@@ -25,6 +25,7 @@
 #include "dnp/math/trig.hpp"
 #include "dnp/math/vec.hpp"
 #include "dnp/sim/state_hash.hpp"
+#include "dnp/sim/world.hpp"
 
 using namespace dnp;
 
@@ -53,6 +54,16 @@ struct World {
     Body  bodies[BODY_COUNT];
     Rng   global;
     u32   tick;
+
+    // The actual gameplay simulation, driven alongside the synthetic workload.
+    //
+    // The bodies above stress the arithmetic most likely to diverge; this covers
+    // the code the game actually runs. Both belong under the gate: the synthetic
+    // half would keep passing while a real controller quietly desynced, and the
+    // real half alone would not exercise saturation or CORDIC hard enough to
+    // catch a math regression.
+    dnp::sim::World sim;
+    Rng             sim_rng;
 };
 
 void world_init(World& w) {
@@ -69,6 +80,12 @@ void world_init(World& w) {
                     fx::zero()};
         b.heading = brad(b.rng.next_u32());
         b.spin    = brad(b.rng.next_u32() >> 12);
+    }
+
+    w.sim.reset();
+    w.sim_rng = Rng(0x5EED, 2);
+    for (int i = 0; i < 8; ++i) {
+        w.sim.spawn(fx3{fx::from_int(i * 2 - 8), fx::from_int(i), fx::from_int(3)});
     }
 }
 
@@ -135,6 +152,19 @@ void world_step(World& w) {
         }
     }
 
+    // Drive the gameplay simulation with deterministic pseudo-input. Buttons are
+    // drawn per agent so jump edge-detection, the jump counter and the grounded
+    // transition all get exercised rather than sitting at their defaults.
+    for (u32 i = 0; i < 8; ++i) {
+        proto::InputFrame f;
+        f.move_x  = static_cast<i16>(w.sim_rng.next_range(-32767, 32768));
+        f.move_y  = static_cast<i16>(w.sim_rng.next_range(-32767, 32768));
+        f.buttons = static_cast<u16>((w.sim_rng.next_u32() & 7) == 0 ? proto::button::JUMP : 0);
+        f.aim     = brad(w.sim_rng.next_u32());
+        w.sim.set_input(i, f);
+    }
+    w.sim.step();
+
     ++w.tick;
 }
 
@@ -158,6 +188,16 @@ void world_dump(const World& w) {
                     b.heading.raw, b.spin.raw,
                     static_cast<unsigned long long>(b.rng.state()));
     }
+    for (u32 i = 0; i < 8; ++i) {
+        const dnp::sim::AgentState& a = w.sim.agent(i);
+        std::printf("agent %02u pos %020lld %020lld %020lld vel %020lld %020lld %020lld fl %04X j %u\n",
+                    i,
+                    static_cast<long long>(a.pos.x.raw), static_cast<long long>(a.pos.y.raw),
+                    static_cast<long long>(a.pos.z.raw),
+                    static_cast<long long>(a.vel.x.raw), static_cast<long long>(a.vel.y.raw),
+                    static_cast<long long>(a.vel.z.raw),
+                    a.state_flags, a.jumps_used);
+    }
 }
 
 u64 world_hash(const World& w) {
@@ -173,6 +213,8 @@ u64 world_hash(const World& w) {
         h.u64v(b.rng.state());
         h.u64v(b.rng.stream_inc());
     }
+    h.u64v(w.sim.hash());
+    h.u64v(w.sim_rng.state());
     return h.value();
 }
 

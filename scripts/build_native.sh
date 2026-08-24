@@ -37,6 +37,7 @@ fi
 SRCS=(
   "$ROOT/core/src/math/trig.cpp"
   "$ROOT/core/src/proto/messages.cpp"
+  "$ROOT/core/src/sim/world.cpp"
 )
 
 echo "[build] arch=$ARCH -> $OUT"

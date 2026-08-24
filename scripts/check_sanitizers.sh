@@ -29,7 +29,7 @@ FLAGS=(
   -I"$ROOT/core/include"
 )
 
-SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp")
+SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp")
 
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1

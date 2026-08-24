@@ -30,7 +30,7 @@ echo "=== 4/5  cross-target determinism gate ==="
 ./scripts/check_determinism.sh
 
 echo
-echo "=== 5/5  edge transport ==="
+echo "=== 5/5  transport + full stack ==="
 if [[ ! -d server/edge/node_modules ]]; then
   echo "  skip (run: cd server/edge && npm install)"
 elif [[ ! -f server/edge/certs/cert.pem ]]; then
@@ -42,7 +42,10 @@ else
     echo "  dev certificate has EXPIRED -- regenerating"
     (cd server/edge && npm run --silent certs >/dev/null)
   fi
-  (cd server/edge && node test/framing.test.js && node test/relay.test.js | tail -2)
+  ./scripts/build_server.sh >/dev/null
+  (cd server/edge && node test/framing.test.js \
+     && node test/relay.test.js | tail -2 \
+     && node test/e2e.test.js 2>/dev/null | tail -2)
 fi
 
 echo

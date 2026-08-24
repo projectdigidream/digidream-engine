@@ -22,6 +22,7 @@ endif()
 add_library(dnp_core STATIC
   core/src/math/trig.cpp
   core/src/proto/messages.cpp
+  core/src/sim/world.cpp
 )
 
 target_include_directories(dnp_core PUBLIC core/include)
@@ -40,6 +41,23 @@ target_compile_options(dnp_core PRIVATE
 # Deny the core the ability to observe anything ambient. Anything the simulation
 # reads must come from replicated state.
 target_compile_definitions(dnp_core PRIVATE DNP_CORE_BUILD=1)
+
+# ---------------------------------------------------------------------------
+# server: authoritative simulation + edge link endpoint.
+#
+# Unlike core/, this target may use wall clock, sockets and the heap. None of
+# that reaches the simulation: the tick loop only decides WHEN a tick happens,
+# never what it computes.
+# ---------------------------------------------------------------------------
+if(NOT EMSCRIPTEN)
+  add_executable(dnp-server
+    server/src/main.cpp
+    server/src/net/link.cpp
+  )
+  target_include_directories(dnp-server PRIVATE server/src)
+  target_link_libraries(dnp-server PRIVATE dnp_core)
+  target_compile_options(dnp-server PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 # ---------------------------------------------------------------------------
 # tests
