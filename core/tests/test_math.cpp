@@ -248,7 +248,7 @@ static void test_atan2() {
         const fx2 v{fx::from_raw(static_cast<i64>(rng.next_u64()) >> 30),
                     fx::from_raw(static_cast<i64>(rng.next_u64()) >> 30)};
         if (v.x.raw == 0 && v.y.raw == 0) continue;
-        const fx2 big{fx::from_raw(v.x.raw << 8), fx::from_raw(v.y.raw << 8)};
+        const fx2 big{fx::from_raw(asl(v.x.raw, 8)), fx::from_raw(asl(v.y.raw, 8))};
         const i32 err = brad_delta(fx_angle_of(v), fx_angle_of(big));
         CHECK((err < 0 ? -err : err) < 4096);
     }

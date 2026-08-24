@@ -21,6 +21,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(dnp_core STATIC
   core/src/math/trig.cpp
+  core/src/proto/messages.cpp
 )
 
 target_include_directories(dnp_core PUBLIC core/include)
@@ -48,6 +49,10 @@ enable_testing()
 add_executable(test_math core/tests/test_math.cpp)
 target_link_libraries(test_math PRIVATE dnp_core)
 add_test(NAME math COMMAND test_math)
+
+add_executable(test_proto core/tests/test_proto.cpp)
+target_link_libraries(test_proto PRIVATE dnp_core)
+add_test(NAME proto COMMAND test_proto)
 
 add_executable(golden_trace core/tests/golden_trace.cpp)
 target_link_libraries(golden_trace PRIVATE dnp_core)

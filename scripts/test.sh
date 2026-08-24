@@ -7,21 +7,30 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "=== 1/4  no-floats guard ==="
+echo "=== 1/5  no-floats guard ==="
 ./scripts/check_no_floats.sh
 
 echo
-echo "=== 2/4  core/math unit + property tests ==="
+echo "=== 2/5  core unit + property tests ==="
 HOST_ARCH="$(uname -m)"
 ./scripts/build_native.sh "$HOST_ARCH" >/dev/null
 "./build/$HOST_ARCH/test_math"
+"./build/$HOST_ARCH/test_proto"
 
 echo
-echo "=== 3/4  cross-target determinism gate ==="
+echo "=== 3/5  sanitizers (ASan + UBSan) ==="
+# Not redundant with the tests above. UBSan is what catches undefined behaviour
+# that currently happens to compile into the intended instruction -- shifting a
+# negative value left, signed overflow -- which is invisible until a compiler
+# upgrade resolves it differently on one target and silently breaks prediction.
+./scripts/check_sanitizers.sh
+
+echo
+echo "=== 4/5  cross-target determinism gate ==="
 ./scripts/check_determinism.sh
 
 echo
-echo "=== 4/4  edge transport ==="
+echo "=== 5/5  edge transport ==="
 if [[ ! -d server/edge/node_modules ]]; then
   echo "  skip (run: cd server/edge && npm install)"
 elif [[ ! -f server/edge/certs/cert.pem ]]; then

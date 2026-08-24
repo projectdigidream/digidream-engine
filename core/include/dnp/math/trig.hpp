@@ -19,7 +19,7 @@ struct brad {
     explicit constexpr brad(u32 r) noexcept : raw(r) {}
 
     static constexpr brad turns_frac(i64 num, i64 den) noexcept {
-        return brad(static_cast<u32>((static_cast<i128>(num) << 32) / den));
+        return brad(static_cast<u32>(asl128(static_cast<i128>(num), 32) / den));
     }
     static constexpr brad from_degrees(i64 deg) noexcept { return turns_frac(deg, 360); }
 };

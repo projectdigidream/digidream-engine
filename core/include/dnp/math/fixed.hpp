@@ -21,8 +21,12 @@
 
 namespace dnp {
 
+using i8   = std::int8_t;
+using i16  = std::int16_t;
 using i32  = std::int32_t;
 using i64  = std::int64_t;
+using u8   = std::uint8_t;
+using u16  = std::uint16_t;
 using u32  = std::uint32_t;
 using u64  = std::uint64_t;
 using i128 = __int128;
@@ -40,6 +44,23 @@ constexpr i64 asr(i64 v, int s) noexcept {
 
 constexpr i128 asr128(i128 v, int s) noexcept {
     return v < 0 ? ~((~v) >> s) : (v >> s);
+}
+
+// Left shift, performed in unsigned arithmetic.
+//
+// `E1 << E2` on a NEGATIVE E1 is undefined behaviour before C++20, and the
+// compiler is entitled to resolve UB differently between two builds -- which is
+// exactly the divergence class the whole fixed-point contract exists to
+// eliminate. Doing the shift on the unsigned bit pattern is well-defined,
+// compiles to the same single instruction, and cannot surprise us on one target.
+// (Converting back out of range is implementation-defined rather than undefined,
+// and is modular on every compiler this project supports.)
+constexpr i64 asl(i64 v, int s) noexcept {
+    return static_cast<i64>(static_cast<u64>(v) << s);
+}
+
+constexpr i128 asl128(i128 v, int s) noexcept {
+    return static_cast<i128>(static_cast<u128>(v) << s);
 }
 
 // Shift right truncating toward zero (the rule this codebase uses for products).
@@ -77,7 +98,7 @@ struct fx {
     // Exact-to-one-ulp rational literal, evaluated in 128-bit: from_frac(1, 3).
     // Preferred over any float-derived constant, which would not be portable.
     static constexpr fx from_frac(i64 n, i64 d) noexcept {
-        return from_raw(sat_from_i128((static_cast<i128>(n) << FRAC) / d));
+        return from_raw(sat_from_i128(asl128(static_cast<i128>(n), FRAC) / d));
     }
 
     static constexpr fx zero() noexcept { return from_raw(0); }
@@ -108,7 +129,7 @@ constexpr fx operator*(i64 k, fx a) noexcept { return a * k; }
 
 constexpr fx operator/(fx a, fx b) noexcept {
     if (b.raw == 0) return a.raw >= 0 ? fx::max() : fx::min();  // defined, never a trap
-    return fx::from_raw(sat_from_i128((static_cast<i128>(a.raw) << fx::FRAC) / b.raw));
+    return fx::from_raw(sat_from_i128(asl128(static_cast<i128>(a.raw), fx::FRAC) / b.raw));
 }
 
 constexpr fx operator/(fx a, i64 k) noexcept {

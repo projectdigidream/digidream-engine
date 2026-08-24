@@ -125,7 +125,9 @@ brad fx_atan2(fx y, fx x) noexcept {
         i64 m  = ax > ay ? ax : ay;
         constexpr i64 LO = static_cast<i64>(1) << 59;
         constexpr i64 HI = static_cast<i64>(1) << 60;
-        while (m < LO) { vx <<= 1; vy <<= 1; m <<= 1; }
+        // asl(), not `<<=`: vx and vy are routinely negative here, and shifting
+        // a negative value left is undefined behaviour before C++20.
+        while (m < LO) { vx = asl(vx, 1); vy = asl(vy, 1); m <<= 1; }
         while (m >= HI) { vx = asr(vx, 1); vy = asr(vy, 1); m >>= 1; }
     }
 
