@@ -40,10 +40,12 @@ constexpr int BODY_COUNT = 64;
 // Agents driven in the gameplay half of the trace. Eight roam the open room;
 // three more stand where geometry closes on them -- under a descending ceiling,
 // beside a sweeping footprint, and in the dead end a piston runs into -- so the
-// determinism gate covers crushing and §3.1.3 as well. Without them those paths
+// determinism gate covers crushing and §3.1.3 as well. A twelfth rides a
+// SCRIPTED-DISCRETE platform, which is the only way the anchor-relative hashing
+// of §3.2.5 is ever executed rather than merely compiled. Without them those paths
 // are compiled by every target and executed by none, and `--coverage` is what
 // keeps that honest rather than assumed.
-constexpr u32 SIM_AGENTS = 11;
+constexpr u32 SIM_AGENTS = 12;
 
 // The fixed simulation timestep (design 7.1.1). 60 Hz, as an exact rational --
 // never a measured frame time, and never a decimal literal that would round
@@ -89,6 +91,8 @@ struct World {
     // way on arm64 and another on wasm. Getting it under the gate before
     // anything depends on it is cheaper than bisecting it afterwards.
     u64                 rail_digest;
+    Rng                 drift_rng;
+    fx                  drift_z;
 
     dnp::nav::NavGraph  nav;
     dnp::nav::NavQuery  nav_query;
@@ -100,6 +104,7 @@ struct World {
     // Not hashed and not part of the simulation -- see --coverage in main().
     u32 vertical_crush_ticks;
     u32 horizontal_pin_ticks;
+    u32 discrete_anchor_ticks;
 };
 
 void world_init(World& w) {
@@ -144,6 +149,18 @@ void world_init(World& w) {
         // floor is above step height, so a body cannot be where it is -- that,
         // and not the fact that it moves, is what makes it solid to the sweep.
         // The room's west wall is the dead end that turns a shove into a pin.
+        // A room north of the crusher, which DRIFTS on a schedule with no closed
+        // form. A rider on it is hashed in its frame (design §3.2.5), and that
+        // branch is unreachable without a scripted-discrete mover to stand on.
+        const fx2 drift[] = {{F(0), F(60)}, {F(40), F(60)}, {F(40), F(80)}, {F(0), F(80)}};
+        const u32 s5 = w.sim_map.add_sector(drift, 4, fx::zero(), F(40), 6);
+        w.sim_map.add_side(s5, 0, 1, static_cast<i32>(s3), 0);
+        w.sim_map.add_side(s5, 1, 2, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s5, 2, 3, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s5, 3, 0, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.side_mut(w.sim_map.view().sector(s3).first_side + 2).neighbor =
+            static_cast<i32>(s5);
+
         const fx2 piston[] = {{F(40), F(40)}, {F(50), F(40)}, {F(50), F(60)}, {F(40), F(60)}};
         const u32 s4 = w.sim_map.add_sector(piston, 4, F(4), F(40), 5);
         w.sim_map.add_side(s4, 0, 1, dnp::geom::NO_SECTOR, 0);
@@ -183,6 +200,12 @@ void world_init(World& w) {
     w.sim.motions().start_parametric(3, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(-39)},
                                      0, 173, dnp::sim::LoopMode::PingPong,
                                      dnp::sim::MotionTarget::Ceiling);
+    // The drifting room. Registered here; its offset is chosen per tick in
+    // world_step from the trace's own PRNG, which is deterministic across
+    // targets while still being something no client could derive.
+    w.sim.motions().add(w.sim_map, 5);
+    w.sim.motions().set_discrete(5, fx3::zero());
+
     // The piston: all the way to the far wall, so the shove becomes a pin.
     w.sim.motions().add(w.sim_map, 4);
     w.sim.motions().start_parametric(4, fx3::zero(), fx3{fx::from_int(-40), fx::zero(), fx::zero()},
@@ -196,6 +219,7 @@ void world_init(World& w) {
     w.sim.spawn(fx3{fx::from_int(20), fx::from_int(50), fx::from_int(1)});
     w.sim.spawn(fx3{fx::from_int(59), fx::from_int(20), fx::from_int(1)});
     w.sim.spawn(fx3{fx::from_int(35), fx::from_int(50), fx::from_int(1)});
+    w.sim.spawn(fx3{fx::from_int(20), fx::from_int(70), fx::from_int(1)});   // on the drifter
 
     // Turn every ability on for at least some agents, so the trace exercises
     // hover, flight and grapple rather than only walking and jumping.
@@ -207,6 +231,8 @@ void world_init(World& w) {
         pr.max_jumps = static_cast<u8>(1 + (i % 3));
     }
     w.rail_digest = 0;
+    w.drift_rng = Rng(0xD21F7u, 5);
+    w.drift_z = fx::zero();
     w.nav.build(w.sim_view);
     w.nav_digest = 0;
     w.nav_queries = 0;
@@ -214,6 +240,7 @@ void world_init(World& w) {
 
     w.vertical_crush_ticks = 0;
     w.horizontal_pin_ticks = 0;
+    w.discrete_anchor_ticks = 0;
 }
 
 // One fixed-timestep step. Not the real controller -- that arrives in Phase 2 --
@@ -342,6 +369,10 @@ void world_step(World& w) {
     // Coverage bookkeeping, deliberately outside the hash: this counts what the
     // trace EXERCISED, and a counter in the hashed state would make the gate
     // compare its own instrumentation.
+    for (u32 i = 0; i < SIM_AGENTS; ++i) {
+        const dnp::sim::AgentState& a = w.sim.agent(i);
+        if (a.active && a.mv.anchored && a.mv.anchor == 5) ++w.discrete_anchor_ticks;
+    }
     for (u32 i = 0; i < w.sim.crushes().count(); ++i) {
         if (w.sim.crushes().at(i).kind == dnp::sim::CrushKind::Vertical) ++w.vertical_crush_ticks;
         else ++w.horizontal_pin_ticks;
@@ -462,10 +493,12 @@ int main(int argc, char** argv) {
         std::printf("horizontal_pin_events %u\n", w.horizontal_pin_ticks);
         std::printf("nav_queries %u\n", w.nav_queries);
         std::printf("nav_routes_found %u\n", w.nav_routes_found);
+        std::printf("discrete_anchor_ticks %u\n", w.discrete_anchor_ticks);
         // Routes must be found AND refused over the run: a gate that only ever
         // saw "unreachable" would compare three targets agreeing about nothing.
         return (w.vertical_crush_ticks > 0 && w.horizontal_pin_ticks > 0 &&
-                w.nav_routes_found > 0 && w.nav_routes_found < w.nav_queries) ? 0 : 1;
+                w.nav_routes_found > 0 && w.nav_routes_found < w.nav_queries &&
+                w.discrete_anchor_ticks > 0) ? 0 : 1;
     }
     if (summary) std::printf("final %d %016llX\n", ticks, static_cast<unsigned long long>(last));
     return 0;

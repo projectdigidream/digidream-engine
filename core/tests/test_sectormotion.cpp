@@ -309,6 +309,130 @@ static void test_no_drift_over_a_long_run() {
     }
 }
 
+// Anchor-relative prediction (design §3.2.5), as a property of the hash.
+//
+// Two worlds run the same rider on the same platform. One is the "server" and
+// moves the platform every tick by a rule the other cannot know; the other is
+// the "client" and only learns the platform's offset when a snapshot arrives.
+// Their ABSOLUTE positions must diverge -- that is what unpredictable means --
+// and their per-agent hashes must nonetheless agree on every tick, because the
+// hash is taken in the platform's frame.
+static void test_a_discrete_anchor_is_hashed_in_its_own_frame() {
+    std::printf("motion: a rider on an unpredictable platform still hashes exactly\n");
+
+    static Stage server_stage;
+    static Stage client_stage;
+    static World server;
+    static World client;
+
+    server.reset(); server_stage.attach(server);
+    client.reset(); client_stage.attach(client);
+
+    const u32 sa = server.spawn(fx3{F(30), F(10), F(0)});
+    const u32 ca = client.spawn(fx3{F(30), F(10), F(0)});
+    server.motions().add(server_stage.store, 1);
+    client.motions().add(client_stage.store, 1);
+
+    // Land and anchor.
+    for (int i = 0; i < 4; ++i) { server.step(); client.step(); }
+    CHECK(server.agent(sa).mv.anchored);
+    CHECK(server.agent(sa).mv.anchor == 1);
+
+    // A schedule with no closed form -- which is the whole definition of
+    // scripted-discrete. Drawn from a PRNG the client never sees.
+    Rng sched(0xC0FFEE, 3);
+    fx  z = fx::zero();
+
+    int  ticks = 0;
+    int  hash_agreed = 0;
+    int  hash_differed = 0;
+    int  abs_differed = 0;
+    fx   worst_abs_gap = fx::zero();
+
+    for (u32 t = 0; t < 600; ++t) {
+        // The server picks a new offset every tick.
+        z += fx::from_frac(static_cast<i64>(sched.next_range(-3, 4)), 100);
+        if (z > F(2)) z = F(2);
+        if (z < fx::zero()) z = fx::zero();
+        server.motions().set_discrete(1, fx3{fx::zero(), fx::zero(), z});
+        server.step();
+
+        // The client steps the SAME tick with whatever offset it last heard.
+        // Deliberately in this order: reconciliation compares the client's
+        // recorded prediction for a tick against the server's answer for that
+        // same tick, so a harness that let the client adopt first would be
+        // comparing the server against itself.
+        client.step();
+
+        ++ticks;
+        if (server.agent_hash(sa) == client.agent_hash(ca)) ++hash_agreed;
+        else ++hash_differed;
+
+        const fx gap = server.agent(sa).pos.z - client.agent(ca).pos.z;
+        const fx mag = gap.raw < 0 ? -gap : gap;
+        if (mag.raw != 0) ++abs_differed;
+        if (mag > worst_abs_gap) worst_abs_gap = mag;
+
+        // Only now does a snapshot arrive: the streamed offset, then the
+        // authoritative state, exactly as the client does it.
+        if ((t % 2) == 0) {
+            client.motions().set_discrete(1, fx3{fx::zero(), fx::zero(), z});
+            client.agent_mut(ca).pos = server.agent(sa).pos;
+            client.agent_mut(ca).vel = server.agent(sa).vel;
+            client.agent_mut(ca).mv = server.agent(sa).mv;
+            client.set_tick(server.tick());
+        }
+    }
+
+    std::printf("  %d ticks: %d hashes agreed, %d differed; absolute z differed on %d "
+                "(worst %.3f)\n",
+                ticks, hash_agreed, hash_differed, abs_differed, D(worst_abs_gap));
+
+    // The hash agrees on every tick...
+    CHECK(hash_differed == 0);
+    // ...while the absolute positions genuinely do not. Without this the test
+    // would pass just as well on a platform that never moved, and would be
+    // measuring nothing.
+    CHECK(abs_differed > 0);
+    CHECK(worst_abs_gap > fx::zero());
+}
+
+// The control: the same setup with a PARAMETRIC platform must agree absolutely,
+// because that one IS predictable and asking for less would let the gate stop
+// noticing when it broke.
+static void test_a_parametric_anchor_is_still_hashed_absolutely() {
+    std::printf("motion: CONTROL -- a rider on a predictable platform agrees absolutely\n");
+
+    static Stage server_stage;
+    static Stage client_stage;
+    static World server;
+    static World client;
+    server.reset(); server_stage.attach(server);
+    client.reset(); client_stage.attach(client);
+
+    const u32 sa = server.spawn(fx3{F(30), F(10), F(0)});
+    const u32 ca = client.spawn(fx3{F(30), F(10), F(0)});
+    server.motions().add(server_stage.store, 1);
+    client.motions().add(client_stage.store, 1);
+    server.motions().start_parametric(1, fx3::zero(), fx3{fx::zero(), fx::zero(), F(3)},
+                                      0, 90, LoopMode::PingPong);
+    client.motions().start_parametric(1, fx3::zero(), fx3{fx::zero(), fx::zero(), F(3)},
+                                      0, 90, LoopMode::PingPong);
+
+    int differed = 0;
+    for (u32 t = 0; t < 400; ++t) {
+        server.step();
+        client.step();
+        if (server.agent(sa).pos != client.agent(ca).pos) ++differed;
+        if (server.agent_hash(sa) != client.agent_hash(ca)) ++differed;
+    }
+    CHECK(differed == 0);
+    // And it really did move, or "they agree" means "neither moved".
+    CHECK(server.motions().at(0).offset.z != fx::zero() ||
+          server.agent(sa).pos.z != F(0));
+    std::printf("  400 ticks, no divergence of any kind\n");
+}
+
 int main() {
     std::printf("== core/sim sector motion suite ==\n");
     test_parametric_is_a_pure_function();
@@ -317,6 +441,8 @@ int main() {
     test_discrete_motion();
     test_determinism();
     test_no_drift_over_a_long_run();
+    test_a_discrete_anchor_is_hashed_in_its_own_frame();
+    test_a_parametric_anchor_is_still_hashed_absolutely();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

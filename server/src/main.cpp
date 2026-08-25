@@ -17,6 +17,7 @@
 
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapfile.hpp"
+#include "dnp/math/rng.hpp"
 #include "dnp/nav/navgraph.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
@@ -65,6 +66,45 @@ struct Server {
         // still runnable. Phase 3 retires this once every deployment ships a
         // baked map.
         world.set_map(&sim::test_map());
+    }
+
+    // Scripted-discrete movers: how far each may travel, and the schedule state
+    // driving it. Indexed by sector so a map may have several.
+    fx  discrete_range[geom::MAX_MAP_SECTORS]{};
+    fx  discrete_now[geom::MAX_MAP_SECTORS]{};
+    fx  discrete_target[geom::MAX_MAP_SECTORS]{};
+    Rng discrete_rng{0xD15C0FFEEull, 7};
+
+    // Advance every scripted-discrete mover by one tick.
+    //
+    // Deliberately NOT a function of the tick counter. A schedule a client
+    // could re-derive would make this a parametric mover wearing a disguise,
+    // and the whole reason the protocol streams SectorOffset every snapshot is
+    // that no such derivation exists.
+    void drive_discrete_movers() {
+        for (u32 si = 0; si < geom::MAX_MAP_SECTORS; ++si) {
+            if (discrete_range[si].raw == 0) continue;
+
+            // A new destination every so often, then a steady crawl toward it.
+            // Crawling rather than jumping because an entity riding it is
+            // carried rigidly: a mover that teleported would teleport its
+            // passengers, which is a gameplay choice a map author should have
+            // to make on purpose rather than inherit from the scheduler.
+            if ((discrete_rng.next_u32() & 63u) == 0) {
+                discrete_target[si] =
+                    fx::from_frac(static_cast<i64>(discrete_rng.next_range(0, 101)), 100) *
+                    discrete_range[si];
+            }
+            const fx step = fx::from_frac(1, 100);
+            if (discrete_now[si] < discrete_target[si]) {
+                discrete_now[si] += step;
+                if (discrete_now[si] > discrete_target[si]) discrete_now[si] = discrete_target[si];
+            } else if (discrete_now[si] > discrete_target[si]) {
+                discrete_now[si] -= step;
+                if (discrete_now[si] < discrete_target[si]) discrete_now[si] = discrete_target[si];
+            }
+            world.motions().set_discrete(si, fx3{fx::zero(), fx::zero(), discrete_now[si]});
+        }
     }
 
     // Sectors whose motion is scripted-discrete, collected once per tick so the
@@ -160,7 +200,19 @@ struct Server {
             if (tag < 100) continue;
             if (world.motions().add(*map_store, si) >= sim::MAX_MOVING_SECTORS) continue;
 
-            if (tag >= 300) {
+            if (tag >= 400) {
+                // A scripted-discrete mover (design §3.1.2). There is no path
+                // to declare, because the whole point is that there is no
+                // closed form: the offset is whatever a callback decides this
+                // tick. Lua is Phase 4, so the stand-in is the server's own
+                // PRNG -- and that is faithful, because what makes this kind
+                // unpredictable to a client is not randomness but the absence
+                // of any parameter set describing it.
+                discrete_range[si] = fx::from_int(tag - 400);
+                world.motions().set_discrete(si, fx3::zero());
+                std::fprintf(stderr, "[srv] sector %u drifts (scripted-discrete, range %u)\n",
+                             si, tag - 400u);
+            } else if (tag >= 300) {
                 const u16 slide = tag - 300;
                 world.motions().start_parametric(
                     si, fx3::zero(), fx3{fx::zero(), -fx::from_int(slide), fx::zero()},
@@ -443,11 +495,19 @@ struct Server {
         for (auto& [id, s] : sessions) {
             if (s.has_agent) world.set_input(s.agent, s.take());
         }
+        // Before the step, so the offsets a snapshot reports are the ones the
+        // tick actually ran with. Deciding after would ship the client an
+        // offset the server had not used yet.
+        drive_discrete_movers();
         world.step();
         report_crushes();
     }
 
     void send_snapshots() {
+        // Once per snapshot, not once per session: the offsets are a property
+        // of the world, and every observer of a moving sector sees the same one.
+        collect_discrete_offsets();
+
         for (auto& [id, s] : sessions) {
             if (!s.has_agent) continue;
 

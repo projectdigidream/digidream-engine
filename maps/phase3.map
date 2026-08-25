@@ -1,0 +1,83 @@
+# The Phase 3 exit map.
+#
+# The plan's exit criterion for this phase names four things: a parametric lift,
+# a scripted-discrete mover, a crusher, and a rail -- with anchored riding
+# predicting cleanly in BOTH motion modes. This map is that criterion, made of
+# geometry, so the claim is tested rather than asserted.
+#
+#   sector 0   the yard: where a player lands, and where the rails are
+#   sector 1   a parametric lift. Rises 3 units on a fixed schedule, so a client
+#              computes its position for any tick from parameters sent once.
+#   sector 2   a scripted-discrete mover. Drifts on a schedule with no closed
+#              form, so its offset is streamed every snapshot and a rider falls
+#              back to anchor-relative prediction (design §3.2.5).
+#   sector 3   a crusher: its CEILING descends, which is the only way the gap a
+#              body occupies can close.
+#
+#   y
+#   ^   +--------+--------+
+#   |   |   2    |   3    |   discrete mover | crusher
+#   |   +--------+--------+
+#   |   |   0    |   1    |   yard | parametric lift
+#   |   +--------+--------+
+#   +-------------------------> x
+#
+# Both movers rest FLUSH with the yard. A lift whose resting floor is above
+# STEP_HEIGHT cannot be walked onto -- correctly, since that is what the step
+# rule is for -- so a platform a player is meant to board has to be level with
+# the ground at the bottom of its travel.
+
+sector floor 0 ceil 12 tag 1
+  vertex  0   0   wall
+  vertex 20   0   neighbor 1
+  vertex 20  20   neighbor 2
+  vertex  0  20   wall
+end
+
+# tag 100+N: a parametric lift rising N units.
+sector floor 0 ceil 12 tag 103
+  vertex 20   0   wall
+  vertex 40   0   wall
+  vertex 40  20   neighbor 3
+  vertex 20  20   neighbor 0
+end
+
+# tag 400+N: a scripted-discrete mover with N units of range. No path is
+# declared because there is none to declare -- that is what makes it the mode a
+# client cannot predict.
+sector floor 0 ceil 12 tag 402
+  vertex  0  20   neighbor 0
+  vertex 20  20   neighbor 3
+  vertex 20  40   wall
+  vertex  0  40   wall
+end
+
+# tag 200+N: a crusher whose ceiling drops N units. Ceiling 12 minus 11 leaves a
+# gap of 1 -- half a standing body.
+sector floor 0 ceil 12 tag 211
+  vertex 20  20   neighbor 1
+  vertex 40  20   wall
+  vertex 40  40   wall
+  vertex 20  40   neighbor 2
+end
+
+spawn yard      10 10 0
+spawn lift      30 10 0
+spawn drifter   10 30 0
+spawn crusher   30 30 0
+
+# A rail across the yard, and a wire bolted to the discrete mover so that a rail
+# on an unpredictable platform is exercised too -- the waypoints ride it exactly
+# as a rail on a lift rides that.
+rail tag 1
+  waypoint  2  2 1
+  waypoint 18  2 1
+  waypoint 18 18 1
+end
+
+wire tag 2
+  waypoint  2 22 6
+  waypoint 18 22 6
+end
+
+junction 0 2 to 1 0

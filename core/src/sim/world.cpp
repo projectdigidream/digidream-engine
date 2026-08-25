@@ -273,12 +273,40 @@ u16 World::state_flags(u32 i) const noexcept {
     return f;
 }
 
+fx3 World::anchor_frame(const MoveState& m) const noexcept {
+    // Anchor-relative prediction (design §3.2.5), expressed as a coordinate
+    // frame rather than as a special case in the comparison.
+    //
+    // A client cannot compute where a scripted-discrete sector will be: the
+    // position is whatever a Lua callback decided, and no parameter set
+    // describes it. What the client CAN predict exactly is where the entity is
+    // relative to the sector it is riding -- it is standing on it, and its own
+    // movement is ordinary physics. So for an entity anchored to an
+    // unpredictable sector, positions are hashed in that sector's frame.
+    //
+    // Both sides subtract their own copy of the offset. The client's is stale
+    // by up to a snapshot interval and the server's is current, and that is
+    // exactly the difference the subtraction removes: the client's rider was
+    // carried by the stale offset from a position adopted with the stale
+    // offset, so the two relative positions agree bit for bit.
+    //
+    // Parametric anchors are deliberately NOT included. Those are predictable,
+    // absolute agreement is achievable, and asking for less would stop the gate
+    // noticing if it ever stopped holding.
+    if (!m.anchored || m.anchor < 0) return fx3::zero();
+    const i32 mi = motions_.find(static_cast<u32>(m.anchor));
+    if (mi < 0) return fx3::zero();
+    const SectorMotion& sm = motions_.at(static_cast<u32>(mi));
+    if (sm.type != MotionType::ScriptedDiscrete) return fx3::zero();
+    return sm.offset;
+}
+
 u64 World::agent_hash(u32 i) const noexcept {
     StateHasher h;
     const AgentState& a = agents_[i];
     const MoveState& m = a.mv;
 
-    h.vec3(a.pos);
+    h.vec3(a.pos - anchor_frame(m));
     h.vec3(a.vel);
     h.bradv(a.facing);
 
@@ -303,6 +331,13 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.vec2(m.climb_normal);
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
+    // NOT rebased, deliberately. A grapple anchor is a point on the geometry
+    // the rope is attached to, which is usually not the platform the entity is
+    // standing on -- rebasing it by the platform's offset would move an anchor
+    // bolted to a static wall. It is also zero when nothing is grappling, and
+    // subtracting a different offset from zero on each side turns "no grapple"
+    // into a divergence, which is exactly what it did when this was written the
+    // other way.
     h.vec3(m.grapple_anchor);
     h.fxv(m.grapple_dist);
     h.fxv(m.hover_fuel);

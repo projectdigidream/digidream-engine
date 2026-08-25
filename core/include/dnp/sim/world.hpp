@@ -112,6 +112,10 @@ public:
 private:
     void step_agent(u32 i) noexcept;
 
+    // The frame positions are hashed in: the offset of an unpredictable anchor,
+    // or zero. See the definition -- this is design §3.2.5's fallback.
+    fx3 anchor_frame(const physics::MoveState& m) const noexcept;
+
     // Carry entities riding a sector that moved, then let moving footprints
     // shove the ones they ran into (design §3.1.3). Both happen after the
     // geometry has moved and before any agent runs its own physics.
