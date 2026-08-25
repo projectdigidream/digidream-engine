@@ -288,4 +288,85 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     return r;
 }
 
+i32 find_side_with_flag(const MapData& map, i32 sector, fx2 p, fx radius,
+                        u8 flag, fx2& out_normal) noexcept {
+    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return -1;
+
+    const Sector& sec = map.sector(static_cast<u32>(sector));
+    const u128 r_sq = static_cast<u128>(static_cast<i128>(radius.raw) * radius.raw);
+
+    i32  best = -1;
+    u128 best_d = r_sq;
+    for (u32 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        if ((map.side(si).flags & flag) == 0) continue;
+
+        const Side& sd = map.side(si);
+        const u128 d_sq = distance_sq_to_segment(map.point(sd.a), map.point(sd.b), p);
+        // Strictly nearer, so ties resolve to the lower index rather than to
+        // whichever the loop happened to reach last.
+        if (d_sq < best_d) {
+            best_d = d_sq;
+            best = static_cast<i32>(si);
+        }
+    }
+
+    if (best < 0) return -1;
+    // Inward: from the wall toward the agent. See the header.
+    out_normal = -side_normal(map, static_cast<u32>(best), static_cast<u32>(sector));
+    return best;
+}
+
+RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
+               u8 flag) noexcept {
+    RayHit hit;
+    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return hit;
+
+    const fx2 to = from + dir * max_dist;
+    i32 cur = sector;
+
+    // Walk sector to sector. Bounded so a ray that grazes a shared edge and
+    // oscillates between two sectors costs a fixed amount rather than hanging
+    // the tick.
+    for (int hops = 0; hops < 32; ++hops) {
+        const Sector& sec = map.sector(static_cast<u32>(cur));
+
+        fx   best_t = fx::one();
+        i32  best_side = -1;
+        bool found = false;
+
+        for (u32 k = 0; k < sec.side_count; ++k) {
+            const u32 si = sec.first_side + k;
+            const Side& sd = map.side(si);
+            fx t;
+            if (!segment_intersect(from, to, map.point(sd.a), map.point(sd.b), t)) continue;
+            // Ignore a crossing at the very start, which is the side just
+            // stepped through on the previous hop.
+            if (t <= fx::from_frac(1, 4096)) continue;
+            if (!found || t < best_t) { best_t = t; best_side = static_cast<i32>(si); found = true; }
+        }
+
+        if (!found) return hit;   // ran out of range inside this sector
+
+        const Side& sd = map.side(static_cast<u32>(best_side));
+        const bool wanted = (sd.flags & flag) != 0;
+        const bool solid = (sd.neighbor == NO_SECTOR) || (sd.flags & side_flag::BLOCKING) != 0;
+
+        if (wanted) {
+            hit.hit = true;
+            hit.side = best_side;
+            hit.point = from + (to - from) * best_t;
+            hit.normal = side_normal(map, static_cast<u32>(best_side), static_cast<u32>(cur));
+            hit.distance = max_dist * best_t;
+            return hit;
+        }
+        // A solid side without the flag occludes: you cannot grapple through a
+        // wall just because the anchor beyond it is in range.
+        if (solid) return hit;
+
+        cur = sd.neighbor;
+    }
+    return hit;
+}
+
 }  // namespace dnp::physics

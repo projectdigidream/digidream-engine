@@ -80,4 +80,33 @@ SurfaceQuery query_surface(const geom::MapData& map, fx2 p, i32 hint) noexcept;
 bool side_is_passable(const geom::MapData& map, u32 side_index, u32 from,
                       fx feet_z, fx body_height) noexcept;
 
+// Nearest side within `radius` of `p` carrying `flag`, or -1.
+//
+// Used by climbing (CLIMBABLE) and by direct grapple attachment (GRAPPLE).
+//
+// `out_normal` faces INWARD -- from the wall toward the agent -- which is the
+// direction every caller actually wants: it is the way a wall jump pushes off,
+// and the surface orientation a climbing agent aligns to. side_normal() returns
+// the outward normal, and handing that straight back made wall jumps drive
+// into the wall rather than away from it.
+i32 find_side_with_flag(const geom::MapData& map, i32 sector, fx2 p, fx radius,
+                        u8 flag, fx2& out_normal) noexcept;
+
+struct RayHit {
+    bool hit = false;
+    fx2  point{};
+    fx2  normal{};
+    fx   distance{};
+    i32  side = -1;
+};
+
+// Cast a ray across the sectors it passes through, stopping at the first side
+// carrying `flag` (or at any blocking side, which occludes).
+//
+// Reuses the same swept segment test CCD is built on (design §7.1.1: the ranged
+// grapple "reuses the same swept/ray-based approach as CCD"), so aiming and
+// collision cannot disagree about what is in the way.
+RayHit raycast(const geom::MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
+               u8 flag) noexcept;
+
 }  // namespace dnp::physics

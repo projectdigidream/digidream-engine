@@ -17,6 +17,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_math"
 "./build/$HOST_ARCH/test_proto"
 "./build/$HOST_ARCH/test_physics"
+"./build/$HOST_ARCH/test_abilities"
 
 echo
 echo "=== 3/5  sanitizers (ASan + UBSan) ==="
