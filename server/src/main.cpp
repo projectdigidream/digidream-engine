@@ -89,45 +89,6 @@ struct Server {
         world.set_map(&sim::test_map());
     }
 
-    // Scripted-discrete movers: how far each may travel, and the schedule state
-    // driving it. Indexed by sector so a map may have several.
-    fx  discrete_range[geom::MAX_MAP_SECTORS]{};
-    fx  discrete_now[geom::MAX_MAP_SECTORS]{};
-    fx  discrete_target[geom::MAX_MAP_SECTORS]{};
-    Rng discrete_rng{0xD15C0FFEEull, 7};
-
-    // Advance every scripted-discrete mover by one tick.
-    //
-    // Deliberately NOT a function of the tick counter. A schedule a client
-    // could re-derive would make this a parametric mover wearing a disguise,
-    // and the whole reason the protocol streams SectorOffset every snapshot is
-    // that no such derivation exists.
-    void drive_discrete_movers() {
-        for (u32 si = 0; si < geom::MAX_MAP_SECTORS; ++si) {
-            if (discrete_range[si].raw == 0) continue;
-
-            // A new destination every so often, then a steady crawl toward it.
-            // Crawling rather than jumping because an entity riding it is
-            // carried rigidly: a mover that teleported would teleport its
-            // passengers, which is a gameplay choice a map author should have
-            // to make on purpose rather than inherit from the scheduler.
-            if ((discrete_rng.next_u32() & 63u) == 0) {
-                discrete_target[si] =
-                    fx::from_frac(static_cast<i64>(discrete_rng.next_range(0, 101)), 100) *
-                    discrete_range[si];
-            }
-            const fx step = fx::from_frac(1, 100);
-            if (discrete_now[si] < discrete_target[si]) {
-                discrete_now[si] += step;
-                if (discrete_now[si] > discrete_target[si]) discrete_now[si] = discrete_target[si];
-            } else if (discrete_now[si] > discrete_target[si]) {
-                discrete_now[si] -= step;
-                if (discrete_now[si] < discrete_target[si]) discrete_now[si] = discrete_target[si];
-            }
-            world.motions().set_discrete(si, fx3{fx::zero(), fx::zero(), discrete_now[si]});
-        }
-    }
-
     // Sectors whose motion is scripted-discrete, collected once per tick so the
     // snapshot encoder does not rescan.
     proto::SectorOffset discrete_offsets[proto::MAX_SECTOR_OFFSETS];
@@ -249,10 +210,9 @@ struct Server {
         }
     }
 
-    // A stand-in for Lua, exactly as drive_discrete_movers() is for sector
-    // motion: something has to change a parameter before the replication of
-    // parameter changes can be tested at all. --param-test toggles the player's
-    // move_speed on a fixed schedule.
+    // A stand-in for Lua, kept only so PARAM_UPDATE replication can be tested
+    // without a script attached. Sector motion no longer needs an equivalent:
+    // maps/scripts/init.lua drives it.
     bool param_test = false;
     void drive_param_test() {
         if (!param_test) return;
@@ -300,56 +260,15 @@ struct Server {
         map_hash = map_store->hash();
         world.set_map_storage(map_store.get());
 
-        // Sectors tagged 100+ are movers, so the authored map decides what
-        // moves rather than the server hardcoding indices. Lua takes this over
-        // in Phase 4; the tag convention is the bridge.
+        // Sector motion is the MAP'S business now, not the engine's.
         //
-        //   100+N  a lift that rises N units, travelling as a volume
-        //   200+N  a crusher whose CEILING descends N units
-        //   300+N  a footprint that slides N units south (-y)
-        //
-        // Three conventions rather than one because the differences are not
-        // decorative: only a sector that moves one surface can ever close the
-        // gap a body occupies (§3.1), and only one that moves horizontally can
-        // sweep a body out of its way (§3.1.3).
-        for (u32 si = 0; si < loaded.sector_count; ++si) {
-            const u16 tag = loaded.sector(si).tag;
-            if (tag < 100) continue;
-            if (world.motions().add(*map_store, si) >= sim::MAX_MOVING_SECTORS) continue;
+        // This is where the 100/200/300/400 tag branches used to live, marked
+        // "Lua takes this over in Phase 4". maps/scripts/init.lua implements the
+        // same convention, so every existing map behaves identically -- what
+        // changed is who decides. Run without --script and nothing moves, which
+        // is the control that proves the takeover is real rather than a second
+        // implementation running alongside the first.
 
-            if (tag >= 400) {
-                // A scripted-discrete mover (design §3.1.2). There is no path
-                // to declare, because the whole point is that there is no
-                // closed form: the offset is whatever a callback decides this
-                // tick. Lua is Phase 4, so the stand-in is the server's own
-                // PRNG -- and that is faithful, because what makes this kind
-                // unpredictable to a client is not randomness but the absence
-                // of any parameter set describing it.
-                discrete_range[si] = fx::from_int(tag - 400);
-                world.motions().set_discrete(si, fx3::zero());
-                std::fprintf(stderr, "[srv] sector %u drifts (scripted-discrete, range %u)\n",
-                             si, tag - 400u);
-            } else if (tag >= 300) {
-                const u16 slide = tag - 300;
-                world.motions().start_parametric(
-                    si, fx3::zero(), fx3{fx::zero(), -fx::from_int(slide), fx::zero()},
-                    0, 240, sim::LoopMode::PingPong);
-                std::fprintf(stderr, "[srv] sector %u sweeps (slides %u south)\n", si, slide);
-            } else if (tag >= 200) {
-                const u16 drop = tag - 200;
-                world.motions().start_parametric(
-                    si, fx3::zero(), fx3{fx::zero(), fx::zero(), -fx::from_int(drop)},
-                    0, 240, sim::LoopMode::PingPong, sim::MotionTarget::Ceiling);
-                std::fprintf(stderr, "[srv] sector %u crushes (ceiling drops %u)\n", si, drop);
-            } else {
-                // Ping-pong a lift over four seconds. A placeholder schedule
-                // until Lua drives it.
-                world.motions().start_parametric(
-                    si, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(tag - 100)},
-                    0, 240, sim::LoopMode::PingPong);
-                std::fprintf(stderr, "[srv] sector %u moves (rise %u)\n", si, tag - 100u);
-            }
-        }
         std::fprintf(stderr, "[srv] map %s: %u sectors, %u sides, hash %016llX\n",
                      path, loaded.sector_count, loaded.side_count,
                      static_cast<unsigned long long>(map_hash));
@@ -689,15 +608,14 @@ struct Server {
         if (script_vm.is_open()) {
             script_vm.begin_tick();
             // Timers and per-tick logic run BEFORE the step, in the same place
-            // drive_discrete_movers() does and for the same reason: what a
-            // snapshot reports must be what the tick actually ran with.
+            // sector motion used to be driven from, and for the same reason:
+            // what a snapshot reports must be what the tick actually ran with.
             script_vm.call_hook("on_tick", world.tick());
         }
         // After the callbacks, before the step: what the tick runs with is what
         // the snapshot will report.
         refresh_effect_params();
 
-        drive_discrete_movers();
         drive_param_test();
 
         // Flush 1. Everything scripts asked for before the step lands here, so
@@ -922,6 +840,10 @@ int main(int argc, char** argv) {
         srv.lua_ctx.world = &srv.world;
         srv.lua_ctx.commands = &srv.lua_commands;
         srv.lua_ctx.effects = &srv.lua_effects;
+        srv.lua_ctx.map_store = srv.map_store.get();
+        // Seeded from the map, so a scripted-discrete schedule is unpredictable
+        // to a client but replayable by the server.
+        srv.lua_ctx.rng = Rng(srv.map_hash ^ 0x9E3779B97F4A7C15ull, 11);
         // Installed BEFORE the chunk runs: a script's top level is allowed to
         // look at the world, and `dnp` being nil at load time would be a
         // baffling first experience.

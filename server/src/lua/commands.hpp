@@ -37,11 +37,20 @@ enum class CmdKind : u8 {
     Teleport = 0,     // absolute
     AddImpulse = 1,   // relative, accumulates
     SetVelocity = 2,  // absolute
+
+    // A scripted-discrete sector offset (§3.1.2). Routed through the queue like
+    // everything else rather than written straight to the motion set: the claim
+    // that "replaying the command log reproduces the world" is only true if the
+    // log is COMPLETE, and a per-tick mutation that skipped it would quietly
+    // make that false.
+    //
+    // `subject` is the sector index, not an agent.
+    SetSectorOffset = 3,
 };
 
 struct Command {
     CmdKind kind = CmdKind::Teleport;
-    u32     agent = 0;
+    u32     subject = 0;   // agent index, or sector index for SetSectorOffset
     fx3     v{};
 };
 
@@ -71,13 +80,25 @@ public:
         u32 applied = 0;
         for (u32 i = 0; i < count_; ++i) {
             const Command& c = cmds_[i];
-            if (c.agent >= sim::MAX_AGENTS || !world.agent(c.agent).active) continue;
-            switch (c.kind) {
-                case CmdKind::Teleport:    world.teleport(c.agent, c.v); break;
-                case CmdKind::AddImpulse:  world.add_impulse(c.agent, c.v); break;
-                case CmdKind::SetVelocity: world.set_velocity(c.agent, c.v); break;
+
+            if (c.kind == CmdKind::SetSectorOffset) {
+                // Sector, not agent -- and no `touched` call: a moving sector is
+                // already replicated to every client as a SectorOffset in each
+                // snapshot, so it is not an unpredictable change to one
+                // observer's own entity and LUA_APPLIED would be the wrong
+                // signal for it.
+                if (world.motions().set_discrete(c.subject, c.v)) ++applied;
+                continue;
             }
-            touched(c.agent);
+
+            if (c.subject >= sim::MAX_AGENTS || !world.agent(c.subject).active) continue;
+            switch (c.kind) {
+                case CmdKind::Teleport:    world.teleport(c.subject, c.v); break;
+                case CmdKind::AddImpulse:  world.add_impulse(c.subject, c.v); break;
+                case CmdKind::SetVelocity: world.set_velocity(c.subject, c.v); break;
+                case CmdKind::SetSectorOffset: break;   // handled above
+            }
+            touched(c.subject);
             ++applied;
         }
         count_ = 0;

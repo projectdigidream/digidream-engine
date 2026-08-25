@@ -75,7 +75,8 @@ const core = await Core.load()
 // predicting client, run `ticks` frames, and hand back everything observed.
 async function session ({ spawnTag, ticks, wtPort, linkPort }) {
   const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
-                       ['--port', String(linkPort), '--map', MAP_PATH, '--spawn', spawnTag],
+                       ['--port', String(linkPort), '--map', MAP_PATH, '--spawn', spawnTag,
+                      '--script', join(ROOT, 'maps', 'scripts', 'init.lua')],
                        { stdio: ['ignore', 'inherit', 'pipe'] })
   let serverLog = ''
   server.stderr.on('data', (d) => { serverLog += d.toString() })

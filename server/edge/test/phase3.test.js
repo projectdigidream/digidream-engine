@@ -43,6 +43,12 @@ const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34534)
 // prediction has nothing to be relative TO.
 const IGNORE_OFFSETS = process.env.DNP_IGNORE_OFFSETS === '1'
 
+// The control for slice 6. Sector motion is the MAP's business now, declared in
+// maps/scripts/init.lua rather than by the engine. Run without a script and
+// nothing should move -- which is what proves the takeover is real rather than
+// a second implementation still running quietly alongside the first.
+const NO_SCRIPT = process.env.DNP_NO_SCRIPT === '1'
+
 let checks = 0
 let fails = 0
 const check = (ok, label) => {
@@ -76,7 +82,8 @@ const core = await Core.load()
 
 async function ride ({ spawnTag, ticks, wtPort, linkPort }) {
   const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
-                       ['--port', String(linkPort), '--map', MAP_PATH, '--spawn', spawnTag],
+                       ['--port', String(linkPort), '--map', MAP_PATH, '--spawn', spawnTag,
+                      ...(NO_SCRIPT ? [] : ['--script', join(ROOT, 'maps', 'scripts', 'init.lua')])],
                        { stdio: ['ignore', 'inherit', 'pipe'] })
   let serverLog = ''
   server.stderr.on('data', (d) => { serverLog += d.toString() })
@@ -142,7 +149,8 @@ async function ride ({ spawnTag, ticks, wtPort, linkPort }) {
   await cw.write(encodeHello())
   await waitFor(() => welcome, 8000, 'welcome')
   await waitFor(() => acc.complete, 8000, 'map')
-  await waitFor(() => motionSets.length >= 3, 5000, 'motion sets')
+  if (!NO_SCRIPT) await waitFor(() => motionSets.length >= 3, 5000, 'motion sets')
+  else await sleep(400)   // nothing to wait for; give the handshake a moment
 
   const { ok, map } = core.loadMap(acc.bytes())
   if (!ok || map.hash !== welcome.mapHash) throw new Error('map mismatch')
@@ -211,6 +219,20 @@ async function ride ({ spawnTag, ticks, wtPort, linkPort }) {
   kill()
 
   return { serverLog, motionSets, stats: predictor.stats, track, settled, offsetsBySector }
+}
+
+if (NO_SCRIPT) {
+  // Only this block runs: with no script there is nothing to ride.
+  const r = await ride({ spawnTag: 'lift', ticks: 180, wtPort: WT_PORT, linkPort: LINK_PORT })
+  check(r.motionSets.length === 0,
+        `CONTROL: with no script, the server declares no movers (${r.motionSets.length})`)
+  check(!r.serverLog.includes('moves (rise'),
+        'CONTROL: and the engine no longer declares them itself')
+  const span = Math.max(...r.track) - Math.min(...r.track)
+  check(span < 0.01, `CONTROL: the lift does not move (${span.toFixed(3)} units)`)
+  check(r.stats.mispredictions === 0, 'CONTROL: prediction stays exact on a still map')
+  console.log(`\nphase3: ${checks} checks, ${fails} failures`)
+  process.exit(fails === 0 ? 0 : 1)
 }
 
 console.log('\n--- mode 1: a PARAMETRIC lift (predictable, free to replicate) ---')

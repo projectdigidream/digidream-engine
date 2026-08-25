@@ -108,6 +108,10 @@ else
      node test/platform.test.js 2>/dev/null | grep -E "CONTROL|platform:")
   (cd server/edge && DNP_IGNORE_MOTION=1 DNP_WT_PORT=34480 DNP_LINK_PORT=34550 \
      node test/crush.test.js 2>/dev/null | grep -E "CONTROL|crush:")
+  # Sector motion is the map's business now: run without a script and nothing
+  # moves, which is what proves the engine is not still driving it quietly.
+  (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34498 DNP_LINK_PORT=34582 \
+     node test/phase3.test.js 2>/dev/null | grep -E "CONTROL|phase3:")
   # And the other half of §3.1.2: a client that discards the STREAMED offsets
   # has nothing for anchor-relative prediction to be relative to.
   (cd server/edge && DNP_IGNORE_OFFSETS=1 DNP_WT_PORT=34486 DNP_LINK_PORT=34556 \

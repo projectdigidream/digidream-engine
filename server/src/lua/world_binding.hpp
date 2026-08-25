@@ -18,6 +18,8 @@
 // increments a counter. "My script silently does nothing" has to be
 // diagnosable, or the defined-no-op rule just moves the confusion.
 //
+#include "dnp/geom/mapstore.hpp"
+#include "dnp/math/rng.hpp"
 #include "dnp/sim/world.hpp"
 #include "lua/commands.hpp"
 #include "lua/effects.hpp"
@@ -37,6 +39,13 @@ struct WorldBindingStats {
 // for a global.
 struct WorldContext {
     sim::World*       world = nullptr;
+    geom::MapStorage* map_store = nullptr;
+
+    // Deterministic, seeded from the map hash and the script name -- never from
+    // a clock or /dev/urandom. A script that behaved differently on replay
+    // would destroy the debuggability the command log buys, and "random" in a
+    // simulation means "reproducibly arbitrary", not "unpredictable to us".
+    Rng               rng{1, 1};
     CommandQueue*     commands = nullptr;
     EffectStack*      effects = nullptr;
 

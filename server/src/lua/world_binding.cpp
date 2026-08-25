@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "dnp/proto/messages.hpp"
+#include "dnp/sim/sectormotion.hpp"
 #include "dnp/physics/params_table.hpp"
 #include "lua/fx_binding.hpp"
 
@@ -249,6 +250,156 @@ const luaL_Reg ENTITY_METHODS[] = {
     {nullptr, nullptr},
 };
 
+// --------------------------------------------------------------------- sectors
+//
+// A sector handle carries only an index, with no generation -- unlike an
+// entity. Sectors do not die: the map's topology is fixed for the lifetime of
+// the map, so there is no reuse for a generation to protect against. Giving
+// them one anyway would imply a lifecycle they do not have.
+
+const char* const SECTOR_MT = "dnp.sector";
+
+u32* to_sector(lua_State* L, int idx) {
+    return static_cast<u32*>(luaL_testudata(L, idx, SECTOR_MT));
+}
+
+u32 check_sector(lua_State* L, int idx) {
+    if (u32* p = to_sector(L, idx)) return *p;
+    luaL_error(L, "expected a sector, got %s", luaL_typename(L, idx));
+    return 0;
+}
+
+void push_sector(lua_State* L, u32 index) {
+    *static_cast<u32*>(lua_newuserdata(L, sizeof(u32))) = index;
+    luaL_getmetatable(L, SECTOR_MT);
+    lua_setmetatable(L, -2);
+}
+
+bool sector_in_range(WorldContext& ctx, u32 s) {
+    return ctx.world->map() && s < ctx.world->map()->sector_count;
+}
+
+int l_sector_index(lua_State* L) {
+    lua_pushnumber(L, check_sector(L, 1));
+    return 1;
+}
+
+int l_sector_tag(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s)) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->map()->sector(s).tag);
+    return 1;
+}
+
+int l_sector_floor(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s)) { lua_pushnil(L); return 1; }
+    push_fx(L, ctx.world->map()->sector(s).floor_z);
+    return 1;
+}
+
+int l_sector_ceil(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s)) { lua_pushnil(L); return 1; }
+    push_fx(L, ctx.world->map()->sector(s).ceil_z);
+    return 1;
+}
+
+// sector:move_parametric(from, to, duration_ticks [, loop] [, target])
+//
+// PARAMETRIC: a pure function of the tick, so it is replicated once and every
+// client computes it for ticks the server has not reached (design §3.1.2). Free
+// to replicate and free to predict.
+int l_sector_move_parametric(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s) || !ctx.map_store) { lua_pushboolean(L, 0); return 1; }
+
+    const fx3 from = check_vec3(L, 2);
+    const fx3 to   = check_vec3(L, 3);
+    const u32 dur  = static_cast<u32>(luaL_checknumber(L, 4));
+
+    const char* loop_s = lua_isnoneornil(L, 5) ? "once" : luaL_checkstring(L, 5);
+    sim::LoopMode loop;
+    if (std::strcmp(loop_s, "once") == 0)          loop = sim::LoopMode::Once;
+    else if (std::strcmp(loop_s, "loop") == 0)     loop = sim::LoopMode::Loop;
+    else if (std::strcmp(loop_s, "pingpong") == 0) loop = sim::LoopMode::PingPong;
+    else return luaL_error(L, "loop must be 'once', 'loop' or 'pingpong', got '%s'", loop_s);
+
+    const char* tgt_s = lua_isnoneornil(L, 6) ? "both" : luaL_checkstring(L, 6);
+    sim::MotionTarget target;
+    if (std::strcmp(tgt_s, "both") == 0)         target = sim::MotionTarget::Both;
+    else if (std::strcmp(tgt_s, "floor") == 0)   target = sim::MotionTarget::Floor;
+    else if (std::strcmp(tgt_s, "ceiling") == 0) target = sim::MotionTarget::Ceiling;
+    else return luaL_error(L, "target must be 'both', 'floor' or 'ceiling', got '%s'", tgt_s);
+
+    if (ctx.world->motions().add(*ctx.map_store, s) >= sim::MAX_MOVING_SECTORS) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    // start_tick is NOW, not zero: a motion declared at load time and one
+    // declared by a trigger mid-match must both mean "begin from here".
+    lua_pushboolean(L, ctx.world->motions().start_parametric(
+        s, from, to, ctx.world->tick(), dur, loop, target) ? 1 : 0);
+    return 1;
+}
+
+// sector:set_offset(v)
+//
+// SCRIPTED-DISCRETE: whatever this callback decided, with no closed form. The
+// server streams it in every snapshot and a rider falls back to anchor-relative
+// prediction (§3.2.5). Costs bandwidth every tick it moves, which is the price
+// of being unpredictable.
+int l_sector_set_offset(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s) || !ctx.map_store) { lua_pushboolean(L, 0); return 1; }
+    const fx3 off = check_vec3(L, 2);
+    if (ctx.world->motions().add(*ctx.map_store, s) >= sim::MAX_MOVING_SECTORS) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    // Queued, not applied. Registering the sector as movable above is
+    // configuration and happens now; the OFFSET is a per-tick mutation and goes
+    // through the same choke point everything else does, so the command log
+    // stays a complete replay artifact.
+    lua_pushboolean(L, ctx.commands->push(Command{CmdKind::SetSectorOffset, s, off}) ? 1 : 0);
+    return 1;
+}
+
+int l_sector_offset(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    const i32 mi = ctx.world->motions().find(s);
+    if (mi < 0) { lua_pushnil(L); return 1; }
+    push_vec3(L, ctx.world->motions().at(static_cast<u32>(mi)).offset);
+    return 1;
+}
+
+int l_sector_eq(lua_State* L) {
+    lua_pushboolean(L, check_sector(L, 1) == check_sector(L, 2));
+    return 1;
+}
+
+int l_sector_tostring(lua_State* L) {
+    lua_pushfstring(L, "sector(%d)", static_cast<int>(check_sector(L, 1)));
+    return 1;
+}
+
+const luaL_Reg SECTOR_METHODS[] = {
+    {"index", l_sector_index},
+    {"tag", l_sector_tag},
+    {"floor", l_sector_floor},
+    {"ceil", l_sector_ceil},
+    {"offset", l_sector_offset},
+    {"move_parametric", l_sector_move_parametric},
+    {"set_offset", l_sector_set_offset},
+    {nullptr, nullptr},
+};
+
 // ------------------------------------------------------------------ dnp table
 
 int l_dnp_tick(lua_State* L) {
@@ -279,6 +430,32 @@ int l_dnp_entities(lua_State* L) {
     return 1;
 }
 
+int l_dnp_sectors(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    lua_newtable(L);
+    const u32 n = ctx.world->map() ? ctx.world->map()->sector_count : 0;
+    for (u32 i = 0; i < n; ++i) {
+        push_sector(L, i);
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    return 1;
+}
+
+// dnp.random(lo, hi) -> integer in [lo, hi]
+//
+// Deterministic and seeded from the map, never from a clock. "Random" in a
+// simulation means reproducibly arbitrary: a scripted-discrete mover has to be
+// something no CLIENT can derive, which is not the same as something the server
+// cannot replay.
+int l_dnp_random(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 lo = static_cast<i32>(luaL_checknumber(L, 1));
+    const i32 hi = static_cast<i32>(luaL_checknumber(L, 2));
+    if (hi < lo) return luaL_error(L, "dnp.random(%d, %d): empty range", lo, hi);
+    lua_pushnumber(L, ctx.rng.next_range(lo, hi + 1));
+    return 1;
+}
+
 int l_dnp_stale_ops(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(ctx_of(L).stats.stale_handle_ops));
     return 1;
@@ -288,6 +465,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"tick", l_dnp_tick},
     {"entity", l_dnp_entity},
     {"entities", l_dnp_entities},
+    {"sectors", l_dnp_sectors},
+    {"random", l_dnp_random},
     {"stale_handle_ops", l_dnp_stale_ops},
     {nullptr, nullptr},
 };
@@ -321,6 +500,18 @@ void open_world(lua_State* L, WorldContext* ctx) {
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, l_entity_eq);       lua_setfield(L, -2, "__eq");
     lua_pushcfunction(L, l_entity_tostring); lua_setfield(L, -2, "__tostring");
+    lua_pushliteral(L, "locked");            lua_setfield(L, -2, "__metatable");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, SECTOR_MT);
+    lua_newtable(L);
+    for (const luaL_Reg* r = SECTOR_METHODS; r->name; ++r) {
+        lua_pushcfunction(L, r->func);
+        lua_setfield(L, -2, r->name);
+    }
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_sector_eq);       lua_setfield(L, -2, "__eq");
+    lua_pushcfunction(L, l_sector_tostring); lua_setfield(L, -2, "__tostring");
     lua_pushliteral(L, "locked");            lua_setfield(L, -2, "__metatable");
     lua_pop(L, 1);
 

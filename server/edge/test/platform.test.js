@@ -58,7 +58,8 @@ const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
                      // separate concern (and only possible while it is within
                      // step height of the ground); what is being tested here is
                      // predicting the ride.
-                     ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'ledge'],
+                     ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'ledge',
+                      '--script', join(ROOT, 'maps', 'scripts', 'init.lua')],
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })
