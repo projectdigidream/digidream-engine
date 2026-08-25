@@ -37,6 +37,16 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
 
+# The Lua runtime, built separately from the core tests on purpose: those
+# compile against core sources only, which is what lets the determinism gate run
+# before any third-party toolchain is installed.
+if [[ -f third_party/luajit/src/libluajit.a ]]; then
+  ./scripts/build_lua_tests.sh >/dev/null
+  "./build/lua/test_lua_vm"
+else
+  echo "  skip lua tests (run: scripts/setup_luajit.sh)"
+fi
+
 echo
 echo "=== 3/5  sanitizers (ASan + UBSan) ==="
 # Not redundant with the tests above. UBSan is what catches undefined behaviour

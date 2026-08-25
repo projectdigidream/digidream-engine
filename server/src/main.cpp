@@ -22,6 +22,7 @@
 #include "dnp/physics/params_table.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
+#include "lua/vm.hpp"
 #include "net/link.hpp"
 #include "session.hpp"
 #include "snapshot_history.hpp"
@@ -59,6 +60,13 @@ struct Server {
     // reach each other into a line in the startup log rather than into an
     // enemy that stands still and a bug report six weeks later.
     std::unique_ptr<nav::NavGraph>    nav_graph;
+
+    // The script runtime. Nothing is bound to it yet -- that is the next slice
+    // -- but it runs on the tick so its budget, GC and stall accounting are
+    // exercised from the first commit rather than bolted on once scripts
+    // already depend on the timing.
+    lua::Vm     script_vm;
+    const char* script_path = nullptr;
     std::vector<u8>                   map_bytes;   // exactly what clients receive
     u64                               map_hash = 0;
 
@@ -600,10 +608,23 @@ struct Server {
         // Before the step, so the offsets a snapshot reports are the ones the
         // tick actually ran with. Deciding after would ship the client an
         // offset the server had not used yet.
+        // Lua runs OUTSIDE world.step(), always. The client predicts by
+        // running the same step; anything Lua did has to reach it as replicated
+        // state, never as a second implementation of physics.
+        if (script_vm.is_open()) script_vm.begin_tick();
+
         drive_discrete_movers();
         drive_param_test();
         world.step();
         report_crushes();
+
+        if (script_vm.is_open()) {
+            script_vm.end_tick(world.tick());
+            // A fixed step per tick, so a collection cannot choose its own
+            // moment, land on an arbitrary frame, push the loop past the 250 ms
+            // threshold and present as a burst of client corrections.
+            script_vm.gc_step();
+        }
     }
 
     void send_snapshots() {
@@ -739,6 +760,8 @@ int main(int argc, char** argv) {
     const char* map_path = nullptr;
     const char* spawn_tag_arg = nullptr;
     bool want_param_test = false;
+    const char* script_arg = nullptr;
+    bool strict_scripts = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
@@ -748,6 +771,10 @@ int main(int argc, char** argv) {
             spawn_tag_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--param-test") == 0) {
             want_param_test = true;
+        } else if (std::strcmp(argv[i], "--script") == 0 && i + 1 < argc) {
+            script_arg = argv[++i];
+        } else if (std::strcmp(argv[i], "--script-trust") == 0 && i + 1 < argc) {
+            strict_scripts = std::strcmp(argv[++i], "strict") == 0;
         }
     }
 
@@ -765,6 +792,32 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[srv] no --map given; using the built-in test map "
                              "(clients cannot be sent geometry)\n");
     }
+    if (script_arg) {
+        lua::VmConfig vc;
+        vc.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
+        if (!srv.script_vm.open(vc)) {
+            std::fprintf(stderr, "[srv] cannot start Lua: %s\n", srv.script_vm.last_error());
+            return 1;
+        }
+        // Stated at startup, deliberately. Under the default profile a script
+        // can reach the filesystem, databases and native libraries, and the
+        // confinement that makes that safe lives outside this process. An
+        // operator should learn their trust posture from the log rather than
+        // from an incident.
+        std::fprintf(stderr, "[srv] Lua: trust=%s (filesystem/db/native %s), "
+                             "budget %u/call %u/tick, memory cap %zu MB\n",
+                     strict_scripts ? "strict" : "full",
+                     strict_scripts ? "DENIED" : "ALLOWED -- confine this process",
+                     vc.budget_per_call, vc.budget_per_tick,
+                     vc.memory_cap / (1024u * 1024u));
+        if (!srv.script_vm.run_file(script_arg, script_arg)) {
+            std::fprintf(stderr, "[srv] script failed: %s\n", srv.script_vm.last_error());
+            return 1;
+        }
+        srv.script_path = script_arg;
+        std::fprintf(stderr, "[srv] loaded script %s\n", script_arg);
+    }
+
     if (!srv.link.listen(port)) {
         std::fprintf(stderr, "[srv] failed to listen on %u\n", port);
         return 1;
