@@ -24,6 +24,7 @@ add_library(dnp_core STATIC
   core/src/proto/messages.cpp
   core/src/sim/world.cpp
   core/src/sim/testmap.cpp
+  core/src/sim/sectormotion.cpp
   core/src/geom/map.cpp
   core/src/geom/triangulate.cpp
   core/src/geom/mapstore.cpp
@@ -94,6 +95,10 @@ add_test(NAME triangulate COMMAND test_triangulate)
 add_executable(test_mapfile core/tests/test_mapfile.cpp)
 target_link_libraries(test_mapfile PRIVATE dnp_core)
 add_test(NAME mapfile COMMAND test_mapfile)
+
+add_executable(test_sectormotion core/tests/test_sectormotion.cpp)
+target_link_libraries(test_sectormotion PRIVATE dnp_core)
+add_test(NAME sectormotion COMMAND test_sectormotion)
 
 add_executable(mapc tools/mapc/main.cpp)
 target_link_libraries(mapc PRIVATE dnp_core)

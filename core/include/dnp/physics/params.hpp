@@ -89,6 +89,13 @@ struct MoveState {
     bool grounded = false;
     i32  sector   = -1;
 
+    // The sector this entity rides (design §3.2.5). By default the last one it
+    // stood on -- footprint contact, not proximity -- and it stays until the
+    // entity stands on a different one. While anchored the entity moves rigidly
+    // with the sector; on detach it inherits the sector's velocity once.
+    i32  anchor   = -1;
+    bool anchored = false;
+
     u8 jumps_used  = 0;
     u8 dashes_used = 0;
 

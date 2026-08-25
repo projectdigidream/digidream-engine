@@ -17,12 +17,18 @@
 //   CLIMBABLE          (walkable up)      (too high: a wall)
 //                                         east wall is GRAPPLE
 //
-#include "dnp/geom/map.hpp"
+#include "dnp/geom/mapstore.hpp"
 
 namespace dnp::sim {
 
 // The shared instance. Identical on every target because it is built from the
 // same constants, which is the property the client's prediction depends on.
 const geom::MapData& test_map() noexcept;
+
+// The same layout, built into mutable storage. Sector motion needs a MapStorage
+// to write moved geometry back into, so anything that moves sectors -- the
+// golden trace included -- uses this rather than the const view. One definition
+// backs both, so they cannot describe different worlds.
+bool build_test_map(geom::MapStorage& store) noexcept;
 
 }  // namespace dnp::sim

@@ -91,6 +91,13 @@ public:
     Sector& sector_mut(u32 i) noexcept { return sectors_[i]; }
     Side& side_mut(u32 i) noexcept { return sides_[i]; }
 
+    // Direct point access, for sector motion writing base+offset each tick.
+    // Deliberately NOT a general editing path: changing a point's position
+    // without re-triangulating is only safe when the change cannot alter which
+    // vertices are ears, which is true of a translation and of nothing else.
+    // Shape edits go through stage_point/commit_shape.
+    fx2& point_mut(u32 i) noexcept { return points_[i]; }
+
     // Content hash of the geometry. Part of the world state, so a client whose
     // map has drifted from the server's is detectable rather than mysterious.
     u64 hash() const noexcept;

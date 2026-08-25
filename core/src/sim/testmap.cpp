@@ -1,5 +1,6 @@
 #include "dnp/sim/testmap.hpp"
 
+#include "dnp/geom/mapstore.hpp"
 #include "dnp/sim/constants.hpp"
 
 namespace dnp::sim {
@@ -73,5 +74,26 @@ const MapData MAP{
 }  // namespace
 
 const MapData& test_map() noexcept { return MAP; }
+
+bool build_test_map(MapStorage& store) noexcept {
+    store.clear();
+    for (u32 si = 0; si < MAP.sector_count; ++si) {
+        const Sector& s = MAP.sector(si);
+        if (store.add_sector(&MAP.point(s.first_point), s.point_count,
+                             s.floor_z, s.ceil_z, s.tag) != si) {
+            return false;
+        }
+        for (u16 k = 0; k < s.side_count; ++k) {
+            const Side& sd = MAP.side(s.first_side + k);
+            if (!store.add_side(si, static_cast<u16>(sd.a - s.first_point),
+                                static_cast<u16>(sd.b - s.first_point),
+                                sd.neighbor, sd.flags)) {
+                return false;
+            }
+        }
+    }
+    store.add_spawn("start", 5, fx3{F(10), F(10), F(2)});
+    return true;
+}
 
 }  // namespace dnp::sim

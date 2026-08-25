@@ -20,6 +20,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_abilities"
 "./build/$HOST_ARCH/test_triangulate"
 "./build/$HOST_ARCH/test_mapfile"
+"./build/$HOST_ARCH/test_sectormotion"
 
 # The map compiler must round-trip the authored map: mapc bakes it, and the
 # loader re-triangulates and compares, so this also proves the compiler and the

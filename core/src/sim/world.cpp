@@ -101,8 +101,29 @@ void World::step_agent(u32 i) noexcept {
 
     a.facing = cmd.aim;
 
+    const bool was_anchored = a.mv.anchored;
+    const i32  prev_anchor = a.mv.anchor;
+
     if (map_) {
         step_controller(*map_, params_[i], a.mv, cmd, a.pos, a.vel, DT);
+
+        // Anchoring follows footprint contact, not proximity (design §3.2.5):
+        // standing on a sector anchors to it, and the anchor survives until the
+        // entity stands on a different one.
+        if (a.mv.grounded && a.mv.sector >= 0) {
+            a.mv.anchor = a.mv.sector;
+            a.mv.anchored = true;
+        } else if (was_anchored) {
+            // Detached this tick -- walked off, jumped, or the sector pulled out
+            // from under it. Take an instantaneous snapshot of the sector's
+            // velocity and add it, then the entity is a fully independent free
+            // body. That is what makes jumping off a rising lift preserve the
+            // fling, and it is the same handoff pattern used for climb release,
+            // grapple release and controller detach.
+            const i32 mi = prev_anchor >= 0 ? motions_.find(static_cast<u32>(prev_anchor)) : -1;
+            if (mi >= 0) a.vel += motions_.at(static_cast<u32>(mi)).velocity();
+            a.mv.anchored = false;
+        }
     } else {
         // No map: integrate under gravity only. Not a hidden flat floor -- a
         // silently substituted floor turns a map-loading failure into a physics
@@ -114,6 +135,24 @@ void World::step_agent(u32 i) noexcept {
 }
 
 void World::step() noexcept {
+    // Sectors move BEFORE agents do. The order matters: an agent riding a lift
+    // must be carried by this tick's motion and then run its own physics from
+    // the new position, not the other way round -- resolving the agent first
+    // would leave it a tick behind the platform, which reads as the platform
+    // sliding out from under it every frame.
+    if (store_) motions_.apply(*store_, tick_);
+
+    // Carry anchored agents with their sector.
+    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+        AgentState& a = agents_[i];
+        if (!a.active || !a.mv.anchored || a.mv.anchor < 0) continue;
+        const i32 mi = motions_.find(static_cast<u32>(a.mv.anchor));
+        if (mi < 0) continue;
+        const SectorMotion& m = motions_.at(static_cast<u32>(mi));
+        const fx3 delta = m.offset - m.prev_offset;
+        a.pos += delta;
+    }
+
     // Ascending index order, always. Any order would be deterministic on its
     // own, but it must be the SAME order on client and server, and index order
     // is the one that cannot drift as the agent set changes.
@@ -150,6 +189,8 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.byte(static_cast<unsigned char>(m.mode));
     h.boolv(m.grounded);
     h.i32v(m.sector);
+    h.i32v(m.anchor);
+    h.boolv(m.anchored);
     h.byte(m.jumps_used);
     h.byte(m.dashes_used);
     h.boolv(m.jump_held);
@@ -174,6 +215,7 @@ u64 World::agent_hash(u32 i) const noexcept {
 u64 World::hash() const noexcept {
     StateHasher h;
     h.u32v(tick_);
+    motions_.hash_into(h);
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         h.boolv(agents_[i].active);
         if (!agents_[i].active) continue;

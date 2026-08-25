@@ -25,6 +25,7 @@
 #include "dnp/math/trig.hpp"
 #include "dnp/math/vec.hpp"
 #include "dnp/sim/state_hash.hpp"
+#include "dnp/geom/mapstore.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
@@ -63,8 +64,10 @@ struct World {
     // half would keep passing while a real controller quietly desynced, and the
     // real half alone would not exercise saturation or CORDIC hard enough to
     // catch a math regression.
-    dnp::sim::World sim;
-    Rng             sim_rng;
+    dnp::sim::World      sim;
+    dnp::geom::MapStorage sim_map;
+    dnp::geom::MapData    sim_view{};
+    Rng                   sim_rng;
 };
 
 void world_init(World& w) {
@@ -84,9 +87,22 @@ void world_init(World& w) {
     }
 
     w.sim.reset();
-    // Real geometry, so the collision rules and every ability are under the
-    // determinism gate rather than only the arithmetic beneath them.
-    w.sim.set_map(&dnp::sim::test_map());
+    // Real geometry in MUTABLE storage, so sector motion and anchor riding are
+    // under the determinism gate too -- not just the collision rules and the
+    // abilities, but the moving platforms agents stand on.
+    dnp::sim::build_test_map(w.sim_map);
+    w.sim_view = w.sim_map.view();
+    w.sim.set_map(&w.sim_view);
+    w.sim.set_map_storage(&w.sim_map);
+
+    // Sector 1 ping-pongs vertically, and sector 2 slides horizontally, so both
+    // the lift case and the sweeping-footprint case are exercised.
+    w.sim.motions().add(w.sim_map, 1);
+    w.sim.motions().start_parametric(1, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(3)},
+                                     0, 137, dnp::sim::LoopMode::PingPong);
+    w.sim.motions().add(w.sim_map, 2);
+    w.sim.motions().start_parametric(2, fx3::zero(), fx3{fx::from_frac(3, 2), fx::zero(), fx::zero()},
+                                     0, 211, dnp::sim::LoopMode::PingPong);
     w.sim_rng = Rng(0x5EED, 2);
     for (int i = 0; i < 8; ++i) {
         w.sim.spawn(fx3{fx::from_int(5 + i * 4), fx::from_int(5 + i * 3), fx::from_int(3)});
@@ -226,6 +242,13 @@ void world_dump(const World& w) {
                     static_cast<long long>(a.mv.flight_fuel.raw),
                     a.mv.grappling ? 1 : 0, a.mv.climbing ? 1 : 0);
     }
+    for (u32 i = 0; i < w.sim.motions().count(); ++i) {
+        const dnp::sim::SectorMotion& m = w.sim.motions().at(i);
+        std::printf("motion %u sector %u off %020lld %020lld %020lld\n", i, m.sector,
+                    static_cast<long long>(m.offset.x.raw),
+                    static_cast<long long>(m.offset.y.raw),
+                    static_cast<long long>(m.offset.z.raw));
+    }
 }
 
 u64 world_hash(const World& w) {
@@ -262,7 +285,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    World w;
+    // Static, not a stack local. This struct now carries a MapStorage and a
+    // SectorMotionSet -- around half a megabyte -- and Emscripten's stack is
+    // 64 KB. Large simulation state belongs off the stack on every target; wasm
+    // is just where forgetting shows up immediately rather than by luck.
+    static World w;
     world_init(w);
 
     if (dump_at >= 0) {

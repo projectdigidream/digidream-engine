@@ -13,6 +13,7 @@
 #include "dnp/physics/controller.hpp"
 #include "dnp/proto/messages.hpp"
 #include "dnp/sim/constants.hpp"
+#include "dnp/sim/sectormotion.hpp"
 #include "dnp/sim/state_hash.hpp"
 
 namespace dnp::sim {
@@ -42,6 +43,13 @@ public:
     // turns into a physics mystery.
     void set_map(const geom::MapData* map) noexcept { map_ = map; }
     const geom::MapData* map() const noexcept { return map_; }
+
+    // Attach mutable map storage, which sector motion needs in order to write
+    // the moved geometry back. Without it the world is read-only and no sector
+    // can move.
+    void set_map_storage(geom::MapStorage* store) noexcept { store_ = store; }
+    SectorMotionSet& motions() noexcept { return motions_; }
+    const SectorMotionSet& motions() const noexcept { return motions_; }
 
     u32  spawn(fx3 pos) noexcept;
     void despawn(u32 index) noexcept;
@@ -85,6 +93,8 @@ private:
     void step_agent(u32 i) noexcept;
 
     const geom::MapData* map_ = nullptr;
+    geom::MapStorage*    store_ = nullptr;
+    SectorMotionSet      motions_{};
 
     AgentState           agents_[MAX_AGENTS]{};
     u8                   generation_[MAX_AGENTS]{};
