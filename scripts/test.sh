@@ -7,8 +7,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "=== 1/5  no-floats guard ==="
+echo "=== 1/5  purity guards ==="
 ./scripts/check_no_floats.sh
+# Lua belongs in the server build and nowhere else. Until Phase 4 the six core
+# source lists were identical by construction and a mistake showed up as a link
+# error; now they are required to differ in one specific way, which no link
+# error can check for you.
+./scripts/check_source_lists.sh
 
 echo
 echo "=== 2/5  core unit + property tests ==="
