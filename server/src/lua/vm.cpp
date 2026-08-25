@@ -325,6 +325,33 @@ void Vm::end_tick(u32 tick) {
     }
 }
 
+void Vm::call_hook(const char* fn_name, u32 tick) {
+    if (!L_) return;
+    lua_getglobal(L_, fn_name);
+    if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); return; }
+
+    // Each callback gets its own per-call budget; the per-tick total keeps
+    // accumulating across them, so a thousand individually cheap callbacks
+    // still cannot blow the frame.
+    used_this_call_ = 0;
+    killed_ = false;
+    lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
+
+    ++stats_.callbacks_run;
+    if (lua_pcall(L_, 0, 0, 0) != 0) {
+        ++stats_.errors;
+        const char* msg = lua_tostring(L_, -1);
+        // Rate-limited by tick rather than silenced: an error every frame would
+        // bury the log, and an error nobody sees is a script that quietly does
+        // nothing.
+        if (stats_.errors <= 3 || (tick % 300) == 0) {
+            std::fprintf(stderr, "[lua] %s error (tick %u): %s\n", fn_name, tick,
+                         msg ? msg : "unknown");
+        }
+        lua_pop(L_, 1);
+    }
+}
+
 void Vm::gc_step() {
     if (L_) lua_gc(L_, LUA_GCSTEP, 4);
 }

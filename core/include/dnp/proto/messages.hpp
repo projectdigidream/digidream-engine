@@ -143,6 +143,12 @@ inline constexpr u16 ANCHORED  = 1u << 5;
 
 inline constexpr u16 SNAP_RESYNC_REQUIRED = 1u << 0;
 
+// A server-side script changed THIS observer's entity since the last snapshot
+// sent to it (docs/protocol.md §10.1.3). Per observer, deliberately: set
+// globally it would excuse every client's mismatch on every scripted tick, and
+// the signal it exists to carry would be worth nothing.
+inline constexpr u16 SNAP_LUA_APPLIED = 1u << 1;
+
 struct SnapshotHeader {
     u32 server_tick     = 0;
     u32 baseline_tick   = 0;   // 0 == full snapshot

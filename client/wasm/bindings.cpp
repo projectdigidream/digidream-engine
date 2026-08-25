@@ -57,7 +57,9 @@ constexpr int BUF32_CLIMBING  = 10;
 constexpr int BUF32_GRAPPLING = 11;
 constexpr int BUF32_GRAP_PULL = 12;
 constexpr int BUF32_GROUNDED  = 13;
-constexpr int BUF32_LEN       = 14;
+constexpr int BUF32_ANCHOR    = 14;   // sector + 1, 0 == none
+constexpr int BUF32_ANCHORED  = 15;
+constexpr int BUF32_LEN       = 16;
 
 }  // namespace
 
@@ -294,6 +296,8 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_GRAPPLING] = m.grappling ? 1u : 0u;
     out32[BUF32_GRAP_PULL] = m.grapple_pulling ? 1u : 0u;
     out32[BUF32_GROUNDED]  = m.grounded ? 1u : 0u;
+    out32[BUF32_ANCHOR]    = m.anchor >= 0 ? static_cast<unsigned>(m.anchor) + 1u : 0u;
+    out32[BUF32_ANCHORED]  = m.anchored ? 1u : 0u;
 }
 
 // Adopt authoritative state. This is step 2 of reconciliation
@@ -337,6 +341,13 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
     m.grounded = in32[BUF32_GROUNDED] != 0;
+    // Adopted, not inferred. The anchor is simulation state the controller
+    // carries between ticks, so a replay that started from the wrong one
+    // diverges for reasons position correction cannot repair -- exactly the
+    // argument docs/protocol.md §5.1 makes for the ability timers.
+    m.anchor = in32[BUF32_ANCHOR] == 0
+                   ? -1 : static_cast<i32>(in32[BUF32_ANCHOR]) - 1;
+    m.anchored = in32[BUF32_ANCHORED] != 0;
 }
 
 // Input quantisation, exposed so the client uses the SAME function the server

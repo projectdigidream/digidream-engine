@@ -64,6 +64,31 @@ public:
 
     void step() noexcept;
 
+    // --- invariant-preserving mutators -------------------------------------
+    //
+    // The ONLY way anything outside the simulation may move an entity. They
+    // exist because `agent_mut(i).pos = p` is not a teleport: it leaves
+    // mv.sector naming the sector the entity used to be in, so the next tick
+    // resolves collision against the wrong geometry, and it leaves the entity
+    // anchored to a platform it is no longer standing on. Both failures present
+    // as physics bugs somewhere else entirely.
+    //
+    // Keeping them in core/ rather than in the binding layer means the script
+    // API physically cannot leave the world in a shape the engine would not
+    // produce itself -- and it keeps them integer-only, under the no-floats
+    // guard, where every other rule of the simulation lives.
+
+    // Move an entity, re-deriving what its new position implies.
+    void teleport(u32 index, fx3 pos) noexcept;
+
+    // Add to velocity. RELATIVE on purpose: two effects that each want to push
+    // an entity this tick should both push it, where two absolute writes would
+    // silently mean "whichever ran last".
+    void add_impulse(u32 index, fx3 dv) noexcept;
+
+    // Absolute, for the cases where last-write-wins is the correct semantic.
+    void set_velocity(u32 index, fx3 v) noexcept;
+
     // Crush and pin events raised by the tick that just ran (design §3.1,
     // §3.1.3). Rebuilt from scratch every step: this is what happened THIS
     // tick, not a backlog, so a caller that does not drain it loses it rather

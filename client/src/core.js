@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 19
-const BUF32_LEN = 14
+const BUF32_LEN = 16
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -23,7 +23,7 @@ export const IDX = {
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15
 }
 
 export class Core {
@@ -250,7 +250,9 @@ export class WasmWorld {
       climbing: u32[b32 + IDX.CLIMBING] !== 0,
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
-      grounded: u32[b32 + IDX.GROUNDED] !== 0
+      grounded: u32[b32 + IDX.GROUNDED] !== 0,
+      anchor: u32[b32 + IDX.ANCHOR],
+      anchored: u32[b32 + IDX.ANCHORED] !== 0
     }
   }
 
@@ -288,6 +290,8 @@ export class WasmWorld {
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
     u32[b32 + IDX.GROUNDED] = s.grounded ? 1 : 0
+    u32[b32 + IDX.ANCHOR] = s.anchor ?? 0
+    u32[b32 + IDX.ANCHORED] = s.anchored ? 1 : 0
     this.core.M._dnp_world_write_agent(this.ptr, idx, this.core.buf64, this.core.buf32)
   }
 }

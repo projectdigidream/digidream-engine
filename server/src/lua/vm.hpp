@@ -124,6 +124,11 @@ public:
     // its own moment.
     void gc_step();
 
+    // Call a global function of no arguments, if it exists. Errors are caught,
+    // counted and logged once -- a script that throws must not take the tick
+    // with it, and must not be silently ignored either.
+    void call_hook(const char* fn_name, u32 tick);
+
     const char* last_error() const noexcept { return err_; }
 
     // Which script is running, for log attribution.

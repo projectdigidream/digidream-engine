@@ -15,7 +15,7 @@
 // disagree. All three are worth knowing about, and all three are invisible in a
 // float-based engine where small corrections happen constantly.
 //
-import { STATE_FLAG } from './proto.js'
+import { STATE_FLAG, SNAP_FLAG } from './proto.js'
 
 const HISTORY = 256   // ticks of input kept for replay; ~4s at 60 Hz
 
@@ -65,6 +65,11 @@ export class Predictor {
     this.paramsStaleRun = 0
     this.paramsStaleLimit = 12
 
+    // Test hook for the control: a client that ignores LUA_APPLIED must report
+    // the scripted change as a defect. If it did not, the flag would be
+    // carrying no information and could be deleted.
+    this.ignoreLuaFlag = false
+
     this.stats = {
       ticks: 0,
       snapshots: 0,
@@ -75,6 +80,7 @@ export class Predictor {
       starvedDivergences: 0,    // expected: the server simulated input we never sent
       paramsStale: 0,           // expected: our rules are one generation behind
       paramsStuck: 0,           // NOT expected: they have been behind too long
+      luaApplied: 0,            // expected: the server ran gameplay logic we cannot predict
       serverRepeats: 0,
       hardResyncs: 0,
       noHistory: 0
@@ -135,6 +141,11 @@ export class Predictor {
       grappleAnchor: sb.grappleAnchor,
       grappleDist: sb.grappleDist,
       grounded: (sb.stateFlags & STATE_FLAG.GROUNDED) !== 0,
+      // The sector this entity rides, and whether it is riding it. Both are
+      // controller state carried between ticks, so a replay starting from the
+      // wrong anchor diverges until the entity happens to land again.
+      anchor: sb.anchor,
+      anchored: (sb.stateFlags & STATE_FLAG.ANCHORED) !== 0,
       climbing: (sb.stateFlags & STATE_FLAG.CLIMBING) !== 0,
       grappling: (sb.stateFlags & STATE_FLAG.GRAPPLING) !== 0,
 
@@ -205,6 +216,17 @@ export class Predictor {
       } else if (serverRepeats > 0) {
         this.stats.starvedDivergences += 1
         verdict = 'starved'
+      } else if (!this.ignoreLuaFlag && (snapshot.flags & SNAP_FLAG.LUA_APPLIED) !== 0) {
+        // Server-side gameplay logic touched THIS entity since the last
+        // snapshot we received (docs/protocol.md §10.1.3). The client never
+        // runs server Lua, by design, so this tick was never predictable.
+        //
+        // Expected -- but the SHAPE is what makes it distinguishable from a
+        // real fault: a scripted change mismatches on one tick and then
+        // self-heals, because the adopt-and-replay below re-derives everything
+        // after it. A determinism regression never stops.
+        this.stats.luaApplied += 1
+        verdict = 'lua-applied'
       } else if (mine.epoch !== snapEpoch || snapEpoch !== this.paramEpoch) {
         // Either this tick was predicted under a different parameter
         // generation than the server used for it, or our current set is still

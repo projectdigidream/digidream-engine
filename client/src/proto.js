@@ -49,6 +49,12 @@ export const ENT_FIELD = {
   DESTROYED: 1 << 7
 }
 
+// Snapshot header flags (docs/protocol.md §5).
+export const SNAP_FLAG = {
+  RESYNC_REQUIRED: 1 << 0,
+  LUA_APPLIED: 1 << 1
+}
+
 export const STATE_FLAG = {
   GROUNDED: 1 << 0,
   CLIMBING: 1 << 1,

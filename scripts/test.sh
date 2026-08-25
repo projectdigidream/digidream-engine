@@ -95,7 +95,8 @@ else
      && node test/platform.test.js 2>/dev/null | tail -2 \
      && node test/crush.test.js 2>/dev/null | tail -2 \
      && node test/phase3.test.js 2>/dev/null | tail -2 \
-     && node test/params.test.js 2>/dev/null | tail -2)
+     && node test/params.test.js 2>/dev/null | tail -2 \
+     && node test/lua.test.js 2>/dev/null | tail -2)
 
   # The control case: a client that ignores the replicated motion parameters
   # MUST mispredict. If it does not, the replication is doing nothing and the
@@ -114,6 +115,12 @@ else
   # physics from the server and must be caught saying so.
   (cd server/edge && DNP_IGNORE_PARAMS=1 DNP_WT_PORT=34488 DNP_LINK_PORT=34558 \
      node test/params.test.js 2>/dev/null | grep -E "CONTROL|params:")
+  # Scripted changes: one control proves the flag is not set unconditionally,
+  # the other proves a client that ignores it reports a defect.
+  (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34492 DNP_LINK_PORT=34572 \
+     node test/lua.test.js 2>/dev/null | grep -E "CONTROL|lua:")
+  (cd server/edge && DNP_IGNORE_LUA=1 DNP_WT_PORT=34494 DNP_LINK_PORT=34574 \
+     node test/lua.test.js 2>/dev/null | grep -E "CONTROL|lua:")
 
   echo
   echo "--- client prediction against the real server ---"

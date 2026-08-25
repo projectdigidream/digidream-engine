@@ -22,7 +22,9 @@
 #include "dnp/physics/params_table.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
+#include "lua/commands.hpp"
 #include "lua/vm.hpp"
+#include "lua/world_binding.hpp"
 #include "net/link.hpp"
 #include "session.hpp"
 #include "snapshot_history.hpp"
@@ -65,8 +67,16 @@ struct Server {
     // -- but it runs on the tick so its budget, GC and stall accounting are
     // exercised from the first commit rather than bolted on once scripts
     // already depend on the timing.
-    lua::Vm     script_vm;
-    const char* script_path = nullptr;
+    lua::Vm            script_vm;
+    const char*        script_path = nullptr;
+    lua::CommandQueue  lua_commands;
+    lua::WorldContext  lua_ctx;
+
+    // The tick at which a script last changed each agent. Compared against the
+    // tick of the last snapshot sent to a session, so LUA_APPLIED is set for
+    // the observers a change actually concerns and nobody else -- setting it
+    // globally would excuse every client's mismatch on every scripted tick.
+    u32 lua_touched_tick[sim::MAX_AGENTS]{};
     std::vector<u8>                   map_bytes;   // exactly what clients receive
     u64                               map_hash = 0;
 
@@ -601,6 +611,20 @@ struct Server {
         }
     }
 
+    void flush_lua_commands() {
+        if (!script_vm.is_open()) return;
+        const u32 now = world.tick();
+        lua_commands.apply(world, [&](u32 agent) {
+            if (agent < sim::MAX_AGENTS) lua_touched_tick[agent] = now + 1;
+        });
+        if (lua_commands.dropped() > 0) {
+            // R10's rule again: never silently cap.
+            std::fprintf(stderr, "[srv] tick %u: %u Lua commands dropped (queue full)\n",
+                         now, lua_commands.dropped());
+            lua_commands.clear();
+        }
+    }
+
     void tick() {
         for (auto& [id, s] : sessions) {
             if (s.has_agent) world.set_input(s.agent, s.take());
@@ -611,12 +635,31 @@ struct Server {
         // Lua runs OUTSIDE world.step(), always. The client predicts by
         // running the same step; anything Lua did has to reach it as replicated
         // state, never as a second implementation of physics.
-        if (script_vm.is_open()) script_vm.begin_tick();
+        if (script_vm.is_open()) {
+            script_vm.begin_tick();
+            // Timers and per-tick logic run BEFORE the step, in the same place
+            // drive_discrete_movers() does and for the same reason: what a
+            // snapshot reports must be what the tick actually ran with.
+            script_vm.call_hook("on_tick", world.tick());
+        }
 
         drive_discrete_movers();
         drive_param_test();
+
+        // Flush 1. Everything scripts asked for before the step lands here, so
+        // physics never observes an entity moving underneath it mid-resolution.
+        flush_lua_commands();
+
         world.step();
         report_crushes();
+
+        if (script_vm.is_open()) {
+            // Post-step callbacks see the world the tick produced.
+            script_vm.call_hook("on_post_tick", world.tick());
+        }
+        // Flush 2, before snapshots: a consequence and the state it acted on
+        // ride the same snapshot rather than arriving a frame apart.
+        flush_lua_commands();
 
         if (script_vm.is_open()) {
             script_vm.end_tick(world.tick());
@@ -648,6 +691,11 @@ struct Server {
             h.last_input_tick = s.last_applied_tick;
             h.input_margin    = s.margin();
             h.flags           = 0;
+            // Per observer: only if a script touched THIS agent since the last
+            // snapshot this session received (docs/protocol.md §10.1.3).
+            if (lua_touched_tick[s.agent] > s.last_snapshot_sent) {
+                h.flags |= proto::SNAP_LUA_APPLIED;
+            }
 
             // The whole controller state, not just position. Reconciliation
             // overwrites the client's copy and replays from it, so anything
@@ -667,6 +715,12 @@ struct Server {
             sb.flight_fuel     = self.mv.flight_fuel;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
+            // The sector this entity rides (design §3.2.5), encoded with the
+            // same "raw 0 means none" convention handles use. Not replicating
+            // it left the client carrying a stale anchor across any server-side
+            // move -- see docs/protocol.md §5.1.
+            sb.anchor          = proto::Handle{self.mv.anchor >= 0
+                                     ? static_cast<u32>(self.mv.anchor) + 1u : 0u};
             sb.param_epoch     = param_epoch[s.agent];
             sb.state_hash      = world.agent_hash(s.agent);
 
@@ -739,6 +793,7 @@ struct Server {
                 }
             }
 
+            s.last_snapshot_sent = world.tick();
             const size_t n = w.finish();
             if (omitted > 0) {
                 // Protocol R10: never silently cap.
@@ -810,6 +865,13 @@ int main(int argc, char** argv) {
                      strict_scripts ? "DENIED" : "ALLOWED -- confine this process",
                      vc.budget_per_call, vc.budget_per_tick,
                      vc.memory_cap / (1024u * 1024u));
+        srv.lua_ctx.world = &srv.world;
+        srv.lua_ctx.commands = &srv.lua_commands;
+        // Installed BEFORE the chunk runs: a script's top level is allowed to
+        // look at the world, and `dnp` being nil at load time would be a
+        // baffling first experience.
+        lua::open_world(srv.script_vm.state(), &srv.lua_ctx);
+
         if (!srv.script_vm.run_file(script_arg, script_arg)) {
             std::fprintf(stderr, "[srv] script failed: %s\n", srv.script_vm.last_error());
             return 1;

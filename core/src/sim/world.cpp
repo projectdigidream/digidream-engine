@@ -231,6 +231,41 @@ void World::detect_vertical_crush() noexcept {
     }
 }
 
+void World::teleport(u32 index, fx3 pos) noexcept {
+    if (index >= MAX_AGENTS || !agents_[index].active) return;   // defined no-op
+    AgentState& a = agents_[index];
+    a.pos = pos;
+
+    // Re-derive the sector. Without this the next tick tests the new position
+    // against the old sector's walls, which is how a teleported entity ends up
+    // inside geometry or falling through a floor that is not there.
+    a.mv.sector = map_ ? geom::find_sector(*map_, fx2{pos.x, pos.y}) : geom::NO_SECTOR;
+
+    // And drop the anchor. An entity moved off a platform is no longer riding
+    // it, and leaving the anchor set would have the next tick carry it by that
+    // platform's motion from wherever it now is (design §3.2.5).
+    a.mv.anchored = false;
+    a.mv.anchor = -1;
+
+    // Grounded is re-derived by the next step from the new surroundings rather
+    // than asserted here: whether the destination has a floor under it is the
+    // mover's question, not the caller's.
+    a.mv.grounded = false;
+}
+
+void World::add_impulse(u32 index, fx3 dv) noexcept {
+    if (index >= MAX_AGENTS || !agents_[index].active) return;
+    agents_[index].vel += dv;
+    // A pushed entity is no longer resting on anything.
+    if (dv.z.raw != 0) agents_[index].mv.grounded = false;
+}
+
+void World::set_velocity(u32 index, fx3 v) noexcept {
+    if (index >= MAX_AGENTS || !agents_[index].active) return;
+    agents_[index].vel = v;
+    if (v.z.raw != 0) agents_[index].mv.grounded = false;
+}
+
 void World::step() noexcept {
     // Events describe the tick about to run, so the previous tick's are dropped
     // here rather than at the end -- a caller reading them after step() sees
@@ -270,6 +305,11 @@ u16 World::state_flags(u32 i) const noexcept {
     if (m.hovering)  f |= proto::state_flag::HOVERING;
     if (m.flying)    f |= proto::state_flag::FLYING;
     if (m.grappling) f |= proto::state_flag::GRAPPLING;
+    // Declared in the protocol since Phase 1 and never populated until now.
+    // Its absence cost 18 ticks of divergence after every teleport: the client
+    // kept riding an anchor the server had dropped, and the two only reconverged
+    // once the entity landed and both re-derived it.
+    if (m.anchored) f |= proto::state_flag::ANCHORED;
     return f;
 }
 

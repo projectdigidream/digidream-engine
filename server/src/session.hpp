@@ -23,6 +23,11 @@ public:
 
     u32  last_applied_tick   = 0;   // reported as SNAPSHOT.last_input_tick
     u32  ack_snapshot_tick   = 0;
+
+    // Tick of the most recent snapshot sent to this session, so LUA_APPLIED can
+    // be scoped to changes this observer has not yet been told about
+    // (docs/protocol.md §10.1.3).
+    u32  last_snapshot_sent  = 0;
     u32  newest_input_tick   = 0;
 
     // Statistics worth watching: a client that starves regularly is either
@@ -48,6 +53,7 @@ public:
         for (u32 i = 0; i < INPUT_RING; ++i) { have_[i] = false; ring_[i] = proto::InputFrame{}; }
         last_applied_tick = 0;
         ack_snapshot_tick = 0;
+        last_snapshot_sent = 0;
         newest_input_tick = 0;
         next_tick_ = 0;
         started_ = false;
