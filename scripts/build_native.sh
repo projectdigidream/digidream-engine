@@ -47,6 +47,7 @@ SRCS=(
   "$ROOT/core/src/geom/mapfile.cpp"
   "$ROOT/core/src/physics/collide.cpp"
   "$ROOT/core/src/physics/controller.cpp"
+  "$ROOT/core/src/nav/navgraph.cpp"
 )
 
 echo "[build] arch=$ARCH -> $OUT"
@@ -58,6 +59,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_triangulate.cpp" -o "$
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_mapfile.cpp"     -o "$OUT/test_mapfile"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sectormotion.cpp" -o "$OUT/test_sectormotion"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_crush.cpp"        -o "$OUT/test_crush"
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_nav.cpp"          -o "$OUT/test_nav"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/tools/mapc/main.cpp"             -o "$OUT/mapc"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/golden_trace.cpp" -o "$OUT/golden_trace"
 echo "[build] ok"

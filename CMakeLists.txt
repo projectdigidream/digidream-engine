@@ -32,6 +32,7 @@ add_library(dnp_core STATIC
   core/src/geom/mapfile.cpp
   core/src/physics/collide.cpp
   core/src/physics/controller.cpp
+  core/src/nav/navgraph.cpp
 )
 
 target_include_directories(dnp_core PUBLIC core/include)
@@ -104,6 +105,10 @@ add_test(NAME sectormotion COMMAND test_sectormotion)
 add_executable(test_crush core/tests/test_crush.cpp)
 target_link_libraries(test_crush PRIVATE dnp_core)
 add_test(NAME crush COMMAND test_crush)
+
+add_executable(test_nav core/tests/test_nav.cpp)
+target_link_libraries(test_nav PRIVATE dnp_core)
+add_test(NAME nav COMMAND test_nav)
 
 add_executable(mapc tools/mapc/main.cpp)
 target_link_libraries(mapc PRIVATE dnp_core)

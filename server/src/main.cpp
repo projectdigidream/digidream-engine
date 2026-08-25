@@ -17,6 +17,7 @@
 
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapfile.hpp"
+#include "dnp/nav/navgraph.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 #include "net/link.hpp"
@@ -50,10 +51,16 @@ struct Server {
     u32         spawn_tag_len = 5;
 
     std::unique_ptr<geom::MapStorage> map_store;
+
+    // The sector graph (design §3.2.4). Nothing routes over it yet -- enemies
+    // are Phase 4 -- but building it at load turns a map whose rooms cannot
+    // reach each other into a line in the startup log rather than into an
+    // enemy that stands still and a bug report six weeks later.
+    std::unique_ptr<nav::NavGraph>    nav_graph;
     std::vector<u8>                   map_bytes;   // exactly what clients receive
     u64                               map_hash = 0;
 
-    Server() : map_store(new geom::MapStorage()) {
+    Server() : map_store(new geom::MapStorage()), nav_graph(new nav::NavGraph()) {
         // Until a map is loaded, fall back to the built-in one so the server is
         // still runnable. Phase 3 retires this once every deployment ships a
         // baked map.
@@ -177,7 +184,65 @@ struct Server {
         std::fprintf(stderr, "[srv] map %s: %u sectors, %u sides, hash %016llX\n",
                      path, loaded.sector_count, loaded.side_count,
                      static_cast<unsigned long long>(map_hash));
+
+        // Nav graph, plus a reachability report from the default spawn. This is
+        // a map-authoring signal, not a runtime one: "17 of 40 sectors are
+        // reachable" is something the author wants to hear at load, and is
+        // otherwise only discovered by watching an enemy fail to path.
+        if (!nav_graph->build(loaded)) {
+            std::fprintf(stderr, "[srv] map has more sectors than the nav graph holds\n");
+            return false;
+        }
+        report_reachability(loaded);
         return true;
+    }
+
+    // How much of the map a standard body can walk to from the spawn.
+    //
+    // A flood fill over the same edge test A* uses, so it reports what pathing
+    // would actually find rather than what the topology suggests. Sectors are
+    // counted once; the queue is the caller's stack-free scratch.
+    void report_reachability(const geom::MapData& map) {
+        static u8  seen[nav::MAX_NAV_NODES];
+        static u32 queue[nav::MAX_NAV_NODES];
+        for (u32 i = 0; i < nav_graph->node_count(); ++i) seen[i] = 0;
+
+        const fx3 origin = map_store->spawn_for_tag(spawn_tag, spawn_tag_len);
+        const i32 start = geom::find_sector(map, fx2{origin.x, origin.y});
+        if (start < 0) {
+            std::fprintf(stderr, "[srv] spawn '%s' is not inside any sector\n", spawn_tag);
+            return;
+        }
+
+        const nav::NavBody body;
+        u32 head = 0, tail = 0, found = 1;
+        queue[tail++] = static_cast<u32>(start);
+        seen[start] = 1;
+        while (head < tail) {
+            const u32 cur = queue[head++];
+            const nav::NavNode& n = nav_graph->node(cur);
+            for (u32 k = 0; k < n.edge_count; ++k) {
+                const nav::NavEdge& e = nav_graph->edge(n.first_edge + k);
+                if (seen[e.to]) continue;
+                if (!nav_graph->edge_is_open(map, cur, e, body)) continue;
+                seen[e.to] = 1;
+                queue[tail++] = e.to;
+                ++found;
+            }
+        }
+
+        std::fprintf(stderr, "[srv] nav: %u nodes, %u edges; %u of %u sectors reachable "
+                             "on foot from spawn '%s'\n",
+                     nav_graph->node_count(), nav_graph->edge_count(), found,
+                     nav_graph->node_count(), spawn_tag);
+        if (found < nav_graph->node_count()) {
+            // Not an error. Sectors reachable only by jumping, grappling or a
+            // lift at the top of its travel are legitimate level design, and
+            // the walk-only graph is expected to miss them (design §3.2.2:
+            // enemies do not jump). Worth saying out loud all the same.
+            std::fprintf(stderr, "[srv] nav: %u sector(s) need more than walking to reach\n",
+                         nav_graph->node_count() - found);
+        }
     }
 
     void send_map(u32 id) {

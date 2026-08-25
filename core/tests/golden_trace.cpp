@@ -26,6 +26,7 @@
 #include "dnp/math/vec.hpp"
 #include "dnp/sim/state_hash.hpp"
 #include "dnp/geom/mapstore.hpp"
+#include "dnp/nav/navgraph.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
@@ -78,6 +79,20 @@ struct World {
     dnp::geom::MapStorage sim_map;
     dnp::geom::MapData    sim_view{};
     Rng                   sim_rng;
+
+    // The nav graph, queried periodically and folded into the hash.
+    //
+    // Nothing in the simulation routes yet -- enemies arrive in Phase 4 -- but
+    // A* over the sector graph is integer division, sqrt and a heap whose order
+    // decides the answer, which is exactly the shape of code that resolves one
+    // way on arm64 and another on wasm. Getting it under the gate before
+    // anything depends on it is cheaper than bisecting it afterwards.
+    dnp::nav::NavGraph  nav;
+    dnp::nav::NavQuery  nav_query;
+    u32                 nav_path[dnp::nav::MAX_NAV_NODES];
+    u64                 nav_digest;
+    u32                 nav_queries;
+    u32                 nav_routes_found;
 
     // Not hashed and not part of the simulation -- see --coverage in main().
     u32 vertical_crush_ticks;
@@ -178,6 +193,11 @@ void world_init(World& w) {
         pr.grapple_enabled = (i % 2) == 1;
         pr.max_jumps = static_cast<u8>(1 + (i % 3));
     }
+    w.nav.build(w.sim_view);
+    w.nav_digest = 0;
+    w.nav_queries = 0;
+    w.nav_routes_found = 0;
+
     w.vertical_crush_ticks = 0;
     w.horizontal_pin_ticks = 0;
 }
@@ -268,6 +288,28 @@ void world_step(World& w) {
     }
     w.sim.step();
 
+    // Route across the map periodically. The floors are moving underneath it,
+    // so the answer genuinely changes over the run rather than being one cached
+    // result hashed ten thousand times.
+    if ((w.tick % 97) == 0) {
+        const dnp::nav::NavBody body;
+        const u32 from = (w.tick / 97) % w.nav.node_count();
+        const u32 to = (w.tick / 97 + 3) % w.nav.node_count();
+        const dnp::nav::PathResult pr =
+            dnp::nav::find_path(w.sim_view, w.nav, w.nav_query, from, to, body,
+                                w.nav_path, dnp::nav::MAX_NAV_NODES);
+        StateHasher nh;
+        nh.u64v(w.nav_digest);
+        nh.byte(static_cast<unsigned char>(pr.status));
+        nh.u32v(pr.length);
+        nh.fxv(pr.cost);
+        nh.u32v(pr.expanded);
+        for (u32 i = 0; i < pr.length; ++i) nh.u32v(w.nav_path[i]);
+        w.nav_digest = nh.value();
+        ++w.nav_queries;
+        if (pr.status == dnp::nav::PathStatus::Ok) ++w.nav_routes_found;
+    }
+
     // Coverage bookkeeping, deliberately outside the hash: this counts what the
     // trace EXERCISED, and a counter in the hashed state would make the gate
     // compare its own instrumentation.
@@ -337,6 +379,7 @@ u64 world_hash(const World& w) {
         h.u64v(b.rng.stream_inc());
     }
     h.u64v(w.sim.hash());
+    h.u64v(w.nav_digest);
     h.u64v(w.sim_rng.state());
     return h.value();
 }
@@ -387,7 +430,12 @@ int main(int argc, char** argv) {
         std::printf("ticks %d\n", ticks);
         std::printf("vertical_crush_events %u\n", w.vertical_crush_ticks);
         std::printf("horizontal_pin_events %u\n", w.horizontal_pin_ticks);
-        return (w.vertical_crush_ticks > 0 && w.horizontal_pin_ticks > 0) ? 0 : 1;
+        std::printf("nav_queries %u\n", w.nav_queries);
+        std::printf("nav_routes_found %u\n", w.nav_routes_found);
+        // Routes must be found AND refused over the run: a gate that only ever
+        // saw "unreachable" would compare three targets agreeing about nothing.
+        return (w.vertical_crush_ticks > 0 && w.horizontal_pin_ticks > 0 &&
+                w.nav_routes_found > 0 && w.nav_routes_found < w.nav_queries) ? 0 : 1;
     }
     if (summary) std::printf("final %d %016llX\n", ticks, static_cast<unsigned long long>(last));
     return 0;
