@@ -4,6 +4,7 @@
 // reconciliation and clock sync depend on.
 //
 #include "dnp/proto/messages.hpp"
+#include "snapshot_history.hpp"
 
 namespace dnp::server {
 
@@ -30,7 +31,20 @@ public:
     u64 starved_ticks = 0;
     u64 duplicate_frames = 0;
 
+    // What this client has been sent, for delta encoding (docs/protocol.md 5.3).
+    SnapshotHistory history;
+
+    // Bandwidth accounting. Delta compression is only worth its complexity if
+    // it actually reduces bytes, so the server measures rather than assumes.
+    u64 bytes_sent = 0;
+    u64 snapshots_sent = 0;
+    u64 entities_omitted = 0;
+
     void reset() noexcept {
+        history.reset();
+        bytes_sent = 0;
+        snapshots_sent = 0;
+        entities_omitted = 0;
         for (u32 i = 0; i < INPUT_RING; ++i) { have_[i] = false; ring_[i] = proto::InputFrame{}; }
         last_applied_tick = 0;
         ack_snapshot_tick = 0;

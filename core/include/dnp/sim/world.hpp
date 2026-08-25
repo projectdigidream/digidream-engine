@@ -69,6 +69,14 @@ public:
     u32 tick() const noexcept { return tick_; }
     u32 capacity() const noexcept { return MAX_AGENTS; }
 
+    // Entity generation, incremented every time a slot is reused. This is what
+    // makes protocol R8 real: without it a recycled index looks like the same
+    // entity to a client, which inherits the previous occupant's interpolation
+    // history, animation state -- and, once delta compression is on, its
+    // replication baseline. The visible result is an enemy appearing to
+    // teleport across the map at the moment it dies.
+    u8 generation(u32 i) const noexcept { return generation_[i]; }
+
     const AgentState&  agent(u32 i) const noexcept { return agents_[i]; }
     AgentState&        agent_mut(u32 i) noexcept { return agents_[i]; }
     const AgentParams& params(u32 i) const noexcept { return params_[i]; }
@@ -86,6 +94,7 @@ private:
     void step_agent(u32 i) noexcept;
 
     AgentState        agents_[MAX_AGENTS]{};
+    u8                generation_[MAX_AGENTS]{};
     AgentParams       params_[MAX_AGENTS]{};
     proto::InputFrame inputs_[MAX_AGENTS]{};
     u32               tick_ = 0;

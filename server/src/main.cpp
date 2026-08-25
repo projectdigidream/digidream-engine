@@ -2,10 +2,10 @@
 // Authoritative server: fixed-timestep loop, link endpoint, snapshot production.
 //
 // Phase 1 harness. The simulation is the placeholder point-mass controller from
-// core/sim/world.cpp and there is no Lua, no map, and no delta compression yet
-// (every snapshot is sent with baseline_tick = 0, which the protocol defines as
-// "full"). What IS real is the shape: the tick loop, the input jitter buffer,
-// per-observer snapshot encoding, and the budget enforcement.
+// core/sim/world.cpp, and there is no Lua and no map yet. What IS real is the
+// shape: the tick loop, the input jitter buffer, per-observer snapshot
+// encoding, delta compression against an acked baseline, and budget
+// enforcement.
 //
 #include <chrono>
 #include <cstdio>
@@ -17,6 +17,7 @@
 #include "dnp/sim/world.hpp"
 #include "net/link.hpp"
 #include "session.hpp"
+#include "snapshot_history.hpp"
 
 using namespace dnp;
 using namespace dnp::server;
@@ -47,8 +48,16 @@ struct Server {
         auto it = sessions.find(id);
         if (it == sessions.end()) return;   // defined no-op
         if (it->second.has_agent) world.despawn(it->second.agent);
-        std::fprintf(stderr, "[srv] session %u closed (reason %u, starved %llu ticks)\n",
-                     id, reason, static_cast<unsigned long long>(it->second.starved_ticks));
+        const Session& c = it->second;
+        const double avg = c.snapshots_sent ? static_cast<double>(c.bytes_sent) / c.snapshots_sent : 0.0;
+        std::fprintf(stderr,
+                     "[srv] session %u closed (reason %u, starved %llu ticks, "
+                     "%llu snapshots, %.1f bytes avg, %llu entity-sends elided)\n",
+                     id, reason,
+                     static_cast<unsigned long long>(c.starved_ticks),
+                     static_cast<unsigned long long>(c.snapshots_sent),
+                     avg,
+                     static_cast<unsigned long long>(c.entities_omitted));
         sessions.erase(it);
     }
 
@@ -105,7 +114,7 @@ struct Server {
             w.u16v(proto::TICK_RATE_HZ);
             w.u16v(static_cast<u16>(sim::TICK_RATE_HZ / snapshot_divisor));
             w.u32v(world.tick());
-            w.u32v(proto::Handle::make(agent + 1, 1).raw);
+            w.u32v(proto::Handle::make(agent + 1, world.generation(agent)).raw);
             const size_t end = w.size();
             const u32 body_len = static_cast<u32>(end - len_pos - 4);
             buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -147,9 +156,14 @@ struct Server {
 
             const sim::AgentState& self = world.agent(s.agent);
 
+            // Delta against whatever the client last confirmed it applied. If
+            // that snapshot has aged out of the ring -- or the client has never
+            // acked -- fall back to a full snapshot, which is always correct.
+            const SnapshotRecord* baseline = s.history.find(s.ack_snapshot_tick);
+
             proto::SnapshotHeader h;
             h.server_tick     = world.tick();
-            h.baseline_tick   = 0;   // full snapshot; delta compression is Phase 1 work still to come
+            h.baseline_tick   = baseline ? baseline->tick : 0;
             h.last_input_tick = s.last_applied_tick;
             h.input_margin    = s.margin();
             h.flags           = 0;
@@ -166,30 +180,80 @@ struct Server {
             proto::SnapshotWriter w(buf, sizeof(buf));
             w.begin(h, sb, 100);
 
-            // Every OTHER agent. The observer's own agent is already in
-            // SelfBlock at full precision, and sending it twice would let the
-            // client reconcile against the quantised copy by mistake.
+            SnapshotRecord& record = s.history.begin(world.tick());
+
             u32 omitted = 0;
+            u32 unchanged = 0;
             for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
-                if (i == s.agent || !world.agent(i).active) continue;
+                // The observer's own agent is in SelfBlock at full precision.
+                // Sending it again here would let the client reconcile against
+                // the quantised copy of itself.
+                if (i == s.agent) continue;
+
                 const sim::AgentState& a = world.agent(i);
+                const EntitySample was = baseline ? baseline->entities[i] : EntitySample{};
+
+                EntitySample now;
+                now.present          = a.active;
+                now.generation       = world.generation(i);
+                now.pos              = a.pos;
+                now.facing           = a.facing;
+                now.animation_state  = 0;
+
+                if (!now.present) {
+                    // Only tell the client about a destruction it has not
+                    // already been told about.
+                    if (was.present) {
+                        proto::EntityBlock e;
+                        e.handle = proto::Handle::make(i + 1, was.generation);
+                        e.mask   = proto::ent_field::DESTROYED;
+                        if (w.try_entity(e)) {
+                            record.entities[i] = EntitySample{};   // client now agrees it is gone
+                        } else {
+                            record.entities[i] = was;              // retry next snapshot
+                            ++omitted;
+                        }
+                    }
+                    continue;
+                }
+
+                const u32 mask = delta_mask(was, now);
+                if (mask == 0) {
+                    // Unchanged: omit entirely. The client carries it forward
+                    // from the baseline.
+                    ++unchanged;
+                    record.entities[i] = now;
+                    continue;
+                }
 
                 proto::EntityBlock e;
-                e.handle = proto::Handle::make(i + 1, 1);
-                e.mask   = proto::ent_field::POS | proto::ent_field::FACING;
-                e.pos    = a.pos;
-                e.facing = a.facing;
-                if (!w.try_entity(e)) ++omitted;
+                e.handle           = proto::Handle::make(i + 1, now.generation);
+                e.mask             = mask;
+                e.pos              = now.pos;
+                e.facing           = now.facing;
+                e.animation_state  = now.animation_state;
+
+                if (w.try_entity(e)) {
+                    record.entities[i] = now;
+                } else {
+                    // Did not fit. Record what the client STILL has, not what we
+                    // wanted to send -- otherwise the next delta is computed
+                    // against data that never arrived and the entity freezes at
+                    // a stale position with nothing reporting an error.
+                    record.entities[i] = was;
+                    ++omitted;
+                }
             }
 
             const size_t n = w.finish();
             if (omitted > 0) {
-                // Protocol R10: never silently cap. A silent drop reads as full
-                // replication right up until someone notices distant entities
-                // teleporting, by which point the cause is three systems away.
+                // Protocol R10: never silently cap.
                 std::fprintf(stderr, "[srv] tick %u session %u: %u entities omitted (budget)\n",
                              world.tick(), id, omitted);
             }
+            s.bytes_sent += n;
+            s.snapshots_sent += 1;
+            s.entities_omitted += unchanged;
             if (n > 0) link.send_datagram(id, buf, n);
         }
     }

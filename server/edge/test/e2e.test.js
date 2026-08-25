@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
+import { SnapshotReassembler } from '../../../client/src/snapshots.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, handleIndex, MSG, BUTTON, STATE_FLAG, TICK_RATE_HZ
@@ -98,6 +99,11 @@ class TestClient {
     this.snapshots = []
     this.welcome = null
     this.tick = 0
+    // Snapshots are delta-encoded, so `snapshot.entities` is a CHANGE LIST, not
+    // a complete set -- a removed entity appears as a DESTROYED block, and an
+    // unchanged one does not appear at all. Entity assertions therefore have to
+    // go through reassembly.
+    this.reasm = new SnapshotReassembler()
   }
 
   async connect () {
@@ -143,7 +149,7 @@ class TestClient {
         const { value, done } = await r.read()
         if (done) break
         const snap = decodeSnapshot(Buffer.from(value))
-        if (snap) this.snapshots.push(snap)
+        if (snap) { this.snapshots.push(snap); this.reasm.apply(snap) }
       }
     } catch { /* closed */ }
   }
@@ -160,7 +166,8 @@ class TestClient {
     this.history = this.history.slice(0, 8)   // redundancy window, protocol 4.1
     await this.dgWriter.write(encodeInputBundle({
       clientTick: this.tick,
-      ackSnapshotTick: this.snapshots.at(-1)?.serverTick ?? 0,
+      // Ack what was successfully REASSEMBLED, never what was merely received.
+      ackSnapshotTick: this.reasm.ackTick,
       frames: this.history
     }))
   }
@@ -249,25 +256,24 @@ for (let i = 0; i < 30; i++) {
 await sleep(200)
 
 {
-  const sa = a.latest()
   const sb = b.latest()
-  check(sa.entities.length === 1, `client A sees exactly one other entity (${sa.entities.length})`)
-  check(sb.entities.length === 1, `client B sees exactly one other entity (${sb.entities.length})`)
+  const aSeen = a.reasm.entities()
+  const bSeen = b.reasm.entities()
+  check(aSeen.size === 1, `client A sees exactly one other entity (${aSeen.size})`)
+  check(bSeen.size === 1, `client B sees exactly one other entity (${bSeen.size})`)
 
-  const seenByA = sa.entities[0]
-  check(handleIndex(seenByA.handle) === handleIndex(b.welcome.selfHandle),
-        "the entity A sees is B's agent")
+  const bIdx = handleIndex(b.welcome.selfHandle)
+  check(aSeen.has(bIdx), "the entity A sees is B's agent")
 
   // Per-observer encoding: an observer's own agent appears in SelfBlock at full
   // precision and MUST NOT be duplicated in the entity array, or the client
   // could reconcile against the quantised copy.
-  const aSelfIdx = handleIndex(a.welcome.selfHandle)
-  check(!sa.entities.some((e) => handleIndex(e.handle) === aSelfIdx),
+  check(!aSeen.has(handleIndex(a.welcome.selfHandle)),
         "A's own agent is not duplicated in its entity list")
 
   // The two clients moved in opposite directions; the replicated position
   // should reflect that rather than being a static placeholder.
-  const bxFromA = fxToNumber(seenByA.pos.x)
+  const bxFromA = fxToNumber(aSeen.get(bIdx).pos.x)
   const bxFromB = fxToNumber(sb.self.pos.x)
   check(Math.abs(bxFromA - bxFromB) < 0.01,
         `replicated position matches authoritative within quantisation (${bxFromA.toFixed(3)} vs ${bxFromB.toFixed(3)})`)
@@ -302,10 +308,12 @@ await sleep(200)
 // --- disconnect frees the agent ------------------------------------------------
 
 {
+  const bIdx = handleIndex(b.welcome.selfHandle)
   b.wt.close()
-  await sleep(500)
-  const sa = a.latest()
-  check(sa.entities.length === 0, "B's agent was despawned when its session closed")
+  await sleep(700)
+  check(!a.reasm.entities().has(bIdx), "B's agent was despawned when its session closed")
+  check(a.reasm.stats.droppedNoBaseline === 0,
+        'no snapshot was unusable for want of a baseline')
 }
 
 await cleanup()

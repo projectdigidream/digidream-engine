@@ -10,6 +10,9 @@ void World::reset() noexcept {
         agents_[i] = AgentState{};
         params_[i] = AgentParams{};
         inputs_[i] = proto::InputFrame{};
+        // Generations start at 1, not 0: handle raw 0 means "no entity", and a
+        // slot-0 agent at generation 0 would encode to exactly that.
+        generation_[i] = 1;
     }
     tick_ = 0;
 }
@@ -34,6 +37,14 @@ u32 World::spawn(fx3 pos) noexcept {
 
 void World::despawn(u32 index) noexcept {
     if (index >= MAX_AGENTS) return;   // defined no-op, never an error
+    if (agents_[index].active) {
+        // Wraps deliberately, skipping 0. Eight bits is enough because the only
+        // question a client ever asks is "is this the same entity I saw last
+        // snapshot", and 255 intervening reuses of one slot cannot happen
+        // within a snapshot round trip.
+        generation_[index] = static_cast<u8>(generation_[index] + 1);
+        if (generation_[index] == 0) generation_[index] = 1;
+    }
     agents_[index] = AgentState{};
     inputs_[index] = proto::InputFrame{};
 }
@@ -116,6 +127,7 @@ u64 World::hash() const noexcept {
         h.boolv(agents_[i].active);
         if (!agents_[i].active) continue;
         h.u32v(i);
+        h.byte(generation_[i]);
         h.u64v(agent_hash(i));
     }
     return h.value();

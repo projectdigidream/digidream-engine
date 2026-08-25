@@ -43,9 +43,11 @@ else
     (cd server/edge && npm run --silent certs >/dev/null)
   fi
   ./scripts/build_server.sh >/dev/null
+  node client/test/snapshots.test.js
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
-     && node test/e2e.test.js 2>/dev/null | tail -2)
+     && node test/e2e.test.js 2>/dev/null | tail -2 \
+     && node test/delta.test.js 2>/dev/null | tail -2)
 
   echo
   echo "--- client prediction against the real server ---"
