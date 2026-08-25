@@ -25,6 +25,8 @@ add_library(dnp_core STATIC
   core/src/sim/world.cpp
   core/src/sim/testmap.cpp
   core/src/geom/map.cpp
+  core/src/geom/triangulate.cpp
+  core/src/geom/mapstore.cpp
   core/src/physics/collide.cpp
   core/src/physics/controller.cpp
 )
@@ -83,6 +85,10 @@ add_test(NAME physics COMMAND test_physics)
 add_executable(test_abilities core/tests/test_abilities.cpp)
 target_link_libraries(test_abilities PRIVATE dnp_core)
 add_test(NAME abilities COMMAND test_abilities)
+
+add_executable(test_triangulate core/tests/test_triangulate.cpp)
+target_link_libraries(test_triangulate PRIVATE dnp_core)
+add_test(NAME triangulate COMMAND test_triangulate)
 
 add_executable(golden_trace core/tests/golden_trace.cpp)
 target_link_libraries(golden_trace PRIVATE dnp_core)

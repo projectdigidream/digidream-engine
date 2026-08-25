@@ -45,6 +45,11 @@ struct Sector {
     fx  floor_z{};
     fx  ceil_z{};
     u16 tag = 0;
+
+    // Baked triangle range, into MapData::tris. Indices are absolute into the
+    // point array, so a mesh can be uploaded without a per-sector rebase.
+    u32 first_tri = 0;
+    u16 tri_count = 0;
 };
 
 struct MapData {
@@ -54,6 +59,8 @@ struct MapData {
     u32           sector_count = 0;
     const Side*   sides        = nullptr;
     u32           side_count   = 0;
+    const u16*    tris         = nullptr;
+    u32           tri_index_count = 0;
 
     const fx2& point(u32 i) const noexcept { return points[i]; }
     const Sector& sector(u32 i) const noexcept { return sectors[i]; }

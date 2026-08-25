@@ -27,6 +27,8 @@ em++ -std=c++17 -O2 \
   "$ROOT/core/src/sim/world.cpp" \
   "$ROOT/core/src/sim/testmap.cpp" \
   "$ROOT/core/src/geom/map.cpp" \
+  "$ROOT/core/src/geom/triangulate.cpp" \
+  "$ROOT/core/src/geom/mapstore.cpp" \
   "$ROOT/core/src/physics/collide.cpp" \
   "$ROOT/core/src/physics/controller.cpp" \
   "$ROOT/client/wasm/bindings.cpp" \
