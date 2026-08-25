@@ -44,6 +44,7 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   ./scripts/build_lua_tests.sh >/dev/null
   "./build/lua/test_lua_vm"
   "./build/lua/test_lua_fx"
+  "./build/lua/test_lua_effects"
 else
   echo "  skip lua tests (run: scripts/setup_luajit.sh)"
 fi
@@ -121,6 +122,10 @@ else
      node test/lua.test.js 2>/dev/null | grep -E "CONTROL|lua:")
   (cd server/edge && DNP_IGNORE_LUA=1 DNP_WT_PORT=34494 DNP_LINK_PORT=34574 \
      node test/lua.test.js 2>/dev/null | grep -E "CONTROL|lua:")
+  # A scripted change to the RULES rather than the state: it travels on the
+  # reliable channel with an epoch, not as a snapshot flag.
+  (cd server/edge && DNP_EFFECTS=1 DNP_WT_PORT=34496 DNP_LINK_PORT=34578 \
+     node test/lua.test.js 2>/dev/null | tail -2)
 
   echo
   echo "--- client prediction against the real server ---"

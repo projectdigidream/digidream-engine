@@ -32,4 +32,6 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_vm.cpp" "${LINK[@]}" -o "$OUT/test_lua_vm"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_fx.cpp" "${LINK[@]}" -o "$OUT/test_lua_fx"
-echo "[lua-tests] $OUT/test_lua_vm $OUT/test_lua_fx"
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_effects.cpp" "${LINK[@]}" -o "$OUT/test_lua_effects"
+echo "[lua-tests] $OUT/test_lua_vm $OUT/test_lua_fx $OUT/test_lua_effects"

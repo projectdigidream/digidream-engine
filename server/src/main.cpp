@@ -23,6 +23,7 @@
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 #include "lua/commands.hpp"
+#include "lua/effects.hpp"
 #include "lua/vm.hpp"
 #include "lua/world_binding.hpp"
 #include "net/link.hpp"
@@ -70,6 +71,7 @@ struct Server {
     lua::Vm            script_vm;
     const char*        script_path = nullptr;
     lua::CommandQueue  lua_commands;
+    lua::EffectStack   lua_effects;
     lua::WorldContext  lua_ctx;
 
     // The tick at which a script last changed each agent. Compared against the
@@ -449,7 +451,10 @@ struct Server {
     void on_close(u32 id, u16 reason) {
         auto it = sessions.find(id);
         if (it == sessions.end()) return;   // defined no-op
-        if (it->second.has_agent) world.despawn(it->second.agent);
+        if (it->second.has_agent) {
+            lua_effects.clear_agent(it->second.agent);
+            world.despawn(it->second.agent);
+        }
         const Session& c = it->second;
         const double avg = c.snapshots_sent ? static_cast<double>(c.bytes_sent) / c.snapshots_sent : 0.0;
         std::fprintf(stderr,
@@ -507,6 +512,11 @@ struct Server {
                 link.close_session(id, 2);
                 return;
             }
+
+            // Capture the authored parameters as this agent's base. Everything
+            // effects do is computed from here, never from the live value --
+            // see server/src/lua/effects.hpp for why that matters.
+            lua_effects.set_base(agent, world.params(agent));
 
             s.agent = agent;
             s.has_agent = true;
@@ -611,6 +621,47 @@ struct Server {
         }
     }
 
+    // Recompute effective parameters from base and replicate what changed.
+    //
+    // From BASE every time, never incrementally: apply-then-remove has to be
+    // exactly the identity, and in fixed point an incremental version is not
+    // (effects.hpp). The diff against the live values is what keeps this from
+    // sending a full parameter set every tick an effect is running.
+    void refresh_effect_params() {
+        if (!script_vm.is_open()) return;
+
+        const bool expired = lua_effects.expire(world.tick());
+        if (!expired && !lua_ctx.effects_dirty) return;
+        lua_ctx.effects_dirty = false;
+
+        for (auto& [id, s] : sessions) {
+            if (!s.has_agent) continue;
+            const u32 a = s.agent;
+
+            const physics::MoveParams want = lua_effects.compute(a);
+            physics::MoveParams& live = world.params_mut(a);
+
+            u16 changed[physics::PARAM_COUNT];
+            u16 n = 0;
+            for (u16 f = 0; f < physics::PARAM_COUNT; ++f) {
+                const i64 target = physics::param_get_raw(want, f);
+                if (physics::param_get_raw(live, f) == target) continue;
+                physics::param_set_raw(live, f, target);
+                changed[n++] = f;
+            }
+            if (n == 0) continue;
+
+            // One epoch bump and one message for the whole batch, not one per
+            // field: an effect touching four parameters is one change to the
+            // rules, and four epochs would make the client look stale three
+            // extra times for no reason.
+            param_epoch[a] = static_cast<u8>(param_epoch[a] + 1);
+            for (auto& [oid, os] : sessions) {
+                if (os.hello_done) send_param_update(oid, a, false, changed, n);
+            }
+        }
+    }
+
     void flush_lua_commands() {
         if (!script_vm.is_open()) return;
         const u32 now = world.tick();
@@ -642,6 +693,9 @@ struct Server {
             // snapshot reports must be what the tick actually ran with.
             script_vm.call_hook("on_tick", world.tick());
         }
+        // After the callbacks, before the step: what the tick runs with is what
+        // the snapshot will report.
+        refresh_effect_params();
 
         drive_discrete_movers();
         drive_param_test();
@@ -867,6 +921,7 @@ int main(int argc, char** argv) {
                      vc.memory_cap / (1024u * 1024u));
         srv.lua_ctx.world = &srv.world;
         srv.lua_ctx.commands = &srv.lua_commands;
+        srv.lua_ctx.effects = &srv.lua_effects;
         // Installed BEFORE the chunk runs: a script's top level is allowed to
         // look at the world, and `dnp` being nil at load time would be a
         // baffling first experience.

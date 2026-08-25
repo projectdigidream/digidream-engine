@@ -20,6 +20,7 @@
 //
 #include "dnp/sim/world.hpp"
 #include "lua/commands.hpp"
+#include "lua/effects.hpp"
 
 struct lua_State;
 
@@ -37,6 +38,13 @@ struct WorldBindingStats {
 struct WorldContext {
     sim::World*       world = nullptr;
     CommandQueue*     commands = nullptr;
+    EffectStack*      effects = nullptr;
+
+    // Set whenever a script changes the effect set. The host recomputes the
+    // affected agents' parameters from base and replicates the difference --
+    // never incrementally, see effects.hpp.
+    bool              effects_dirty = false;
+
     WorldBindingStats stats{};
 };
 

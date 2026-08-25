@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "dnp/proto/messages.hpp"
+#include "dnp/physics/params_table.hpp"
 #include "lua/fx_binding.hpp"
 
 extern "C" {
@@ -144,6 +145,79 @@ int l_entity_set_velocity(lua_State* L) {
     return 0;
 }
 
+// --------------------------------------------------------------- parameters
+
+int l_entity_param(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    const char* name = luaL_checkstring(L, 2);
+    const i32 id = physics::param_id_by_name(name);
+    if (id < 0) return luaL_error(L, "no movement parameter named '%s'", name);
+    // The EFFECTIVE value -- base plus whatever is currently modifying it,
+    // which is what the physics will actually use this tick.
+    push_fx(L, fx::from_raw(physics::param_get_raw(ctx.world->params(static_cast<u32>(a)),
+                                                   static_cast<u16>(id))));
+    return 1;
+}
+
+int l_entity_base_param(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || !ctx.effects) { lua_pushnil(L); return 1; }
+    const char* name = luaL_checkstring(L, 2);
+    const i32 id = physics::param_id_by_name(name);
+    if (id < 0) return luaL_error(L, "no movement parameter named '%s'", name);
+    push_fx(L, fx::from_raw(physics::param_get_raw(ctx.effects->base(static_cast<u32>(a)),
+                                                   static_cast<u16>(id))));
+    return 1;
+}
+
+// entity:add_effect(field, op, value [, ticks]) -> id
+//
+// `op` is "mul", "add" or "set". There is no priority argument, deliberately:
+// design §6 leaves stacking to the game, and modifiers compose in the order
+// they were added. Returns 0 if the table is full, which a script may check.
+int l_entity_add_effect(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || !ctx.effects) { lua_pushnumber(L, 0); return 1; }
+
+    const char* name = luaL_checkstring(L, 2);
+    const i32 id = physics::param_id_by_name(name);
+    if (id < 0) return luaL_error(L, "no movement parameter named '%s'", name);
+
+    const char* op_s = luaL_checkstring(L, 3);
+    EffectOp op;
+    if (std::strcmp(op_s, "mul") == 0)      op = EffectOp::Mul;
+    else if (std::strcmp(op_s, "add") == 0) op = EffectOp::Add;
+    else if (std::strcmp(op_s, "set") == 0) op = EffectOp::Set;
+    else return luaL_error(L, "effect op must be 'mul', 'add' or 'set', got '%s'", op_s);
+
+    const fx value = check_fx(L, 4);
+    const u32 ticks = lua_isnoneornil(L, 5) ? 0u
+                                            : static_cast<u32>(luaL_checknumber(L, 5));
+    const u32 expires = ticks == 0 ? 0u : ctx.world->tick() + ticks;
+
+    const u32 eid = ctx.effects->add(static_cast<u32>(a), static_cast<u16>(id), op,
+                                     value, expires);
+    if (eid != 0) ctx.effects_dirty = true;
+    lua_pushnumber(L, eid);
+    return 1;
+}
+
+int l_entity_remove_effect(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (!ctx.effects) { lua_pushboolean(L, 0); return 1; }
+    // Not gated on the handle: an effect outliving the entity that carried it
+    // still needs removing, and refusing here would leak table slots.
+    const u32 eid = static_cast<u32>(luaL_checknumber(L, 2));
+    const bool removed = ctx.effects->remove(eid);
+    if (removed) ctx.effects_dirty = true;
+    lua_pushboolean(L, removed);
+    return 1;
+}
+
 int l_entity_eq(lua_State* L) {
     lua_pushboolean(L, check_handle(L, 1) == check_handle(L, 2));
     return 1;
@@ -168,6 +242,10 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"teleport", l_entity_teleport},
     {"add_impulse", l_entity_add_impulse},
     {"set_velocity", l_entity_set_velocity},
+    {"param", l_entity_param},
+    {"base_param", l_entity_base_param},
+    {"add_effect", l_entity_add_effect},
+    {"remove_effect", l_entity_remove_effect},
     {nullptr, nullptr},
 };
 

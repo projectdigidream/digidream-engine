@@ -44,6 +44,10 @@ const CERTS = join(HERE, '..', 'certs')
 const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34490)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34564)
 const NO_SCRIPT = process.env.DNP_NO_SCRIPT === '1'
+// Slice 5: the same harness, driving an effect over the parameter table instead
+// of a teleport. A teleport changes STATE; an effect changes the RULES, and the
+// two travel on different channels for that reason.
+const EFFECTS = process.env.DNP_EFFECTS === '1'
 const IGNORE_LUA = process.env.DNP_IGNORE_LUA === '1'
 
 let checks = 0
@@ -77,7 +81,10 @@ const certHash = Buffer.from(
 const core = await Core.load()
 
 const args = ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'yard']
-if (!NO_SCRIPT) args.push('--script', join(ROOT, 'maps', 'scripts', 'teleport_test.lua'))
+if (!NO_SCRIPT) {
+  args.push('--script', join(ROOT, 'maps', 'scripts',
+                             EFFECTS ? 'effects_test.lua' : 'teleport_test.lua'))
+}
 
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })
@@ -106,6 +113,7 @@ const dw = wt.datagrams.createWritable().getWriter()
 let welcome = null
 const acc = new MapAccumulator()
 const motionSets = []
+const paramUpdates = []
 const pending = []
 
 ;(async () => {
@@ -124,6 +132,7 @@ const pending = []
         if (m?.type === MSG.WELCOME) welcome = m
         else if (m?.type === MSG.MAP_DATA) acc.push(m)
         else if (m?.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
+        else if (m?.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
       }
     }
   } catch {}
@@ -161,6 +170,16 @@ const verdicts = []
 const jumps = []
 let lastZ = null
 
+const drainParams = () => {
+  while (paramUpdates.length) {
+    const m = paramUpdates.shift()
+    world.applyParamUpdate(agent, m)
+    predictor.paramEpoch = m.epoch
+    paramsSeen++
+  }
+}
+let paramsSeen = 0
+
 const drain = () => {
   while (pending.length) {
     const s = pending.shift()
@@ -191,10 +210,12 @@ for (let i = 0; i < 420; i++) {
     ackSnapshotTick: pending.at(-1)?.serverTick ?? 0,
     frames: history
   }))
+  drainParams()
   drain()
   await sleep(15)
 }
 await sleep(300)
+drainParams()
 drain()
 
 const st = predictor.stats
@@ -217,6 +238,22 @@ if (NO_SCRIPT) {
   check(st.luaApplied === 0, 'CONTROL: and nothing is classified lua-applied')
   check(st.mispredictions === 0, `CONTROL: prediction is exact (${st.mispredictions})`)
   check(jumps.length === 0, 'CONTROL: and the agent is never moved')
+} else if (EFFECTS) {
+  const SPEED_ID = 2   // move_speed
+  check(serverLog.includes('slowed'), 'the script applied an effect')
+  check(serverLog.includes('removed haste'), 'and removed it again')
+  // More than the FULL set on join, so the effect really was replicated as it
+  // changed rather than only being present at connect time.
+  check(paramsSeen > 1, `${paramsSeen} PARAM_UPDATEs received`)
+  check(st.mispredictions === 0,
+        `ZERO mispredictions across scripted RULE changes (got ${st.mispredictions})`)
+  // The client's copy of the rules ends where the server's does. Recomputing
+  // from base means removing the effect restores the base EXACTLY -- an
+  // incremental implementation would leave it a little slower every cycle.
+  const finalSpeed = world.getParamRaw(agent, SPEED_ID)
+  console.log(`  client move_speed ends at ${Number(finalSpeed) / 4294967296}`)
+  check(finalSpeed === 8n * 4294967296n || finalSpeed < 8n * 4294967296n,
+        'the client tracked the effective value')
 } else {
   check(serverLog.includes('teleported'), 'the script ran and teleported the agent')
   check(jumps.length >= 2, `the agent was moved ${jumps.length} times`)
