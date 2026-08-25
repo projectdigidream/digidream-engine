@@ -149,15 +149,41 @@ export class WasmWorld {
     i64[b + 3] = msg.to.x; i64[b + 4] = msg.to.y; i64[b + 5] = msg.to.z
     return M._dnp_world_start_parametric(
       this.ptr, msg.sector, this.core.buf64, this.core.buf64 + 24,
-      msg.startTick, msg.durationTicks, msg.loopMode) !== 0
+      msg.startTick, msg.durationTicks, msg.loopMode, msg.motionTarget ?? 0) !== 0
   }
 
   /** Apply a scripted-discrete offset the server streamed. */
-  setDiscreteOffset (sector, offset) {
+  setDiscreteOffset (sector, offset, target = 0) {
     const { i64 } = this.core.views
     const b = this.core.buf64 / 8
     i64[b] = offset.x; i64[b + 1] = offset.y; i64[b + 2] = offset.z
-    return this.core.M._dnp_world_set_discrete(this.ptr, sector, this.core.buf64) !== 0
+    return this.core.M._dnp_world_set_discrete(this.ptr, sector, this.core.buf64, target) !== 0
+  }
+
+  /**
+   * Crush and pin events from the last step (design §3.1).
+   *
+   * The client cannot act on these -- the consequence is server Lua's, and Lua
+   * is not predicted. They are here for diagnosis: a client whose crush set
+   * differs from the server's has a determinism bug, and seeing that directly
+   * beats inferring it from a position that drifts for no visible reason.
+   */
+  crushes () {
+    const M = this.core.M
+    const n = M._dnp_world_crush_count(this.ptr)
+    const out = []
+    for (let i = 0; i < n; i++) {
+      M._dnp_world_crush_at(this.ptr, i, this.core.buf32, this.core.buf64)
+      const { i64, u32 } = this.core.views
+      const b32 = this.core.buf32 / 4
+      out.push({
+        entity: u32[b32],
+        sector: u32[b32 + 1],
+        kind: u32[b32 + 2],       // 1 vertical, 2 horizontal
+        depth: i64[this.core.buf64 / 8]
+      })
+    }
+    return out
   }
 
   setInput (idx, { buttons = 0, moveX = 0, moveY = 0, aim = 0 }) {

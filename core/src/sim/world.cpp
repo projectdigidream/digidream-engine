@@ -134,7 +134,109 @@ void World::step_agent(u32 i) noexcept {
     }
 }
 
+void World::carry_anchored() noexcept {
+    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+        AgentState& a = agents_[i];
+        if (!a.active || !a.mv.anchored || a.mv.anchor < 0) continue;
+        const i32 mi = motions_.find(static_cast<u32>(a.mv.anchor));
+        if (mi < 0) continue;
+        // The floor's displacement, not the sector's raw offset: a rider is
+        // carried by the surface under its feet, and a descending ceiling moves
+        // no surface anybody is standing on.
+        a.pos += motions_.at(static_cast<u32>(mi)).floor_delta();
+    }
+}
+
+void World::sweep_agent(u32 i, const SectorMotion& m) noexcept {
+    AgentState& a = agents_[i];
+    const MoveParams& p = params_[i];
+
+    fx2 pos2{a.pos.x, a.pos.y};
+    const physics::SweepContact hit =
+        physics::sweep_out_of_sector(*map_, m.sector, pos2, p.radius, a.pos.z, p.height);
+    if (!hit.contacted) return;
+
+    // The wall wins the argument about where it is; the only question left is
+    // whether the entity has anywhere to go. Deliberately positional and not an
+    // impulse: a shove is a constraint being resolved, and adding the wall's
+    // velocity would launch an entity that a slow platform merely nudged, then
+    // leave it sliding after the platform stopped.
+    const i32 host = geom::find_sector(*map_, pos2);
+    if (host == geom::NO_SECTOR) {
+        // Shoved clean out of the world. Nothing to resolve against and nowhere
+        // to put the entity, so it stays where it was and is reported pinned.
+        crushes_.push(CrushEvent{i, m.sector, CrushKind::Horizontal, length(hit.escape)});
+        return;
+    }
+
+    // Let the static world push back. If it yields, the entity is simply
+    // displaced -- the ordinary case, and not a crush. If the moving sector is
+    // STILL overlapping afterwards, the two surfaces have closed on the entity
+    // from both directions and there is no position that satisfies either.
+    physics::push_out_of_sector(*map_, static_cast<u32>(host), pos2, nullptr,
+                                p.radius, a.pos.z, p.height);
+    const physics::SweepContact again =
+        physics::sweep_out_of_sector(*map_, m.sector, pos2, p.radius, a.pos.z, p.height);
+
+    a.pos.x = pos2.x;
+    a.pos.y = pos2.y;
+    a.mv.sector = host;
+
+    if (again.contacted) {
+        crushes_.push(CrushEvent{i, m.sector, CrushKind::Horizontal, length(again.escape)});
+    }
+}
+
+void World::sweep_moving_sectors() noexcept {
+    if (!map_) return;
+    for (u32 k = 0; k < motions_.count(); ++k) {
+        const SectorMotion& m = motions_.at(k);
+        const fx3 d = m.floor_delta();
+        // Only a footprint that MOVED sweeps anything. A lift travelling
+        // straight up displaces no horizontal space, and running the test for it
+        // would push every agent standing beside the shaft away from a wall that
+        // never came at them.
+        if (d.x.raw == 0 && d.y.raw == 0) continue;
+
+        for (u32 i = 0; i < MAX_AGENTS; ++i) {
+            if (!agents_[i].active) continue;
+            // A rider was already carried with this sector and is where the
+            // sector expects it to be; sweeping it too would push it off its own
+            // platform every tick.
+            if (agents_[i].mv.anchored && agents_[i].mv.anchor == static_cast<i32>(m.sector)) continue;
+            sweep_agent(i, m);
+        }
+    }
+}
+
+void World::detect_vertical_crush() noexcept {
+    if (!map_) return;
+    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+        const AgentState& a = agents_[i];
+        if (!a.active) continue;
+        const i32 s = a.mv.sector;
+        if (s < 0 || static_cast<u32>(s) >= map_->sector_count) continue;
+
+        const geom::Sector& sec = map_->sector(static_cast<u32>(s));
+        const fx gap = sec.ceil_z - sec.floor_z;
+        const fx height = params_[i].height;
+        if (gap >= height) continue;
+
+        // No check for whether the sector is a mover, and none is needed: an
+        // agent can only BE somewhere its body does not fit if the geometry
+        // moved around it, because sector_admits() refuses to let it walk in.
+        // The one other way is a map that spawns a player inside a crawlspace,
+        // and reporting that is right too.
+        crushes_.push(CrushEvent{i, static_cast<u32>(s), CrushKind::Vertical, height - gap});
+    }
+}
+
 void World::step() noexcept {
+    // Events describe the tick about to run, so the previous tick's are dropped
+    // here rather than at the end -- a caller reading them after step() sees
+    // exactly what this tick raised.
+    crushes_.clear();
+
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from
     // the new position, not the other way round -- resolving the agent first
@@ -142,16 +244,8 @@ void World::step() noexcept {
     // sliding out from under it every frame.
     if (store_) motions_.apply(*store_, tick_);
 
-    // Carry anchored agents with their sector.
-    for (u32 i = 0; i < MAX_AGENTS; ++i) {
-        AgentState& a = agents_[i];
-        if (!a.active || !a.mv.anchored || a.mv.anchor < 0) continue;
-        const i32 mi = motions_.find(static_cast<u32>(a.mv.anchor));
-        if (mi < 0) continue;
-        const SectorMotion& m = motions_.at(static_cast<u32>(mi));
-        const fx3 delta = m.offset - m.prev_offset;
-        a.pos += delta;
-    }
+    carry_anchored();
+    sweep_moving_sectors();
 
     // Ascending index order, always. Any order would be deterministic on its
     // own, but it must be the SAME order on client and server, and index order
@@ -159,6 +253,12 @@ void World::step() noexcept {
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         if (agents_[i].active) step_agent(i);
     }
+
+    // Last, on settled positions. Running it before the agents moved would
+    // report a crush on an agent that was about to walk out from under the
+    // ceiling in the same tick, and miss one that walked in.
+    detect_vertical_crush();
+
     ++tick_;
 }
 
@@ -216,6 +316,7 @@ u64 World::hash() const noexcept {
     StateHasher h;
     h.u32v(tick_);
     motions_.hash_into(h);
+    crushes_.hash_into(h);
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         h.boolv(agents_[i].active);
         if (!agents_[i].active) continue;

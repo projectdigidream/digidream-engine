@@ -21,11 +21,13 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_triangulate"
 "./build/$HOST_ARCH/test_mapfile"
 "./build/$HOST_ARCH/test_sectormotion"
+"./build/$HOST_ARCH/test_crush"
 
 # The map compiler must round-trip the authored map: mapc bakes it, and the
 # loader re-triangulates and compares, so this also proves the compiler and the
 # runtime have not drifted apart.
-"./build/$HOST_ARCH/mapc" maps/test.map "build/$HOST_ARCH/test.dnpm"
+"./build/$HOST_ARCH/mapc" maps/test.map  "build/$HOST_ARCH/test.dnpm"
+"./build/$HOST_ARCH/mapc" maps/crush.map "build/$HOST_ARCH/crush.dnpm"
 
 echo
 echo "=== 3/5  sanitizers (ASan + UBSan) ==="
@@ -59,7 +61,8 @@ else
      && node test/e2e.test.js 2>/dev/null | tail -2 \
      && node test/delta.test.js 2>/dev/null | tail -2 \
      && node test/mapdata.test.js 2>/dev/null | tail -2 \
-     && node test/platform.test.js 2>/dev/null | tail -2)
+     && node test/platform.test.js 2>/dev/null | tail -2 \
+     && node test/crush.test.js 2>/dev/null | tail -2)
 
   # The control case: a client that ignores the replicated motion parameters
   # MUST mispredict. If it does not, the replication is doing nothing and the
@@ -68,6 +71,8 @@ else
   echo "--- control: ignoring motion parameters must break prediction ---"
   (cd server/edge && DNP_IGNORE_MOTION=1 DNP_WT_PORT=34470 DNP_LINK_PORT=34540 \
      node test/platform.test.js 2>/dev/null | grep -E "CONTROL|platform:")
+  (cd server/edge && DNP_IGNORE_MOTION=1 DNP_WT_PORT=34480 DNP_LINK_PORT=34550 \
+     node test/crush.test.js 2>/dev/null | grep -E "CONTROL|crush:")
 
   echo
   echo "--- client prediction against the real server ---"

@@ -175,6 +175,10 @@ export function decodeControlMessage (buf) {
       type,
       sector: r.u32(),
       motionType: r.u8(),
+      // Which surfaces the vertical path moves: 0 both, 1 floor, 2 ceiling.
+      // A client that ignored it would put a crusher's floor where its ceiling
+      // belongs (docs/protocol.md §8.2).
+      motionTarget: r.u8(),
       startTick: r.u32(),
       durationTicks: r.u32(),
       loopMode: r.u8(),

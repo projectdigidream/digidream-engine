@@ -35,6 +35,14 @@ namespace {
 
 constexpr int BODY_COUNT = 64;
 
+// Agents driven in the gameplay half of the trace. Eight roam the open room;
+// three more stand where geometry closes on them -- under a descending ceiling,
+// beside a sweeping footprint, and in the dead end a piston runs into -- so the
+// determinism gate covers crushing and §3.1.3 as well. Without them those paths
+// are compiled by every target and executed by none, and `--coverage` is what
+// keeps that honest rather than assumed.
+constexpr u32 SIM_AGENTS = 11;
+
 // The fixed simulation timestep (design 7.1.1). 60 Hz, as an exact rational --
 // never a measured frame time, and never a decimal literal that would round
 // differently if the rate were ever edited.
@@ -43,6 +51,8 @@ const fx DT = fx::from_frac(1, 60);
 const fx GRAVITY   = fx::from_frac(-1600, 100);   // -16.00 units/s^2
 const fx BOUNDS    = fx::from_int(48);
 const fx RESTITUTION = fx::from_frac(60, 100);
+
+constexpr fx F(i64 n) { return fx::from_int(n); }
 
 struct Body {
     fx3  pos;
@@ -68,6 +78,10 @@ struct World {
     dnp::geom::MapStorage sim_map;
     dnp::geom::MapData    sim_view{};
     Rng                   sim_rng;
+
+    // Not hashed and not part of the simulation -- see --coverage in main().
+    u32 vertical_crush_ticks;
+    u32 horizontal_pin_ticks;
 };
 
 void world_init(World& w) {
@@ -91,31 +105,81 @@ void world_init(World& w) {
     // under the determinism gate too -- not just the collision rules and the
     // abilities, but the moving platforms agents stand on.
     dnp::sim::build_test_map(w.sim_map);
+
+    // A fourth room, north of sector 0, whose CEILING comes down. The test map
+    // proper has no crusher and should not grow one: it is the shared fixture
+    // several other tests compare against byte for byte. This one exists only
+    // for the gate, so it is built here.
+    {
+        const fx2 room[] = {{F(0), F(40)}, {F(40), F(40)}, {F(40), F(60)}, {F(0), F(60)}};
+        const u32 s3 = w.sim_map.add_sector(room, 4, fx::zero(), F(40), 4);
+        w.sim_map.add_side(s3, 0, 1, 0, 0);            // south: back into sector 0
+        w.sim_map.add_side(s3, 1, 2, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s3, 2, 3, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s3, 3, 0, dnp::geom::NO_SECTOR, 0);
+        // And the other half of that shared boundary: sector 0's north wall was
+        // solid, and a one-sided portal would let an agent walk out of the
+        // crusher but never into it.
+        w.sim_map.side_mut(2).neighbor = static_cast<i32>(s3);
+
+        // A piston east of that room, which runs the whole length of it. Its
+        // floor is above step height, so a body cannot be where it is -- that,
+        // and not the fact that it moves, is what makes it solid to the sweep.
+        // The room's west wall is the dead end that turns a shove into a pin.
+        const fx2 piston[] = {{F(40), F(40)}, {F(50), F(40)}, {F(50), F(60)}, {F(40), F(60)}};
+        const u32 s4 = w.sim_map.add_sector(piston, 4, F(4), F(40), 5);
+        w.sim_map.add_side(s4, 0, 1, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s4, 1, 2, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s4, 2, 3, dnp::geom::NO_SECTOR, 0);
+        w.sim_map.add_side(s4, 3, 0, static_cast<i32>(s3), 0);
+        w.sim_map.side_mut(w.sim_map.view().sector(s3).first_side + 1).neighbor =
+            static_cast<i32>(s4);
+    }
+
     w.sim_view = w.sim_map.view();
     w.sim.set_map(&w.sim_view);
     w.sim.set_map_storage(&w.sim_map);
 
     // Sector 1 ping-pongs vertically, and sector 2 slides horizontally, so both
-    // the lift case and the sweeping-footprint case are exercised.
+    // the lift case and the sweeping-footprint case are exercised. Sector 2
+    // slides WEST, into the room agents can reach: a footprint that retreats
+    // from everyone sweeps through nothing.
     w.sim.motions().add(w.sim_map, 1);
     w.sim.motions().start_parametric(1, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(3)},
                                      0, 137, dnp::sim::LoopMode::PingPong);
     w.sim.motions().add(w.sim_map, 2);
-    w.sim.motions().start_parametric(2, fx3::zero(), fx3{fx::from_frac(3, 2), fx::zero(), fx::zero()},
+    w.sim.motions().start_parametric(2, fx3::zero(), fx3{fx::from_frac(-3, 2), fx::zero(), fx::zero()},
                                      0, 211, dnp::sim::LoopMode::PingPong);
+    // The crusher: ceiling only, so the gap actually closes.
+    w.sim.motions().add(w.sim_map, 3);
+    w.sim.motions().start_parametric(3, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(-39)},
+                                     0, 173, dnp::sim::LoopMode::PingPong,
+                                     dnp::sim::MotionTarget::Ceiling);
+    // The piston: all the way to the far wall, so the shove becomes a pin.
+    w.sim.motions().add(w.sim_map, 4);
+    w.sim.motions().start_parametric(4, fx3::zero(), fx3{fx::from_int(-40), fx::zero(), fx::zero()},
+                                     0, 293, dnp::sim::LoopMode::PingPong);
+
     w.sim_rng = Rng(0x5EED, 2);
     for (int i = 0; i < 8; ++i) {
         w.sim.spawn(fx3{fx::from_int(5 + i * 4), fx::from_int(5 + i * 3), fx::from_int(3)});
     }
+    // Under the crusher, beside the sweeping footprint, and in the piston's path.
+    w.sim.spawn(fx3{fx::from_int(20), fx::from_int(50), fx::from_int(1)});
+    w.sim.spawn(fx3{fx::from_int(59), fx::from_int(20), fx::from_int(1)});
+    w.sim.spawn(fx3{fx::from_int(35), fx::from_int(50), fx::from_int(1)});
+
     // Turn every ability on for at least some agents, so the trace exercises
     // hover, flight and grapple rather than only walking and jumping.
-    for (u32 i = 0; i < 8; ++i) {
+    for (u32 i = 0; i < SIM_AGENTS; ++i) {
         auto& pr = w.sim.params_mut(i);
         pr.hover_enabled = (i % 2) == 0;
         pr.flight_enabled = (i % 3) == 0;
         pr.grapple_enabled = (i % 2) == 1;
         pr.max_jumps = static_cast<u8>(1 + (i % 3));
     }
+    w.vertical_crush_ticks = 0;
+    w.horizontal_pin_ticks = 0;
 }
 
 // One fixed-timestep step. Not the real controller -- that arrives in Phase 2 --
@@ -184,7 +248,7 @@ void world_step(World& w) {
     // Drive the gameplay simulation with deterministic pseudo-input. Buttons are
     // drawn per agent so jump edge-detection, the jump counter and the grounded
     // transition all get exercised rather than sitting at their defaults.
-    for (u32 i = 0; i < 8; ++i) {
+    for (u32 i = 0; i < SIM_AGENTS; ++i) {
         proto::InputFrame f;
         f.move_x  = static_cast<i16>(w.sim_rng.next_range(-32767, 32768));
         f.move_y  = static_cast<i16>(w.sim_rng.next_range(-32767, 32768));
@@ -203,6 +267,14 @@ void world_step(World& w) {
         w.sim.set_input(i, f);
     }
     w.sim.step();
+
+    // Coverage bookkeeping, deliberately outside the hash: this counts what the
+    // trace EXERCISED, and a counter in the hashed state would make the gate
+    // compare its own instrumentation.
+    for (u32 i = 0; i < w.sim.crushes().count(); ++i) {
+        if (w.sim.crushes().at(i).kind == dnp::sim::CrushKind::Vertical) ++w.vertical_crush_ticks;
+        else ++w.horizontal_pin_ticks;
+    }
 
     ++w.tick;
 }
@@ -227,7 +299,7 @@ void world_dump(const World& w) {
                     b.heading.raw, b.spin.raw,
                     static_cast<unsigned long long>(b.rng.state()));
     }
-    for (u32 i = 0; i < 8; ++i) {
+    for (u32 i = 0; i < SIM_AGENTS; ++i) {
         const dnp::sim::AgentState& a = w.sim.agent(i);
         std::printf("agent %02u pos %020lld %020lld %020lld vel %020lld %020lld %020lld "
                     "sec %d j %u d %u dt %020lld hf %020lld ff %020lld g %d c %d\n",
@@ -274,10 +346,13 @@ u64 world_hash(const World& w) {
 int main(int argc, char** argv) {
     int  ticks    = 10000;
     bool summary  = false;
+    bool coverage = false;
     int  dump_at  = -1;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--summary") == 0) {
             summary = true;
+        } else if (std::strcmp(argv[i], "--coverage") == 0) {
+            coverage = true;
         } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             dump_at = std::atoi(argv[++i]);
         } else {
@@ -302,7 +377,17 @@ int main(int argc, char** argv) {
     for (int t = 0; t < ticks; ++t) {
         world_step(w);
         last = world_hash(w);
-        if (!summary) std::printf("%d %016llX\n", t, static_cast<unsigned long long>(last));
+        if (!summary && !coverage) std::printf("%d %016llX\n", t, static_cast<unsigned long long>(last));
+    }
+
+    // Which paths this trace actually walked. A gate that compares three targets
+    // over code none of them executes proves only that they agree about nothing,
+    // so the counts are worth being able to read.
+    if (coverage) {
+        std::printf("ticks %d\n", ticks);
+        std::printf("vertical_crush_events %u\n", w.vertical_crush_ticks);
+        std::printf("horizontal_pin_events %u\n", w.horizontal_pin_ticks);
+        return (w.vertical_crush_ticks > 0 && w.horizontal_pin_ticks > 0) ? 0 : 1;
     }
     if (summary) std::printf("final %d %016llX\n", ticks, static_cast<unsigned long long>(last));
     return 0;

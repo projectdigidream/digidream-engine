@@ -91,6 +91,7 @@ struct Server {
             w.u8v(proto::MSG_SECTOR_MOTION_SET);
             w.u32v(m.sector);
             w.u8v(static_cast<u8>(m.type));
+            w.u8v(static_cast<u8>(m.target));
             w.u32v(m.start_tick);
             w.u32v(m.duration_ticks);
             w.u8v(static_cast<u8>(m.loop));
@@ -138,16 +139,40 @@ struct Server {
         // Sectors tagged 100+ are movers, so the authored map decides what
         // moves rather than the server hardcoding indices. Lua takes this over
         // in Phase 4; the tag convention is the bridge.
+        //
+        //   100+N  a lift that rises N units, travelling as a volume
+        //   200+N  a crusher whose CEILING descends N units
+        //   300+N  a footprint that slides N units south (-y)
+        //
+        // Three conventions rather than one because the differences are not
+        // decorative: only a sector that moves one surface can ever close the
+        // gap a body occupies (§3.1), and only one that moves horizontally can
+        // sweep a body out of its way (§3.1.3).
         for (u32 si = 0; si < loaded.sector_count; ++si) {
             const u16 tag = loaded.sector(si).tag;
             if (tag < 100) continue;
             if (world.motions().add(*map_store, si) >= sim::MAX_MOVING_SECTORS) continue;
-            // Ping-pong a lift over four seconds. A placeholder schedule until
-            // Lua drives it.
-            world.motions().start_parametric(
-                si, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(tag - 100)},
-                0, 240, sim::LoopMode::PingPong);
-            std::fprintf(stderr, "[srv] sector %u moves (rise %u)\n", si, tag - 100u);
+
+            if (tag >= 300) {
+                const u16 slide = tag - 300;
+                world.motions().start_parametric(
+                    si, fx3::zero(), fx3{fx::zero(), -fx::from_int(slide), fx::zero()},
+                    0, 240, sim::LoopMode::PingPong);
+                std::fprintf(stderr, "[srv] sector %u sweeps (slides %u south)\n", si, slide);
+            } else if (tag >= 200) {
+                const u16 drop = tag - 200;
+                world.motions().start_parametric(
+                    si, fx3::zero(), fx3{fx::zero(), fx::zero(), -fx::from_int(drop)},
+                    0, 240, sim::LoopMode::PingPong, sim::MotionTarget::Ceiling);
+                std::fprintf(stderr, "[srv] sector %u crushes (ceiling drops %u)\n", si, drop);
+            } else {
+                // Ping-pong a lift over four seconds. A placeholder schedule
+                // until Lua drives it.
+                world.motions().start_parametric(
+                    si, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(tag - 100)},
+                    0, 240, sim::LoopMode::PingPong);
+                std::fprintf(stderr, "[srv] sector %u moves (rise %u)\n", si, tag - 100u);
+            }
         }
         std::fprintf(stderr, "[srv] map %s: %u sectors, %u sides, hash %016llX\n",
                      path, loaded.sector_count, loaded.side_count,
@@ -305,11 +330,56 @@ struct Server {
         it->second.ingest(b);
     }
 
+    // Crush and pin events from the tick just run (design §3.1).
+    //
+    // Reported, not acted on. What happens to a crushed entity is a Lua
+    // decision and Lua arrives in Phase 4; until then this is where that
+    // callback will be dispatched from, and logging it keeps the detection
+    // observable rather than silently discarded.
+    //
+    // Rate-limited per entity: a body held under a closing ceiling raises an
+    // event on every tick it stays there, and a line per tick per player would
+    // bury everything else in the log within seconds.
+    u32 crush_reported_tick[sim::MAX_AGENTS]{};
+    bool crush_seen[sim::MAX_AGENTS]{};
+
+    void report_crushes() {
+        bool now[sim::MAX_AGENTS]{};
+        const sim::CrushLog& log = world.crushes();
+        for (u32 i = 0; i < log.count(); ++i) {
+            const sim::CrushEvent& e = log.at(i);
+            if (e.entity >= sim::MAX_AGENTS) continue;
+            now[e.entity] = true;
+            if (crush_seen[e.entity]) continue;   // already reported this episode
+            crush_seen[e.entity] = true;
+            crush_reported_tick[e.entity] = world.tick();
+            std::fprintf(stderr, "[srv] tick %u: agent %u %s by sector %u (depth %.3f)\n",
+                         world.tick(), e.entity,
+                         e.kind == sim::CrushKind::Vertical ? "crushed" : "pinned",
+                         e.sector, static_cast<double>(e.depth.raw) / 4294967296.0);
+        }
+        // An episode ends when the geometry lets go, so escaping and being
+        // caught again reports twice.
+        for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+            if (!now[i] && crush_seen[i]) {
+                std::fprintf(stderr, "[srv] tick %u: agent %u released after %u ticks\n",
+                             world.tick(), i, world.tick() - crush_reported_tick[i]);
+                crush_seen[i] = false;
+            }
+        }
+        if (log.dropped() > 0) {
+            // Never silently cap -- the same rule R10 applies to snapshots.
+            std::fprintf(stderr, "[srv] tick %u: %u crush events dropped (log full)\n",
+                         world.tick(), log.dropped());
+        }
+    }
+
     void tick() {
         for (auto& [id, s] : sessions) {
             if (s.has_agent) world.set_input(s.agent, s.take());
         }
         world.step();
+        report_crushes();
     }
 
     void send_snapshots() {

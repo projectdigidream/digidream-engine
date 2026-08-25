@@ -41,9 +41,24 @@ enum class LoopMode : u8 {
     PingPong = 2,   // reverses
 };
 
+// Which surfaces the vertical part of the offset moves.
+//
+// A platform moves as a volume; a door or a crusher moves one surface and
+// leaves the other where it is. Without this distinction the gap between floor
+// and ceiling is constant for every mover in the engine, and §3.1's crushing
+// has nothing that can ever cause it. Horizontal motion always moves the whole
+// footprint -- a sector cannot have its floor in one place and its ceiling in
+// another.
+enum class MotionTarget : u8 {
+    Both = 0,      // the sector moves as a body: a lift, a platform
+    Floor = 1,     // Doom's lift: the floor rises into the room above it
+    Ceiling = 2,   // a door, or a crusher coming down
+};
+
 struct SectorMotion {
-    u32        sector = 0;
-    MotionType type = MotionType::Static;
+    u32          sector = 0;
+    MotionType   type = MotionType::Static;
+    MotionTarget target = MotionTarget::Both;
 
     // The geometry as authored. Motion is expressed as an offset from this
     // rather than accumulated into the live points, so a moving sector cannot
@@ -66,10 +81,19 @@ struct SectorMotion {
     fx3 offset{};
     fx3 prev_offset{};
 
-    fx3 velocity() const noexcept {
-        // (pos_now - pos_last) / dt, exactly as the design specifies.
-        return (offset - prev_offset) * fx::from_int(TICK_RATE_HZ);
+    // How far the FLOOR moved this tick. This, not the raw offset, is what an
+    // entity riding the sector experiences: a descending ceiling displaces
+    // nothing an entity is standing on, and carrying riders by the raw offset
+    // would drag everyone in a closing door down through the floor with it.
+    fx3 floor_delta() const noexcept {
+        return fx3{offset.x - prev_offset.x,
+                   offset.y - prev_offset.y,
+                   target == MotionTarget::Ceiling ? fx::zero() : offset.z - prev_offset.z};
     }
+
+    // Velocity of the surface a rider stands on. Inherited once on detach --
+    // (pos_now - pos_last) / dt, exactly as the design specifies.
+    fx3 velocity() const noexcept { return floor_delta() * fx::from_int(TICK_RATE_HZ); }
 };
 
 // Offset of a parametric motion at `tick`. A pure function of its arguments --
@@ -92,11 +116,13 @@ public:
 
     // Start a parametric motion. Lua-triggered; from here it runs predictably.
     bool start_parametric(u32 sector, fx3 from, fx3 to, u32 start_tick,
-                          u32 duration_ticks, LoopMode loop) noexcept;
+                          u32 duration_ticks, LoopMode loop,
+                          MotionTarget target = MotionTarget::Both) noexcept;
 
     // Set an offset directly. Unpredictable by construction, so an anchored
     // entity falls back to anchor-relative prediction on the client.
-    bool set_discrete(u32 sector, fx3 offset) noexcept;
+    bool set_discrete(u32 sector, fx3 offset,
+                      MotionTarget target = MotionTarget::Both) noexcept;
 
     // Advance every motion to `tick` and write the resulting geometry into the
     // map. Parametric sectors are evaluated; discrete ones keep whatever was

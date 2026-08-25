@@ -32,14 +32,8 @@ SurfaceQuery query_surface(const MapData& map, fx2 p, i32 hint) noexcept {
     return q;
 }
 
-bool side_is_passable(const MapData& map, u32 side_index, u32 from,
-                      fx feet_z, fx body_height) noexcept {
-    const Side& sd = map.side(side_index);
-    if (sd.flags & side_flag::BLOCKING) return false;
-    if (sd.neighbor == NO_SECTOR) return false;
-
-    const Sector& to = map.sector(static_cast<u32>(sd.neighbor));
-    (void)from;
+bool sector_admits(const MapData& map, u32 s, fx feet_z, fx body_height) noexcept {
+    const Sector& to = map.sector(s);
 
     // The step-up rule, in one place. A rise of at most STEP_HEIGHT is walkable;
     // anything more is a wall. Slopes are not a separate concept -- they are a
@@ -47,7 +41,7 @@ bool side_is_passable(const MapData& map, u32 side_index, u32 from,
     // this same threshold incrementally.
     if (to.floor_z - feet_z > sim::STEP_HEIGHT) return false;
 
-    // And the far side has to be tall enough to stand in. Without this an agent
+    // And the space has to be tall enough to stand in. Without this an agent
     // walks into a crawlspace and ends up intersecting its ceiling.
     if (to.ceil_z - to.floor_z < body_height) return false;
     if (to.ceil_z - feet_z < body_height) return false;
@@ -55,10 +49,17 @@ bool side_is_passable(const MapData& map, u32 side_index, u32 from,
     return true;
 }
 
-namespace {
+bool side_is_passable(const MapData& map, u32 side_index, u32 from,
+                      fx feet_z, fx body_height) noexcept {
+    const Side& sd = map.side(side_index);
+    if (sd.flags & side_flag::BLOCKING) return false;
+    if (sd.neighbor == NO_SECTOR) return false;
+    (void)from;
+    return sector_admits(map, static_cast<u32>(sd.neighbor), feet_z, body_height);
+}
 
-// Push `p` out of any blocking side it overlaps, and remove the into-wall
-// component of `vel` for each contact. Returns true if anything was touched.
+// Push `p` out of any solid side of `s` it overlaps, and remove the into-wall
+// component of `vel` for each contact.
 //
 // Velocity is handled HERE, not only on the sweep path, because contact and
 // crossing are different events and the common one is contact. An agent walking
@@ -66,10 +67,11 @@ namespace {
 // so a version that only slid on crossing would leave the full into-wall
 // velocity intact: the agent would be shoved back out every tick, jitter against
 // the wall, and never settle.
-bool resolve_walls_in_sector(const MapData& map, u32 s, fx2& p, fx3& vel, fx radius,
-                             fx feet_z, fx body_height) noexcept {
+SweepContact push_out_of_sector(const MapData& map, u32 s, fx2& p, fx3* vel, fx radius,
+                                fx feet_z, fx body_height) noexcept {
     const Sector& sec = map.sector(s);
-    bool touched = false;
+    SweepContact out;
+    const fx2 start = p;
 
     const u128 r_sq = static_cast<u128>(static_cast<i128>(radius.raw) * radius.raw);
 
@@ -86,7 +88,7 @@ bool resolve_walls_in_sector(const MapData& map, u32 s, fx2& p, fx3& vel, fx rad
         const u128 d_sq = len_sq_raw(away);
         if (d_sq >= r_sq) continue;
 
-        touched = true;
+        out.contacted = true;
 
         // Choosing the push direction.
         //
@@ -121,17 +123,104 @@ bool resolve_walls_in_sector(const MapData& map, u32 s, fx2& p, fx3& vel, fx rad
         // Wall sliding on contact: drop the component heading into this wall,
         // keep the tangential part. Applied per contact, so a corner resolves
         // against both walls rather than only the last one examined.
-        const fx2 v2 = fx2{vel.x, vel.y};
-        if (dot(v2, n) < fx::zero()) {
-            const fx2 slid = project_out(v2, n);
-            vel.x = slid.x;
-            vel.y = slid.y;
+        if (vel) {
+            const fx2 v2 = fx2{vel->x, vel->y};
+            if (dot(v2, n) < fx::zero()) {
+                const fx2 slid = project_out(v2, n);
+                vel->x = slid.x;
+                vel->y = slid.y;
+            }
         }
     }
-    return touched;
+    out.escape = p - start;
+    return out;
 }
 
-}  // namespace
+SweepContact sweep_out_of_sector(const MapData& map, u32 s, fx2& p, fx radius,
+                                 fx feet_z, fx body_height) noexcept {
+    SweepContact out;
+    const fx2 start = p;
+    const Sector& sec = map.sector(s);
+
+    // A moving sector is a solid VOLUME to this agent exactly when the agent
+    // could not stand in it. That is the whole rule, and it is deliberately not
+    // the per-side passability test push_out_of_sector uses: passability asks
+    // "may I leave through this wall", which is the wrong question once the
+    // wall has swept past and the agent is standing inside the polygon. Asked
+    // the wrong way round, every side reports the agent's own room as a
+    // perfectly good destination and the piston slides through it untouched.
+    const bool volume_solid = !sector_admits(map, s, feet_z, body_height);
+
+    const u128 r_sq = static_cast<u128>(static_cast<i128>(radius.raw) * radius.raw);
+
+    const auto side_is_solid = [&](u32 si) {
+        const Side& sd = map.side(si);
+        return volume_solid || (sd.flags & side_flag::BLOCKING) != 0 || sd.neighbor == NO_SECTOR;
+    };
+
+    // Phase 1: the footprint has swept OVER the agent, which is the case a
+    // resting-contact test cannot see -- the agent is not near one wall, it is
+    // inside all of them. Eject through the nearest boundary only. Pushing out
+    // of every overlapped side would add four normals together and fire the
+    // agent out of a corner at several times the speed the sector was moving.
+    if (volume_solid && point_in_sector(map, s, p)) {
+        i32  nearest = -1;
+        u128 best_d = 0;
+        for (u32 k = 0; k < sec.side_count; ++k) {
+            const u32 si = sec.first_side + k;
+            const Side& sd = map.side(si);
+            const u128 d = distance_sq_to_segment(map.point(sd.a), map.point(sd.b), p);
+            // Strictly nearer, so ties resolve to the lower index rather than to
+            // whichever the loop happened to reach last.
+            if (nearest < 0 || d < best_d) { best_d = d; nearest = static_cast<i32>(si); }
+        }
+        if (nearest >= 0) {
+            const fx2 n = side_normal(map, static_cast<u32>(nearest), s);   // outward
+            if (n.x.raw != 0 || n.y.raw != 0) {
+                const fx dist = fx::from_raw(static_cast<i64>(isqrt128(best_d)));
+                p += n * (radius + dist);
+                out.contacted = true;
+            }
+        }
+    }
+
+    // Phase 2: ordinary resting overlap against the solid sides, from outside.
+    for (u32 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        if (!side_is_solid(si)) continue;
+
+        const Side& sd = map.side(si);
+        const fx2 a = map.point(sd.a);
+        const fx2 b = map.point(sd.b);
+
+        const fx2 closest = closest_point_on_segment(a, b, p);
+        const fx2 away = p - closest;
+        const u128 d_sq = len_sq_raw(away);
+        if (d_sq >= r_sq) continue;
+
+        out.contacted = true;
+
+        // Same normal choice as resting contact: the side's own normal against
+        // its interior (exact for axis-aligned geometry), radial at an endpoint
+        // so an agent grazing a corner is not ejected along the wall.
+        const bool at_endpoint = (closest == a) || (closest == b);
+        fx2 n;
+        if (at_endpoint && d_sq != 0) {
+            n = normalize(away);
+        } else {
+            n = side_normal(map, si, s);
+            if (dot(n, away) < fx::zero()) n = -n;
+            if (n.x.raw == 0 && n.y.raw == 0) n = (d_sq == 0) ? fx2::zero() : normalize(away);
+        }
+        if (n.x.raw == 0 && n.y.raw == 0) continue;
+
+        const fx dist = fx::from_raw(static_cast<i64>(isqrt128(d_sq)));
+        p += n * (radius - dist);
+    }
+
+    out.escape = p - start;
+    return out;
+}
 
 MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     MoveResult r;
@@ -217,8 +306,8 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
         const SurfaceQuery q = query_surface(map, pos2, r.sector);
         if (q.in_map) {
             r.sector = q.sector;
-            if (resolve_walls_in_sector(map, static_cast<u32>(q.sector), pos2, r.vel,
-                                        in.radius, r.pos.z, in.height)) {
+            if (push_out_of_sector(map, static_cast<u32>(q.sector), pos2, &r.vel,
+                                   in.radius, r.pos.z, in.height).contacted) {
                 r.hit_wall = true;
             }
         } else {
@@ -279,9 +368,10 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
         if (r.vel.z > fx::zero()) r.vel.z = fx::zero();
         r.hit_ceiling = true;
         // A ceiling that leaves less headroom than the body height means the
-        // agent is being compressed. Detection is native; what happens as a
-        // result is Lua's decision (design §3.1 crushing), so nothing is
-        // decided here beyond reporting the contact.
+        // agent is being compressed. The clamp keeps the body between the two
+        // surfaces so nothing downstream sees an agent below its own floor;
+        // recognising it AS a crush is sim/crush.cpp's job, because the answer
+        // depends on the sector, not on this one agent's move.
         if (r.pos.z < floor_z) r.pos.z = floor_z;
     }
 

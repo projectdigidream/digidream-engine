@@ -1,0 +1,59 @@
+# The Phase 3 crushing map (design §3.1, §3.1.3).
+#
+# Two hazards, and they are deliberately different KINDS of hazard rather than
+# the same one twice:
+#
+#   sector 1  a crusher. Its CEILING descends while its floor stays put, which
+#             is the only way the gap a body occupies can ever close. A sector
+#             that travels as a volume can never crush anything, however fast.
+#
+#   sector 2  a piston. Its footprint sweeps south through the room, shoving
+#             anything in the way ahead of it until the far wall runs out. Its
+#             floor is above step height, so a body cannot be where it is --
+#             that, and not the fact that it moves, is what makes it solid.
+#
+# The piston is the half a client has to PREDICT: being shoved changes position,
+# and position is what reconciliation compares. The crusher is the half it does
+# not: the consequence of being crushed is a Lua decision (§3.1), and Lua is
+# never predicted.
+
+#   ^ y
+#   |  +--------+
+#   |  | piston |   sector 2, y 20..30, slides to y 1..11
+#   |  +--------+
+#   |  |  room  | crusher |   sectors 0 and 1
+#   |  +--------+---------+
+#   +-------------------------> x
+
+sector floor 0 ceil 8 tag 1
+  vertex  0   0   wall
+  vertex 20   0   neighbor 1
+  vertex 20  20   neighbor 2
+  vertex  0  20   wall
+end
+
+# tag 200+N: a crusher whose ceiling drops N units. Ceiling 8 minus 7 leaves a
+# gap of 1 -- half a standing body -- so anything in here is crushed at the
+# bottom of the stroke and released on the way back up.
+sector floor 0 ceil 8 tag 207
+  vertex 20   0   wall
+  vertex 40   0   wall
+  vertex 40  20   wall
+  vertex 20  20   neighbor 0
+end
+
+# tag 300+N: a footprint that slides N units south. Floor 4 puts it well above
+# STEP_HEIGHT, so it is solid to a body standing on the room floor.
+#
+# 20, not 19: a stroke that ends exactly one radius from the far wall pushes a
+# body right up to it and stops, which is a shove and not a pin. The room has to
+# actually run out for §3.1.3 to have anything to report.
+sector floor 4 ceil 8 tag 320
+  vertex  0  20   neighbor 0
+  vertex 20  20   wall
+  vertex 20  30   wall
+  vertex  0  30   wall
+end
+
+spawn start  10 10 0
+spawn trap   30 10 0

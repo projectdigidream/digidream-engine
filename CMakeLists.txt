@@ -25,6 +25,7 @@ add_library(dnp_core STATIC
   core/src/sim/world.cpp
   core/src/sim/testmap.cpp
   core/src/sim/sectormotion.cpp
+  core/src/sim/crush.cpp
   core/src/geom/map.cpp
   core/src/geom/triangulate.cpp
   core/src/geom/mapstore.cpp
@@ -99,6 +100,10 @@ add_test(NAME mapfile COMMAND test_mapfile)
 add_executable(test_sectormotion core/tests/test_sectormotion.cpp)
 target_link_libraries(test_sectormotion PRIVATE dnp_core)
 add_test(NAME sectormotion COMMAND test_sectormotion)
+
+add_executable(test_crush core/tests/test_crush.cpp)
+target_link_libraries(test_crush PRIVATE dnp_core)
+add_test(NAME crush COMMAND test_crush)
 
 add_executable(mapc tools/mapc/main.cpp)
 target_link_libraries(mapc PRIVATE dnp_core)

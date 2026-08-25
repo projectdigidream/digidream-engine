@@ -13,6 +13,8 @@
 #include "dnp/physics/controller.hpp"
 #include "dnp/proto/messages.hpp"
 #include "dnp/sim/constants.hpp"
+#include "dnp/sim/crush.hpp"
+#include "dnp/sim/crush.hpp"
 #include "dnp/sim/sectormotion.hpp"
 #include "dnp/sim/state_hash.hpp"
 
@@ -62,6 +64,14 @@ public:
 
     void step() noexcept;
 
+    // Crush and pin events raised by the tick that just ran (design §3.1,
+    // §3.1.3). Rebuilt from scratch every step: this is what happened THIS
+    // tick, not a backlog, so a caller that does not drain it loses it rather
+    // than accumulating a queue nobody reads. The server hands these to Lua;
+    // the client computes the identical list and ignores it, because the
+    // consequence is Lua's and Lua is not predicted.
+    const CrushLog& crushes() const noexcept { return crushes_; }
+
     u32 tick() const noexcept { return tick_; }
 
     // Align the simulation clock to the server's.
@@ -102,9 +112,20 @@ public:
 private:
     void step_agent(u32 i) noexcept;
 
+    // Carry entities riding a sector that moved, then let moving footprints
+    // shove the ones they ran into (design §3.1.3). Both happen after the
+    // geometry has moved and before any agent runs its own physics.
+    void carry_anchored() noexcept;
+    void sweep_moving_sectors() noexcept;
+    void sweep_agent(u32 i, const SectorMotion& m) noexcept;
+
+    // Geometry closed on a body that no longer fits between its surfaces.
+    void detect_vertical_crush() noexcept;
+
     const geom::MapData* map_ = nullptr;
     geom::MapStorage*    store_ = nullptr;
     SectorMotionSet      motions_{};
+    CrushLog             crushes_{};
 
     AgentState           agents_[MAX_AGENTS]{};
     u8                   generation_[MAX_AGENTS]{};

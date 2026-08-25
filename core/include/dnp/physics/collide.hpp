@@ -72,6 +72,15 @@ struct SurfaceQuery {
 };
 SurfaceQuery query_surface(const geom::MapData& map, fx2 p, i32 hint) noexcept;
 
+// Can a body of `body_height`, whose feet are at `feet_z`, occupy sector `s`?
+//
+// The step-up threshold and the headroom requirement, in one predicate. It is
+// separate from side_is_passable() because the sweep of §3.1.3 asks the same
+// question in the opposite direction: a wall moving toward an agent is solid
+// exactly when the agent could not stand in the sector behind it, and that is a
+// property of the destination sector, not of the side that happens to name it.
+bool sector_admits(const geom::MapData& map, u32 s, fx feet_z, fx body_height) noexcept;
+
 // Is the boundary between `from` and the side's neighbour passable for an agent
 // standing at height `feet_z` with the given body height?
 //
@@ -79,6 +88,34 @@ SurfaceQuery query_surface(const geom::MapData& map, fx2 p, i32 hint) noexcept;
 // drift between the mover and anything else that asks.
 bool side_is_passable(const geom::MapData& map, u32 side_index, u32 from,
                       fx feet_z, fx body_height) noexcept;
+
+struct SweepContact {
+    bool contacted = false;
+    fx2  escape{};      // total displacement applied to clear the geometry
+};
+
+// Push `p` out of every impassable side of the sector it is standing in.
+//
+// This is RESTING CONTACT: the agent is inside `s`, and a side is solid when it
+// cannot walk out through it. For a sector that has moved into an agent
+// standing elsewhere, use sweep_out_of_sector() instead -- see the note there.
+//
+// `vel`, when non-null, has its into-wall component removed per contact -- the
+// wall-slide rule.
+SweepContact push_out_of_sector(const geom::MapData& map, u32 s, fx2& p, fx3* vel,
+                                fx radius, fx feet_z, fx body_height) noexcept;
+
+// Keep a cylinder out of the solid volume of a sector that has MOVED into it
+// (design §3.1.3), and report the displacement that took.
+//
+// Deliberately a separate function from push_out_of_sector, because the two ask
+// opposite questions. Resting contact asks whether the agent may leave the
+// sector it is standing in through a given wall. A sweep asks whether the agent
+// may be where the moving sector now is -- which is a property of that sector's
+// own floor and ceiling, and stays the right question whether the wall has
+// reached the agent or already passed over it.
+SweepContact sweep_out_of_sector(const geom::MapData& map, u32 sector, fx2& p,
+                                 fx radius, fx feet_z, fx body_height) noexcept;
 
 // Nearest side within `radius` of `p` carrying `flag`, or -1.
 //

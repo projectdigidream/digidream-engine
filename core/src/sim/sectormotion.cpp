@@ -66,11 +66,13 @@ i32 SectorMotionSet::find(u32 sector) const noexcept {
 }
 
 bool SectorMotionSet::start_parametric(u32 sector, fx3 from, fx3 to, u32 start_tick,
-                                       u32 duration_ticks, LoopMode loop) noexcept {
+                                       u32 duration_ticks, LoopMode loop,
+                                       MotionTarget target) noexcept {
     const i32 i = find(sector);
     if (i < 0) return false;
     SectorMotion& m = motions_[static_cast<u32>(i)];
     m.type = MotionType::Parametric;
+    m.target = target;
     m.from = from;
     m.to = to;
     m.start_tick = start_tick;
@@ -79,11 +81,12 @@ bool SectorMotionSet::start_parametric(u32 sector, fx3 from, fx3 to, u32 start_t
     return true;
 }
 
-bool SectorMotionSet::set_discrete(u32 sector, fx3 offset) noexcept {
+bool SectorMotionSet::set_discrete(u32 sector, fx3 offset, MotionTarget target) noexcept {
     const i32 i = find(sector);
     if (i < 0) return false;
     SectorMotion& m = motions_[static_cast<u32>(i)];
     m.type = MotionType::ScriptedDiscrete;
+    m.target = target;
     m.offset = offset;
     return true;
 }
@@ -106,8 +109,14 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
         // each step, and a platform that ends a round trip a few ulp from where
         // it started is a platform that eventually is not where the level
         // author put it.
-        s.floor_z = m.base_floor + m.offset.z;
-        s.ceil_z = m.base_ceil + m.offset.z;
+        // Which surfaces the vertical offset applies to. A crusher moves only
+        // its ceiling, which is the ONLY way the gap between the two can ever
+        // close -- a sector that always moves as a body can never crush
+        // anything, however fast it travels.
+        if (m.target != MotionTarget::Ceiling) s.floor_z = m.base_floor + m.offset.z;
+        else                                   s.floor_z = m.base_floor;
+        if (m.target != MotionTarget::Floor)   s.ceil_z = m.base_ceil + m.offset.z;
+        else                                   s.ceil_z = m.base_ceil;
 
         if (m.offset.x.raw != 0 || m.offset.y.raw != 0 ||
             m.prev_offset.x.raw != 0 || m.prev_offset.y.raw != 0) {
@@ -129,6 +138,7 @@ void SectorMotionSet::hash_into(StateHasher& h) const noexcept {
         const SectorMotion& m = motions_[i];
         h.u32v(m.sector);
         h.byte(static_cast<unsigned char>(m.type));
+        h.byte(static_cast<unsigned char>(m.target));
         h.vec3(m.offset);
         h.vec3(m.prev_offset);
         h.vec3(m.from);
