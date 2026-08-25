@@ -17,6 +17,7 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror \
   "$ROOT/core/src/math/trig.cpp" \
   "$ROOT/core/src/proto/messages.cpp" \
   "$ROOT/core/src/sim/world.cpp" \
+  "$ROOT/core/src/sim/testmap.cpp" \
   "$ROOT/core/src/geom/map.cpp" \
   "$ROOT/core/src/physics/collide.cpp" \
   "$ROOT/core/src/physics/controller.cpp" \

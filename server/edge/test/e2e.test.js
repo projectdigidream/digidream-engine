@@ -207,6 +207,7 @@ check(a.snapshots.length > 0, `client A received snapshots (${a.snapshots.length
 
 {
   const before = fxToNumber(a.latest().self.pos.x)
+  const beforeY = fxToNumber(a.latest().self.pos.y)
   const TICKS = 60
   for (let i = 0; i < TICKS; i++) { await a.sendInput({ moveX: 1 }); await sleep(16) }
   await sleep(200)
@@ -221,7 +222,10 @@ check(a.snapshots.length > 0, `client A received snapshots (${a.snapshots.length
   const perTick = 8 / TICK_RATE_HZ
   check(moved > perTick * 20, `moved right under input (${moved.toFixed(3)} units)`)
   check(moved < perTick * TICKS * 1.5, 'movement rate matches move_speed at the fixed timestep')
-  check(Math.abs(fxToNumber(a.latest().self.pos.y)) < 1e-9, 'no drift on the unused axis')
+  // Drift, not absolute position: the spawn point is not the origin, so
+  // measuring |y| would only be testing where the map put the player.
+  check(Math.abs(fxToNumber(a.latest().self.pos.y) - beforeY) < 1e-6,
+        'no drift on the unused axis')
 }
 
 // --- the server simulates: jump ----------------------------------------------

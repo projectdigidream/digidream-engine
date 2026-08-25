@@ -158,6 +158,23 @@ struct SelfBlock {
     Handle anchor{};
     u8     jumps_used      = 0;
     u8     dashes_used     = 0;
+    i32    sector          = -1;
+
+    // Ability state the controller carries between ticks. Present because
+    // reconciliation OVERWRITES local state and replays: anything the
+    // controller keeps that is not sent here would survive the overwrite, and
+    // the client would then replay from the server's position with its own
+    // stale timers. See docs/protocol.md 5.1.
+    fx     dash_timer{};
+    fx     dash_cooldown{};
+    fx     hover_fuel{};
+    fx     flight_fuel{};
+
+    // Only encoded when state_flags & GRAPPLING. A swinging player is the
+    // exception, and gating it keeps 32 bytes off every other snapshot.
+    fx3    grapple_anchor{};
+    fx     grapple_dist{};
+
     u64    state_hash      = 0;
 };
 

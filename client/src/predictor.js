@@ -92,15 +92,33 @@ export class Predictor {
     this.stats.snapshots += 1
     const t = snapshot.lastInputTick
 
+    const sb = snapshot.self
+    const held = this.inputs.get(t)?.buttons ?? 0
     const authoritative = {
-      pos: snapshot.self.pos,
-      vel: snapshot.self.vel,
-      facing: snapshot.self.facing,
-      stateFlags: snapshot.self.stateFlags,
-      jumpsUsed: snapshot.self.jumpsUsed,
-      // jump_held is not replicated: it is derived from the input the server
-      // applied, which the client has in its own history.
-      jumpHeld: (this.inputs.get(t)?.buttons & 0x0001) !== 0,
+      pos: sb.pos,
+      vel: sb.vel,
+      facing: sb.facing,
+      stateFlags: sb.stateFlags,
+      mode: sb.controllerMode,
+      jumpsUsed: sb.jumpsUsed,
+      dashesUsed: sb.dashesUsed,
+      sector: sb.sector,
+      dashTimer: sb.dashTimer,
+      dashCooldown: sb.dashCooldown,
+      hoverFuel: sb.hoverFuel,
+      flightFuel: sb.flightFuel,
+      grappleAnchor: sb.grappleAnchor,
+      grappleDist: sb.grappleDist,
+      grounded: (sb.stateFlags & STATE_FLAG.GROUNDED) !== 0,
+      climbing: (sb.stateFlags & STATE_FLAG.CLIMBING) !== 0,
+      grappling: (sb.stateFlags & STATE_FLAG.GRAPPLING) !== 0,
+
+      // Held-button flags are NOT replicated: they are edge-detection state,
+      // and the client already holds the input it sent for the acknowledged
+      // tick. Deriving them keeps three bytes off every snapshot.
+      jumpHeld: (held & 0x0001) !== 0,
+      dashHeld: (held & 0x0002) !== 0,
+      grappleHeld: (held & 0x0020) !== 0,
       active: true
     }
 

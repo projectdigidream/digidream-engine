@@ -25,6 +25,7 @@
 #include "dnp/math/trig.hpp"
 #include "dnp/math/vec.hpp"
 #include "dnp/sim/state_hash.hpp"
+#include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
 using namespace dnp;
@@ -83,9 +84,21 @@ void world_init(World& w) {
     }
 
     w.sim.reset();
+    // Real geometry, so the collision rules and every ability are under the
+    // determinism gate rather than only the arithmetic beneath them.
+    w.sim.set_map(&dnp::sim::test_map());
     w.sim_rng = Rng(0x5EED, 2);
     for (int i = 0; i < 8; ++i) {
-        w.sim.spawn(fx3{fx::from_int(i * 2 - 8), fx::from_int(i), fx::from_int(3)});
+        w.sim.spawn(fx3{fx::from_int(5 + i * 4), fx::from_int(5 + i * 3), fx::from_int(3)});
+    }
+    // Turn every ability on for at least some agents, so the trace exercises
+    // hover, flight and grapple rather than only walking and jumping.
+    for (u32 i = 0; i < 8; ++i) {
+        auto& pr = w.sim.params_mut(i);
+        pr.hover_enabled = (i % 2) == 0;
+        pr.flight_enabled = (i % 3) == 0;
+        pr.grapple_enabled = (i % 2) == 1;
+        pr.max_jumps = static_cast<u8>(1 + (i % 3));
     }
 }
 
@@ -159,7 +172,17 @@ void world_step(World& w) {
         proto::InputFrame f;
         f.move_x  = static_cast<i16>(w.sim_rng.next_range(-32767, 32768));
         f.move_y  = static_cast<i16>(w.sim_rng.next_range(-32767, 32768));
-        f.buttons = static_cast<u16>((w.sim_rng.next_u32() & 7) == 0 ? proto::button::JUMP : 0);
+        // Draw the whole action set, not just jump: edge detection, fuel
+        // drain, dash cooldown and grapple attach all need to be walked.
+        const u32 bits = w.sim_rng.next_u32();
+        u16 buttons = 0;
+        if ((bits & 7) == 0) buttons |= proto::button::JUMP;
+        if ((bits & 0x38) == 0) buttons |= proto::button::DASH;
+        if ((bits & 0x1C0) == 0) buttons |= proto::button::CLIMB;
+        if ((bits & 0xE00) == 0) buttons |= proto::button::HOVER;
+        if ((bits & 0x7000) == 0) buttons |= proto::button::FLIGHT;
+        if ((bits & 0x38000) == 0) buttons |= proto::button::GRAPPLE;
+        f.buttons = buttons;
         f.aim     = brad(w.sim_rng.next_u32());
         w.sim.set_input(i, f);
     }
@@ -190,13 +213,18 @@ void world_dump(const World& w) {
     }
     for (u32 i = 0; i < 8; ++i) {
         const dnp::sim::AgentState& a = w.sim.agent(i);
-        std::printf("agent %02u pos %020lld %020lld %020lld vel %020lld %020lld %020lld fl %04X j %u\n",
+        std::printf("agent %02u pos %020lld %020lld %020lld vel %020lld %020lld %020lld "
+                    "sec %d j %u d %u dt %020lld hf %020lld ff %020lld g %d c %d\n",
                     i,
                     static_cast<long long>(a.pos.x.raw), static_cast<long long>(a.pos.y.raw),
                     static_cast<long long>(a.pos.z.raw),
                     static_cast<long long>(a.vel.x.raw), static_cast<long long>(a.vel.y.raw),
                     static_cast<long long>(a.vel.z.raw),
-                    a.state_flags, a.jumps_used);
+                    a.mv.sector, a.mv.jumps_used, a.mv.dashes_used,
+                    static_cast<long long>(a.mv.dash_timer.raw),
+                    static_cast<long long>(a.mv.hover_fuel.raw),
+                    static_cast<long long>(a.mv.flight_fuel.raw),
+                    a.mv.grappling ? 1 : 0, a.mv.climbing ? 1 : 0);
     }
 }
 

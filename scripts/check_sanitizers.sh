@@ -29,7 +29,7 @@ FLAGS=(
   -I"$ROOT/core/include"
 )
 
-SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/src/physics/controller.cpp")
+SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/sim/testmap.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/src/physics/controller.cpp")
 
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1

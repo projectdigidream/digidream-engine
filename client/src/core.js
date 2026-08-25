@@ -10,12 +10,20 @@
 //
 import createModule from '../wasm/dist/dnp_core.mjs'
 
-const BUF64_LEN = 7   // pos.xyz, vel.xyz, hash
-const BUF32_LEN = 5   // facing, state_flags, jumps_used, jump_held, active
+// Must mirror client/wasm/bindings.cpp exactly. The layout carries every field
+// the controller keeps between ticks, because reconciliation overwrites local
+// state and replays from it -- anything missing here survives the overwrite and
+// diverges silently (docs/protocol.md 5.1).
+const BUF64_LEN = 19
+const BUF32_LEN = 14
 
 export const IDX = {
-  POS: 0, VEL: 3, HASH: 6,
-  FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4
+  POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
+  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17,
+
+  FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
+  SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
+  GRAP_PULL: 12, GROUNDED: 13
 }
 
 export class Core {
@@ -49,7 +57,13 @@ export class Core {
     return this._views
   }
 
-  createWorld () { return new WasmWorld(this, this.M._dnp_world_create()) }
+  createWorld () {
+    const w = new WasmWorld(this, this.M._dnp_world_create())
+    // Same geometry the server uses. Phase 3 replaces this with a map received
+    // over the control channel.
+    this.M._dnp_world_use_test_map(w.ptr)
+    return w
+  }
 
   /** Quantise an fx-raw BigInt with the server's own function (protocol R1). */
   axisFromFxRaw (raw) {
@@ -91,11 +105,30 @@ export class WasmWorld {
       vel: { x: i64[b64 + IDX.VEL], y: i64[b64 + IDX.VEL + 1], z: i64[b64 + IDX.VEL + 2] },
       // agent_hash is a u64; it crosses as i64 and is reinterpreted here.
       hash: BigInt.asUintN(64, i64[b64 + IDX.HASH]),
+      dashTimer: i64[b64 + IDX.DASH_T],
+      dashCooldown: i64[b64 + IDX.DASH_CD],
+      hoverFuel: i64[b64 + IDX.HOVER_F],
+      flightFuel: i64[b64 + IDX.FLIGHT_F],
+      grappleAnchor: {
+        x: i64[b64 + IDX.GRAP_ANCH], y: i64[b64 + IDX.GRAP_ANCH + 1], z: i64[b64 + IDX.GRAP_ANCH + 2]
+      },
+      grappleDist: i64[b64 + IDX.GRAP_DIST],
+      dashDir: { x: i64[b64 + IDX.DASH_DIR], y: i64[b64 + IDX.DASH_DIR + 1] },
+      climbNormal: { x: i64[b64 + IDX.CLIMB_N], y: i64[b64 + IDX.CLIMB_N + 1] },
       facing: u32[b32 + IDX.FACING],
       stateFlags: u32[b32 + IDX.FLAGS],
       jumpsUsed: u32[b32 + IDX.JUMPS],
       jumpHeld: u32[b32 + IDX.JUMP_HELD] !== 0,
-      active: u32[b32 + IDX.ACTIVE] !== 0
+      active: u32[b32 + IDX.ACTIVE] !== 0,
+      mode: u32[b32 + IDX.MODE],
+      dashesUsed: u32[b32 + IDX.DASHES],
+      sector: u32[b32 + IDX.SECTOR] | 0,
+      dashHeld: u32[b32 + IDX.DASH_HELD] !== 0,
+      grappleHeld: u32[b32 + IDX.GRAP_HELD] !== 0,
+      climbing: u32[b32 + IDX.CLIMBING] !== 0,
+      grappling: u32[b32 + IDX.GRAPPLING] !== 0,
+      grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
+      grounded: u32[b32 + IDX.GROUNDED] !== 0
     }
   }
 
@@ -103,13 +136,36 @@ export class WasmWorld {
     const { i64, u32 } = this.core.views
     const b64 = this.core.buf64 / 8
     const b32 = this.core.buf32 / 4
+    const z = 0n
     i64[b64 + IDX.POS] = s.pos.x; i64[b64 + IDX.POS + 1] = s.pos.y; i64[b64 + IDX.POS + 2] = s.pos.z
     i64[b64 + IDX.VEL] = s.vel.x; i64[b64 + IDX.VEL + 1] = s.vel.y; i64[b64 + IDX.VEL + 2] = s.vel.z
+    i64[b64 + IDX.DASH_T] = s.dashTimer ?? z
+    i64[b64 + IDX.DASH_CD] = s.dashCooldown ?? z
+    i64[b64 + IDX.HOVER_F] = s.hoverFuel ?? z
+    i64[b64 + IDX.FLIGHT_F] = s.flightFuel ?? z
+    i64[b64 + IDX.GRAP_ANCH] = s.grappleAnchor?.x ?? z
+    i64[b64 + IDX.GRAP_ANCH + 1] = s.grappleAnchor?.y ?? z
+    i64[b64 + IDX.GRAP_ANCH + 2] = s.grappleAnchor?.z ?? z
+    i64[b64 + IDX.GRAP_DIST] = s.grappleDist ?? z
+    i64[b64 + IDX.DASH_DIR] = s.dashDir?.x ?? z
+    i64[b64 + IDX.DASH_DIR + 1] = s.dashDir?.y ?? z
+    i64[b64 + IDX.CLIMB_N] = s.climbNormal?.x ?? z
+    i64[b64 + IDX.CLIMB_N + 1] = s.climbNormal?.y ?? z
+
     u32[b32 + IDX.FACING] = s.facing >>> 0
-    u32[b32 + IDX.FLAGS] = s.stateFlags >>> 0
-    u32[b32 + IDX.JUMPS] = s.jumpsUsed >>> 0
+    u32[b32 + IDX.FLAGS] = (s.stateFlags ?? 0) >>> 0
+    u32[b32 + IDX.JUMPS] = (s.jumpsUsed ?? 0) >>> 0
     u32[b32 + IDX.JUMP_HELD] = s.jumpHeld ? 1 : 0
     u32[b32 + IDX.ACTIVE] = s.active === false ? 0 : 1
+    u32[b32 + IDX.MODE] = (s.mode ?? 0) >>> 0
+    u32[b32 + IDX.DASHES] = (s.dashesUsed ?? 0) >>> 0
+    u32[b32 + IDX.SECTOR] = (s.sector ?? -1) >>> 0
+    u32[b32 + IDX.DASH_HELD] = s.dashHeld ? 1 : 0
+    u32[b32 + IDX.GRAP_HELD] = s.grappleHeld ? 1 : 0
+    u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
+    u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
+    u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
+    u32[b32 + IDX.GROUNDED] = s.grounded ? 1 : 0
     this.core.M._dnp_world_write_agent(this.ptr, idx, this.core.buf64, this.core.buf32)
   }
 }

@@ -200,9 +200,11 @@ await sleep(300)
   const idleAvg = (a.bytes - bytesBefore) / Math.max(1, a.snapCount - countBefore)
   console.log(`\n  idle snapshot average: ${idleAvg.toFixed(1)} bytes`)
 
-  // Fixed overhead is ~93 bytes (docs/protocol.md 5.4); one entity block is 23.
-  // Settled and unchanging, a snapshot should be at or near the floor.
-  check(idleAvg < 110, `idle snapshots collapse to fixed overhead (${idleAvg.toFixed(1)} bytes < 110)`)
+  // Fixed overhead is 129 bytes (docs/protocol.md 5.4); one entity block is 23.
+  // Settled and unchanging, a snapshot should be at or near the floor -- so the
+  // threshold is overhead plus less than one entity, which is what makes this
+  // an assertion about entities being ELIDED rather than merely compressed.
+  check(idleAvg < 150, `idle snapshots collapse to fixed overhead (${idleAvg.toFixed(1)} bytes < 150)`)
   check(a.reasm.stats.carriedForward > 0,
         `entities were carried forward rather than re-sent (${a.reasm.stats.carriedForward})`)
 }

@@ -23,6 +23,7 @@ add_library(dnp_core STATIC
   core/src/math/trig.cpp
   core/src/proto/messages.cpp
   core/src/sim/world.cpp
+  core/src/sim/testmap.cpp
   core/src/geom/map.cpp
   core/src/physics/collide.cpp
   core/src/physics/controller.cpp

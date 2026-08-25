@@ -131,6 +131,15 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
     w.u32v(s.anchor.raw);
     w.u8v(s.jumps_used);
     w.u8v(s.dashes_used);
+    w.i32v(s.sector);
+    w.fxraw(s.dash_timer);
+    w.fxraw(s.dash_cooldown);
+    w.fxraw(s.hover_fuel);
+    w.fxraw(s.flight_fuel);
+    if (s.state_flags & state_flag::GRAPPLING) {
+        w.vec3_raw(s.grapple_anchor);
+        w.fxraw(s.grapple_dist);
+    }
     w.u64v(s.state_hash);
 }
 
@@ -143,6 +152,15 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     s.anchor.raw      = r.u32v();
     s.jumps_used      = r.u8v();
     s.dashes_used     = r.u8v();
+    s.sector          = r.i32v();
+    s.dash_timer      = r.fxraw();
+    s.dash_cooldown   = r.fxraw();
+    s.hover_fuel      = r.fxraw();
+    s.flight_fuel     = r.fxraw();
+    if (s.state_flags & state_flag::GRAPPLING) {
+        s.grapple_anchor = r.vec3_raw();
+        s.grapple_dist   = r.fxraw();
+    }
     s.state_hash      = r.u64v();
 }
 

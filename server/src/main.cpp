@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "dnp/proto/messages.hpp"
+#include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 #include "net/link.hpp"
 #include "session.hpp"
@@ -33,6 +34,8 @@ constexpr auto TICK_PERIOD = std::chrono::nanoseconds(1'000'000'000 / sim::TICK_
 struct Server {
     net::LinkServer      link;
     sim::World           world;
+
+    Server() { world.set_map(&sim::test_map()); }
     std::map<u32, Session> sessions;   // ordered: iteration order must not vary
     u32                  snapshot_divisor = 2;   // 60 Hz sim, 30 Hz snapshots
 
@@ -88,7 +91,7 @@ struct Server {
                 return;
             }
 
-            const u32 agent = world.spawn(fx3{fx::zero(), fx::zero(), fx::from_int(2)});
+            const u32 agent = world.spawn(fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)});
             if (agent >= sim::MAX_AGENTS) {
                 u8 buf[64];
                 ByteWriter w(buf, sizeof(buf));
@@ -168,13 +171,25 @@ struct Server {
             h.input_margin    = s.margin();
             h.flags           = 0;
 
+            // The whole controller state, not just position. Reconciliation
+            // overwrites the client's copy and replays from it, so anything
+            // omitted here would survive the overwrite and diverge silently.
             proto::SelfBlock sb;
-            sb.pos         = self.pos;
-            sb.vel         = self.vel;
-            sb.facing      = self.facing;
-            sb.state_flags = self.state_flags;
-            sb.jumps_used  = self.jumps_used;
-            sb.state_hash  = world.agent_hash(s.agent);
+            sb.pos             = self.pos;
+            sb.vel             = self.vel;
+            sb.facing          = self.facing;
+            sb.controller_mode = static_cast<u8>(self.mv.mode);
+            sb.state_flags     = world.state_flags(s.agent);
+            sb.jumps_used      = self.mv.jumps_used;
+            sb.dashes_used     = self.mv.dashes_used;
+            sb.sector          = self.mv.sector;
+            sb.dash_timer      = self.mv.dash_timer;
+            sb.dash_cooldown   = self.mv.dash_cooldown_timer;
+            sb.hover_fuel      = self.mv.hover_fuel;
+            sb.flight_fuel     = self.mv.flight_fuel;
+            sb.grapple_anchor  = self.mv.grapple_anchor;
+            sb.grapple_dist    = self.mv.grapple_dist;
+            sb.state_hash      = world.agent_hash(s.agent);
 
             u8 buf[proto::MAX_DATAGRAM_BYTES];
             proto::SnapshotWriter w(buf, sizeof(buf));

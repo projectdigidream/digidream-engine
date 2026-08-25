@@ -15,6 +15,7 @@
 //
 #include <emscripten/emscripten.h>
 
+#include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
 using namespace dnp;
@@ -22,19 +23,39 @@ using namespace dnp;
 namespace {
 
 // Layout of the i64 buffer used by read/write_agent.
-//   [0..2] pos.xyz   [3..5] vel.xyz   [6] agent hash
-constexpr int BUF64_POS = 0;
-constexpr int BUF64_VEL = 3;
-constexpr int BUF64_HASH = 6;
-constexpr int BUF64_LEN = 7;
+//
+// Carries every fx-valued field the controller keeps between ticks, because
+// reconciliation OVERWRITES local state and replays from it: anything omitted
+// would survive the overwrite and diverge (docs/protocol.md 5.1).
+constexpr int BUF64_POS       = 0;   // 3
+constexpr int BUF64_VEL       = 3;   // 3
+constexpr int BUF64_HASH      = 6;
+constexpr int BUF64_DASH_T    = 7;
+constexpr int BUF64_DASH_CD   = 8;
+constexpr int BUF64_HOVER_F   = 9;
+constexpr int BUF64_FLIGHT_F  = 10;
+constexpr int BUF64_GRAP_ANCH = 11;  // 3
+constexpr int BUF64_GRAP_DIST = 14;
+constexpr int BUF64_DASH_DIR  = 15;  // 2
+constexpr int BUF64_CLIMB_N   = 17;  // 2
+constexpr int BUF64_LEN       = 19;
 
 // Layout of the u32 buffer.
-//   [0] facing  [1] state_flags  [2] jumps_used  [3] jump_held  [4] active
-constexpr int BUF32_FACING = 0;
-constexpr int BUF32_FLAGS = 1;
-constexpr int BUF32_JUMPS = 2;
+constexpr int BUF32_FACING    = 0;
+constexpr int BUF32_FLAGS     = 1;
+constexpr int BUF32_JUMPS     = 2;
 constexpr int BUF32_JUMP_HELD = 3;
-constexpr int BUF32_ACTIVE = 4;
+constexpr int BUF32_ACTIVE    = 4;
+constexpr int BUF32_MODE      = 5;
+constexpr int BUF32_DASHES    = 6;
+constexpr int BUF32_SECTOR    = 7;
+constexpr int BUF32_DASH_HELD = 8;
+constexpr int BUF32_GRAP_HELD = 9;
+constexpr int BUF32_CLIMBING  = 10;
+constexpr int BUF32_GRAPPLING = 11;
+constexpr int BUF32_GRAP_PULL = 12;
+constexpr int BUF32_GROUNDED  = 13;
+constexpr int BUF32_LEN       = 14;
 
 }  // namespace
 
@@ -42,6 +63,15 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 int dnp_buf64_len() { return BUF64_LEN; }
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_buf32_len() { return BUF32_LEN; }
+
+// Point the world at the built-in test map. Phase 3 replaces this with a map
+// loaded over the control channel; until then both sides construct the same
+// geometry from the same code, which is what prediction requires.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_use_test_map(sim::World* w) { w->set_map(&sim::test_map()); }
 
 EMSCRIPTEN_KEEPALIVE
 sim::World* dnp_world_create() { return new sim::World(); }
@@ -76,6 +106,8 @@ unsigned dnp_world_tick(sim::World* w) { return w->tick(); }
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigned* out32) {
     const sim::AgentState& a = w->agent(idx);
+    const physics::MoveState& m = a.mv;
+
     out64[BUF64_POS + 0] = a.pos.x.raw;
     out64[BUF64_POS + 1] = a.pos.y.raw;
     out64[BUF64_POS + 2] = a.pos.z.raw;
@@ -83,11 +115,33 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out64[BUF64_VEL + 1] = a.vel.y.raw;
     out64[BUF64_VEL + 2] = a.vel.z.raw;
     out64[BUF64_HASH]    = static_cast<long long>(w->agent_hash(idx));
+    out64[BUF64_DASH_T]  = m.dash_timer.raw;
+    out64[BUF64_DASH_CD] = m.dash_cooldown_timer.raw;
+    out64[BUF64_HOVER_F] = m.hover_fuel.raw;
+    out64[BUF64_FLIGHT_F] = m.flight_fuel.raw;
+    out64[BUF64_GRAP_ANCH + 0] = m.grapple_anchor.x.raw;
+    out64[BUF64_GRAP_ANCH + 1] = m.grapple_anchor.y.raw;
+    out64[BUF64_GRAP_ANCH + 2] = m.grapple_anchor.z.raw;
+    out64[BUF64_GRAP_DIST] = m.grapple_dist.raw;
+    out64[BUF64_DASH_DIR + 0] = m.dash_dir.x.raw;
+    out64[BUF64_DASH_DIR + 1] = m.dash_dir.y.raw;
+    out64[BUF64_CLIMB_N + 0] = m.climb_normal.x.raw;
+    out64[BUF64_CLIMB_N + 1] = m.climb_normal.y.raw;
+
     out32[BUF32_FACING]    = a.facing.raw;
-    out32[BUF32_FLAGS]     = a.state_flags;
-    out32[BUF32_JUMPS]     = a.jumps_used;
-    out32[BUF32_JUMP_HELD] = a.jump_held ? 1u : 0u;
+    out32[BUF32_FLAGS]     = w->state_flags(idx);
+    out32[BUF32_JUMPS]     = m.jumps_used;
+    out32[BUF32_JUMP_HELD] = m.jump_held ? 1u : 0u;
     out32[BUF32_ACTIVE]    = a.active ? 1u : 0u;
+    out32[BUF32_MODE]      = static_cast<unsigned>(m.mode);
+    out32[BUF32_DASHES]    = m.dashes_used;
+    out32[BUF32_SECTOR]    = static_cast<unsigned>(m.sector);
+    out32[BUF32_DASH_HELD] = m.dash_held ? 1u : 0u;
+    out32[BUF32_GRAP_HELD] = m.grapple_held ? 1u : 0u;
+    out32[BUF32_CLIMBING]  = m.climbing ? 1u : 0u;
+    out32[BUF32_GRAPPLING] = m.grappling ? 1u : 0u;
+    out32[BUF32_GRAP_PULL] = m.grapple_pulling ? 1u : 0u;
+    out32[BUF32_GROUNDED]  = m.grounded ? 1u : 0u;
 }
 
 // Adopt authoritative state. This is step 2 of reconciliation
@@ -100,15 +154,37 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, const unsigned* in32) {
     sim::AgentState& a = w->agent_mut(idx);
+    physics::MoveState& m = a.mv;
+
     a.pos = fx3{fx::from_raw(in64[BUF64_POS + 0]), fx::from_raw(in64[BUF64_POS + 1]),
                 fx::from_raw(in64[BUF64_POS + 2])};
     a.vel = fx3{fx::from_raw(in64[BUF64_VEL + 0]), fx::from_raw(in64[BUF64_VEL + 1]),
                 fx::from_raw(in64[BUF64_VEL + 2])};
-    a.facing      = brad(in32[BUF32_FACING]);
-    a.state_flags = static_cast<u16>(in32[BUF32_FLAGS]);
-    a.jumps_used  = static_cast<u8>(in32[BUF32_JUMPS]);
-    a.jump_held   = in32[BUF32_JUMP_HELD] != 0;
-    a.active      = in32[BUF32_ACTIVE] != 0;
+    a.facing = brad(in32[BUF32_FACING]);
+    a.active = in32[BUF32_ACTIVE] != 0;
+
+    m.dash_timer = fx::from_raw(in64[BUF64_DASH_T]);
+    m.dash_cooldown_timer = fx::from_raw(in64[BUF64_DASH_CD]);
+    m.hover_fuel = fx::from_raw(in64[BUF64_HOVER_F]);
+    m.flight_fuel = fx::from_raw(in64[BUF64_FLIGHT_F]);
+    m.grapple_anchor = fx3{fx::from_raw(in64[BUF64_GRAP_ANCH + 0]),
+                           fx::from_raw(in64[BUF64_GRAP_ANCH + 1]),
+                           fx::from_raw(in64[BUF64_GRAP_ANCH + 2])};
+    m.grapple_dist = fx::from_raw(in64[BUF64_GRAP_DIST]);
+    m.dash_dir = fx2{fx::from_raw(in64[BUF64_DASH_DIR + 0]), fx::from_raw(in64[BUF64_DASH_DIR + 1])};
+    m.climb_normal = fx2{fx::from_raw(in64[BUF64_CLIMB_N + 0]), fx::from_raw(in64[BUF64_CLIMB_N + 1])};
+
+    m.mode = static_cast<physics::ControllerMode>(in32[BUF32_MODE]);
+    m.jumps_used = static_cast<u8>(in32[BUF32_JUMPS]);
+    m.dashes_used = static_cast<u8>(in32[BUF32_DASHES]);
+    m.sector = static_cast<i32>(in32[BUF32_SECTOR]);
+    m.jump_held = in32[BUF32_JUMP_HELD] != 0;
+    m.dash_held = in32[BUF32_DASH_HELD] != 0;
+    m.grapple_held = in32[BUF32_GRAP_HELD] != 0;
+    m.climbing = in32[BUF32_CLIMBING] != 0;
+    m.grappling = in32[BUF32_GRAPPLING] != 0;
+    m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
+    m.grounded = in32[BUF32_GROUNDED] != 0;
 }
 
 // Input quantisation, exposed so the client uses the SAME function the server
