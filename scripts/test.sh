@@ -46,6 +46,16 @@ else
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2)
+
+  echo
+  echo "--- client prediction against the real server ---"
+  if command -v em++ >/dev/null 2>&1; then
+    ./scripts/build_wasm.sh >/dev/null
+    (cd server/edge && node test/prediction.test.js 2>/dev/null | tail -4)
+  else
+    echo "  skip (emsdk not active -- source emsdk/emsdk_env.sh)"
+    echo "  NOTE: this is the test that verifies client and server agree bit-for-bit."
+  fi
 fi
 
 echo
