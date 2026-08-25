@@ -1,5 +1,7 @@
 #include "lua/vm.hpp"
 
+#include "lua/fx_binding.hpp"
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -151,7 +153,7 @@ void Vm::count_hook(lua_State* L, lua_Debug* /*ar*/) {
                vm->current_, vm->cfg_.budget_per_call, vm->cfg_.budget_per_tick);
 }
 
-bool Vm::open(const VmConfig& cfg) noexcept {
+bool Vm::open(const VmConfig& cfg) {
     close();
     cfg_ = cfg;
     bytes_ = 0;
@@ -192,7 +194,7 @@ bool Vm::open(const VmConfig& cfg) noexcept {
     return true;
 }
 
-void Vm::install_environment() noexcept {
+void Vm::install_environment() {
     for (const char* n : REMOVED_ALWAYS) {
         lua_pushnil(L_);
         lua_setglobal(L_, n);
@@ -224,6 +226,10 @@ void Vm::install_environment() noexcept {
         lua_pop(L_, 1);
     }
 
+    // The fx type. Installed for both trust profiles: it is not a capability,
+    // it is the only exact way to name a number the simulation will accept.
+    open_fx(L_);
+
     // Script output goes to stderr, alongside the engine's own logs.
     lua_pushcfunction(L_, lua_print_to_stderr);
     lua_setglobal(L_, "print");
@@ -249,7 +255,7 @@ void Vm::close() noexcept {
     bytes_ = 0;
 }
 
-bool Vm::run_file(const char* path, const char* name) noexcept {
+bool Vm::run_file(const char* path, const char* name) {
     if (!L_) return false;
 
     std::FILE* f = std::fopen(path, "rb");
@@ -295,7 +301,7 @@ bool Vm::run_file(const char* path, const char* name) noexcept {
     return true;
 }
 
-void Vm::begin_tick() noexcept {
+void Vm::begin_tick() {
     used_this_tick_ = 0;
     used_this_call_ = 0;
     killed_ = false;
@@ -303,7 +309,7 @@ void Vm::begin_tick() noexcept {
     if (L_) lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
 }
 
-void Vm::end_tick(u32 tick) noexcept {
+void Vm::end_tick(u32 tick) {
     if (!L_) return;
     const u64 spent = now_us() - tick_start_us_;
     if (spent > stats_.worst_tick_us) stats_.worst_tick_us = spent;
@@ -319,7 +325,7 @@ void Vm::end_tick(u32 tick) noexcept {
     }
 }
 
-void Vm::gc_step() noexcept {
+void Vm::gc_step() {
     if (L_) lua_gc(L_, LUA_GCSTEP, 4);
 }
 

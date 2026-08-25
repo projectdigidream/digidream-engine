@@ -43,6 +43,7 @@ HOST_ARCH="$(uname -m)"
 if [[ -f third_party/luajit/src/libluajit.a ]]; then
   ./scripts/build_lua_tests.sh >/dev/null
   "./build/lua/test_lua_vm"
+  "./build/lua/test_lua_fx"
 else
   echo "  skip lua tests (run: scripts/setup_luajit.sh)"
 fi

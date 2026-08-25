@@ -26,6 +26,10 @@ FLAGS=(-std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror
 LINK=("$LJ/src/libluajit.a" -lm)
 [[ "$(uname -s)" == "Darwin" ]] || LINK+=(-ldl)
 
-clang++ "${FLAGS[@]}" "$ROOT/server/src/lua/vm.cpp" \
+SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
+
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_vm.cpp" "${LINK[@]}" -o "$OUT/test_lua_vm"
-echo "[lua-tests] $OUT/test_lua_vm"
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_fx.cpp" "${LINK[@]}" -o "$OUT/test_lua_fx"
+echo "[lua-tests] $OUT/test_lua_vm $OUT/test_lua_fx"

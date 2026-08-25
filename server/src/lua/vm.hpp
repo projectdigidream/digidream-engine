@@ -78,6 +78,15 @@ struct VmStats {
     u64 worst_tick_us = 0;
 };
 
+// NOTE: almost nothing here is noexcept, deliberately.
+//
+// LuaJIT raises errors by unwinding, on this platform through the C++ exception
+// machinery. Marking a function that can call into Lua `noexcept` does not stop
+// the throw -- it turns it into std::terminate. The fx binding was written that
+// way first and died with "terminating due to uncaught foreign exception" the
+// moment a script passed a bad argument, which in production is the server
+// crashing on a script typo. close() keeps noexcept because lua_close is
+// documented not to raise.
 class Vm {
 public:
     Vm() noexcept = default;
@@ -86,7 +95,7 @@ public:
     Vm& operator=(const Vm&) = delete;
 
     // Creates the state and installs the environment for `cfg.trust`.
-    bool open(const VmConfig& cfg) noexcept;
+    bool open(const VmConfig& cfg);
     void close() noexcept;
 
     bool is_open() const noexcept { return L_ != nullptr; }
@@ -101,19 +110,19 @@ public:
     // LuaJIT's bytecode loader is not memory-safe on malformed input, and the
     // failure is a crash inside the interpreter rather than a Lua error, which
     // no amount of operator confinement makes debuggable.
-    bool run_file(const char* path, const char* name) noexcept;
+    bool run_file(const char* path, const char* name);
 
     // Called once per tick before any callback: resets the tick budget and
     // starts wall-clock attribution.
-    void begin_tick() noexcept;
+    void begin_tick();
 
     // Called once per tick after the last callback. Logs a stall if Lua spent
     // more than `stall_warn_us`, naming the script that was running.
-    void end_tick(u32 tick) noexcept;
+    void end_tick(u32 tick);
 
     // Drive the collector a fixed amount per tick rather than letting it choose
     // its own moment.
-    void gc_step() noexcept;
+    void gc_step();
 
     const char* last_error() const noexcept { return err_; }
 
@@ -124,7 +133,7 @@ private:
     static void* alloc_hook(void* ud, void* ptr, size_t osize, size_t nsize);
     static void count_hook(lua_State* L, lua_Debug* ar);
 
-    void install_environment() noexcept;
+    void install_environment();
 
     lua_State* L_ = nullptr;
     VmConfig   cfg_{};

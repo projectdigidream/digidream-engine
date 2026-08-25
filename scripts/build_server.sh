@@ -41,6 +41,7 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror \
   "$ROOT/core/src/nav/navgraph.cpp" \
   "$ROOT/server/src/net/link.cpp" \
   "$ROOT/server/src/lua/vm.cpp" \
+  "$ROOT/server/src/lua/fx_binding.cpp" \
   "$ROOT/server/src/main.cpp" \
   "$ROOT/third_party/luajit/src/libluajit.a" \
   -lm $LUA_EXTRA_LIBS \
