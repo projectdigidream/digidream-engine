@@ -56,7 +56,8 @@ else
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2 \
-     && node test/delta.test.js 2>/dev/null | tail -2)
+     && node test/delta.test.js 2>/dev/null | tail -2 \
+     && node test/mapdata.test.js 2>/dev/null | tail -2)
 
   echo
   echo "--- client prediction against the real server ---"

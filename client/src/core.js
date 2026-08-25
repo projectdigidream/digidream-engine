@@ -57,18 +57,64 @@ export class Core {
     return this._views
   }
 
-  createWorld () {
+  createWorld ({ map = null } = {}) {
     const w = new WasmWorld(this, this.M._dnp_world_create())
-    // Same geometry the server uses. Phase 3 replaces this with a map received
-    // over the control channel.
-    this.M._dnp_world_use_test_map(w.ptr)
+    if (map) {
+      this.M._dnp_world_set_map(w.ptr, map.ptr)
+      w.map = map
+    } else {
+      // Fallback for tests. The real path is a map parsed from the bytes the
+      // server sent, so the two sides agree because they parsed the same file.
+      this.M._dnp_world_use_test_map(w.ptr)
+    }
     return w
+  }
+
+  /** Parse a baked .dnpm buffer. Returns { ok, status, map } . */
+  loadMap (bytes) {
+    const ptr = this.M._malloc(bytes.length)
+    this.M.HEAPU8.set(bytes, ptr)
+    const store = this.M._dnp_map_create()
+    const status = this.M._dnp_map_load(store, ptr, bytes.length)
+    this.M._free(ptr)
+    if (status !== 0) {
+      this.M._dnp_map_destroy(store)
+      return { ok: false, status, map: null }
+    }
+    return { ok: true, status: 0, map: new WasmMap(this, store) }
   }
 
   /** Quantise an fx-raw BigInt with the server's own function (protocol R1). */
   axisFromFxRaw (raw) {
     this.views.i64[this.argbuf / 8] = raw
     return this.M._dnp_axis_from_buf(this.argbuf)
+  }
+}
+
+export class WasmMap {
+  constructor (core, ptr) {
+    this.core = core
+    this.ptr = ptr
+  }
+
+  destroy () { this.core.M._dnp_map_destroy(this.ptr); this.ptr = 0 }
+  get sectorCount () { return this.core.M._dnp_map_sector_count(this.ptr) }
+
+  /** Content hash, as BigInt. Must equal WELCOME.map_hash. */
+  get hash () {
+    this.core.M._dnp_map_hash(this.ptr, this.core.buf64)
+    return BigInt.asUintN(64, this.core.views.i64[this.core.buf64 / 8])
+  }
+
+  spawnForTag (tag) {
+    const bytes = new TextEncoder().encode(tag)
+    const ptr = this.core.M._malloc(Math.max(1, bytes.length))
+    this.core.M.HEAPU8.set(bytes, ptr)
+    this.core.M._dnp_map_spawn_for_tag(this.ptr, ptr, bytes.length, this.core.buf64)
+    this.core.M._free(ptr)
+    const i64 = this.core.views.i64
+    const b = this.core.buf64 / 8
+    return { x: i64[b], y: i64[b + 1], z: i64[b + 2] }
   }
 }
 

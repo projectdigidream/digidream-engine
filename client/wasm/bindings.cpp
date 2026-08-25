@@ -15,6 +15,7 @@
 //
 #include <emscripten/emscripten.h>
 
+#include "dnp/geom/mapfile.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
@@ -67,11 +68,67 @@ int dnp_buf64_len() { return BUF64_LEN; }
 EMSCRIPTEN_KEEPALIVE
 int dnp_buf32_len() { return BUF32_LEN; }
 
-// Point the world at the built-in test map. Phase 3 replaces this with a map
-// loaded over the control channel; until then both sides construct the same
-// geometry from the same code, which is what prediction requires.
+// Point the world at the built-in test map.
+//
+// Retained as a fallback and for tests. The real path is dnp_map_load() below,
+// which parses the bytes the server sent -- so client and server agree on
+// geometry because they parse the SAME file, not because they happen to share
+// a compiled-in copy of it.
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_use_test_map(sim::World* w) { w->set_map(&sim::test_map()); }
+
+// --- map loading -----------------------------------------------------------
+//
+// The store owns the geometry; the MapData view handed to the world points into
+// it, so the store must outlive the world. JS keeps both alive together.
+
+EMSCRIPTEN_KEEPALIVE
+geom::MapStorage* dnp_map_create() { return new geom::MapStorage(); }
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_destroy(geom::MapStorage* m) { delete m; }
+
+// Parse `len` bytes. Returns a MapLoadStatus; anything non-zero means the map
+// was rejected and the store is left empty rather than half-populated.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_load(geom::MapStorage* m, const unsigned char* data, unsigned len) {
+    ByteReader r(data, len);
+    return static_cast<int>(geom::load_map(r, *m));
+}
+
+// Content hash, written to out64[0]. Compared against WELCOME.map_hash: a
+// client running different geometry from the server is otherwise
+// indistinguishable from a physics bug.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_hash(const geom::MapStorage* m, long long* out64) {
+    out64[0] = static_cast<long long>(m->hash());
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_sector_count(const geom::MapStorage* m) { return m->view().sector_count; }
+
+// Attach a loaded map to a world. The view is stored out of line because
+// World keeps a pointer to it.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_set_map(sim::World* w, geom::MapStorage* m) {
+    static geom::MapData views[8];
+    static int next = 0;
+    geom::MapData& v = views[next++ % 8];
+    v = m->view();
+    w->set_map(&v);
+}
+
+// Spawn position for a tag, written to out64[0..2]. Falls back to the first
+// spawn and then the origin, never failing -- a player who cannot land
+// anywhere is worse than one who lands in the wrong place (design 3.3).
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_spawn_for_tag(const geom::MapStorage* m, const char* tag, unsigned len,
+                           long long* out64) {
+    const fx3 p = m->spawn_for_tag(tag, len);
+    out64[0] = p.x.raw;
+    out64[1] = p.y.raw;
+    out64[2] = p.z.raw;
+}
 
 EMSCRIPTEN_KEEPALIVE
 sim::World* dnp_world_create() { return new sim::World(); }

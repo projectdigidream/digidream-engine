@@ -17,6 +17,7 @@ export const MSG = {
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
+  MAP_DATA: 0x10,
   INPUT_BUNDLE: 0x80,
   SNAPSHOT: 0x81
 }
@@ -163,9 +164,21 @@ export function decodeControlMessage (buf) {
       tickRate: r.u16(),
       snapshotRate: r.u16(),
       serverTick: r.u32(),
-      selfHandle: r.u32()
+      selfHandle: r.u32(),
+      mapHash: r.u64()
     }
     return r.ok ? msg : null
+  }
+  if (type === MSG.MAP_DATA) {
+    const totalBytes = r.u32()
+    const offset = r.u32()
+    if (!r.ok) return null
+    // The remainder of the message body is the chunk. `len` counts the type
+    // byte plus the body, so the chunk is what is left after the two headers.
+    const chunkLen = len - 1 - 8
+    if (chunkLen < 0 || r.pos + chunkLen > r.buf.length) return null
+    const chunk = r.buf.subarray(r.pos, r.pos + chunkLen)
+    return { type, totalBytes, offset, chunk }
   }
   if (type === MSG.REJECT) {
     const msg = { type, reason: r.u16() }

@@ -8,12 +8,15 @@
 // enforcement.
 //
 #include <chrono>
+#include <memory>
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <thread>
 
 #include "dnp/proto/messages.hpp"
+#include "dnp/geom/mapfile.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 #include "net/link.hpp"
@@ -31,11 +34,83 @@ namespace {
 using Clock = std::chrono::steady_clock;
 constexpr auto TICK_PERIOD = std::chrono::nanoseconds(1'000'000'000 / sim::TICK_RATE_HZ);
 
+// Chunk size for MAP_DATA. Well under the link frame cap, and small enough that
+// a slow client does not stall behind one enormous write.
+constexpr size_t MAP_CHUNK_BYTES = 8192;
+
 struct Server {
     net::LinkServer      link;
     sim::World           world;
 
-    Server() { world.set_map(&sim::test_map()); }
+    // Heap, not a member by value: MapStorage is a few hundred KB of fixed
+    // arrays and Server is a stack local.
+    std::unique_ptr<geom::MapStorage> map_store;
+    std::vector<u8>                   map_bytes;   // exactly what clients receive
+    u64                               map_hash = 0;
+
+    Server() : map_store(new geom::MapStorage()) {
+        // Until a map is loaded, fall back to the built-in one so the server is
+        // still runnable. Phase 3 retires this once every deployment ships a
+        // baked map.
+        world.set_map(&sim::test_map());
+    }
+
+    bool load_map_file(const char* path) {
+        std::FILE* f = std::fopen(path, "rb");
+        if (!f) { std::fprintf(stderr, "[srv] cannot open map %s\n", path); return false; }
+        std::fseek(f, 0, SEEK_END);
+        const long n = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (n <= 0) { std::fclose(f); return false; }
+        map_bytes.resize(static_cast<size_t>(n));
+        const size_t got = std::fread(map_bytes.data(), 1, map_bytes.size(), f);
+        std::fclose(f);
+        if (got != map_bytes.size()) { map_bytes.clear(); return false; }
+
+        ByteReader r(map_bytes.data(), map_bytes.size());
+        const geom::MapLoadStatus st = geom::load_map(r, *map_store);
+        if (st != geom::MapLoadStatus::Ok) {
+            std::fprintf(stderr, "[srv] map %s rejected: %s\n", path,
+                         geom::map_load_status_text(st));
+            map_bytes.clear();
+            return false;
+        }
+
+        // Point the world at the loaded map. The view is stable for the
+        // lifetime of the store, which outlives the world.
+        static geom::MapData loaded;
+        loaded = map_store->view();
+        world.set_map(&loaded);
+        map_hash = map_store->hash();
+        std::fprintf(stderr, "[srv] map %s: %u sectors, %u sides, hash %016llX\n",
+                     path, loaded.sector_count, loaded.side_count,
+                     static_cast<unsigned long long>(map_hash));
+        return true;
+    }
+
+    void send_map(u32 id) {
+        if (map_bytes.empty()) return;
+        for (size_t off = 0; off < map_bytes.size(); off += MAP_CHUNK_BYTES) {
+            const size_t n = map_bytes.size() - off < MAP_CHUNK_BYTES
+                                 ? map_bytes.size() - off
+                                 : MAP_CHUNK_BYTES;
+            std::vector<u8> msg(n + 32);
+            ByteWriter w(msg.data(), msg.size());
+            const size_t len_pos = w.mark();
+            w.u32v(0);
+            w.u8v(proto::MSG_MAP_DATA);
+            w.u32v(static_cast<u32>(map_bytes.size()));
+            w.u32v(static_cast<u32>(off));
+            w.bytes(map_bytes.data() + off, n);
+            const size_t end = w.size();
+            const u32 body = static_cast<u32>(end - len_pos - 4);
+            msg[len_pos]     = static_cast<u8>(body & 0xFF);
+            msg[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+            msg[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+            msg[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+            link.send_control(id, msg.data(), end);
+        }
+    }
     std::map<u32, Session> sessions;   // ordered: iteration order must not vary
     u32                  snapshot_divisor = 2;   // 60 Hz sim, 30 Hz snapshots
 
@@ -91,7 +166,13 @@ struct Server {
                 return;
             }
 
-            const u32 agent = world.spawn(fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)});
+            // Spawn at the map's tagged landing point. entry_spawn_tag comes
+            // from the portal that sent the player (design §3.3); until portals
+            // land, everyone arrives at the default.
+            const fx3 spawn_pos = map_bytes.empty()
+                ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
+                : map_store->spawn_for_tag("start", 5);
+            const u32 agent = world.spawn(spawn_pos);
             if (agent >= sim::MAX_AGENTS) {
                 u8 buf[64];
                 ByteWriter w(buf, sizeof(buf));
@@ -118,6 +199,7 @@ struct Server {
             w.u16v(static_cast<u16>(sim::TICK_RATE_HZ / snapshot_divisor));
             w.u32v(world.tick());
             w.u32v(proto::Handle::make(agent + 1, world.generation(agent)).raw);
+            w.u64v(map_hash);
             const size_t end = w.size();
             const u32 body_len = static_cast<u32>(end - len_pos - 4);
             buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -125,6 +207,13 @@ struct Server {
             buf[len_pos + 2] = static_cast<u8>((body_len >> 16) & 0xFF);
             buf[len_pos + 3] = static_cast<u8>((body_len >> 24) & 0xFF);
             link.send_control(id, buf, end);
+
+            // The map follows WELCOME immediately. A client must not start
+            // predicting before it lands (docs/protocol.md 8.0) -- physics
+            // against no geometry is wrong on every tick, and the corrections
+            // would arrive as a burst of mispredictions explained nowhere near
+            // the symptom.
+            send_map(id);
 
             std::fprintf(stderr, "[srv] session %u -> agent %u\n", id, agent);
         }
@@ -278,13 +367,24 @@ struct Server {
 
 int main(int argc, char** argv) {
     u16 port = 34500;
+    const char* map_path = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
+            map_path = argv[++i];
         }
     }
 
     Server srv;
+    if (map_path && !srv.load_map_file(map_path)) {
+        std::fprintf(stderr, "[srv] refusing to start without the requested map\n");
+        return 1;
+    }
+    if (!map_path) {
+        std::fprintf(stderr, "[srv] no --map given; using the built-in test map "
+                             "(clients cannot be sent geometry)\n");
+    }
     if (!srv.link.listen(port)) {
         std::fprintf(stderr, "[srv] failed to listen on %u\n", port);
         return 1;

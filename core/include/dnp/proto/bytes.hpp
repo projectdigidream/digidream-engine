@@ -208,6 +208,18 @@ public:
         return fx3{x, y, z};
     }
 
+    // Reposition the cursor. Lets a parser walk a structure more than once
+    // instead of buffering it -- which for a map means reading each sector's
+    // points straight out of the source buffer rather than copying every point
+    // in the file into scratch first.
+    constexpr bool seek(size_t p) noexcept {
+        if (p > size_) { ok_ = false; return false; }
+        pos_ = p;
+        return true;
+    }
+
+    constexpr bool skip(size_t n) noexcept { return seek(pos_ + n); }
+
     const u8* bytes(size_t n) noexcept {
         if (!require(n)) return nullptr;
         const u8* p = data_ + pos_;

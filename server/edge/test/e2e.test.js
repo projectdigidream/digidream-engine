@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
+import { bakedMapPath } from './helpers.js'
 import { SnapshotReassembler } from '../../../client/src/snapshots.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
@@ -59,7 +60,9 @@ const waitFor = async (fn, ms, label) => {
 // ------------------------------------------------------------- C++ server
 
 const serverBin = join(ROOT, 'build', 'server', 'dnp-server')
-const server = spawn(serverBin, ['--port', String(LINK_PORT)], { stdio: ['ignore', 'inherit', 'pipe'] })
+const server = spawn(serverBin, [...['--port', String(LINK_PORT)],
+                      ...(bakedMapPath(ROOT) ? ['--map', bakedMapPath(ROOT)] : [])],
+                     { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })
 

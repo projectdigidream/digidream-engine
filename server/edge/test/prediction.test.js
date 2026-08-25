@@ -19,6 +19,8 @@ import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
 import { Core } from '../../../client/src/core.js'
+import { MapAccumulator } from '../../../client/src/maploader.js'
+import { bakedMapPath } from './helpers.js'
 import { Predictor } from '../../../client/src/predictor.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
@@ -63,8 +65,14 @@ const waitFor = async (fn, ms, label) => {
 
 // ------------------------------------------------------------------- processes
 
+// Run against the BAKED map, transferred over the control channel -- the real
+// configuration. Falling back to the compiled-in map would mean prediction was
+// only ever verified against geometry both sides happened to share a copy of.
+const MAP_PATH = bakedMapPath(ROOT)
+const serverArgs = ['--port', String(LINK_PORT)]
+if (MAP_PATH) serverArgs.push('--map', MAP_PATH)
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
-                     ['--port', String(LINK_PORT)], { stdio: ['ignore', 'inherit', 'pipe'] })
+                     serverArgs, { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })
 process.on('exit', () => { try { server.kill('SIGKILL') } catch {} })
@@ -115,6 +123,8 @@ class PredictingClient {
     this.snapshots = []
     this.welcome = null
     this.pending = []
+    this.mapAcc = new MapAccumulator()
+    this.map = null
   }
 
   async connect () {
@@ -130,11 +140,24 @@ class PredictingClient {
     await this.controlWriter.write(encodeHello())
     await waitFor(() => this.welcome, 8000, 'welcome')
 
+    // Wait for the map before predicting anything. Physics against no geometry
+    // is wrong on every tick, and the corrections would arrive as a burst of
+    // mispredictions explained nowhere near the symptom (docs/protocol.md 8.0).
+    let spawnPos = { x: numberToFx(10), y: numberToFx(10), z: numberToFx(2) }
+    if (MAP_PATH) {
+      await waitFor(() => this.mapAcc.complete || this.mapAcc.failed, 8000, 'map')
+      const { ok, map } = core.loadMap(this.mapAcc.bytes())
+      if (!ok) throw new Error('client rejected the map')
+      if (map.hash !== this.welcome.mapHash) throw new Error('map hash mismatch')
+      this.map = map
+      spawnPos = map.spawnForTag('start')
+    }
+
     // The client's own world holds only its own agent. Remote agents are
     // interpolated from snapshots, never simulated locally -- their positions
     // are stale by construction (docs/protocol.md 11).
-    this.world = core.createWorld()
-    this.agent = this.world.spawn({ z: numberToFx(2) })
+    this.world = core.createWorld({ map: this.map })
+    this.agent = this.world.spawn(spawnPos)
     this.predictor = new Predictor(this.world, this.agent)
   }
 
@@ -152,6 +175,7 @@ class PredictingClient {
           const msg = decodeControlMessage(buf.subarray(0, 4 + len))
           buf = buf.subarray(4 + len)
           if (msg?.type === MSG.WELCOME) this.welcome = msg
+          else if (msg?.type === MSG.MAP_DATA) this.mapAcc.push(msg)
         }
       }
     } catch {}

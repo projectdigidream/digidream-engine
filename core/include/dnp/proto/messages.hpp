@@ -24,6 +24,7 @@ inline constexpr u8 MSG_SNAPSHOT     = 0x81;
 inline constexpr u8 MSG_HELLO   = 0x01;
 inline constexpr u8 MSG_WELCOME = 0x02;
 inline constexpr u8 MSG_REJECT  = 0x03;
+inline constexpr u8 MSG_MAP_DATA = 0x10;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.

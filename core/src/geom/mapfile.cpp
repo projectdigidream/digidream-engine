@@ -2,6 +2,13 @@
 
 namespace dnp::geom {
 
+namespace {
+// On-disk record sizes, so the loader can seek past a section without
+// materialising it.
+constexpr size_t POINT_BYTES = 16;   // two fxraw
+constexpr size_t SIDE_BYTES  = 9;    // u16 + u16 + i32 + u8
+}  // namespace
+
 bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     const MapData m = store.view();
 
@@ -91,25 +98,22 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         return MapLoadStatus::TooLarge;
     }
 
-    // Sectors are rebuilt through add_sector/add_side rather than written into
-    // the arrays directly, so a loaded map goes through exactly the same
-    // construction path as one built in code -- including triangulation. The
-    // baked triangles are then compared against what the triangulator produces,
-    // below.
+    // The arrays are walked by SEEKING through the source buffer rather than
+    // copied into scratch first. Buffering them would need ~140 KB of locals --
+    // more than the whole wasm stack, and unreasonable anywhere. Each section's
+    // offset is recorded once and revisited as needed.
+    const size_t points_at = r.pos();
+    if (!r.skip(static_cast<size_t>(point_count) * POINT_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+
+    // Sector records are small enough to hold: 512 of them is ~20 KB.
     struct PendingSector {
         u16 first_point, point_count, first_side, side_count, tag, tri_count;
         u32 first_tri;
         fx floor_z, ceil_z;
     };
     PendingSector pend[MAX_MAP_SECTORS];
-    fx2 pts[MAX_MAP_POINTS];
-
-    for (u32 i = 0; i < point_count; ++i) {
-        pts[i].x = r.fxraw();
-        pts[i].y = r.fxraw();
-    }
-    if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
-
     for (u32 i = 0; i < sector_count; ++i) {
         PendingSector& s = pend[i];
         s.first_point = r.u16v();
@@ -124,27 +128,15 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     }
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
-    struct PendingSide { u16 a, b; i32 neighbor; u8 flags; };
-    PendingSide psides[MAX_MAP_SIDES];
-    for (u32 i = 0; i < side_count; ++i) {
-        psides[i].a = r.u16v();
-        psides[i].b = r.u16v();
-        psides[i].neighbor = r.i32v();
-        psides[i].flags = r.u8v();
+    const size_t sides_at = r.pos();
+    if (!r.skip(static_cast<size_t>(side_count) * SIDE_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
     }
-    if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
-
-    // The baked triangles are READ AND CHECKED, not discarded.
-    //
-    // Recomputing them and ignoring the file's copy would work -- the
-    // triangulator is deterministic -- but it would also mean a map baked by a
-    // mapc built from different core code loads silently and only diverges once
-    // something calls update_shape(). Shipping them and comparing turns that
-    // into an immediate, named failure, which is what docs/protocol.md 8.1
-    // claims they are for.
-    u16 baked[MAX_MAP_TRI_IDX];
-    for (u32 i = 0; i < tri_index_count; ++i) baked[i] = r.u16v();
-    if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+    const size_t tris_at = r.pos();
+    if (!r.skip(static_cast<size_t>(tri_index_count) * 2)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+    const size_t spawns_at = r.pos();
 
     // --- validate every index before anything can dereference one ----------
     for (u32 i = 0; i < sector_count; ++i) {
@@ -159,61 +151,88 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             store.clear(); return MapLoadStatus::BadIndex;
         }
     }
+    r.seek(sides_at);
     for (u32 i = 0; i < side_count; ++i) {
-        const PendingSide& sd = psides[i];
-        if (sd.a >= point_count || sd.b >= point_count) {
+        const u16 a = r.u16v();
+        const u16 b = r.u16v();
+        const i32 nb = r.i32v();
+        (void)r.u8v();
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        if (a >= point_count || b >= point_count) {
             store.clear(); return MapLoadStatus::BadIndex;
         }
-        if (sd.neighbor != NO_SECTOR &&
-            (sd.neighbor < 0 || static_cast<u32>(sd.neighbor) >= sector_count)) {
+        if (nb != NO_SECTOR && (nb < 0 || static_cast<u32>(nb) >= sector_count)) {
             store.clear(); return MapLoadStatus::BadIndex;
         }
     }
 
     // --- rebuild ------------------------------------------------------------
+    //
+    // Sectors go through add_sector/add_side rather than being written into the
+    // arrays directly, so a loaded map takes exactly the same construction path
+    // as one built in code -- including triangulation.
     for (u32 i = 0; i < sector_count; ++i) {
         const PendingSector& s = pend[i];
-        const u32 idx = store.add_sector(&pts[s.first_point], s.point_count,
-                                         s.floor_z, s.ceil_z, s.tag);
+
+        fx2 poly[MAX_POLY_POINTS];   // at most 64 points: ~1 KB
+        r.seek(points_at + static_cast<size_t>(s.first_point) * POINT_BYTES);
+        for (u16 k = 0; k < s.point_count; ++k) {
+            poly[k].x = r.fxraw();
+            poly[k].y = r.fxraw();
+        }
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+
+        const u32 idx = store.add_sector(poly, s.point_count, s.floor_z, s.ceil_z, s.tag);
         if (idx != i) { store.clear(); return MapLoadStatus::BadIndex; }
 
+        r.seek(sides_at + static_cast<size_t>(s.first_side) * SIDE_BYTES);
         for (u16 k = 0; k < s.side_count; ++k) {
-            const PendingSide& sd = psides[s.first_side + k];
+            const u16 a = r.u16v();
+            const u16 b = r.u16v();
+            const i32 nb = r.i32v();
+            const u8 fl = r.u8v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
             // Sides are stored with absolute point indices; add_side takes
             // sector-local ones.
-            const u16 la = static_cast<u16>(sd.a - s.first_point);
-            const u16 lb = static_cast<u16>(sd.b - s.first_point);
+            const u16 la = static_cast<u16>(a - s.first_point);
+            const u16 lb = static_cast<u16>(b - s.first_point);
             if (la >= s.point_count || lb >= s.point_count) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
-            if (!store.add_side(i, la, lb, sd.neighbor, sd.flags)) {
+            if (!store.add_side(i, la, lb, nb, fl)) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
         }
     }
 
-    // Compare what this build produced against what the file carries.
+    // --- the baked triangles are CHECKED, not discarded ---------------------
+    //
+    // Recomputing them and ignoring the file's copy would work -- the
+    // triangulator is deterministic -- but a map baked by a mapc built from
+    // different core code would then load silently and only diverge once
+    // something called update_shape(). Comparing turns that into an immediate,
+    // named failure, which is what docs/protocol.md 8.1 claims they are for.
     {
         const MapData built = store.view();
         if (built.tri_index_count != tri_index_count) {
-            store.clear();
-            return MapLoadStatus::TriangleMismatch;
+            store.clear(); return MapLoadStatus::TriangleMismatch;
         }
         for (u32 i = 0; i < sector_count; ++i) {
             const Sector& got = built.sector(i);
             if (got.first_tri != pend[i].first_tri || got.tri_count != pend[i].tri_count) {
-                store.clear();
-                return MapLoadStatus::TriangleMismatch;
+                store.clear(); return MapLoadStatus::TriangleMismatch;
             }
         }
+        r.seek(tris_at);
         for (u32 i = 0; i < tri_index_count; ++i) {
-            if (built.tris[i] != baked[i]) {
-                store.clear();
-                return MapLoadStatus::TriangleMismatch;
+            if (r.u16v() != built.tris[i]) {
+                store.clear(); return MapLoadStatus::TriangleMismatch;
             }
         }
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
     }
 
+    r.seek(spawns_at);
     for (u32 i = 0; i < spawn_count; ++i) {
         const u8 len = r.u8v();
         if (!r.ok() || len > MAX_SPAWN_TAG) { store.clear(); return MapLoadStatus::Truncated; }
@@ -229,11 +248,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u64 want_hash = r.u64v();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
-    // The rebuilt map is hashed and compared against the file's own hash. This
-    // catches corruption, but more usefully it catches a file whose BAKED
-    // triangles disagree with what this build's triangulator produces -- which
-    // would mean the map compiler and the runtime had drifted apart, and every
-    // update_shape() would silently reshape the sector.
+    // Finally, the rebuilt map is hashed and compared against the file's own.
     if (store.hash() != want_hash) { store.clear(); return MapLoadStatus::HashMismatch; }
 
     return MapLoadStatus::Ok;
