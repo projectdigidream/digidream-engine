@@ -1,0 +1,34 @@
+# The Phase 3 test map, authored as text.
+#
+# Reproduces what core/src/sim/testmap.cpp currently hardcodes, so the two can
+# be compared byte for byte before the hardcoded one is retired.
+#
+#   sector 0            sector 1          sector 2
+#   x 0..40 floor 0     x 40..60          x 60..80
+#   west wall climbs    floor +0.5        floor 4.0 (too high: a wall)
+#                       (walkable step)   east wall grapples
+
+sector floor 0 ceil 40 tag 1
+  vertex  0   0   wall
+  vertex 40   0   neighbor 1
+  vertex 40  40   wall
+  vertex  0  40   wall climbable
+end
+
+sector floor 0.5 ceil 40 tag 2
+  vertex 40   0   wall
+  vertex 60   0   neighbor 2
+  vertex 60  40   wall
+  vertex 40  40   neighbor 0
+end
+
+sector floor 4 ceil 40 tag 3
+  vertex 60   0   wall
+  vertex 80   0   wall grapple
+  vertex 80  40   wall
+  vertex 60  40   neighbor 1
+end
+
+spawn start   10 10 2
+spawn ledge   50 20 2
+spawn high    70 20 6

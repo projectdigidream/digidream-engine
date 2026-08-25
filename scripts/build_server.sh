@@ -21,6 +21,7 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror \
   "$ROOT/core/src/geom/map.cpp" \
   "$ROOT/core/src/geom/triangulate.cpp" \
   "$ROOT/core/src/geom/mapstore.cpp" \
+  "$ROOT/core/src/geom/mapfile.cpp" \
   "$ROOT/core/src/physics/collide.cpp" \
   "$ROOT/core/src/physics/controller.cpp" \
   "$ROOT/server/src/net/link.cpp" \

@@ -11,6 +11,33 @@ void MapStorage::clear() noexcept {
     tri_index_count_ = 0;
     for (u32 i = 0; i < MAX_MAP_POINTS; ++i) staged_[i] = Staged{};
     for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_dirty_[i] = false;
+    spawn_count_ = 0;
+}
+
+bool MapStorage::add_spawn(const char* tag, u32 tag_len, fx3 pos) noexcept {
+    if (spawn_count_ >= MAX_MAP_SPAWNS) return false;
+    if (tag_len > MAX_SPAWN_TAG) return false;
+    SpawnPoint& sp = spawns_[spawn_count_++];
+    sp = SpawnPoint{};
+    for (u32 i = 0; i < tag_len; ++i) sp.tag[i] = tag[i];
+    sp.tag_len = static_cast<u8>(tag_len);
+    sp.pos = pos;
+    return true;
+}
+
+fx3 MapStorage::spawn_for_tag(const char* tag, u32 tag_len) const noexcept {
+    for (u32 i = 0; i < spawn_count_; ++i) {
+        const SpawnPoint& sp = spawns_[i];
+        if (sp.tag_len != tag_len) continue;
+        bool same = true;
+        for (u32 k = 0; k < tag_len; ++k) {
+            if (sp.tag[k] != tag[k]) { same = false; break; }
+        }
+        if (same) return sp.pos;
+    }
+    // Fall back rather than fail. See the header.
+    if (spawn_count_ > 0) return spawns_[0].pos;
+    return fx3::zero();
 }
 
 u32 MapStorage::add_sector(const fx2* pts, u32 n, fx floor_z, fx ceil_z, u16 tag) noexcept {
@@ -22,7 +49,12 @@ u32 MapStorage::add_sector(const fx2* pts, u32 n, fx floor_z, fx ceil_z, u16 tag
     s = Sector{};
     s.first_point = static_cast<u16>(point_count_);
     s.point_count = static_cast<u16>(n);
-    s.first_side = static_cast<u16>(side_count_);
+    // first_side is assigned lazily, on this sector's FIRST add_side. Capturing
+    // it here instead would silently require that every sector's sides be added
+    // before the next sector exists -- and a caller that adds all the sectors
+    // and then all the sides, which is the natural order, would have every
+    // sector after the first reject its sides and end up with no walls at all.
+    s.first_side = 0;
     s.side_count = 0;
     s.floor_z = floor_z;
     s.ceil_z = ceil_z;
@@ -41,10 +73,14 @@ bool MapStorage::add_side(u32 sector, u16 local_a, u16 local_b, i32 neighbor, u8
     Sector& s = sectors_[sector];
     if (local_a >= s.point_count || local_b >= s.point_count) return false;
 
-    // Sides must be contiguous per sector, because a Sector addresses them as a
-    // range. Adding one to a sector that is no longer the most recent would
-    // silently extend a different sector's range.
-    if (s.first_side + s.side_count != side_count_) return false;
+    // A Sector addresses its sides as a contiguous range, so one sector's sides
+    // must be added consecutively -- but WHICH sector is being filled need not
+    // be the most recently created one.
+    if (s.side_count == 0) {
+        s.first_side = static_cast<u16>(side_count_);
+    } else if (static_cast<u32>(s.first_side) + s.side_count != side_count_) {
+        return false;
+    }
 
     Side& sd = sides_[side_count_++];
     sd.a = static_cast<u16>(s.first_point + local_a);
@@ -188,6 +224,13 @@ u64 MapStorage::hash() const noexcept {
     for (u32 i = 0; i < side_count_; ++i) {
         const Side& sd = sides_[i];
         h.u32v(sd.a); h.u32v(sd.b); h.i32v(sd.neighbor); h.byte(sd.flags);
+    }
+    h.u32v(spawn_count_);
+    for (u32 i = 0; i < spawn_count_; ++i) {
+        const SpawnPoint& sp = spawns_[i];
+        h.byte(sp.tag_len);
+        for (u32 k = 0; k < sp.tag_len; ++k) h.byte(static_cast<unsigned char>(sp.tag[k]));
+        h.vec3(sp.pos);
     }
     return h.value();
 }

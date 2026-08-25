@@ -19,6 +19,12 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_physics"
 "./build/$HOST_ARCH/test_abilities"
 "./build/$HOST_ARCH/test_triangulate"
+"./build/$HOST_ARCH/test_mapfile"
+
+# The map compiler must round-trip the authored map: mapc bakes it, and the
+# loader re-triangulates and compares, so this also proves the compiler and the
+# runtime have not drifted apart.
+"./build/$HOST_ARCH/mapc" maps/test.map "build/$HOST_ARCH/test.dnpm"
 
 echo
 echo "=== 3/5  sanitizers (ASan + UBSan) ==="

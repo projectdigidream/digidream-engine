@@ -26,6 +26,17 @@ inline constexpr u32 MAX_MAP_POINTS  = 4096;
 inline constexpr u32 MAX_MAP_SECTORS = 512;
 inline constexpr u32 MAX_MAP_SIDES   = 4096;
 inline constexpr u32 MAX_MAP_TRI_IDX = 12288;   // 3 per triangle
+inline constexpr u32 MAX_MAP_SPAWNS  = 64;
+inline constexpr u32 MAX_SPAWN_TAG   = 32;
+
+// A named landing point. Portals name one of these in the join handshake
+// (design §3.3), so each portal can deliver its arrivals somewhere specific
+// rather than every portal dumping players at one generic map spawn.
+struct SpawnPoint {
+    char tag[MAX_SPAWN_TAG]{};   // NUL-padded, not NUL-terminated at capacity
+    u8   tag_len = 0;
+    fx3  pos{};
+};
 
 enum class CommitStatus : u8 {
     Ok = 0,
@@ -63,6 +74,17 @@ public:
     bool has_staged_edits(u32 sector) const noexcept;
     void discard_staged_edits(u32 sector) noexcept;
 
+    // --- spawns ---
+    bool add_spawn(const char* tag, u32 tag_len, fx3 pos) noexcept;
+    u32 spawn_count() const noexcept { return spawn_count_; }
+    const SpawnPoint& spawn(u32 i) const noexcept { return spawns_[i]; }
+
+    // Spawn matching `tag`, else the first spawn, else the origin. An
+    // unmatched tag MUST NOT reject the join (design §3.3): a player who
+    // cannot land anywhere is a worse outcome than one who lands in the wrong
+    // place.
+    fx3 spawn_for_tag(const char* tag, u32 tag_len) const noexcept;
+
     // --- access ---
     MapData view() const noexcept;
     u32 sector_count() const noexcept { return sector_count_; }
@@ -93,6 +115,9 @@ private:
     };
     Staged staged_[MAX_MAP_POINTS]{};
     bool   sector_dirty_[MAX_MAP_SECTORS]{};
+
+    SpawnPoint spawns_[MAX_MAP_SPAWNS]{};
+    u32        spawn_count_ = 0;
 };
 
 }  // namespace dnp::geom

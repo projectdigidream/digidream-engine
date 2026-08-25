@@ -27,6 +27,7 @@ add_library(dnp_core STATIC
   core/src/geom/map.cpp
   core/src/geom/triangulate.cpp
   core/src/geom/mapstore.cpp
+  core/src/geom/mapfile.cpp
   core/src/physics/collide.cpp
   core/src/physics/controller.cpp
 )
@@ -89,6 +90,13 @@ add_test(NAME abilities COMMAND test_abilities)
 add_executable(test_triangulate core/tests/test_triangulate.cpp)
 target_link_libraries(test_triangulate PRIVATE dnp_core)
 add_test(NAME triangulate COMMAND test_triangulate)
+
+add_executable(test_mapfile core/tests/test_mapfile.cpp)
+target_link_libraries(test_mapfile PRIVATE dnp_core)
+add_test(NAME mapfile COMMAND test_mapfile)
+
+add_executable(mapc tools/mapc/main.cpp)
+target_link_libraries(mapc PRIVATE dnp_core)
 
 add_executable(golden_trace core/tests/golden_trace.cpp)
 target_link_libraries(golden_trace PRIVATE dnp_core)
