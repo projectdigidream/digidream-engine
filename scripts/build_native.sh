@@ -38,10 +38,13 @@ SRCS=(
   "$ROOT/core/src/math/trig.cpp"
   "$ROOT/core/src/proto/messages.cpp"
   "$ROOT/core/src/sim/world.cpp"
+  "$ROOT/core/src/geom/map.cpp"
+  "$ROOT/core/src/physics/collide.cpp"
 )
 
 echo "[build] arch=$ARCH -> $OUT"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_math.cpp"    -o "$OUT/test_math"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_proto.cpp"   -o "$OUT/test_proto"
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_physics.cpp" -o "$OUT/test_physics"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/golden_trace.cpp" -o "$OUT/golden_trace"
 echo "[build] ok"

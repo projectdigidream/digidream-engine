@@ -16,6 +16,7 @@ HOST_ARCH="$(uname -m)"
 ./scripts/build_native.sh "$HOST_ARCH" >/dev/null
 "./build/$HOST_ARCH/test_math"
 "./build/$HOST_ARCH/test_proto"
+"./build/$HOST_ARCH/test_physics"
 
 echo
 echo "=== 3/5  sanitizers (ASan + UBSan) ==="

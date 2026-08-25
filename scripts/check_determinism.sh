@@ -21,7 +21,7 @@ WORK="$ROOT/build/determinism"
 mkdir -p "$WORK"
 
 FLAGS=(-std=c++17 -O2 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -I"$ROOT/core/include")
-SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/tests/golden_trace.cpp")
+SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/tests/golden_trace.cpp")
 
 declare -a NAMES=()
 declare -a TRACES=()

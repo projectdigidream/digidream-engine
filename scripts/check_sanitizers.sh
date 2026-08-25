@@ -29,12 +29,12 @@ FLAGS=(
   -I"$ROOT/core/include"
 )
 
-SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp")
+SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/physics/collide.cpp")
 
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1
 
-for t in test_math test_proto; do
+for t in test_math test_proto test_physics; do
   echo "[san] $t"
   clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/$t.cpp" -o "$OUT/$t"
   "$OUT/$t" | tail -1
