@@ -26,6 +26,7 @@ inline constexpr u8 MSG_WELCOME = 0x02;
 inline constexpr u8 MSG_REJECT  = 0x03;
 inline constexpr u8 MSG_MAP_DATA = 0x10;
 inline constexpr u8 MSG_SECTOR_MOTION_SET = 0x12;
+inline constexpr u8 MSG_PARAM_UPDATE = 0x14;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -178,8 +179,60 @@ struct SelfBlock {
     fx3    grapple_anchor{};
     fx     grapple_dist{};
 
+    // Which generation of this entity's movement parameters produced the state
+    // above (docs/protocol.md 8.4, 10.1.2).
+    //
+    // Parameters are the RULES, not the state, and they travel on the reliable
+    // channel while this travels on the unreliable one -- the two are not
+    // ordered against each other, so a snapshot computed with new parameters
+    // can arrive before the PARAM_UPDATE that describes them. Without this byte
+    // the client cannot tell "I am one generation behind" from "the two builds
+    // disagree", and those have opposite fixes.
+    u8     param_epoch     = 0;
+
     u64    state_hash      = 0;
 };
+
+// ------------------------------------------------------- movement parameters
+//
+// docs/protocol.md 8.4. Control channel, reliable, because these are the RULES
+// the next thousand ticks will be computed from rather than a position that
+// reconciliation can correct. A client running different parameters from the
+// server mispredicts every tick and never recovers.
+
+namespace param_flag {
+// Replaces every field rather than patching. Required on the first update a
+// joining client receives, which has no parameter history to patch.
+inline constexpr u8 FULL = 1u << 0;
+}  // namespace param_flag
+
+// MoveParams has 47 fields today. The cap is a decoder bound on hostile input,
+// not a gameplay limit -- it exists so a two-byte count cannot ask for a
+// gigabyte, the same reason as every other cap in this file.
+inline constexpr u32 MAX_PARAM_FIELDS = 64;
+
+struct ParamField {
+    u16 id  = 0;    // index into the field table; see server/src/lua/params_table.hpp
+    i64 raw = 0;    // fx raw, or a bool/u8 widened -- the table says which
+};
+
+struct ParamUpdate {
+    Handle     handle{};
+    u8         epoch = 0;
+    u32        effective_tick = 0;
+    u8         flags = 0;
+    u16        count = 0;
+    ParamField fields[MAX_PARAM_FIELDS]{};
+};
+
+// Body only: the caller supplies the control-channel length/type framing, the
+// same split SECTOR_MOTION_SET uses.
+void encode_param_update(ByteWriter& w, const ParamUpdate& p) noexcept;
+
+// Returns false on truncation or an out-of-range count, leaving `p` untouched
+// rather than partly filled -- a half-applied parameter set is worse than none,
+// because it looks like it worked.
+bool decode_param_update(ByteReader& r, ParamUpdate& p) noexcept;
 
 struct VisualParam {
     u16 key   = 0;

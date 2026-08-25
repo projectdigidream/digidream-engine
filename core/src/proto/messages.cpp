@@ -140,6 +140,11 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
     }
+    // Which generation of the movement parameters this state was computed with
+    // (docs/protocol.md 8.4). Ungated, unlike the grapple block: a client needs
+    // it on EVERY snapshot, because its whole job is to answer "were we running
+    // the same rules?" and the answer matters most when it is no.
+    w.u8v(s.param_epoch);
     w.u64v(s.state_hash);
 }
 
@@ -161,10 +166,51 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();
     }
+    s.param_epoch     = r.u8v();
     s.state_hash      = r.u64v();
 }
 
 }  // namespace
+
+// ------------------------------------------------------- movement parameters
+
+void encode_param_update(ByteWriter& w, const ParamUpdate& p) noexcept {
+    const u16 n = p.count > MAX_PARAM_FIELDS ? static_cast<u16>(MAX_PARAM_FIELDS) : p.count;
+    w.u32v(p.handle.raw);
+    w.u8v(p.epoch);
+    w.u32v(p.effective_tick);
+    w.u8v(p.flags);
+    w.u16v(n);
+    for (u16 i = 0; i < n; ++i) {
+        w.u16v(p.fields[i].id);
+        w.i64v(p.fields[i].raw);
+    }
+}
+
+bool decode_param_update(ByteReader& r, ParamUpdate& p) noexcept {
+    ParamUpdate out;
+    out.handle.raw     = r.u32v();
+    out.epoch          = r.u8v();
+    out.effective_tick = r.u32v();
+    out.flags          = r.u8v();
+    const u16 n        = r.u16v();
+    if (!r.ok()) return false;
+
+    // Bounded BEFORE it is used as a loop count. This arrives from the network.
+    if (n > MAX_PARAM_FIELDS) return false;
+
+    for (u16 i = 0; i < n; ++i) {
+        out.fields[i].id  = r.u16v();
+        out.fields[i].raw = r.i64v();
+    }
+    if (!r.ok()) return false;
+
+    // Committed only once every byte is known good, so a truncated message
+    // leaves the caller's parameters alone instead of half-updated.
+    out.count = n;
+    p = out;
+    return true;
+}
 
 // ------------------------------------------------------------ SnapshotWriter
 

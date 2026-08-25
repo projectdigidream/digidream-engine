@@ -426,6 +426,82 @@ static void test_snapshot_hostile() {
     }
 }
 
+// PARAM_UPDATE (docs/protocol.md 8.4). Parameters are the RULES, so the
+// failure mode of getting this wrong is not a correctable position error --
+// it is every subsequent tick computed differently. That makes "a truncated
+// message must leave the previous parameters ALONE" the property worth
+// hammering, more than the round trip.
+static void test_param_update() {
+    std::printf("params: round trip, and a bad message never half-applies\n");
+
+    ParamUpdate sent;
+    sent.handle = Handle::make(7, 3);
+    sent.epoch = 42;
+    sent.effective_tick = 123456;
+    sent.flags = param_flag::FULL;
+    sent.count = 3;
+    sent.fields[0] = ParamField{0, fx::from_int(8).raw};
+    sent.fields[1] = ParamField{17, fx::from_frac(3, 2).raw};
+    sent.fields[2] = ParamField{46, -1};
+
+    u8 buf[1024];
+    ByteWriter w(buf, sizeof(buf));
+    encode_param_update(w, sent);
+    CHECK(w.ok());
+
+    ParamUpdate got;
+    ByteReader r(buf, w.size());
+    CHECK(decode_param_update(r, got));
+    CHECK(got.handle == sent.handle);
+    CHECK(got.epoch == 42);
+    CHECK(got.effective_tick == 123456);
+    CHECK(got.flags == param_flag::FULL);
+    CHECK(got.count == 3);
+    for (u16 i = 0; i < 3; ++i) {
+        CHECK(got.fields[i].id == sent.fields[i].id);
+        CHECK(got.fields[i].raw == sent.fields[i].raw);
+    }
+
+    // Every truncation must be refused, and must not disturb the destination.
+    // A parameter set that is half old and half new is worse than one that is
+    // entirely stale, because the stale one is at least self-consistent and the
+    // epoch names it.
+    for (size_t cut = 0; cut < w.size(); ++cut) {
+        ParamUpdate dest = sent;
+        dest.epoch = 99;
+        ByteReader tr(buf, cut);
+        const bool ok = decode_param_update(tr, dest);
+        CHECK(!ok);
+        CHECK(dest.epoch == 99);   // untouched
+    }
+
+    // A hostile count must be rejected before it is used to index anything.
+    {
+        u8 bad[64];
+        ByteWriter bw(bad, sizeof(bad));
+        bw.u32v(1); bw.u8v(0); bw.u32v(0); bw.u8v(0);
+        bw.u16v(static_cast<u16>(MAX_PARAM_FIELDS + 1));
+        ParamUpdate dest;
+        dest.epoch = 55;
+        ByteReader br(bad, bw.size());
+        CHECK(!decode_param_update(br, dest));
+        CHECK(dest.epoch == 55);
+    }
+
+    // The count is clamped on encode rather than writing past the array.
+    {
+        ParamUpdate over;
+        over.count = static_cast<u16>(MAX_PARAM_FIELDS + 10);
+        u8 ob[4096];
+        ByteWriter ow(ob, sizeof(ob));
+        encode_param_update(ow, over);
+        ParamUpdate back;
+        ByteReader orr(ob, ow.size());
+        CHECK(decode_param_update(orr, back));
+        CHECK(back.count == MAX_PARAM_FIELDS);
+    }
+}
+
 static void test_fuzz() {
     // Anything reachable from the network is reachable from an attacker. The
     // decoders' contract is that ANY byte string either decodes or is rejected
@@ -493,6 +569,7 @@ int main() {
     test_snapshot_roundtrip();
     test_snapshot_budget();
     test_snapshot_hostile();
+    test_param_update();
     test_fuzz();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

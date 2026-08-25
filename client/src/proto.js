@@ -253,6 +253,11 @@ export function decodeSnapshot (buf) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()
   }
+  // Which generation of the movement parameters the server computed this state
+  // with (docs/protocol.md 8.4). Compared against the client's applied epoch to
+  // tell "I am one parameter generation behind" from "the two builds disagree"
+  // -- see 10.1.2. Those look identical in the hash and have opposite fixes.
+  snap.self.paramEpoch = r.u8()
   snap.self.stateHash = r.u64()
   snap.hp = r.i32()
   if (!r.ok) return null
