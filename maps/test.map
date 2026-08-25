@@ -15,7 +15,15 @@ sector floor 0 ceil 40 tag 1
   vertex  0  40   wall climbable
 end
 
-sector floor 0.5 ceil 40 tag 2
+# tag 100+N marks a mover that rises N units. The authored map decides what
+# moves; Lua takes this over in Phase 4.
+#
+# Floor 0, flush with sector 0, and NOT the 0.5 step it used to be. A lift whose
+# resting floor is above the step threshold cannot be walked onto -- correctly,
+# since that is exactly what the step rule is for -- so a lift a player is meant
+# to board has to be level with the ground at the bottom of its travel. The
+# engine made that a design constraint rather than a bug.
+sector floor 0 ceil 40 tag 101
   vertex 40   0   wall
   vertex 60   0   neighbor 2
   vertex 60  40   wall

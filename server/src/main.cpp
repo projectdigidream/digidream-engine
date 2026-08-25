@@ -44,6 +44,11 @@ struct Server {
 
     // Heap, not a member by value: MapStorage is a few hundred KB of fixed
     // arrays and Server is a stack local.
+    // Which named spawn arriving players land on. Portals supply this per
+    // player via entry_spawn_tag (design §3.3); until then it is server-wide.
+    const char* spawn_tag = "start";
+    u32         spawn_tag_len = 5;
+
     std::unique_ptr<geom::MapStorage> map_store;
     std::vector<u8>                   map_bytes;   // exactly what clients receive
     u64                               map_hash = 0;
@@ -53,6 +58,52 @@ struct Server {
         // still runnable. Phase 3 retires this once every deployment ships a
         // baked map.
         world.set_map(&sim::test_map());
+    }
+
+    // Sectors whose motion is scripted-discrete, collected once per tick so the
+    // snapshot encoder does not rescan.
+    proto::SectorOffset discrete_offsets[proto::MAX_SECTOR_OFFSETS];
+    u16                 discrete_count = 0;
+
+    void collect_discrete_offsets() {
+        discrete_count = 0;
+        const auto& ms = world.motions();
+        for (u32 i = 0; i < ms.count() && discrete_count < proto::MAX_SECTOR_OFFSETS; ++i) {
+            const sim::SectorMotion& m = ms.at(i);
+            // Parametric movers are deliberately absent: the client computes
+            // theirs from the parameters it already holds, and sending it too
+            // would create a second source of truth that could disagree.
+            if (m.type != sim::MotionType::ScriptedDiscrete) continue;
+            discrete_offsets[discrete_count].sector = m.sector;
+            discrete_offsets[discrete_count].offset = m.offset;
+            ++discrete_count;
+        }
+    }
+
+    void send_motion_sets(u32 id) {
+        const auto& ms = world.motions();
+        for (u32 i = 0; i < ms.count(); ++i) {
+            const sim::SectorMotion& m = ms.at(i);
+            u8 buf[128];
+            ByteWriter w(buf, sizeof(buf));
+            const size_t len_pos = w.mark();
+            w.u32v(0);
+            w.u8v(proto::MSG_SECTOR_MOTION_SET);
+            w.u32v(m.sector);
+            w.u8v(static_cast<u8>(m.type));
+            w.u32v(m.start_tick);
+            w.u32v(m.duration_ticks);
+            w.u8v(static_cast<u8>(m.loop));
+            w.vec3_raw(m.from);
+            w.vec3_raw(m.to);
+            const size_t end = w.size();
+            const u32 body = static_cast<u32>(end - len_pos - 4);
+            buf[len_pos]     = static_cast<u8>(body & 0xFF);
+            buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+            buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+            buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+            link.send_control(id, buf, end);
+        }
     }
 
     bool load_map_file(const char* path) {
@@ -82,6 +133,22 @@ struct Server {
         loaded = map_store->view();
         world.set_map(&loaded);
         map_hash = map_store->hash();
+        world.set_map_storage(map_store.get());
+
+        // Sectors tagged 100+ are movers, so the authored map decides what
+        // moves rather than the server hardcoding indices. Lua takes this over
+        // in Phase 4; the tag convention is the bridge.
+        for (u32 si = 0; si < loaded.sector_count; ++si) {
+            const u16 tag = loaded.sector(si).tag;
+            if (tag < 100) continue;
+            if (world.motions().add(*map_store, si) >= sim::MAX_MOVING_SECTORS) continue;
+            // Ping-pong a lift over four seconds. A placeholder schedule until
+            // Lua drives it.
+            world.motions().start_parametric(
+                si, fx3::zero(), fx3{fx::zero(), fx::zero(), fx::from_int(tag - 100)},
+                0, 240, sim::LoopMode::PingPong);
+            std::fprintf(stderr, "[srv] sector %u moves (rise %u)\n", si, tag - 100u);
+        }
         std::fprintf(stderr, "[srv] map %s: %u sectors, %u sides, hash %016llX\n",
                      path, loaded.sector_count, loaded.side_count,
                      static_cast<unsigned long long>(map_hash));
@@ -171,7 +238,7 @@ struct Server {
             // land, everyone arrives at the default.
             const fx3 spawn_pos = map_bytes.empty()
                 ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
-                : map_store->spawn_for_tag("start", 5);
+                : map_store->spawn_for_tag(spawn_tag, spawn_tag_len);
             const u32 agent = world.spawn(spawn_pos);
             if (agent >= sim::MAX_AGENTS) {
                 u8 buf[64];
@@ -214,6 +281,9 @@ struct Server {
             // would arrive as a burst of mispredictions explained nowhere near
             // the symptom.
             send_map(id);
+            // Motion parameters follow the map. Parametric movers cost nothing
+            // after this; the client computes them for any tick.
+            send_motion_sets(id);
 
             std::fprintf(stderr, "[srv] session %u -> agent %u\n", id, agent);
         }
@@ -282,7 +352,7 @@ struct Server {
 
             u8 buf[proto::MAX_DATAGRAM_BYTES];
             proto::SnapshotWriter w(buf, sizeof(buf));
-            w.begin(h, sb, 100);
+            w.begin(h, sb, 100, discrete_offsets, discrete_count);
 
             SnapshotRecord& record = s.history.begin(world.tick());
 
@@ -368,15 +438,22 @@ struct Server {
 int main(int argc, char** argv) {
     u16 port = 34500;
     const char* map_path = nullptr;
+    const char* spawn_tag_arg = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
             map_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--spawn") == 0 && i + 1 < argc) {
+            spawn_tag_arg = argv[++i];
         }
     }
 
     Server srv;
+    if (spawn_tag_arg) {
+        srv.spawn_tag = spawn_tag_arg;
+        srv.spawn_tag_len = static_cast<u32>(std::strlen(spawn_tag_arg));
+    }
     if (map_path && !srv.load_map_file(map_path)) {
         std::fprintf(stderr, "[srv] refusing to start without the requested map\n");
         return 1;

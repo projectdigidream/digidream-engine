@@ -116,6 +116,38 @@ void dnp_world_set_map(sim::World* w, geom::MapStorage* m) {
     geom::MapData& v = views[next++ % 8];
     v = m->view();
     w->set_map(&v);
+    // Mutable storage too: sector motion writes moved geometry back, and
+    // without it every sector on the client would be immovable while the
+    // server's moved -- which reads as the rider sinking through the floor.
+    w->set_map_storage(m);
+}
+
+// --- sector motion ---------------------------------------------------------
+//
+// The client learns motions from SECTOR_MOTION_SET rather than being configured
+// to match the server by hand. That distinction is the whole point: two sides
+// that happen to be set up identically would predict correctly today and
+// silently diverge the moment a map changed only one of them.
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_add_motion(sim::World* w, geom::MapStorage* m, unsigned sector) {
+    return w->motions().add(*m, sector);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_start_parametric(sim::World* w, unsigned sector, const long long* from64,
+                               const long long* to64, unsigned start_tick,
+                               unsigned duration_ticks, unsigned loop) {
+    const fx3 from{fx::from_raw(from64[0]), fx::from_raw(from64[1]), fx::from_raw(from64[2])};
+    const fx3 to{fx::from_raw(to64[0]), fx::from_raw(to64[1]), fx::from_raw(to64[2])};
+    return w->motions().start_parametric(sector, from, to, start_tick, duration_ticks,
+                                         static_cast<sim::LoopMode>(loop)) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_set_discrete(sim::World* w, unsigned sector, const long long* off64) {
+    const fx3 off{fx::from_raw(off64[0]), fx::from_raw(off64[1]), fx::from_raw(off64[2])};
+    return w->motions().set_discrete(sector, off) ? 1 : 0;
 }
 
 // Spawn position for a tag, written to out64[0..2]. Falls back to the first
@@ -159,6 +191,11 @@ void dnp_world_step(sim::World* w) { w->step(); }
 
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_tick(sim::World* w) { return w->tick(); }
+
+// Align the client's simulation clock with the server's. Required as soon as
+// any sector moves -- see World::set_tick.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_set_tick(sim::World* w, unsigned t) { w->set_tick(t); }
 
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigned* out32) {

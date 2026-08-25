@@ -18,6 +18,7 @@ export const MSG = {
   WELCOME: 0x02,
   REJECT: 0x03,
   MAP_DATA: 0x10,
+  SECTOR_MOTION_SET: 0x12,
   INPUT_BUNDLE: 0x80,
   SNAPSHOT: 0x81
 }
@@ -169,6 +170,19 @@ export function decodeControlMessage (buf) {
     }
     return r.ok ? msg : null
   }
+  if (type === MSG.SECTOR_MOTION_SET) {
+    const msg = {
+      type,
+      sector: r.u32(),
+      motionType: r.u8(),
+      startTick: r.u32(),
+      durationTicks: r.u32(),
+      loopMode: r.u8(),
+      from: r.vec3raw(),
+      to: r.vec3raw()
+    }
+    return r.ok ? msg : null
+  }
   if (type === MSG.MAP_DATA) {
     const totalBytes = r.u32()
     const offset = r.u32()
@@ -237,6 +251,16 @@ export function decodeSnapshot (buf) {
   }
   snap.self.stateHash = r.u64()
   snap.hp = r.i32()
+  if (!r.ok) return null
+
+  // Scripted-discrete sector offsets. Parametric movers are absent by
+  // construction -- the client computes those from the parameters it holds.
+  const offsetCount = r.u16()
+  if (!r.ok || offsetCount > 32) return null
+  snap.sectorOffsets = []
+  for (let i = 0; i < offsetCount; i++) {
+    snap.sectorOffsets.push({ sector: r.u32(), offset: r.vec3raw() })
+  }
   if (!r.ok) return null
 
   const entityCount = r.u16()

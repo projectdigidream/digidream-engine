@@ -127,12 +127,37 @@ export class WasmWorld {
   destroy () { this.core.M._dnp_world_destroy(this.ptr); this.ptr = 0 }
   reset () { this.core.M._dnp_world_reset(this.ptr) }
   get tick () { return this.core.M._dnp_world_tick(this.ptr) }
+  set tick (t) { this.core.M._dnp_world_set_tick(this.ptr, t >>> 0) }
 
   spawn ({ x = 0n, y = 0n, z = 0n }) {
     const { i64 } = this.core.views
     const base = this.core.buf64 / 8
     i64[base] = x; i64[base + 1] = y; i64[base + 2] = z
     return this.core.M._dnp_world_spawn(this.ptr, this.core.buf64)
+  }
+
+  /** Register a sector as movable and start a parametric motion on it. */
+  applyMotionSet (msg) {
+    if (!this.map) return false
+    const M = this.core.M
+    if (M._dnp_world_add_motion(this.ptr, this.map.ptr, msg.sector) >= 64) return false
+    if (msg.motionType !== 1) return true   // discrete/static carry no path
+
+    const { i64 } = this.core.views
+    const b = this.core.buf64 / 8
+    i64[b] = msg.from.x; i64[b + 1] = msg.from.y; i64[b + 2] = msg.from.z
+    i64[b + 3] = msg.to.x; i64[b + 4] = msg.to.y; i64[b + 5] = msg.to.z
+    return M._dnp_world_start_parametric(
+      this.ptr, msg.sector, this.core.buf64, this.core.buf64 + 24,
+      msg.startTick, msg.durationTicks, msg.loopMode) !== 0
+  }
+
+  /** Apply a scripted-discrete offset the server streamed. */
+  setDiscreteOffset (sector, offset) {
+    const { i64 } = this.core.views
+    const b = this.core.buf64 / 8
+    i64[b] = offset.x; i64[b + 1] = offset.y; i64[b + 2] = offset.z
+    return this.core.M._dnp_world_set_discrete(this.ptr, sector, this.core.buf64) !== 0
   }
 
   setInput (idx, { buttons = 0, moveX = 0, moveY = 0, aim = 0 }) {

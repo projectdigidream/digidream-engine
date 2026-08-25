@@ -124,6 +124,11 @@ export class Predictor {
 
     if (!this.synced) {
       this.world.writeAgent(this.agent, authoritative)
+      // Adopt the server's clock along with its state. Parametric sector motion
+      // is a pure function of the tick, so a client running its own zero-based
+      // counter would evaluate every moving platform at the wrong point in its
+      // schedule.
+      this.world.tick = snapshot.serverTick
       this.synced = true
       this.lastAppliedTick = t
       this._replayFrom(t)
@@ -132,6 +137,7 @@ export class Predictor {
 
     if (snapshot.flags & 0x0001) {          // RESYNC_REQUIRED
       this.world.writeAgent(this.agent, authoritative)
+      this.world.tick = snapshot.serverTick
       this.inputs.clear()
       this.predicted.clear()
       this.tick = t
@@ -178,6 +184,9 @@ export class Predictor {
     // is correct and nearly free -- and skipping it when the hashes agree would
     // mean the one path that matters is the one never exercised.
     this.world.writeAgent(this.agent, authoritative)
+    // The snapshot's state is the world AFTER server tick `serverTick`, so the
+    // replay below must resume from exactly there for sector motion to line up.
+    this.world.tick = snapshot.serverTick
     this.lastAppliedTick = t
     this._replayFrom(t)
 

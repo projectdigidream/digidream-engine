@@ -58,7 +58,16 @@ else
      && node test/relay.test.js | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2 \
      && node test/delta.test.js 2>/dev/null | tail -2 \
-     && node test/mapdata.test.js 2>/dev/null | tail -2)
+     && node test/mapdata.test.js 2>/dev/null | tail -2 \
+     && node test/platform.test.js 2>/dev/null | tail -2)
+
+  # The control case: a client that ignores the replicated motion parameters
+  # MUST mispredict. If it does not, the replication is doing nothing and the
+  # test above proves nothing.
+  echo
+  echo "--- control: ignoring motion parameters must break prediction ---"
+  (cd server/edge && DNP_IGNORE_MOTION=1 DNP_WT_PORT=34470 DNP_LINK_PORT=34540 \
+     node test/platform.test.js 2>/dev/null | grep -E "CONTROL|platform:")
 
   echo
   echo "--- client prediction against the real server ---"

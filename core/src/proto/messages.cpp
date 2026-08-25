@@ -171,7 +171,8 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
 SnapshotWriter::SnapshotWriter(u8* buf, size_t capacity) noexcept
     : buf_(buf), w_(buf, capacity) {}
 
-void SnapshotWriter::begin(const SnapshotHeader& h, const SelfBlock& self, i32 hp) noexcept {
+void SnapshotWriter::begin(const SnapshotHeader& h, const SelfBlock& self, i32 hp,
+                           const SectorOffset* offsets, u16 offset_count) noexcept {
     w_.u8v(MSG_SNAPSHOT);
     w_.u32v(h.server_tick);
     w_.u32v(h.baseline_tick);
@@ -181,6 +182,17 @@ void SnapshotWriter::begin(const SnapshotHeader& h, const SelfBlock& self, i32 h
 
     encode_self(w_, self);
     w_.i32v(hp);   // PrivateBlock: hp only; the stat dict rides the control channel
+
+    // Scripted-discrete sector offsets come BEFORE entities: geometry the
+    // rider's own collision depends on matters more than a distant entity, so
+    // if the budget runs short it is entities that get dropped.
+    const u16 n = offset_count > MAX_SECTOR_OFFSETS ? static_cast<u16>(MAX_SECTOR_OFFSETS)
+                                                    : offset_count;
+    w_.u16v(n);
+    for (u16 i = 0; i < n; ++i) {
+        w_.u32v(offsets[i].sector);
+        w_.vec3_raw(offsets[i].offset);
+    }
 
     // Reserve the entity count. It is fixed-width precisely so it can be patched
     // here once the budget has been filled (docs/protocol.md 5).
@@ -250,6 +262,15 @@ bool decode_snapshot(ByteReader& r, DecodedSnapshot& out) noexcept {
 
     decode_self(r, out.self);
     out.hp = r.i32v();
+    if (!r.ok()) return false;
+
+    const u16 ocount = r.u16v();
+    if (!r.ok() || ocount > MAX_SECTOR_OFFSETS) return false;
+    out.sector_offset_count = ocount;
+    for (u16 i = 0; i < ocount; ++i) {
+        out.sector_offsets[i].sector = r.u32v();
+        out.sector_offsets[i].offset = r.vec3_raw();
+    }
     if (!r.ok()) return false;
 
     const u16 ecount = r.u16v();

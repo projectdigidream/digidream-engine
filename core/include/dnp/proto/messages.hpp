@@ -25,6 +25,7 @@ inline constexpr u8 MSG_HELLO   = 0x01;
 inline constexpr u8 MSG_WELCOME = 0x02;
 inline constexpr u8 MSG_REJECT  = 0x03;
 inline constexpr u8 MSG_MAP_DATA = 0x10;
+inline constexpr u8 MSG_SECTOR_MOTION_SET = 0x12;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -32,6 +33,7 @@ inline constexpr u32 MAX_INPUT_FRAMES   = 16;
 inline constexpr u32 MAX_ENTITIES       = 256;
 inline constexpr u32 MAX_VFX            = 64;
 inline constexpr u32 MAX_VISUAL_PARAMS  = 8;
+inline constexpr u32 MAX_SECTOR_OFFSETS = 32;
 
 // Fits inside the measured maxDatagramSize of 1211 bytes (docs/protocol.md 5.4).
 inline constexpr size_t MAX_DATAGRAM_BYTES = 1200;
@@ -197,6 +199,13 @@ struct EntityBlock {
     u32    display_id      = 0;   // dropped items only; never an item_hash (R7)
 };
 
+// A scripted-discrete sector's current offset. Parametric movers are absent by
+// construction -- the client computes theirs (docs/protocol.md 5.5).
+struct SectorOffset {
+    u32 sector = 0;
+    fx3 offset{};
+};
+
 struct VfxEvent {
     u16  kind = 0;
     fx3  pos{};
@@ -208,6 +217,8 @@ struct DecodedSnapshot {
     SnapshotHeader header{};
     SelfBlock      self{};
     i32            hp = 0;
+    u16            sector_offset_count = 0;
+    SectorOffset   sector_offsets[MAX_SECTOR_OFFSETS]{};
     u16            entity_count = 0;
     EntityBlock    entities[MAX_ENTITIES]{};
     u16            vfx_count = 0;
@@ -231,7 +242,10 @@ class SnapshotWriter {
 public:
     SnapshotWriter(u8* buf, size_t capacity) noexcept;
 
-    void begin(const SnapshotHeader& h, const SelfBlock& self, i32 hp) noexcept;
+    // `offsets` carries only scripted-discrete movers; parametric ones are
+    // computed client-side and must not be sent (docs/protocol.md 5.5).
+    void begin(const SnapshotHeader& h, const SelfBlock& self, i32 hp,
+               const SectorOffset* offsets = nullptr, u16 offset_count = 0) noexcept;
 
     // Returns false if the entity did not fit; the buffer is left exactly as it
     // was, so the caller may keep offering smaller ones or stop.

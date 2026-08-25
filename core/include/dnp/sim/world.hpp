@@ -63,6 +63,16 @@ public:
     void step() noexcept;
 
     u32 tick() const noexcept { return tick_; }
+
+    // Align the simulation clock to the server's.
+    //
+    // This matters the moment any sector moves. Parametric motion is a pure
+    // function of the TICK, so a client evaluating it against its own
+    // zero-based counter computes the platform's position for the wrong moment
+    // in the schedule -- and the disagreement grows with the offset between the
+    // two clocks. Before sector motion existed the tick only fed the hash and
+    // nothing depended on the two sides agreeing about its value.
+    void set_tick(u32 t) noexcept { tick_ = t; }
     u32 capacity() const noexcept { return MAX_AGENTS; }
 
     // Entity generation, incremented every time a slot is reused. This is what
