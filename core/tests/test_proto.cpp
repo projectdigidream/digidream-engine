@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "dnp/math/rng.hpp"
+#include "dnp/physics/params_table.hpp"
 #include "dnp/proto/messages.hpp"
 
 using namespace dnp;
@@ -502,6 +503,71 @@ static void test_param_update() {
     }
 }
 
+// The parameter table is addressed by WIRE id, so a mistake in it is a protocol
+// bug rather than a local one: the server would encode `jump_impulse` and the
+// client would apply it to `friction`.
+static void test_param_table() {
+    std::printf("params: every field round-trips through its wire id\n");
+
+    using namespace dnp::physics;
+
+    // Every field is reachable, distinct, and survives a set/get round trip.
+    // Distinctness is the one that matters: two entries sharing an offset -- a
+    // copy-paste slip in a 29-line table -- would otherwise pass everything.
+    for (u16 i = 0; i < PARAM_COUNT; ++i) {
+        MoveParams p;
+        const i64 probe = (PARAM_TABLE[i].type == ParamType::Fx)
+                              ? fx::from_frac(static_cast<i64>(i) + 1, 7).raw
+                              : static_cast<i64>(i % 2 == 0 ? 1 : 0);
+        CHECK(param_set_raw(p, i, probe));
+        CHECK(param_get_raw(p, i) == (PARAM_TABLE[i].type == ParamType::Fx
+                                          ? probe
+                                          : (probe != 0 ? 1 : 0)));
+
+        // Writing field i must not disturb any other field.
+        MoveParams fresh;
+        u32 collided = 0;
+        for (u16 j = 0; j < PARAM_COUNT; ++j) {
+            if (j == i) continue;
+            if (param_get_raw(p, j) != param_get_raw(fresh, j)) ++collided;
+        }
+        CHECK(collided == 0);
+    }
+
+    // Names are unique and resolve back to their own id.
+    for (u16 i = 0; i < PARAM_COUNT; ++i) {
+        CHECK(param_id_by_name(PARAM_TABLE[i].name) == static_cast<i32>(i));
+    }
+    CHECK(param_id_by_name("no_such_param") == -1);
+    CHECK(param_id_by_name(nullptr) == -1);
+
+    // An unknown id is version skew, not corruption: a newer server may name a
+    // field this build does not have. Ignore that field, keep the rest.
+    {
+        MoveParams p;
+        const MoveParams before = p;
+        CHECK(!param_set_raw(p, PARAM_COUNT, 999));
+        CHECK(!param_set_raw(p, 65535, 999));
+        for (u16 j = 0; j < PARAM_COUNT; ++j) {
+            CHECK(param_get_raw(p, j) == param_get_raw(before, j));
+        }
+    }
+
+    // u8 fields clamp rather than truncate: 300 jumps is 255, never 44.
+    {
+        MoveParams p;
+        const i32 id = param_id_by_name("max_jumps");
+        CHECK(id >= 0);
+        CHECK(param_set_raw(p, static_cast<u16>(id), 300));
+        CHECK(param_get_raw(p, static_cast<u16>(id)) == 255);
+        CHECK(param_set_raw(p, static_cast<u16>(id), -5));
+        CHECK(param_get_raw(p, static_cast<u16>(id)) == 0);
+    }
+
+    std::printf("       %u fields, %zu bytes of MoveParams, all ids distinct\n",
+                PARAM_COUNT, sizeof(MoveParams));
+}
+
 static void test_fuzz() {
     // Anything reachable from the network is reachable from an attacker. The
     // decoders' contract is that ANY byte string either decodes or is rejected
@@ -570,6 +636,7 @@ int main() {
     test_snapshot_budget();
     test_snapshot_hostile();
     test_param_update();
+    test_param_table();
     test_fuzz();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
