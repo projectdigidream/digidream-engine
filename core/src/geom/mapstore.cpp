@@ -12,6 +12,52 @@ void MapStorage::clear() noexcept {
     for (u32 i = 0; i < MAX_MAP_POINTS; ++i) staged_[i] = Staged{};
     for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_dirty_[i] = false;
     spawn_count_ = 0;
+    rail_count_ = 0;
+    waypoint_count_ = 0;
+    rail_link_count_ = 0;
+}
+
+u32 MapStorage::add_rail(u16 tag, u8 flags) noexcept {
+    if (rail_count_ >= MAX_MAP_RAILS) return MAX_MAP_RAILS;
+    Rail& r = rails_[rail_count_];
+    r = Rail{};
+    r.first_waypoint = static_cast<u16>(waypoint_count_);
+    r.waypoint_count = 0;
+    r.tag = tag;
+    r.flags = flags;
+    return rail_count_++;
+}
+
+bool MapStorage::add_waypoint(u32 rail, fx3 pos, i32 anchor) noexcept {
+    if (rail >= rail_count_) return false;
+    // Only the rail most recently started may grow. A waypoint range has to be
+    // contiguous, and appending to an earlier rail would silently claim the
+    // next one's waypoints.
+    if (rail != rail_count_ - 1) return false;
+    if (waypoint_count_ >= MAX_MAP_WAYPOINTS) return false;
+
+    RailWaypoint& w = waypoints_[waypoint_count_++];
+    w = RailWaypoint{};
+    w.anchor = anchor;
+    w.base = pos;
+    // Live from the moment it exists. A map with no moving sectors then needs
+    // no per-tick pass at all, and a reader never sees an unresolved waypoint.
+    w.pos = pos;
+    ++rails_[rail].waypoint_count;
+    return true;
+}
+
+bool MapStorage::add_rail_link(u32 rail, u16 waypoint, u32 to_rail, u16 to_waypoint) noexcept {
+    if (rail_link_count_ >= MAX_MAP_RAIL_LINKS) return false;
+    if (rail >= rail_count_ || to_rail >= rail_count_) return false;
+    if (waypoint >= rails_[rail].waypoint_count) return false;
+    if (to_waypoint >= rails_[to_rail].waypoint_count) return false;
+    RailLink& l = rail_links_[rail_link_count_++];
+    l.rail = static_cast<u16>(rail);
+    l.waypoint = waypoint;
+    l.to_rail = static_cast<u16>(to_rail);
+    l.to_waypoint = to_waypoint;
+    return true;
 }
 
 bool MapStorage::add_spawn(const char* tag, u32 tag_len, fx3 pos) noexcept {
@@ -203,6 +249,12 @@ MapData MapStorage::view() const noexcept {
     m.side_count = side_count_;
     m.tris = tris_;
     m.tri_index_count = tri_index_count_;
+    m.rails = rails_;
+    m.rail_count = rail_count_;
+    m.waypoints = waypoints_;
+    m.waypoint_count = waypoint_count_;
+    m.rail_links = rail_links_;
+    m.rail_link_count = rail_link_count_;
     return m;
 }
 
@@ -225,6 +277,28 @@ u64 MapStorage::hash() const noexcept {
         const Side& sd = sides_[i];
         h.u32v(sd.a); h.u32v(sd.b); h.i32v(sd.neighbor); h.byte(sd.flags);
     }
+    // Rails are hashed by their AUTHORED positions, never their live ones. The
+    // live position of a waypoint on a moving platform changes every tick, and
+    // a map hash that changed every tick would make WELCOME.map_hash useless
+    // for the one thing it exists for: telling a client its geometry differs
+    // from the server's.
+    h.u32v(rail_count_);
+    h.u32v(waypoint_count_);
+    h.u32v(rail_link_count_);
+    for (u32 i = 0; i < rail_count_; ++i) {
+        const Rail& r = rails_[i];
+        h.u32v(r.first_waypoint); h.u32v(r.waypoint_count);
+        h.u32v(r.tag); h.byte(r.flags);
+    }
+    for (u32 i = 0; i < waypoint_count_; ++i) {
+        h.i32v(waypoints_[i].anchor);
+        h.vec3(waypoints_[i].base);
+    }
+    for (u32 i = 0; i < rail_link_count_; ++i) {
+        const RailLink& l = rail_links_[i];
+        h.u32v(l.rail); h.u32v(l.waypoint); h.u32v(l.to_rail); h.u32v(l.to_waypoint);
+    }
+
     h.u32v(spawn_count_);
     for (u32 i = 0; i < spawn_count_; ++i) {
         const SpawnPoint& sp = spawns_[i];

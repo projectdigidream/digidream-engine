@@ -27,6 +27,9 @@ inline constexpr u32 MAX_MAP_SECTORS = 512;
 inline constexpr u32 MAX_MAP_SIDES   = 4096;
 inline constexpr u32 MAX_MAP_TRI_IDX = 12288;   // 3 per triangle
 inline constexpr u32 MAX_MAP_SPAWNS  = 64;
+inline constexpr u32 MAX_MAP_RAILS      = 64;
+inline constexpr u32 MAX_MAP_WAYPOINTS  = 512;
+inline constexpr u32 MAX_MAP_RAIL_LINKS = 64;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
 
 // A named landing point. Portals name one of these in the join handshake
@@ -73,6 +76,30 @@ public:
 
     bool has_staged_edits(u32 sector) const noexcept;
     void discard_staged_edits(u32 sector) noexcept;
+
+    // --- rails and wires (design §3.4) ---
+    //
+    // Built in the same order every time, like everything else the map is made
+    // of: rails are appended, and a rail's waypoints must be added before the
+    // next rail is started. Interleaving them would leave a rail's waypoint
+    // range non-contiguous, and nothing downstream could iterate it.
+    u32 add_rail(u16 tag, u8 flags) noexcept;
+
+    // `anchor` is the sector the waypoint rides, or NO_SECTOR for a world-fixed
+    // one. The caller decides -- the map compiler infers it from the sector the
+    // point falls in, and stores the answer, so the runtime never has to guess.
+    bool add_waypoint(u32 rail, fx3 pos, i32 anchor) noexcept;
+
+    bool add_rail_link(u32 rail, u16 waypoint, u32 to_rail, u16 to_waypoint) noexcept;
+
+    u32 rail_count() const noexcept { return rail_count_; }
+    u32 waypoint_count() const noexcept { return waypoint_count_; }
+    u32 rail_link_count() const noexcept { return rail_link_count_; }
+
+    // Live waypoint position, written by sector motion each tick. Deliberately
+    // the same shape as point_mut(): a rail on a moving platform is the corner
+    // points of that platform, one level up.
+    RailWaypoint& waypoint_mut(u32 i) noexcept { return waypoints_[i]; }
 
     // --- spawns ---
     bool add_spawn(const char* tag, u32 tag_len, fx3 pos) noexcept;
@@ -125,6 +152,13 @@ private:
 
     SpawnPoint spawns_[MAX_MAP_SPAWNS]{};
     u32        spawn_count_ = 0;
+
+    Rail         rails_[MAX_MAP_RAILS]{};
+    RailWaypoint waypoints_[MAX_MAP_WAYPOINTS]{};
+    RailLink     rail_links_[MAX_MAP_RAIL_LINKS]{};
+    u32          rail_count_ = 0;
+    u32          waypoint_count_ = 0;
+    u32          rail_link_count_ = 0;
 };
 
 }  // namespace dnp::geom

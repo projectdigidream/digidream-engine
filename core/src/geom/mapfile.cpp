@@ -7,6 +7,9 @@ namespace {
 // materialising it.
 constexpr size_t POINT_BYTES = 16;   // two fxraw
 constexpr size_t SIDE_BYTES  = 9;    // u16 + u16 + i32 + u8
+constexpr size_t WAYPOINT_BYTES = 28;   // i32 + three fxraw
+constexpr size_t RAIL_BYTES     = 7;    // u16 + u16 + u16 + u8
+constexpr size_t LINK_BYTES     = 8;    // four u16
 }  // namespace
 
 bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
@@ -21,6 +24,9 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.u32v(m.side_count);
     w.u32v(m.tri_index_count);
     w.u32v(store.spawn_count());
+    w.u32v(store.rail_count());
+    w.u32v(store.waypoint_count());
+    w.u32v(store.rail_link_count());
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -59,6 +65,32 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.fxraw(sp.pos.z);
     }
 
+    // Rails: waypoints hold the position they were AUTHORED at, never a live
+    // one. A waypoint riding a moving platform is somewhere different on every
+    // tick, and baking that would make the file -- and its hash -- depend on
+    // when it was written.
+    for (u32 i = 0; i < m.waypoint_count; ++i) {
+        const RailWaypoint& p = m.waypoint(i);
+        w.i32v(p.anchor);
+        w.fxraw(p.base.x);
+        w.fxraw(p.base.y);
+        w.fxraw(p.base.z);
+    }
+    for (u32 i = 0; i < m.rail_count; ++i) {
+        const Rail& r = m.rail(i);
+        w.u16v(r.first_waypoint);
+        w.u16v(r.waypoint_count);
+        w.u16v(r.tag);
+        w.u8v(r.flags);
+    }
+    for (u32 i = 0; i < m.rail_link_count; ++i) {
+        const RailLink& l = m.rail_link(i);
+        w.u16v(l.rail);
+        w.u16v(l.waypoint);
+        w.u16v(l.to_rail);
+        w.u16v(l.to_waypoint);
+    }
+
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
     // running different geometry from the server is a detectable condition
     // rather than an unexplained series of collision disagreements.
@@ -87,13 +119,17 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 side_count = r.u32v();
     const u32 tri_index_count = r.u32v();
     const u32 spawn_count = r.u32v();
+    const u32 rail_count = r.u32v();
+    const u32 waypoint_count = r.u32v();
+    const u32 rail_link_count = r.u32v();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
     // Bound every count BEFORE reading anything sized by it. These are
     // attacker-chosen numbers.
     if (point_count > MAX_MAP_POINTS || sector_count > MAX_MAP_SECTORS ||
         side_count > MAX_MAP_SIDES || tri_index_count > MAX_MAP_TRI_IDX ||
-        spawn_count > MAX_MAP_SPAWNS) {
+        spawn_count > MAX_MAP_SPAWNS || rail_count > MAX_MAP_RAILS ||
+        waypoint_count > MAX_MAP_WAYPOINTS || rail_link_count > MAX_MAP_RAIL_LINKS) {
         store.clear();
         return MapLoadStatus::TooLarge;
     }
@@ -243,6 +279,86 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         const fx z = r.fxraw();
         if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
         store.add_spawn(tag, len, fx3{x, y, z});
+    }
+
+    // --- rails ---------------------------------------------------------------
+    //
+    // Read after the spawns, in the order they were written. Waypoints come
+    // first because a rail's range has to be validated against a count that is
+    // already known.
+    const size_t waypoints_at = r.pos();
+    if (!r.skip(static_cast<size_t>(waypoint_count) * WAYPOINT_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+    const size_t rails_at = r.pos();
+    if (!r.skip(static_cast<size_t>(rail_count) * RAIL_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+    const size_t links_at = r.pos();
+    if (!r.skip(static_cast<size_t>(rail_link_count) * LINK_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+
+    {
+        // Every rail's waypoint range, validated before a single one is added.
+        struct PendingRail { u16 first, count, tag; u8 flags; };
+        PendingRail rails[MAX_MAP_RAILS];
+        r.seek(rails_at);
+        u32 covered = 0;
+        for (u32 i = 0; i < rail_count; ++i) {
+            rails[i].first = r.u16v();
+            rails[i].count = r.u16v();
+            rails[i].tag = r.u16v();
+            rails[i].flags = r.u8v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            if (static_cast<u32>(rails[i].first) + rails[i].count > waypoint_count) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+            // Ranges are contiguous and in order, because that is the only way
+            // add_waypoint() can rebuild them. A file claiming otherwise was
+            // not written by this format's writer.
+            if (rails[i].first != covered) { store.clear(); return MapLoadStatus::BadIndex; }
+            covered += rails[i].count;
+        }
+        if (covered != waypoint_count) { store.clear(); return MapLoadStatus::BadIndex; }
+
+        r.seek(waypoints_at);
+        u32 next_wp = 0;
+        for (u32 i = 0; i < rail_count; ++i) {
+            const u32 idx = store.add_rail(rails[i].tag, rails[i].flags);
+            if (idx != i) { store.clear(); return MapLoadStatus::BadIndex; }
+            for (u16 k = 0; k < rails[i].count; ++k) {
+                const i32 anchor = r.i32v();
+                const fx x = r.fxraw();
+                const fx y = r.fxraw();
+                const fx z = r.fxraw();
+                if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+                if (anchor != NO_SECTOR &&
+                    (anchor < 0 || static_cast<u32>(anchor) >= sector_count)) {
+                    store.clear(); return MapLoadStatus::BadIndex;
+                }
+                if (!store.add_waypoint(i, fx3{x, y, z}, anchor)) {
+                    store.clear(); return MapLoadStatus::BadIndex;
+                }
+                ++next_wp;
+            }
+        }
+        if (next_wp != waypoint_count) { store.clear(); return MapLoadStatus::BadIndex; }
+
+        r.seek(links_at);
+        for (u32 i = 0; i < rail_link_count; ++i) {
+            const u16 from_rail = r.u16v();
+            const u16 from_wp = r.u16v();
+            const u16 to_rail = r.u16v();
+            const u16 to_wp = r.u16v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            // add_rail_link validates every index against the rails it now
+            // holds, so a junction naming a waypoint that does not exist is a
+            // rejected file rather than an out-of-range read at the first fork.
+            if (!store.add_rail_link(from_rail, from_wp, to_rail, to_wp)) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+        }
     }
 
     const u64 want_hash = r.u64v();

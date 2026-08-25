@@ -52,6 +52,49 @@ struct Sector {
     u16 tri_count = 0;
 };
 
+// Rails and wires (design §3.4).
+//
+// A rail is a polyline an entity is carried along; a wire is the same polyline
+// with the rider hanging under it. The distinction is one flag, because the
+// difference lives entirely in the controller (§7.4, Phase 6), not in the
+// geometry.
+//
+// Waypoints are SECTOR-RELATIVE, and that is the whole design. A waypoint holds
+// the position it was authored at plus the sector it rides; the live position
+// is that base plus the sector's current motion offset, written back exactly
+// the way a moving sector's corner points are. So a rail bolted to a moving
+// platform simply moves, and nothing anywhere has to special-case the
+// combination -- which is what §3.4 asks for and what an absolute-coordinate
+// rail could not give without a special case in every reader.
+namespace rail_flag {
+inline constexpr u8 LOOP = 1u << 0;   // the last waypoint joins back to the first
+inline constexpr u8 WIRE = 1u << 1;   // the rider hangs below instead of riding on top
+}  // namespace rail_flag
+
+struct RailWaypoint {
+    i32 anchor = NO_SECTOR;   // sector it rides, or NO_SECTOR for world-fixed
+    fx3 base{};               // as authored
+    fx3 pos{};                // live: base + the anchor's current offset
+};
+
+struct Rail {
+    u16 first_waypoint = 0;
+    u16 waypoint_count = 0;
+    u16 tag = 0;
+    u8  flags = 0;
+};
+
+// A junction (design §7.4: "junction/branch selection is Lua; movement along
+// the chosen branch is native"). Leaving `rail` at `waypoint` may continue onto
+// `to_rail` at `to_waypoint`. Directed, and a waypoint may carry several, which
+// is what makes it a branch rather than a join.
+struct RailLink {
+    u16 rail = 0;
+    u16 waypoint = 0;      // index into the rail's own waypoint range, not absolute
+    u16 to_rail = 0;
+    u16 to_waypoint = 0;
+};
+
 struct MapData {
     const fx2*    points       = nullptr;
     u32           point_count  = 0;
@@ -62,9 +105,19 @@ struct MapData {
     const u16*    tris         = nullptr;
     u32           tri_index_count = 0;
 
+    const Rail*         rails            = nullptr;
+    u32                 rail_count       = 0;
+    const RailWaypoint* waypoints        = nullptr;
+    u32                 waypoint_count   = 0;
+    const RailLink*     rail_links       = nullptr;
+    u32                 rail_link_count  = 0;
+
     const fx2& point(u32 i) const noexcept { return points[i]; }
     const Sector& sector(u32 i) const noexcept { return sectors[i]; }
     const Side& side(u32 i) const noexcept { return sides[i]; }
+    const Rail& rail(u32 i) const noexcept { return rails[i]; }
+    const RailWaypoint& waypoint(u32 i) const noexcept { return waypoints[i]; }
+    const RailLink& rail_link(u32 i) const noexcept { return rail_links[i]; }
 };
 
 // Is `p` inside sector `s`?

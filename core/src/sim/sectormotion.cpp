@@ -48,6 +48,7 @@ u32 SectorMotionSet::add(const geom::MapStorage& map, u32 sector) noexcept {
     const geom::Sector& s = m.sector(sector);
     if (s.point_count > geom::MAX_POLY_POINTS) return MAX_MOVING_SECTORS;
 
+    motion_of_sector_[sector] = static_cast<i16>(count_);
     SectorMotion& sm = motions_[count_];
     sm = SectorMotion{};
     sm.sector = sector;
@@ -92,6 +93,8 @@ bool SectorMotionSet::set_discrete(u32 sector, fx3 offset, MotionTarget target) 
 }
 
 void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
+    if (count_ == 0) return;   // nothing moves; the waypoint pass has nothing to do either
+
     for (u32 i = 0; i < count_; ++i) {
         SectorMotion& m = motions_[i];
         m.prev_offset = m.offset;
@@ -105,13 +108,22 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
         geom::Sector& s = map.sector_mut(m.sector);
 
         // Written as base + offset every tick, never as an accumulated
-        // increment. Accumulating would let a sector drift by the rounding of
-        // each step, and a platform that ends a round trip a few ulp from where
-        // it started is a platform that eventually is not where the level
-        // author put it.
-        // Which surfaces the vertical offset applies to. A crusher moves only
-        // its ceiling, which is the ONLY way the gap between the two can ever
-        // close -- a sector that always moves as a body can never crush
+        // increment.
+        //
+        // Not for rounding reasons: fx add and subtract are exact integer ops,
+        // so a sum of per-tick deltas telescopes to exactly the same value. The
+        // reason is that base + offset is a pure function of the TICK, and
+        // accumulation is a function of every tick that came before. A client
+        // predicting five ticks past the last snapshot evaluates the offset for
+        // tick N+5 directly; an accumulating sector would have to have stepped
+        // through N+1..N+4 to know where it is, which is precisely what §3.1.2
+        // says parametric motion must not require. It also self-corrects: a
+        // reconciliation that rewinds the world puts the geometry back, where
+        // an accumulated position would stay wrong for the rest of the match.
+        //
+        // `target` decides which surfaces the vertical offset reaches. A crusher
+        // moves only its ceiling, which is the ONLY way the gap between the two
+        // can ever close -- a sector that always moves as a body can never crush
         // anything, however fast it travels.
         if (m.target != MotionTarget::Ceiling) s.floor_z = m.base_floor + m.offset.z;
         else                                   s.floor_z = m.base_floor;
@@ -129,6 +141,25 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
                     fx2{m.base_points[k].x + m.offset.x, m.base_points[k].y + m.offset.y};
             }
         }
+    }
+
+    // Rail waypoints, by exactly the same rule (design §3.4) and for the same
+    // reason as the sector points above: base + offset is a pure function of
+    // the tick, so a predicting client can evaluate a rail's position for a
+    // tick the server has not reached. One pass over the waypoints rather than
+    // a scan per motion.
+    //
+    // A waypoint follows its sector's OFFSET, which for a platform or a Doom
+    // lift is the floor and for a door or crusher is the ceiling. The one shape
+    // that gets wrong is a rail bolted to the unmoving floor of a ceiling
+    // mover; no map has one, and when one does the answer is a mount flag on
+    // the waypoint rather than a special case here.
+    for (u32 w = 0; w < map.waypoint_count(); ++w) {
+        geom::RailWaypoint& p = map.waypoint_mut(w);
+        if (p.anchor < 0 || static_cast<u32>(p.anchor) >= geom::MAX_MAP_SECTORS) continue;
+        const i16 mi = motion_of_sector_[p.anchor];
+        if (mi < 0) continue;
+        p.pos = p.base + motions_[static_cast<u32>(mi)].offset;
     }
 }
 

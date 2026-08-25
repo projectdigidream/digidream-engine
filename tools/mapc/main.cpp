@@ -23,6 +23,12 @@
 //
 //   spawn start 10 10 2
 //
+//   rail tag 1 loop
+//     waypoint 10 10 4
+//     waypoint 30 10 4
+//   end
+//   junction 0 1 to 1 0
+//
 // Each `vertex` line declares the point AND the edge leading from it to the
 // next vertex, which is how sectors are actually drawn. Numbers are decimal and
 // are converted to fixed point exactly, via a rational, never through a double.
@@ -130,6 +136,15 @@ int main(int argc, char** argv) {
 
     std::vector<PendingVertex> verts;
     bool in_sector = false;
+    bool in_rail = false;
+    int  rail_start_line = 0;
+    u32  cur_rail = 0;
+    u32  rail_waypoints = 0;
+
+    // Junctions are collected and resolved at the end, because a rail may name
+    // one declared later in the file -- the same reason sector neighbours are.
+    struct PendingLink { u32 rail, wp, to_rail, to_wp; int line; };
+    std::vector<PendingLink> links;
     fx floor_z{}, ceil_z{};
     u16 tag = 0;
     int sector_start_line = 0;
@@ -175,8 +190,17 @@ int main(int argc, char** argv) {
                 else err(lineno, "unknown edge attribute '%s'", tok[i].c_str());
             }
             verts.push_back(v);
+        } else if (tok[0] == "end" && in_rail) {
+            in_rail = false;
+            // Two waypoints is the minimum that describes a line. One is a
+            // point, and every query below would silently treat it as a rail of
+            // zero segments -- which is a level-authoring mistake worth naming
+            // rather than a shape worth supporting.
+            if (rail_waypoints < 2) {
+                err(rail_start_line, "rail has %u waypoint(s); need at least 2", rail_waypoints);
+            }
         } else if (tok[0] == "end") {
-            if (!in_sector) { err(lineno, "'end' outside a sector"); continue; }
+            if (!in_sector) { err(lineno, "'end' outside a sector or rail"); continue; }
             in_sector = false;
 
             if (verts.size() < 3) {
@@ -209,6 +233,73 @@ int main(int argc, char** argv) {
                     err(sector_start_line, "could not add side %u", a);
                 }
             }
+        } else if (tok[0] == "rail" || tok[0] == "wire") {
+            if (in_sector) { err(lineno, "rail inside a sector; missing 'end'?"); continue; }
+            if (in_rail) { err(lineno, "rail inside a rail; missing 'end'?"); continue; }
+            in_rail = true;
+            rail_start_line = lineno;
+            rail_waypoints = 0;
+            u16 rtag = 0;
+            u8 flags = tok[0] == "wire" ? rail_flag::WIRE : 0;
+            for (size_t i = 1; i < tok.size(); ++i) {
+                if (tok[i] == "loop") { flags |= rail_flag::LOOP; }
+                else if (tok[i] == "tag" && i + 1 < tok.size()) {
+                    rtag = static_cast<u16>(std::atoi(tok[++i].c_str()));
+                } else {
+                    err(lineno, "unknown rail attribute '%s'", tok[i].c_str());
+                }
+            }
+            cur_rail = store.add_rail(rtag, flags);
+            if (cur_rail >= MAX_MAP_RAILS) err(lineno, "too many rails");
+        } else if (tok[0] == "waypoint") {
+            if (!in_rail) { err(lineno, "waypoint outside a rail"); continue; }
+            if (tok.size() < 4) { err(lineno, "waypoint needs x y z"); continue; }
+            fx x, y, z;
+            if (!parse_fx(tok[1], x) || !parse_fx(tok[2], y) || !parse_fx(tok[3], z)) {
+                err(lineno, "bad waypoint coordinates");
+                continue;
+            }
+
+            // The anchor sector, INFERRED from the point it sits over unless
+            // the author says otherwise -- and then written into the file
+            // explicitly. Design §3.4 wants waypoints to be sector-relative;
+            // making the author state that for every point would be a chore
+            // they would get wrong, and making the RUNTIME infer it would mean
+            // a rail's anchor changed the moment a sector moved under it.
+            // Deciding once, at bake time, is the only version of this that is
+            // both convenient and stable.
+            i32 anchor = find_sector(store.view(), fx2{x, y});
+            for (size_t i = 4; i < tok.size(); ++i) {
+                if (tok[i] == "anchor" && i + 1 < tok.size()) {
+                    const std::string& a = tok[++i];
+                    anchor = a == "none" ? NO_SECTOR : std::atoi(a.c_str());
+                } else {
+                    err(lineno, "unknown waypoint attribute '%s'", tok[i].c_str());
+                }
+            }
+            if (anchor != NO_SECTOR &&
+                (anchor < 0 || static_cast<u32>(anchor) >= store.view().sector_count)) {
+                err(lineno, "waypoint anchor %d is not a sector", anchor);
+                continue;
+            }
+            if (!store.add_waypoint(cur_rail, fx3{x, y, z}, anchor)) {
+                err(lineno, "could not add waypoint (too many, or rail out of order)");
+                continue;
+            }
+            ++rail_waypoints;
+        } else if (tok[0] == "junction") {
+            // junction <rail> <waypoint> to <rail> <waypoint>
+            if (tok.size() < 6) {
+                err(lineno, "junction needs: <rail> <waypoint> to <rail> <waypoint>");
+                continue;
+            }
+            PendingLink l;
+            l.rail = static_cast<u32>(std::atoi(tok[1].c_str()));
+            l.wp = static_cast<u32>(std::atoi(tok[2].c_str()));
+            l.to_rail = static_cast<u32>(std::atoi(tok[4].c_str()));
+            l.to_wp = static_cast<u32>(std::atoi(tok[5].c_str()));
+            l.line = lineno;
+            links.push_back(l);
         } else if (tok[0] == "spawn") {
             if (tok.size() < 5) { err(lineno, "spawn needs a tag and x y z"); continue; }
             fx x, y, z;
@@ -226,6 +317,14 @@ int main(int argc, char** argv) {
     std::fclose(in);
 
     if (in_sector) err(lineno, "unterminated sector (missing 'end')");
+    if (in_rail) err(lineno, "unterminated rail (missing 'end')");
+
+    for (const PendingLink& l : links) {
+        if (!store.add_rail_link(l.rail, static_cast<u16>(l.wp), l.to_rail,
+                                 static_cast<u16>(l.to_wp))) {
+            err(l.line, "junction names a rail or waypoint that does not exist");
+        }
+    }
 
     // Neighbour indices are resolved only now, because a sector may legally
     // name one that appears later in the file.
@@ -255,9 +354,11 @@ int main(int argc, char** argv) {
     std::fwrite(out.data(), 1, w.size(), of);
     std::fclose(of);
 
-    std::printf("%s: %u sectors, %u points, %u sides, %u triangles, %u spawns -> %zu bytes (hash %016llX)\n",
+    std::printf("%s: %u sectors, %u points, %u sides, %u triangles, %u spawns, "
+                "%u rails (%u waypoints, %u junctions) -> %zu bytes (hash %016llX)\n",
                 argv[2], m.sector_count, m.point_count, m.side_count,
-                m.tri_index_count / 3, store.spawn_count(), w.size(),
-                static_cast<unsigned long long>(store.hash()));
+                m.tri_index_count / 3, store.spawn_count(),
+                store.rail_count(), store.waypoint_count(), store.rail_link_count(),
+                w.size(), static_cast<unsigned long long>(store.hash()));
     return 0;
 }

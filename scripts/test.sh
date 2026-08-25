@@ -23,6 +23,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_sectormotion"
 "./build/$HOST_ARCH/test_crush"
 "./build/$HOST_ARCH/test_nav"
+"./build/$HOST_ARCH/test_rail"
 
 # The map compiler must round-trip the authored map: mapc bakes it, and the
 # loader re-triangulates and compares, so this also proves the compiler and the
@@ -56,6 +57,18 @@ else
     (cd server/edge && npm run --silent certs >/dev/null)
   fi
   ./scripts/build_server.sh >/dev/null
+
+  # The wasm core, BEFORE the tests that load a map through it.
+  #
+  # It used to be built further down, next to the prediction tests, and the map
+  # transfer test quietly ran against whatever binary happened to be on disk. A
+  # map format change then failed here with "status 2" and no hint that the
+  # client was simply older than the file it was parsing -- which is the exact
+  # confusion the format version exists to prevent, reintroduced by the harness.
+  if command -v em++ >/dev/null 2>&1; then
+    ./scripts/build_wasm.sh >/dev/null
+  fi
+
   node client/test/snapshots.test.js
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
@@ -78,7 +91,6 @@ else
   echo
   echo "--- client prediction against the real server ---"
   if command -v em++ >/dev/null 2>&1; then
-    ./scripts/build_wasm.sh >/dev/null
     (cd server/edge && node test/prediction.test.js 2>/dev/null | tail -4)
 
     echo

@@ -26,6 +26,7 @@
 #include "dnp/math/vec.hpp"
 #include "dnp/sim/state_hash.hpp"
 #include "dnp/geom/mapstore.hpp"
+#include "dnp/geom/rail.hpp"
 #include "dnp/nav/navgraph.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
@@ -87,6 +88,8 @@ struct World {
     // decides the answer, which is exactly the shape of code that resolves one
     // way on arm64 and another on wasm. Getting it under the gate before
     // anything depends on it is cheaper than bisecting it afterwards.
+    u64                 rail_digest;
+
     dnp::nav::NavGraph  nav;
     dnp::nav::NavQuery  nav_query;
     u32                 nav_path[dnp::nav::MAX_NAV_NODES];
@@ -149,6 +152,16 @@ void world_init(World& w) {
         w.sim_map.add_side(s4, 3, 0, static_cast<i32>(s3), 0);
         w.sim_map.side_mut(w.sim_map.view().sector(s3).first_side + 1).neighbor =
             static_cast<i32>(s4);
+
+        // A rail bolted to the sector that slides horizontally, so §3.4's
+        // waypoint pass and the polyline queries run on every target rather
+        // than only being compiled by them. rail_point_at() is a divide and a
+        // lerp per segment, which is the shape of arithmetic worth watching.
+        const u32 rail = w.sim_map.add_rail(1, dnp::geom::rail_flag::LOOP);
+        w.sim_map.add_waypoint(rail, fx3{F(62), F(4), F(6)}, 2);
+        w.sim_map.add_waypoint(rail, fx3{F(78), F(4), F(6)}, 2);
+        w.sim_map.add_waypoint(rail, fx3{F(78), F(36), F(6)}, 2);
+        w.sim_map.add_waypoint(rail, fx3{F(62), F(36), F(6)}, 2);
     }
 
     w.sim_view = w.sim_map.view();
@@ -193,6 +206,7 @@ void world_init(World& w) {
         pr.grapple_enabled = (i % 2) == 1;
         pr.max_jumps = static_cast<u8>(1 + (i % 3));
     }
+    w.rail_digest = 0;
     w.nav.build(w.sim_view);
     w.nav_digest = 0;
     w.nav_queries = 0;
@@ -310,6 +324,21 @@ void world_step(World& w) {
         if (pr.status == dnp::nav::PathStatus::Ok) ++w.nav_routes_found;
     }
 
+    // Ride the rail. The sector it is bolted to slides every tick, so this is
+    // sampling a moving polyline rather than a fixed one.
+    {
+        const fx along = fx::from_int(static_cast<i64>(w.tick % 64));
+        const dnp::geom::RailPoint rp = dnp::geom::rail_point_at(w.sim_view, 0, along);
+        StateHasher rh;
+        rh.u64v(w.rail_digest);
+        rh.vec3(rp.pos);
+        rh.u32v(rp.segment);
+        rh.fxv(rp.t);
+        rh.boolv(rp.clamped);
+        rh.fxv(dnp::geom::rail_length(w.sim_view, 0));
+        w.rail_digest = rh.value();
+    }
+
     // Coverage bookkeeping, deliberately outside the hash: this counts what the
     // trace EXERCISED, and a counter in the hashed state would make the gate
     // compare its own instrumentation.
@@ -379,6 +408,7 @@ u64 world_hash(const World& w) {
         h.u64v(b.rng.stream_inc());
     }
     h.u64v(w.sim.hash());
+    h.u64v(w.rail_digest);
     h.u64v(w.nav_digest);
     h.u64v(w.sim_rng.state());
     return h.value();

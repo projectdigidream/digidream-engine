@@ -30,6 +30,7 @@ add_library(dnp_core STATIC
   core/src/geom/triangulate.cpp
   core/src/geom/mapstore.cpp
   core/src/geom/mapfile.cpp
+  core/src/geom/rail.cpp
   core/src/physics/collide.cpp
   core/src/physics/controller.cpp
   core/src/nav/navgraph.cpp
@@ -109,6 +110,10 @@ add_test(NAME crush COMMAND test_crush)
 add_executable(test_nav core/tests/test_nav.cpp)
 target_link_libraries(test_nav PRIVATE dnp_core)
 add_test(NAME nav COMMAND test_nav)
+
+add_executable(test_rail core/tests/test_rail.cpp)
+target_link_libraries(test_rail PRIVATE dnp_core)
+add_test(NAME rail COMMAND test_rail)
 
 add_executable(mapc tools/mapc/main.cpp)
 target_link_libraries(mapc PRIVATE dnp_core)

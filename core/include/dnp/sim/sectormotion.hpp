@@ -103,7 +103,12 @@ fx3 parametric_offset(const SectorMotion& m, u32 tick) noexcept;
 
 class SectorMotionSet {
 public:
-    void clear() noexcept { count_ = 0; }
+    SectorMotionSet() noexcept { clear(); }
+
+    void clear() noexcept {
+        count_ = 0;
+        for (u32 i = 0; i < geom::MAX_MAP_SECTORS; ++i) motion_of_sector_[i] = -1;
+    }
     u32 count() const noexcept { return count_; }
     const SectorMotion& at(u32 i) const noexcept { return motions_[i]; }
     SectorMotion& at_mut(u32 i) noexcept { return motions_[i]; }
@@ -127,6 +132,13 @@ public:
     // Advance every motion to `tick` and write the resulting geometry into the
     // map. Parametric sectors are evaluated; discrete ones keep whatever was
     // set. Called once per tick, before agents move.
+    //
+    // Rail waypoints anchored to a moving sector are rewritten here too, from
+    // their authored base plus the same offset the sector's corner points get.
+    // That is the whole of §3.4's "sector-relative waypoints": a rail on a
+    // moving platform is already in the right place by the time anything reads
+    // it, so no rail query, no controller and no renderer has a special case
+    // for the combination.
     void apply(geom::MapStorage& map, u32 tick) noexcept;
 
     void hash_into(StateHasher& h) const noexcept;
@@ -134,6 +146,11 @@ public:
 private:
     SectorMotion motions_[MAX_MOVING_SECTORS]{};
     u32 count_ = 0;
+
+    // sector -> index into motions_, or -1. Maintained by add(), so the
+    // per-tick waypoint pass is one lookup per waypoint instead of a scan of
+    // every motion for every waypoint.
+    i16 motion_of_sector_[geom::MAX_MAP_SECTORS];
 };
 
 }  // namespace dnp::sim

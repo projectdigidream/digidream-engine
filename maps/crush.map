@@ -57,3 +57,32 @@ end
 
 spawn start  10 10 0
 spawn trap   30 10 0
+
+# Rails (design §3.4). Waypoints are SECTOR-RELATIVE: mapc infers the anchor
+# from the sector each point falls in and writes it into the file, so a rail
+# bolted to something that moves simply moves, and nothing that reads a rail has
+# a special case for it.
+#
+# Two rails in the same map, differing only in what they are attached to. The
+# wire rides the piston; the floor rail does not move at all. That contrast is
+# the point -- one of them proves nothing without the other.
+
+wire tag 1
+  waypoint  2 22 6
+  waypoint 18 22 6
+end
+
+rail tag 2
+  waypoint  2  2 1
+  waypoint 18  2 1
+  waypoint 18  8 1
+end
+
+# A branch off the floor rail's last waypoint. Choosing between branches is
+# Lua's decision (§7.4); the engine reports the fork and takes neither.
+rail tag 3
+  waypoint 18  8 1
+  waypoint 18 16 1
+end
+
+junction 1 2 to 2 0
