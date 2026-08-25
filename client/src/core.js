@@ -152,6 +152,31 @@ export class WasmWorld {
       msg.startTick, msg.durationTicks, msg.loopMode, msg.motionTarget ?? 0) !== 0
   }
 
+  /**
+   * Apply a replicated movement parameter set (docs/protocol.md §8.4).
+   *
+   * Returns the number of fields applied. A field the server names but this
+   * build does not have is skipped rather than failing the whole update: that
+   * is version skew, and dropping one unknown field beats running with rules
+   * one generation stale.
+   */
+  applyParamUpdate (idx, msg) {
+    const { i64 } = this.core.views
+    const b = this.core.buf64 / 8
+    let applied = 0
+    for (const f of msg.fields) {
+      i64[b] = f.raw
+      if (this.core.M._dnp_world_set_param_raw(this.ptr, idx, f.id, this.core.buf64)) applied++
+    }
+    return applied
+  }
+
+  /** Read one parameter back, so a test can assert what was actually applied. */
+  getParamRaw (idx, fieldId) {
+    this.core.M._dnp_world_get_param_raw(this.ptr, idx, fieldId, this.core.buf64)
+    return this.core.views.i64[this.core.buf64 / 8]
+  }
+
   /** Apply a scripted-discrete offset the server streamed. */
   setDiscreteOffset (sector, offset, target = 0) {
     const { i64 } = this.core.views

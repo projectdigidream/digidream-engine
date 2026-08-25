@@ -30,7 +30,13 @@ export class Predictor {
 
     this.tick = 0                 // client input tick, ahead of the server
     this.inputs = new Map()       // tick -> input frame
-    this.predicted = new Map()    // tick -> agent hash after applying that tick
+    // tick -> { hash, epoch }. The epoch matters as much as the hash: a tick
+    // predicted under one parameter generation and confirmed under another was
+    // computed from different constants on the two sides, and comparing hashes
+    // alone reports that as a defect. docs/protocol.md §8.4 says a client MUST
+    // NOT apply parameters retroactively to ticks before effective_tick; this
+    // is how that is honoured when the change lands mid-replay.
+    this.predicted = new Map()
 
     this.synced = false           // adopted an authoritative state yet?
     this.lastAppliedTick = 0
@@ -42,6 +48,23 @@ export class Predictor {
 
     this.lastSnapshot = null      // { serverTick, lastInputTick }, for starvation detection
 
+    // Which generation of the movement parameters we have applied
+    // (docs/protocol.md §8.4). Compared against the snapshot's, because the
+    // reliable and unreliable channels are not ordered against each other and a
+    // snapshot computed with new rules can arrive before the rules do.
+    this.paramEpoch = 0
+
+    // Consecutive snapshots whose epoch disagreed with ours.
+    //
+    // A parameter update in flight is transient by definition: the reliable
+    // channel delivers, and the disagreement stops. One that never stops means
+    // the update was lost or is being ignored, and THAT is a defect -- a client
+    // silently running different physics from the server. Without this counter
+    // such a client looks healthy, because every mismatch it produces is
+    // truthfully classified as "stale" forever.
+    this.paramsStaleRun = 0
+    this.paramsStaleLimit = 12
+
     this.stats = {
       ticks: 0,
       snapshots: 0,
@@ -50,6 +73,8 @@ export class Predictor {
       exactMatches: 0,
       mispredictions: 0,        // genuine: same inputs, different answer
       starvedDivergences: 0,    // expected: the server simulated input we never sent
+      paramsStale: 0,           // expected: our rules are one generation behind
+      paramsStuck: 0,           // NOT expected: they have been behind too long
       serverRepeats: 0,
       hardResyncs: 0,
       noHistory: 0
@@ -65,7 +90,7 @@ export class Predictor {
     this.world.step()
 
     const s = this.world.readAgent(this.agent)
-    this.predicted.set(this.tick, s.hash)
+    this.predicted.set(this.tick, { hash: s.hash, epoch: this.paramEpoch })
     this.stats.ticks += 1
 
     this._trim()
@@ -164,14 +189,41 @@ export class Predictor {
     // Compare the server's hash against what we predicted for that same input
     // tick. This is the measurement R3 exists for.
     let verdict = 'no-history'
+    const snapEpoch = snapshot.self.paramEpoch ?? 0
+
+    // The stale RUN tracks delivery -- is our current parameter set behind the
+    // server's, and for how long. That is a different question from the
+    // per-tick epoch below, which asks whether one particular comparison is
+    // apples to apples.
+    if (snapEpoch === this.paramEpoch) this.paramsStaleRun = 0
+
     const mine = this.predicted.get(t)
     if (mine !== undefined) {
-      if (mine === snapshot.self.stateHash) {
+      if (mine.hash === snapshot.self.stateHash) {
         this.stats.exactMatches += 1
         verdict = 'exact'
       } else if (serverRepeats > 0) {
         this.stats.starvedDivergences += 1
         verdict = 'starved'
+      } else if (mine.epoch !== snapEpoch || snapEpoch !== this.paramEpoch) {
+        // Either this tick was predicted under a different parameter
+        // generation than the server used for it, or our current set is still
+        // behind. Both mean the two sides computed correct physics from
+        // different constants (docs/protocol.md §10.1.2), which is not a
+        // defect -- but is counted apart from starvation, because the two have
+        // opposite fixes: starvation is a clock-sync problem and this is a
+        // delivery problem.
+        this.paramsStaleRun += 1
+        if (this.paramsStaleRun > this.paramsStaleLimit) {
+          // Long past "in flight". The update is not coming, so this client is
+          // running different physics from the server and saying nothing about
+          // it. Escalate rather than keep excusing it.
+          this.stats.paramsStuck += 1
+          verdict = 'params-stuck'
+        } else {
+          this.stats.paramsStale += 1
+          verdict = 'params-stale'
+        }
       } else {
         this.stats.mispredictions += 1
         verdict = 'mispredicted'
@@ -201,7 +253,7 @@ export class Predictor {
       if (!frame) continue
       this.world.setInput(this.agent, frame)
       this.world.step()
-      this.predicted.set(k, this.world.readAgent(this.agent).hash)
+      this.predicted.set(k, { hash: this.world.readAgent(this.agent).hash, epoch: this.paramEpoch })
       this.stats.replayedTicks += 1
     }
   }

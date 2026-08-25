@@ -19,6 +19,7 @@
 #include "dnp/geom/mapfile.hpp"
 #include "dnp/math/rng.hpp"
 #include "dnp/nav/navgraph.hpp"
+#include "dnp/physics/params_table.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 #include "net/link.hpp"
@@ -151,6 +152,102 @@ struct Server {
             buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
             buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
             link.send_control(id, buf, end);
+        }
+    }
+
+    // --- movement parameters (docs/protocol.md 8.4) --------------------------
+    //
+    // The parameter table is the RULES the client predicts with, not state it
+    // can be corrected toward. A client running different parameters mispredicts
+    // every tick and never recovers, so these go on the reliable channel and
+    // carry a generation the snapshot echoes back.
+
+    u8 param_epoch[sim::MAX_AGENTS]{};
+
+    // Send one agent's parameters. `full` sends every field, which is what a
+    // joining client needs because it has no history to patch.
+    void send_param_update(u32 id, u32 agent, bool full,
+                           const u16* ids = nullptr, u16 id_count = 0) {
+        proto::ParamUpdate p;
+        p.handle         = proto::Handle::make(agent + 1, world.generation(agent));
+        p.epoch          = param_epoch[agent];
+        p.effective_tick = world.tick();
+        p.flags          = full ? proto::param_flag::FULL : 0;
+
+        const physics::MoveParams& mp = world.params(agent);
+        if (full) {
+            p.count = physics::PARAM_COUNT;
+            for (u16 i = 0; i < physics::PARAM_COUNT; ++i) {
+                p.fields[i].id  = i;
+                p.fields[i].raw = physics::param_get_raw(mp, i);
+            }
+        } else {
+            p.count = id_count > proto::MAX_PARAM_FIELDS
+                          ? static_cast<u16>(proto::MAX_PARAM_FIELDS) : id_count;
+            for (u16 i = 0; i < p.count; ++i) {
+                p.fields[i].id  = ids[i];
+                p.fields[i].raw = physics::param_get_raw(mp, ids[i]);
+            }
+        }
+
+        u8 buf[8 + 16 + proto::MAX_PARAM_FIELDS * 10];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_PARAM_UPDATE);
+        proto::encode_param_update(w, p);
+        const size_t end = w.size();
+        if (!w.ok()) {
+            std::fprintf(stderr, "[srv] param update for agent %u did not fit\n", agent);
+            return;
+        }
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(id, buf, end);
+    }
+
+    // Change one parameter and tell everyone. This is the shape the Lua binding
+    // will take in slice 5: mutate, bump the epoch, broadcast.
+    //
+    // Broadcast to EVERY session, not just the owner. Remote clients do not
+    // predict other players (§11 interpolates them), but they will once
+    // entities carry parameters, and a rule that is "reliable for one observer
+    // and absent for the rest" is the kind of asymmetry that is discovered
+    // years later.
+    void set_param(u32 agent, u16 field_id, i64 raw) {
+        if (agent >= sim::MAX_AGENTS) return;
+        if (!physics::param_set_raw(world.params_mut(agent), field_id, raw)) return;
+        // Wraps deliberately; only equality is ever tested (docs/protocol.md
+        // 10.1.2), and 255 intervening changes cannot happen inside one round
+        // trip.
+        param_epoch[agent] = static_cast<u8>(param_epoch[agent] + 1);
+        for (auto& [id, s] : sessions) {
+            if (s.hello_done) send_param_update(id, agent, false, &field_id, 1);
+        }
+    }
+
+    // A stand-in for Lua, exactly as drive_discrete_movers() is for sector
+    // motion: something has to change a parameter before the replication of
+    // parameter changes can be tested at all. --param-test toggles the player's
+    // move_speed on a fixed schedule.
+    bool param_test = false;
+    void drive_param_test() {
+        if (!param_test) return;
+        if (world.tick() % 120 != 0) return;
+        const i32 id = physics::param_id_by_name("move_speed");
+        if (id < 0) return;
+        const bool fast = (world.tick() / 120) % 2 == 1;
+        const fx want = fast ? fx::from_int(16) : fx::from_int(8);
+        for (auto& [sid, s] : sessions) {
+            if (!s.has_agent) continue;
+            if (world.params(s.agent).move_speed == want) continue;
+            set_param(s.agent, static_cast<u16>(id), want.raw);
+            std::fprintf(stderr, "[srv] tick %u: agent %u move_speed -> %lld (epoch %u)\n",
+                         world.tick(), s.agent,
+                         static_cast<long long>(want.raw >> 32), param_epoch[s.agent]);
         }
     }
 
@@ -426,6 +523,11 @@ struct Server {
             // Motion parameters follow the map. Parametric movers cost nothing
             // after this; the client computes them for any tick.
             send_motion_sets(id);
+            // And the movement parameters. FULL, because a joining client has
+            // no history to patch (docs/protocol.md 8.4). Sent before the first
+            // snapshot so the client is never predicting with rules it has not
+            // been told.
+            send_param_update(id, agent, true);
 
             std::fprintf(stderr, "[srv] session %u -> agent %u\n", id, agent);
         }
@@ -499,6 +601,7 @@ struct Server {
         // tick actually ran with. Deciding after would ship the client an
         // offset the server had not used yet.
         drive_discrete_movers();
+        drive_param_test();
         world.step();
         report_crushes();
     }
@@ -543,6 +646,7 @@ struct Server {
             sb.flight_fuel     = self.mv.flight_fuel;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
+            sb.param_epoch     = param_epoch[s.agent];
             sb.state_hash      = world.agent_hash(s.agent);
 
             u8 buf[proto::MAX_DATAGRAM_BYTES];
@@ -634,6 +738,7 @@ int main(int argc, char** argv) {
     u16 port = 34500;
     const char* map_path = nullptr;
     const char* spawn_tag_arg = nullptr;
+    bool want_param_test = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
@@ -641,10 +746,13 @@ int main(int argc, char** argv) {
             map_path = argv[++i];
         } else if (std::strcmp(argv[i], "--spawn") == 0 && i + 1 < argc) {
             spawn_tag_arg = argv[++i];
+        } else if (std::strcmp(argv[i], "--param-test") == 0) {
+            want_param_test = true;
         }
     }
 
     Server srv;
+    srv.param_test = want_param_test;
     if (spawn_tag_arg) {
         srv.spawn_tag = spawn_tag_arg;
         srv.spawn_tag_len = static_cast<u32>(std::strlen(spawn_tag_arg));

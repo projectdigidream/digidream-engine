@@ -16,6 +16,7 @@
 #include <emscripten/emscripten.h>
 
 #include "dnp/geom/mapfile.hpp"
+#include "dnp/physics/params_table.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
@@ -196,6 +197,39 @@ void dnp_world_step(sim::World* w) { w->step(); }
 
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_tick(sim::World* w) { return w->tick(); }
+
+// Apply one replicated movement parameter (docs/protocol.md 8.4).
+//
+// The value arrives as an i64 raw through a buffer rather than as a parameter,
+// for the same reason dnp_axis_from_buf does: without -sWASM_BIGINT an i64
+// argument is legalised into two i32s, and that is an ABI detail no caller
+// should have to know.
+//
+// Returns 0 for an unknown field id, which is version skew rather than an
+// error: a newer server may name a parameter this build does not have, and
+// ignoring that one field beats refusing the whole update.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_set_param_raw(sim::World* w, unsigned idx, unsigned field_id,
+                            const long long* raw) {
+    if (idx >= w->capacity()) return 0;
+    return physics::param_set_raw(w->params_mut(idx), static_cast<u16>(field_id),
+                                  static_cast<i64>(raw[0])) ? 1 : 0;
+}
+
+// Read one back, so a test can assert the client actually applied what the
+// server sent rather than merely not crashing.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_get_param_raw(const sim::World* w, unsigned idx, unsigned field_id,
+                             long long* out) {
+    out[0] = (idx >= w->capacity())
+                 ? 0
+                 : physics::param_get_raw(w->params(idx), static_cast<u16>(field_id));
+}
+
+// Wire id for a parameter name, or -1. Lets the client name fields in tests
+// without hardcoding indices that are a wire contract.
+EMSCRIPTEN_KEEPALIVE
+int dnp_param_id_by_name(const char* name) { return physics::param_id_by_name(name); }
 
 // Crush and pin events from the last step (design §3.1).
 //

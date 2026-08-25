@@ -83,7 +83,8 @@ else
      && node test/mapdata.test.js 2>/dev/null | tail -2 \
      && node test/platform.test.js 2>/dev/null | tail -2 \
      && node test/crush.test.js 2>/dev/null | tail -2 \
-     && node test/phase3.test.js 2>/dev/null | tail -2)
+     && node test/phase3.test.js 2>/dev/null | tail -2 \
+     && node test/params.test.js 2>/dev/null | tail -2)
 
   # The control case: a client that ignores the replicated motion parameters
   # MUST mispredict. If it does not, the replication is doing nothing and the
@@ -98,6 +99,10 @@ else
   # has nothing for anchor-relative prediction to be relative to.
   (cd server/edge && DNP_IGNORE_OFFSETS=1 DNP_WT_PORT=34486 DNP_LINK_PORT=34556 \
      node test/phase3.test.js 2>/dev/null | grep -E "CONTROL|phase3:")
+  # And the rules themselves: a client that discards PARAM_UPDATE runs different
+  # physics from the server and must be caught saying so.
+  (cd server/edge && DNP_IGNORE_PARAMS=1 DNP_WT_PORT=34488 DNP_LINK_PORT=34558 \
+     node test/params.test.js 2>/dev/null | grep -E "CONTROL|params:")
 
   echo
   echo "--- client prediction against the real server ---"

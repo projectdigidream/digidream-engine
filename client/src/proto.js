@@ -19,6 +19,7 @@ export const MSG = {
   REJECT: 0x03,
   MAP_DATA: 0x10,
   SECTOR_MOTION_SET: 0x12,
+  PARAM_UPDATE: 0x14,
   INPUT_BUNDLE: 0x80,
   SNAPSHOT: 0x81
 }
@@ -185,6 +186,30 @@ export function decodeControlMessage (buf) {
       from: r.vec3raw(),
       to: r.vec3raw()
     }
+    return r.ok ? msg : null
+  }
+  if (type === MSG.PARAM_UPDATE) {
+    // docs/protocol.md §8.4. These are the RULES the client predicts with, not
+    // state that reconciliation can correct toward, which is why they ride the
+    // reliable channel.
+    const msg = {
+      type,
+      handle: r.u32(),
+      epoch: r.u8(),
+      effectiveTick: r.u32(),
+      flags: r.u8(),
+      fields: []
+    }
+    const count = r.u16()
+    if (!r.ok || count > 64) return null   // bounded before it is used as a loop count
+    for (let i = 0; i < count; i++) {
+      const id = r.u16()
+      const raw = r.i64()
+      msg.fields.push({ id, raw })
+    }
+    // Nothing is returned unless every byte was good: a parameter set that is
+    // half old and half new is worse than one that is entirely stale, because
+    // the stale one is at least self-consistent and the epoch names it.
     return r.ok ? msg : null
   }
   if (type === MSG.MAP_DATA) {
