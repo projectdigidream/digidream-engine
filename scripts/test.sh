@@ -52,6 +52,10 @@ else
   if command -v em++ >/dev/null 2>&1; then
     ./scripts/build_wasm.sh >/dev/null
     (cd server/edge && node test/prediction.test.js 2>/dev/null | tail -4)
+
+    echo
+    echo "--- prediction under simulated network conditions ---"
+    node tools/netsim/matrix.js --quick 2>/dev/null | tail -8
   else
     echo "  skip (emsdk not active -- source emsdk/emsdk_env.sh)"
     echo "  NOTE: this is the test that verifies client and server agree bit-for-bit."

@@ -12,6 +12,7 @@
 import { readFileSync } from 'node:fs'
 import { Http3Server } from '@fails-components/webtransport'
 import { Upstream } from './upstream.js'
+import { Impairment } from './netsim.js'
 import { createControlReader, LINK } from './framing.js'
 
 export class Edge {
@@ -24,6 +25,13 @@ export class Edge {
       upstreamPort: 34500,
       ...opts
     }
+    // Impairment sits here rather than in the client so the code under test is
+    // untouched. Two independent instances: a real path's uplink and downlink
+    // are not correlated, and sharing one would make loss suspiciously
+    // symmetric in a way that hides direction-specific bugs.
+    this.up = new Impairment({ ...(this.opts.netsim ?? {}), seed: (this.opts.netsim?.seed ?? 1) })
+    this.down = new Impairment({ ...(this.opts.netsim ?? {}), seed: (this.opts.netsim?.seed ?? 1) + 7919 })
+
     this.sessions = new Map() // sessionId -> { session, controlWriter, datagramWriter }
     this.nextSessionId = 1
     this.server = null
@@ -59,6 +67,7 @@ export class Edge {
     this.server.startServer()
     await this.server.ready
     this.log(`listening https://${opts.host}:${opts.port}${opts.path}`)
+    if (this.up.enabled) this.log(`netsim active: ${this.up.describe()}`)
 
     this._acceptLoop().catch((err) => this.log('accept loop ended:', err.message))
   }
@@ -101,7 +110,10 @@ export class Edge {
       if (!this.sessions.has(id)) break
       // Forwarded whole. One datagram is one protocol message, so there is no
       // framing to do and no reassembly to get wrong.
-      this.upstream.send(LINK.DATAGRAM, id, Buffer.from(value))
+      const payload = Buffer.from(value)
+      this.up.datagram(() => {
+        if (this.sessions.has(id)) this.upstream.send(LINK.DATAGRAM, id, payload)
+      })
     }
   }
 
@@ -139,9 +151,24 @@ export class Edge {
     if (!entry) return // stale session: a defined no-op, never an error
 
     if (type === LINK.DATAGRAM) {
-      entry.datagramWriter.write(payload).catch(() => {})
+      // Copy before deferring. `payload` aliases the link reader's buffer, and
+      // netsim can hold it across a timer -- far beyond this synchronous
+      // dispatch. Today's reader happens to allocate a fresh buffer per
+      // concat, so the view would survive; that is an implementation detail of
+      // FrameReader, not a guarantee it makes. A future reader that reuses its
+      // buffer would corrupt delayed packets in a way that only appears with
+      // netsim enabled, which is the worst place to hide a bug.
+      const copy = Buffer.from(payload)
+      this.down.datagram(() => {
+        const e = this.sessions.get(sessionId)
+        if (e) e.datagramWriter.write(copy).catch(() => {})
+      })
     } else if (type === LINK.CONTROL) {
-      if (entry.controlWriter) entry.controlWriter.write(payload).catch(() => {})
+      const copy = Buffer.from(payload)
+      this.down.reliable(() => {
+        const e = this.sessions.get(sessionId)
+        if (e?.controlWriter) e.controlWriter.write(copy).catch(() => {})
+      })
     } else if (type === LINK.SESSION_CLOSE) {
       this._closeSession(sessionId, payload.length >= 2 ? payload.readUInt16LE(0) : 0)
     }
@@ -156,7 +183,11 @@ export class Edge {
     try { entry.session.close() } catch {}
   }
 
+  netsimReport () { return { up: this.up.report(), down: this.down.report() } }
+
   async stop () {
+    this.up.stop()
+    this.down.stop()
     for (const id of [...this.sessions.keys()]) this._closeSession(id, 0)
     if (this.upstream) this.upstream.stop()
     if (this.server) this.server.stopServer()
