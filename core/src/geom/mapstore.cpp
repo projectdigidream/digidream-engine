@@ -16,8 +16,15 @@ void MapStorage::clear() noexcept {
     waypoint_count_ = 0;
     rail_link_count_ = 0;
     texture_count_ = 0;
+    light_count_ = 0;
     for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_render_[i] = SectorRender{};
     for (u32 i = 0; i < MAX_MAP_SIDES; ++i) side_render_[i] = SideRender{};
+}
+
+bool MapStorage::add_light(const MapLight& l) noexcept {
+    if (light_count_ >= MAX_MAP_LIGHTS) return false;
+    lights_[light_count_++] = l;
+    return true;
 }
 
 u16 MapStorage::intern_texture(const char* name, u32 len) noexcept {
@@ -286,6 +293,8 @@ MapData MapStorage::view() const noexcept {
 
 RenderData MapStorage::render_view() const noexcept {
     RenderData r;
+    r.lights = lights_;
+    r.light_count = light_count_;
     r.sectors = sector_render_;
     r.sector_count = sector_count_;
     r.sides = side_render_;
@@ -344,6 +353,13 @@ u64 MapStorage::hash() const noexcept {
     // kind of map divergence the check cannot see, and it costs nothing here:
     // this hash feeds no determinism gate, so a retexture cannot move a golden
     // vector.
+    h.u32v(light_count_);
+    for (u32 i = 0; i < light_count_; ++i) {
+        const MapLight& l = lights_[i];
+        h.vec3(l.pos);
+        h.byte(l.r); h.byte(l.g); h.byte(l.b);
+        h.fxv(l.radius); h.fxv(l.intensity);
+    }
     h.u32v(texture_count_);
     for (u32 i = 0; i < texture_count_; ++i) {
         h.byte(textures_[i].len);

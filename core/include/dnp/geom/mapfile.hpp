@@ -19,7 +19,7 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 5;   // 5 moved slab thickness into Sector, where it collides
+inline constexpr u16 MAP_VERSION = 6;   // 6 added point lights (§4)
 
 enum class MapLoadStatus : u8 {
     Ok = 0,

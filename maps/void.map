@@ -24,7 +24,7 @@
 # touch; everything else needs a jump, and a missed jump is a fall.
 
 # --- 1: the starting slab -----------------------------------------------
-sector floor 6 ceil 60 tag 1 light 210 floortex PLATE1 thickness 2
+sector floor 6 ceil 60 tag 1 light 105 floortex PLATE1 thickness 2
   vertex  4  32   open tex EDGE1
   vertex 36  32   open tex EDGE1
   vertex 36  48   open tex EDGE1
@@ -32,7 +32,7 @@ sector floor 6 ceil 60 tag 1 light 210 floortex PLATE1 thickness 2
 end
 
 # --- 2: a mid step, half a unit up, reachable on foot from 1 ------------
-sector floor 6.4 ceil 60 tag 2 light 190 floortex PLATE2 thickness 2
+sector floor 6.4 ceil 60 tag 2 light 95 floortex PLATE2 thickness 2
   vertex 36  20   open tex EDGE1
   vertex 56  20   open tex EDGE1
   vertex 56  36   open tex EDGE1
@@ -40,7 +40,7 @@ sector floor 6.4 ceil 60 tag 2 light 190 floortex PLATE2 thickness 2
 end
 
 # --- 3: across a gap, needs a jump --------------------------------------
-sector floor 6 ceil 60 tag 3 light 230 floortex PLATE3 thickness 3
+sector floor 6 ceil 60 tag 3 light 110 floortex PLATE3 thickness 3
   vertex 62  32   open tex EDGE2
   vertex 84  32   open tex EDGE2
   vertex 84  48   open tex EDGE2
@@ -48,7 +48,7 @@ sector floor 6 ceil 60 tag 3 light 230 floortex PLATE3 thickness 3
 end
 
 # --- 4: higher still, a double jump --------------------------------------
-sector floor 11 ceil 60 tag 4 light 255 floortex PLATE3 thickness 2
+sector floor 11 ceil 60 tag 4 light 115 floortex PLATE3 thickness 2
   vertex 40  52   open tex EDGE2
   vertex 60  52   open tex EDGE2
   vertex 60  68   open tex EDGE2
@@ -56,7 +56,7 @@ sector floor 11 ceil 60 tag 4 light 255 floortex PLATE3 thickness 2
 end
 
 # --- 5: a lower slab under the gap, to land on when you miss ------------
-sector floor 0 ceil 60 tag 5 light 150 floortex PLATE2 thickness 4
+sector floor 0 ceil 60 tag 5 light 80 floortex PLATE2 thickness 4
   vertex  8   0   open tex EDGE1
   vertex 44   0   open tex EDGE1
   vertex 44  16   open tex EDGE1
@@ -76,7 +76,7 @@ spawn low    26  8 2
 # map made only of boxes tests neither. This one has a reflex corner: the
 # crossing-number test has to get the notch right, and a body walking the inside
 # of the corner has two walls to resolve against at once.
-sector floor 6 ceil 60 tag 6 light 200 floortex PLATE2 thickness 2
+sector floor 6 ceil 60 tag 6 light 100 floortex PLATE2 thickness 2
   vertex  -8  20   open tex EDGE2
   vertex  16  20   open tex EDGE2
   vertex  16  28   open tex EDGE2
@@ -91,7 +91,7 @@ end
 # vertex and come back to it, and the fixed-point predicates have to agree about
 # which is which on all three build targets -- a shape that triangulates one way
 # natively and another under wasm would desync client from server.
-sector floor 9 ceil 60 tag 7 light 245 floortex PLATE3 thickness 1.5
+sector floor 9 ceil 60 tag 7 light 112 floortex PLATE3 thickness 1.5
   vertex  70   4   open tex EDGE2
   vertex  78   4   open tex EDGE2
   vertex  78  12   open tex EDGE2
@@ -111,7 +111,7 @@ end
 # Near-degenerate on purpose. The tip is a very shallow triangle, which is where
 # an ear-clipping bug shows up first and where a normal computed from an almost
 # zero-length edge would come out as noise.
-sector floor 6 ceil 60 tag 8 light 175 floortex PLATE1 thickness 1
+sector floor 6 ceil 60 tag 8 light 90 floortex PLATE1 thickness 1
   vertex -30  36   open tex EDGE1
   vertex  -2  38   open tex EDGE1
   vertex -30  40   open tex EDGE1
@@ -134,7 +134,7 @@ spawn plus  74 16 11
 # map is exactly the number written here -- irrational geometry is approximated
 # by the AUTHOR, deliberately and visibly, never by the compiler behind their
 # back.
-sector floor 8 ceil 60 tag 9 light 235 floortex PLATE3 thickness 2
+sector floor 8 ceil 60 tag 9 light 108 floortex PLATE3 thickness 2
   vertex 28          78          open tex EDGE2
   vertex 22          88.392304845 open tex EDGE2
   vertex 10          88.392304845 open tex EDGE2
@@ -144,3 +144,27 @@ sector floor 8 ceil 60 tag 9 light 235 floortex PLATE3 thickness 2
 end
 
 spawn hex   16 78 10
+
+# --- lamps ---------------------------------------------------------------
+#
+# The sector light levels above are the AMBIENT FLOOR each platform is lit to,
+# and they are deliberately low. These add on top of it with distance falloff
+# and surface orientation, which is the difference between a scene that is one
+# flat colour per sector and one where a slab's near edge is brighter than its
+# far one.
+#
+# Warm over the walkable route, cold over the outliers, so the two read
+# differently at a glance rather than only being differently placed.
+# Two lamps over the starting slab, both OFF to one side. A lamp directly
+# overhead casts its shadow exactly where the contact shadow already is, which
+# hides the whole point of having both.
+light 10 34 12  color 255 205 150  radius 26  intensity 1.6
+light 31 46 11  color 190 205 255  radius 24  intensity 1.4
+light 46 28 14  color 255 214 160  radius 22  intensity 1.55
+light 72 40 15  color 255 226 180  radius 26  intensity 1.7
+light 50 60 18  color 255 236 200  radius 24  intensity 1.55
+light 26  8 10  color 150 190 255  radius 26  intensity 1.55
+light  4 24 13  color 150 190 255  radius 24  intensity 1.4
+light 74 16 18  color 255 236 200  radius 26  intensity 1.7
+light 16 78 18  color 190 200 255  radius 30  intensity 1.8
+light -16 38 12 color 150 190 255  radius 22  intensity 1.4

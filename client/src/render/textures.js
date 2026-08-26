@@ -40,8 +40,11 @@ function hashName (name) {
 export function paintPlaceholder (ctx, name, { pixels = PIXELS } = {}) {
   const h = hashName(name)
   const hue = h % 360
-  const sat = 24 + (h >> 9) % 22
-  const light = 38 + (h >> 17) % 18
+  const sat = 22 + (h >> 9) % 20
+  // Mid-bright, because these are multiplied by the lighting: a base this dark
+  // enough to read as "textured" under full light goes to mud under a lamp at
+  // half strength.
+  const light = 52 + (h >> 17) % 16
 
   ctx.fillStyle = `hsl(${hue} ${sat}% ${light}%)`
   ctx.fillRect(0, 0, pixels, pixels)
@@ -92,18 +95,23 @@ export function makeTextureSet (THREE, names) {
 
     const tex = new THREE.CanvasTexture(canvas)
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-    // UVs arrive in WORLD UNITS (see mapgeom.js), so the repeat is what turns
-    // them into texture space. This is the one place the texture's world size
-    // is known, which is exactly why the mesh does not need to know it -- and
-    // why the same mesh serves clients whose textures are different sizes.
-    tex.repeat.set(1 / DEFAULT_WORLD_SIZE, 1 / DEFAULT_WORLD_SIZE)
+    // NOT tex.repeat: the custom material samples with an explicit `repeat`
+    // uniform, and setting both would divide the world-unit UVs twice. The
+    // texture's world size is still known in exactly one place -- it is just
+    // this constant, read by the material.
     // A canvas's y runs DOWNWARD and a texture's v runs upward, so three flips
     // canvas sources by default. Our v is world distance measured downward from
     // the field's anchor, which is already in the canvas's direction -- leaving
     // the flip on turns every wall's texture upside down, which is how the
     // first rendered frame came out.
     tex.flipY = false
-    tex.colorSpace = THREE.SRGBColorSpace
+    // NoColorSpace, not sRGB. The custom material writes gl_FragColor directly
+    // and includes none of Three's colour-management chunks, so a texture
+    // declared sRGB would be decoded on sampling and never re-encoded on
+    // output -- darkening everything by roughly a gamma. Everything here stays
+    // in display space, consistently, which is the only arrangement where what
+    // a map author picks is what appears.
+    tex.colorSpace = THREE.NoColorSpace
     tex.magFilter = THREE.NearestFilter
     tex.name = name
     return tex

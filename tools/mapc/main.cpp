@@ -32,6 +32,8 @@
 //
 //   spawn start 10 10 2
 //
+//   light 20 40 10 color 255 200 120 radius 18 intensity 1.0
+//
 //   rail tag 1 loop
 //     waypoint 10 10 4
 //     waypoint 30 10 4
@@ -323,6 +325,33 @@ int main(int argc, char** argv) {
                 }
                 store.side_render_mut(next_side++) = verts[i].render;
             }
+        } else if (tok[0] == "light") {
+            // light <x> <y> <z> [color R G B] [radius N] [intensity N]
+            if (in_sector || in_rail) { err(lineno, "light inside a sector or rail"); continue; }
+            if (tok.size() < 4) { err(lineno, "light needs x y z"); continue; }
+            MapLight l;
+            if (!parse_fx(tok[1], l.pos.x) || !parse_fx(tok[2], l.pos.y) ||
+                !parse_fx(tok[3], l.pos.z)) {
+                err(lineno, "bad light position");
+                continue;
+            }
+            l.radius = fx::from_int(12);
+            l.intensity = fx::one();
+            for (size_t i = 4; i < tok.size(); ++i) {
+                if (tok[i] == "color" && i + 3 < tok.size()) {
+                    l.r = static_cast<u8>(std::atoi(tok[++i].c_str()));
+                    l.g = static_cast<u8>(std::atoi(tok[++i].c_str()));
+                    l.b = static_cast<u8>(std::atoi(tok[++i].c_str()));
+                } else if (tok[i] == "radius" && i + 1 < tok.size()) {
+                    if (!parse_fx(tok[++i], l.radius)) err(lineno, "bad light radius");
+                } else if (tok[i] == "intensity" && i + 1 < tok.size()) {
+                    if (!parse_fx(tok[++i], l.intensity)) err(lineno, "bad light intensity");
+                } else {
+                    err(lineno, "unknown light attribute '%s'", tok[i].c_str());
+                    break;
+                }
+            }
+            if (!store.add_light(l)) err(lineno, "too many lights (max %u)", MAX_MAP_LIGHTS);
         } else if (tok[0] == "rail" || tok[0] == "wire") {
             if (in_sector) { err(lineno, "rail inside a sector; missing 'end'?"); continue; }
             if (in_rail) { err(lineno, "rail inside a rail; missing 'end'?"); continue; }

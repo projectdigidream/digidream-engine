@@ -31,7 +31,7 @@ SIM_HEADERS=(core/include/dnp/physics core/include/dnp/sim core/include/dnp/nav)
 # The render-only vocabulary. If one of these appears in the simulation, either
 # a rule is reading cosmetic data or a name has been reused for two things --
 # and both are worth stopping for.
-BANNED='RenderData|SectorRender|SideRender|render_view|light_level|peg_flags|peg_flag|floor_tex|ceil_tex|NO_TEXTURE|intern_texture'
+BANNED='RenderData|SectorRender|SideRender|render_view|light_level|peg_flags|peg_flag|floor_tex|ceil_tex|NO_TEXTURE|intern_texture|MapLight|add_light|light_count'
 
 fail=0
 for d in "${SIM_DIRS[@]}" "${SIM_HEADERS[@]}"; do

@@ -106,6 +106,22 @@ export class WasmMap {
     return BigInt.asUintN(64, this.core.views.i64[this.core.buf64 / 8])
   }
 
+  /**
+   * Sector containing a world point, or -1.
+   *
+   * Takes doubles and converts, because every caller is on the RENDER side of
+   * the boundary -- a shadow deciding whether it lands on a platform. The
+   * predicate itself is the exact one the simulation uses; only the arguments
+   * have been through a double.
+   */
+  findSector (x, y) {
+    const { i64 } = this.core.views
+    const b = this.core.buf64 / 8
+    i64[b] = BigInt(Math.round(x * 4294967296))
+    i64[b + 1] = BigInt(Math.round(y * 4294967296))
+    return this.core.M._dnp_map_find_sector(this.ptr, this.core.buf64)
+  }
+
   spawnForTag (tag) {
     const bytes = new TextEncoder().encode(tag)
     const ptr = this.core.M._malloc(Math.max(1, bytes.length))

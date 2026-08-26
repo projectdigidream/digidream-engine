@@ -100,6 +100,8 @@ else
   node client/test/mapgeom.test.js | tail -2
   node client/test/camera.test.js | tail -2
   node client/test/entities.test.js | tail -2
+  node client/test/lighting.test.js | tail -2
+  node client/test/shadows.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2

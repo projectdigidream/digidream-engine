@@ -8,7 +8,7 @@
 #   west wall climbs    floor +0.5        floor 4.0 (too high: a wall)
 #                       (walkable step)   east wall grapples
 
-sector floor 0 ceil 40 tag 1 light 190 floortex FLOOR1 ceiltex CEIL1
+sector floor 0 ceil 40 tag 1 light 105 floortex FLOOR1 ceiltex CEIL1
   vertex  0   0   wall           tex WALL1
   vertex 40   0   neighbor 1     lower STEP1
   vertex 40  40   wall           tex WALL1
@@ -23,14 +23,14 @@ end
 # since that is exactly what the step rule is for -- so a lift a player is meant
 # to board has to be level with the ground at the bottom of its travel. The
 # engine made that a design constraint rather than a bug.
-sector floor 0 ceil 40 tag 101 light 220 floortex PLAT1 ceiltex CEIL1
+sector floor 0 ceil 40 tag 101 light 115 floortex PLAT1 ceiltex CEIL1
   vertex 40   0   wall           tex WALL2
   vertex 60   0   neighbor 2     lower STEP1 unpeg-lower
   vertex 60  40   wall           tex WALL2
   vertex 40  40   neighbor 0     lower STEP1 unpeg-lower
 end
 
-sector floor 4 ceil 40 tag 3 light 255 floortex PLAT2 ceiltex CEIL1
+sector floor 4 ceil 40 tag 3 light 120 floortex PLAT2 ceiltex CEIL1
   vertex 60   0   wall           tex WALL2
   vertex 80   0   wall grapple   tex HOOK1
   vertex 80  40   wall           tex WALL2
@@ -40,3 +40,9 @@ end
 spawn start   10 10 2
 spawn ledge   50 20 2
 spawn high    70 20 6
+
+# Lamps. Sector light levels above are the ambient floor; these add on top with
+# falloff and surface orientation (design §4, client/src/render/lighting.js).
+light 12 20 12  color 255 214 165  radius 26  intensity 1.7
+light 50 20 12  color 255 230 190  radius 22  intensity 1.6
+light 70 20 15  color 170 200 255  radius 24  intensity 1.6

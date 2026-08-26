@@ -101,6 +101,21 @@ export function readMap (map) {
   const tris = new Uint16Array(M.HEAPU8.buffer, triPtr, got).slice()
   M._free(triPtr)
 
+  const lightCount = M._dnp_map_light_count(p)
+  const lights = new Array(lightCount)
+  for (let i = 0; i < lightCount; i++) {
+    M._dnp_map_light(p, i, core.buf64, core.buf32)
+    const { i64, u32 } = core.views
+    lights[i] = {
+      x: fxToFloat(i64[b64]), y: fxToFloat(i64[b64 + 1]), z: fxToFloat(i64[b64 + 2]),
+      radius: fxToFloat(i64[b64 + 3]),
+      intensity: fxToFloat(i64[b64 + 4]),
+      // 0..1 for the shader; the map stores bytes because a light's colour is
+      // authored, not computed.
+      r: u32[b32] / 255, g: u32[b32 + 1] / 255, b: u32[b32 + 2] / 255
+    }
+  }
+
   const NAME_CAP = 24
   const namePtr = M._malloc(NAME_CAP)
   const textures = new Array(textureCount)
@@ -110,5 +125,5 @@ export function readMap (map) {
   }
   M._free(namePtr)
 
-  return { points, sectors, sides, tris, textures }
+  return { points, sectors, sides, tris, textures, lights }
 }

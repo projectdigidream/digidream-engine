@@ -29,6 +29,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.u32v(store.waypoint_count());
     w.u32v(store.rail_link_count());
     w.u32v(store.texture_count());
+    w.u32v(store.light_count());
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -98,6 +99,13 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     // server's collision code, the nav graph, a diff tool -- can stop at the
     // section it cares about, and the file is laid out so that costs a seek
     // rather than a parse.
+    for (u32 i = 0; i < store.light_count(); ++i) {
+        const MapLight& l = store.light(i);
+        w.fxraw(l.pos.x); w.fxraw(l.pos.y); w.fxraw(l.pos.z);
+        w.u8v(l.r); w.u8v(l.g); w.u8v(l.b);
+        w.fxraw(l.radius);
+        w.fxraw(l.intensity);
+    }
     for (u32 i = 0; i < store.texture_count(); ++i) {
         const TextureName& t = store.texture(i);
         w.u8v(t.len);
@@ -151,6 +159,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 waypoint_count = r.u32v();
     const u32 rail_link_count = r.u32v();
     const u32 texture_count = r.u32v();
+    const u32 light_count = r.u32v();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
     // Bound every count BEFORE reading anything sized by it. These are
@@ -159,7 +168,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         side_count > MAX_MAP_SIDES || tri_index_count > MAX_MAP_TRI_IDX ||
         spawn_count > MAX_MAP_SPAWNS || rail_count > MAX_MAP_RAILS ||
         waypoint_count > MAX_MAP_WAYPOINTS || rail_link_count > MAX_MAP_RAIL_LINKS ||
-        texture_count > MAX_MAP_TEXTURES) {
+        texture_count > MAX_MAP_TEXTURES || light_count > MAX_MAP_LIGHTS) {
         store.clear();
         return MapLoadStatus::TooLarge;
     }
@@ -403,6 +412,16 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     // rejected file rather than an out-of-range read the first time that wall
     // comes on screen. Rendering data is not simulation data, but it is still
     // attacker-supplied.
+    for (u32 i = 0; i < light_count; ++i) {
+        MapLight l;
+        l.pos = fx3{r.fxraw(), r.fxraw(), r.fxraw()};
+        l.r = r.u8v(); l.g = r.u8v(); l.b = r.u8v();
+        l.radius = r.fxraw();
+        l.intensity = r.fxraw();
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        if (!store.add_light(l)) { store.clear(); return MapLoadStatus::TooLarge; }
+    }
+
     for (u32 i = 0; i < texture_count; ++i) {
         const u8 len = r.u8v();
         if (!r.ok() || len == 0 || len > MAX_TEXTURE_NAME) {

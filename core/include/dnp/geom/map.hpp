@@ -188,7 +188,25 @@ struct TextureName {
     u8   len = 0;
 };
 
+// A point light (design §4).
+//
+// Purely visual, and in RenderData for the same structural reason textures are:
+// physics is never handed one, so no collision rule can come to depend on where
+// a lamp is. Sector light_level is the ambient FLOOR a surface is lit to; a
+// point light adds on top of it with distance falloff and surface orientation,
+// so a torch brightens a dark room rather than replacing its lighting.
+struct MapLight {
+    fx3 pos{};
+    u8  r = 255;
+    u8  g = 255;
+    u8  b = 255;
+    fx  radius{};      // world distance at which the contribution reaches zero
+    fx  intensity{};   // scale on the added light, 1.0 being a full extra unit
+};
+
 struct RenderData {
+    const MapLight*     lights       = nullptr;
+    u32                 light_count  = 0;
     const SectorRender* sectors      = nullptr;
     u32                 sector_count = 0;
     const SideRender*   sides        = nullptr;
@@ -199,6 +217,7 @@ struct RenderData {
     const SectorRender& sector(u32 i) const noexcept { return sectors[i]; }
     const SideRender& side(u32 i) const noexcept { return sides[i]; }
     const TextureName& texture(u32 i) const noexcept { return textures[i]; }
+    const MapLight& light(u32 i) const noexcept { return lights[i]; }
 };
 
 struct MapData {

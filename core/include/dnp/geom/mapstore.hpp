@@ -32,6 +32,7 @@ inline constexpr u32 MAX_MAP_WAYPOINTS  = 512;
 inline constexpr u32 MAX_MAP_RAIL_LINKS = 64;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
 inline constexpr u32 MAX_MAP_TEXTURES   = 256;
+inline constexpr u32 MAX_MAP_LIGHTS     = 128;
 
 // A named landing point. Portals name one of these in the join handshake
 // (design §3.3), so each portal can deliver its arrivals somewhere specific
@@ -127,6 +128,13 @@ public:
     u32 texture_count() const noexcept { return texture_count_; }
     const TextureName& texture(u32 i) const noexcept { return textures_[i]; }
 
+    // Returns false when the map is full. Lights are cosmetic, so running out
+    // is not fatal -- but it is reported, because a map that silently drops
+    // half its lighting looks like a renderer bug.
+    bool add_light(const MapLight& l) noexcept;
+    u32 light_count() const noexcept { return light_count_; }
+    const MapLight& light(u32 i) const noexcept { return lights_[i]; }
+
     SectorRender& sector_render_mut(u32 i) noexcept { return sector_render_[i]; }
     SideRender&   side_render_mut(u32 i) noexcept { return side_render_[i]; }
 
@@ -181,6 +189,8 @@ private:
     SideRender   side_render_[MAX_MAP_SIDES]{};
     TextureName  textures_[MAX_MAP_TEXTURES]{};
     u32          texture_count_ = 0;
+    MapLight     lights_[MAX_MAP_LIGHTS]{};
+    u32          light_count_ = 0;
 
     Rail         rails_[MAX_MAP_RAILS]{};
     RailWaypoint waypoints_[MAX_MAP_WAYPOINTS]{};

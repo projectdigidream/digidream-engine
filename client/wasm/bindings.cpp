@@ -135,6 +135,33 @@ unsigned dnp_map_tri_index_count(const geom::MapStorage* m) { return m->view().t
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_map_texture_count(const geom::MapStorage* m) { return m->texture_count(); }
 
+// Which sector contains a point, using the SAME exact predicate the simulation
+// does. The renderer needs it to decide whether a shadow lands on a platform or
+// out over the void, and re-implementing point-in-sector in JS to answer a
+// cosmetic question would put a second, approximate copy of an exact predicate
+// in the codebase -- the kind that agrees until it does not.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_find_sector(const geom::MapStorage* m, const long long* xy64) {
+    return geom::find_sector(m->view(), fx2{fx::from_raw(xy64[0]), fx::from_raw(xy64[1])});
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_light_count(const geom::MapStorage* m) { return m->light_count(); }
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_light(const geom::MapStorage* m, unsigned i, long long* out64, unsigned* out32) {
+    if (i >= m->light_count()) { out32[0] = 0; return; }
+    const geom::MapLight& l = m->light(i);
+    out64[0] = l.pos.x.raw;
+    out64[1] = l.pos.y.raw;
+    out64[2] = l.pos.z.raw;
+    out64[3] = l.radius.raw;
+    out64[4] = l.intensity.raw;
+    out32[0] = l.r;
+    out32[1] = l.g;
+    out32[2] = l.b;
+}
+
 EMSCRIPTEN_KEEPALIVE
 void dnp_map_point(const geom::MapStorage* m, unsigned i, long long* out64) {
     const geom::MapData v = m->view();

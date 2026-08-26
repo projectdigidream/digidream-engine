@@ -43,8 +43,18 @@ check(m.tris.length === 18, `read ${m.tris.length} triangle indices`)
 // was written but never read, which round-tripping in C++ would not notice.
 check(m.textures.length > 0, `read ${m.textures.length} texture names: ${m.textures.join(' ')}`)
 check(m.textures.includes('WALL1'), 'including WALL1, which the map authors')
-check(m.sectors[0].light === 190, `sector 0 carries its authored light level (${m.sectors[0].light})`)
-check(m.sectors[2].light === 255, `sector 2 carries its own (${m.sectors[2].light})`)
+// Asserted as PROPERTIES, not as literals. The first version pinned the exact
+// values the map happened to have, and broke the moment the map was relit --
+// reporting a lighting change as a map-loading failure. What matters is that
+// the authored levels arrived at all and are per-sector.
+const lights = m.sectors.map((s) => s.light)
+check(lights.every((l) => l >= 0 && l <= 255), `light levels in range (${lights.join(', ')})`)
+check(lights.some((l) => l !== 255),
+      'at least one sector is not at the default, so the render section was read')
+check(new Set(lights).size > 1, 'and the levels differ between sectors')
+check(m.lights.length > 0, `read ${m.lights.length} point lights`)
+check(m.lights.every((L) => L.radius > 0 && L.intensity > 0),
+      'each with a usable radius and intensity')
 
 // The neighbour links survived the unsigned round trip. -1 arriving as
 // 4294967295 would index nothing and every solid wall would be treated as a

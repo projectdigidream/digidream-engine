@@ -20,6 +20,7 @@ import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
 import { MapView, makeIsoCamera, resizeIsoCamera, makeAgentMesh } from './render/scene.js'
 import { Camera, cameraOffset, screenRelativeMove } from './camera.js'
 import { EntityView } from './render/entities.js'
+import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { MapAccumulator } from './maploader.js'
@@ -207,6 +208,21 @@ scene.add(view.root)
 const body = makeAgentMesh()
 scene.add(body)
 
+// bodyHeight matches the agent mesh, so the trapezium is the projection of
+// the body actually drawn rather than of an assumed one.
+const shadows = new ShadowCaster({ THREE, scene, radius: 0.5, bodyHeight: 2 })
+
+// The surface a shadow lands on. The sector's floor, taken LIVE so a shadow on
+// a lift rides with it, and null out over the void -- where there is nothing
+// beneath and drawing a disc at some default height would put it in mid-air.
+function groundUnder (x, z) {
+  // three-space back to engine: x stays, three z is the negated engine y.
+  const s = map.findSector(x, -z)
+  if (s < 0) return null
+  return toThreeY(liveSector(s).floorZ)
+}
+const onGround = (x, z) => map.findSector(x, -z) >= 0
+
 // Other players. Interpolated, never predicted -- predicting one means guessing
 // what another person will press (see render/entities.js).
 const others = new EntityView({
@@ -353,6 +369,7 @@ function frame (now) {
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
+  shadows.update(subject, groundUnder(subject.x, subject.z), view.lights, onGround)
   if (LIVE) others.update(newestServerTick, acc / DT)
 
   // The camera follows the PREDICTED position -- here, whichever of the two

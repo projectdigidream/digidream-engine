@@ -8,8 +8,11 @@
 //
 import * as THREE from 'three'
 import { buildMapSurfaces, buildSectorSurfaces, mergeByTexture } from '../mapgeom.js'
-import { makeTextureSet } from './textures.js'
+import { makeTextureSet, DEFAULT_WORLD_SIZE } from './textures.js'
 import { NO_TEXTURE } from '../mapdata.js'
+import {
+  VERTEX_SHADER, FRAGMENT_SHADER, lightUniforms, MAX_ACTIVE_LIGHTS
+} from './lighting.js'
 
 function geometryFromGroup (g) {
   const geo = new THREE.BufferGeometry()
@@ -26,15 +29,37 @@ export class MapView {
     this.map = map
     this.root = new THREE.Group()
     this.textures = makeTextureSet(THREE, map.textures)
-    this.materials = this.textures.map((tex) => new THREE.MeshBasicMaterial({
-      map: tex,
-      // Sector light level arrives as a vertex colour. A sector-lit engine has
-      // no lights to compute -- the light level IS the lighting model, and
-      // adding a lambert term on top would make sector lighting an offset
-      // rather than the answer.
-      vertexColors: true,
+
+    // Lights become uniforms shared by every material, so moving one costs a
+    // uniform write rather than a shader recompile.
+    this.lights = (map.lights ?? []).slice(0, MAX_ACTIVE_LIGHTS).map((L) => ({
+      px: L.x, py: L.z, pz: -L.y,       // engine z-up -> three y-up
+      r: L.r, g: L.g, b: L.b,
+      radius: L.radius, intensity: L.intensity
+    }))
+    if ((map.lights?.length ?? 0) > MAX_ACTIVE_LIGHTS) {
+      // Never silently capped. A map that quietly lost half its lighting looks
+      // like a renderer bug, and the author has no way to tell which half.
+      console.warn(`[render] map has ${map.lights.length} lights; ` +
+                   `only the first ${MAX_ACTIVE_LIGHTS} are drawn`)
+    }
+    this.lightUniforms = lightUniforms(THREE, this.lights)
+
+    // A custom material rather than one of Three's lit ones, because the model
+    // is not the conventional one: sector light is an ADDITIVE FLOOR, not a
+    // multiplier. See lighting.js -- multiplying, which is what vertexColors on
+    // a standard material does, makes a torch in a dark room stay dark.
+    this.materials = this.textures.map((tex) => new THREE.ShaderMaterial({
+      uniforms: {
+        map: { value: tex },
+        repeat: { value: new THREE.Vector2(1 / DEFAULT_WORLD_SIZE, 1 / DEFAULT_WORLD_SIZE) },
+        ...this.lightUniforms
+      },
+      vertexShader: VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER,
       side: THREE.FrontSide
     }))
+
     // Anything the map left untextured. Visible rather than invisible: a
     // missing texture should look like a missing texture, not like a hole.
     this.missing = new THREE.MeshBasicMaterial({
@@ -46,6 +71,25 @@ export class MapView {
 
   materialFor (texture) {
     return texture === NO_TEXTURE ? this.missing : (this.materials[texture] ?? this.missing)
+  }
+
+  /**
+   * Move or retint the lights.
+   *
+   * Uniforms are shared across every material, so this is one write per light
+   * and no recompilation -- which is what makes a flickering lamp or a light
+   * riding a lift cost nothing per frame.
+   */
+  setLights (lights) {
+    const n = Math.min(lights.length, MAX_ACTIVE_LIGHTS)
+    for (let i = 0; i < MAX_ACTIVE_LIGHTS; i++) {
+      const L = lights[i]
+      this.lightUniforms.lightPos.value[i].set(L ? L.px : 0, L ? L.py : 0, L ? L.pz : 0)
+      this.lightUniforms.lightColor.value[i].setRGB(L ? L.r : 0, L ? L.g : 0, L ? L.b : 0)
+      this.lightUniforms.lightRadius.value[i] = L ? L.radius : 0
+      this.lightUniforms.lightIntensity.value[i] = L ? L.intensity : 0
+    }
+    this.lightUniforms.numLights.value = n
   }
 
   disposeMeshes () {
