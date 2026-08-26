@@ -160,3 +160,39 @@ export class Camera {
     }
   }
 }
+
+// --- screen-relative movement ------------------------------------------------
+//
+// Where the camera sits, and which way the stick points, are two halves of one
+// fact and they must be derived from the same yaw or they drift apart. Both
+// live here so a test can assert the relationship between them rather than
+// re-stating either formula.
+//
+// The engine is z-up (x east, y north, z up); Three.js is y-up with its z equal
+// to the NEGATED engine y. Losing that negation is what makes movement rotate
+// opposite to the camera -- which is a reflection, not an offset, so it does
+// not look like a lag that could be tuned out.
+
+/** Camera offset from the subject, in THREE space. */
+export function cameraOffset (yaw, radius = 24, height = 30) {
+  return { x: Math.cos(yaw) * radius, y: height, z: Math.sin(yaw) * radius }
+}
+
+/** The same offset expressed in ENGINE space (x, y horizontal; z up). */
+export function cameraOffsetEngine (yaw, radius = 24, height = 30) {
+  const o = cameraOffset(yaw, radius, height)
+  return { x: o.x, y: -o.z, z: o.y }
+}
+
+/**
+ * Turn a stick reading into an engine-space direction.
+ *
+ * `my` is "away from the camera", `mx` is "camera right". At yaw 0 the camera
+ * is due east of the subject, so away-from-camera is west and camera-right is
+ * north -- which is just "facing west, north is on your right".
+ */
+export function screenRelativeMove (mx, my, yaw) {
+  const c = Math.cos(yaw)
+  const s = Math.sin(yaw)
+  return { x: mx * s - my * c, y: mx * c + my * s }
+}

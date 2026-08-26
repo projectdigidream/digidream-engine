@@ -94,14 +94,23 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
   const normals = []
   for (let i = 0; i < 4; i++) normals.push(toThreeX(nx), toThreeY(0), toThreeZ(ny))
 
-  const u0 = side.xOffset
-  const u1 = side.xOffset + len
+  // u is measured from B, not from A.
+  //
+  // A sector's polygon is counter-clockwise, so its interior lies to the LEFT
+  // of a->b -- which means a viewer standing inside always sees a->b running
+  // right to left across their view. Numbering u from a therefore makes it
+  // increase LEFTWARD and every wall in the map comes out mirrored. It follows
+  // from the winding, so it is every wall, always; on a tiling texture it reads
+  // as "slightly off" rather than as backwards, which is why it survived a
+  // first look at the render.
+  const uA = side.xOffset + len
+  const uB = side.xOffset
   const vAt = (z) => anchorZ - z + side.yOffset
   const uvs = [
-    u0, vAt(zBot),
-    u0, vAt(zTop),
-    u1, vAt(zTop),
-    u1, vAt(zBot)
+    uA, vAt(zBot),
+    uA, vAt(zTop),
+    uB, vAt(zTop),
+    uB, vAt(zBot)
   ]
 
   return {
@@ -163,7 +172,15 @@ export function buildSectorSurfaces (map, sectorIndex) {
         // Flats are projected straight down the vertical axis, so a floor's
         // pattern lines up across sector boundaries the way a tiled floor
         // should, instead of restarting at each sector's own origin.
-        uvs.push(p.x, p.y)
+        //
+        // v is negated because textures are sampled with v running DOWN the
+        // image (see textures.js) while the world's y runs the other way.
+        //
+        // u is negated for CEILINGS only. A ceiling is the same triangles seen
+        // from below, so its winding is reversed just after this -- and
+        // reversing the geometry without reversing the uvs would leave its
+        // texture mirrored relative to the floor's.
+        uvs.push(up ? p.x : -p.x, -p.y)
       }
       indices.push(local)
     }

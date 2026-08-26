@@ -251,7 +251,15 @@ export class WasmWorld {
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
       grounded: u32[b32 + IDX.GROUNDED] !== 0,
+      // BIASED: sector + 1, with 0 meaning none. That convention comes from
+      // the wire (SelfBlock.anchor is a Handle, and handle 0 means "no
+      // entity"), and it is carried unchanged all the way to writeAgent so
+      // reconciliation can round-trip a snapshot's value without translating
+      // it. Left in its wire domain deliberately -- but that is exactly how it
+      // ends up printed as "riding 1" for sector 0, so the decoded form is
+      // offered beside it and anything human-facing should use that.
       anchor: u32[b32 + IDX.ANCHOR],
+      anchorSector: u32[b32 + IDX.ANCHOR] === 0 ? -1 : u32[b32 + IDX.ANCHOR] - 1,
       anchored: u32[b32 + IDX.ANCHORED] !== 0
     }
   }

@@ -237,6 +237,73 @@ console.log('\n--- two-sided middle (a grate) ---')
   }
 }
 
+console.log('\n--- uv orientation (no surface may be mirrored) ---')
+{
+  // Whether a texture is MIRRORED is not something eyeballing a screenshot
+  // answers reliably -- a rotation and a reflection look similar on a tiling
+  // pattern, and only one of them is a bug. It is decidable arithmetic, so it
+  // is decided here.
+  //
+  // The convention, stated once: uv space is V-DOWN. u runs along the surface,
+  // v increases downward from the anchor, and textures.js implements that with
+  // flipY = false so uv (0,0) samples the image's top-left. A surface is
+  // mirrored exactly when its uv triangle winds the opposite way from its
+  // geometry, measured in a frame built on the face itself.
+  const mirrored = (s) => {
+    const P = (i) => [s.positions[i * 3], s.positions[i * 3 + 1], s.positions[i * 3 + 2]]
+    const UV = (i) => [s.uvs[i * 2], -s.uvs[i * 2 + 1]]   // v-down -> right-handed
+    const [i0, i1, i2] = [s.indices[0], s.indices[1], s.indices[2]]
+    const p0 = P(i0); const p1 = P(i1); const p2 = P(i2)
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    const norm = (a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l) }
+
+    const u = sub(p1, p0)
+    const w = sub(p2, p0)
+    const n = norm(cross(u, w))            // the visible face's normal
+    const e1 = norm(u)
+    // A screen frame, meaning right x up points TOWARD the viewer -- which is
+    // along n, because faces are wound to face the room they belong to. e1 and
+    // (n x e1) satisfy that: e1 x (n x e1) = n.
+    //
+    // This was briefly "corrected" to cross(e1, n) on the strength of a
+    // hand-derivation that had screen-right backwards, at which point the test
+    // agreed with the code and both were wrong. The check that settles it uses
+    // no cross products at all: a viewer inside a room, looking south at a wall
+    // running east-west, has EAST on their left -- so screen-right is -x, the
+    // low-x end of the wall appears rightmost, and u running 0 -> len from a to
+    // b therefore increases LEFTWARD. Mirrored, exactly as reported.
+    const e2 = cross(n, e1)
+
+    // Signed area of the triangle in the face's own 2D frame.
+    const to2 = (p) => { const d = sub(p, p0); return [dot(d, e1), dot(d, e2)] }
+    const [a0, a1, a2] = [to2(p0), to2(p1), to2(p2)]
+    const areaGeo = (a1[0] - a0[0]) * (a2[1] - a0[1]) - (a1[1] - a0[1]) * (a2[0] - a0[0])
+
+    const [t0, t1, t2] = [UV(i0), UV(i1), UV(i2)]
+    const areaUv = (t1[0] - t0[0]) * (t2[1] - t0[1]) - (t1[1] - t0[1]) * (t2[0] - t0[0])
+
+    if (Math.abs(areaGeo) < 1e-12 || Math.abs(areaUv) < 1e-12) return false   // degenerate
+    return Math.sign(areaGeo) !== Math.sign(areaUv)
+  }
+
+  const cases = [
+    ['flush', fixture()],
+    ['a step up', fixture({ f0: 0, f1: 3 })],
+    ['a lowered ceiling', fixture({ c0: 8, c1: 5 })],
+    ['a grate', fixture({ f0: 0, c0: 8, f1: 3, c1: 6, mid0: 3 })]
+  ]
+  for (const [name, m] of cases) {
+    for (const si of [0, 1]) {
+      const bad = buildSectorSurfaces(m, si).filter(mirrored)
+      check(bad.length === 0,
+            `${name}, sector ${si}: no mirrored surface` +
+            (bad.length ? ` (${bad.map((s) => s.kind).join(', ')})` : ''))
+    }
+  }
+}
+
 console.log('\n--- merging ---')
 {
   const surf = buildSectorSurfaces(fixture(), 0)

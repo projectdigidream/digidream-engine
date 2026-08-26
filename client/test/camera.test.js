@@ -1,7 +1,7 @@
 //
 // Camera tests (design §4.1).
 //
-import { Camera, DEFAULTS } from '../src/camera.js'
+import { Camera, DEFAULTS, cameraOffsetEngine, screenRelativeMove } from '../src/camera.js'
 
 let checks = 0
 let fails = 0
@@ -159,6 +159,42 @@ console.log('\n--- screen shake ---')
   }
   check(seedRun(5) === seedRun(5), 'the same seed shakes the same way')
   check(seedRun(5) !== seedRun(6), 'and a different seed does not')
+}
+
+console.log('\n--- movement follows the camera ---')
+{
+  // Asserted as a RELATIONSHIP between the two, not as a formula restated in
+  // the test. Restating it would pass for any pair of formulas that happened to
+  // match, including the pair that was wrong: the original had the forward and
+  // right axes swapped, which is a reflection, so the controls rotated opposite
+  // to the camera.
+  for (const deg of [0, 30, 45, 90, 137, 180, 250, 315]) {
+    const yaw = deg * Math.PI / 180
+    const off = cameraOffsetEngine(yaw)
+
+    // Away from the camera: the horizontal direction from camera to subject.
+    const len = Math.hypot(off.x, off.y)
+    const away = { x: -off.x / len, y: -off.y / len }
+
+    const w = screenRelativeMove(0, 1, yaw)
+    const wl = Math.hypot(w.x, w.y)
+    const dotAway = (w.x / wl) * away.x + (w.y / wl) * away.y
+    check(near(dotAway, 1, 1e-9), `yaw ${deg}: W moves away from the camera (dot ${dotAway.toFixed(6)})`)
+
+    // Camera-right, from the away vector alone: looking along `away` with z up,
+    // right is `away` rotated -90 degrees, which is (y, -x).
+    const right = { x: away.y, y: -away.x }
+    const d = screenRelativeMove(1, 0, yaw)
+    const dl = Math.hypot(d.x, d.y)
+    const dotRight = (d.x / dl) * right.x + (d.y / dl) * right.y
+    check(near(dotRight, 1, 1e-9), `yaw ${deg}: D moves to the camera's right (dot ${dotRight.toFixed(6)})`)
+  }
+
+  // And the axes stay perpendicular and unit, so diagonal input is not faster.
+  const w = screenRelativeMove(0, 1, 1.1)
+  const d = screenRelativeMove(1, 0, 1.1)
+  check(near(Math.hypot(w.x, w.y), 1) && near(Math.hypot(d.x, d.y), 1), 'both axes are unit length')
+  check(near(w.x * d.x + w.y * d.y, 0), 'and perpendicular')
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
