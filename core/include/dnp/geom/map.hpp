@@ -55,6 +55,20 @@ struct Sector {
     u16 side_count  = 0;
     fx  floor_z{};
     fx  ceil_z{};
+
+    // How far the solid slab extends BELOW the floor.
+    //
+    // Zero for a sector in a sealed room, where there is no "below the floor" to
+    // be in. For a floating platform it is the thickness of the slab: solid from
+    // floor_z - thickness up to floor_z, so a body falls past its side rather
+    // than through it and cannot rise through its underside.
+    //
+    // Geometry, not decoration -- the renderer draws the skirt from this SAME
+    // number, so what you see is exactly what you collide with. It first lived
+    // in SectorRender on the assumption that thickness was cosmetic; collision
+    // from below is what showed that it is not.
+    fx  thickness{};
+
     u16 tag = 0;
 
     // Baked triangle range, into MapData::tris. Indices are absolute into the
@@ -155,12 +169,6 @@ struct SectorRender {
     u16 floor_tex = NO_TEXTURE;
     u16 ceil_tex  = NO_TEXTURE;
 
-    // How far the platform's edge is drawn hanging BELOW its floor, at a LEDGE.
-    // Purely visual -- nothing collides with it -- which is why it lives here
-    // rather than in Sector: a floating platform with no skirt reads as a sheet
-    // of paper, and giving it thickness must not give it a hitbox that the
-    // client and server would then have to agree about.
-    fx  skirt{};
 
     // 0 = dark, 255 = fully lit. Defaults to LIT, not to dark: a map that
     // authored no lighting should render visibly wrong rather than render

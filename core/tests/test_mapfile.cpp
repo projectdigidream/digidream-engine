@@ -71,6 +71,9 @@ static void build_reference(MapStorage& s) {
     s.sector_render_mut(0).light_level = 190;
     s.sector_render_mut(1).light_level = 220;
     s.sector_render_mut(2).floor_tex = step;
+    // A floating slab: thickness is geometry, so it round-trips with the
+    // sector rather than with its textures.
+    s.sector_mut(1).thickness = fx::from_frac(5, 2);
     s.side_render_mut(0).middle = wall;
     s.side_render_mut(1).lower = step;
     s.side_render_mut(1).peg_flags = peg_flag::LOWER_UNPEGGED;
@@ -124,6 +127,7 @@ static void test_roundtrip() {
         CHECK(a.sector(i).ceil_z == b.sector(i).ceil_z);
         CHECK(a.sector(i).tag == b.sector(i).tag);
         CHECK(a.sector(i).tri_count == b.sector(i).tri_count);
+        CHECK(a.sector(i).thickness == b.sector(i).thickness);
     }
     CHECK(dst.spawn_count() == 2);
 

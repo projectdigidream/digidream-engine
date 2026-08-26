@@ -123,6 +123,28 @@ SweepContact push_out_of_sector(const geom::MapData& map, u32 s, fx2& p, fx3* ve
 SweepContact sweep_out_of_sector(const geom::MapData& map, u32 sector, fx2& p,
                                  fx radius, fx feet_z, fx body_height) noexcept;
 
+// Keep a cylinder out of the SLAB beneath a sector's floor.
+//
+// Within a sector's footprint, everything below its floor is solid -- that is
+// what a floating platform IS. Nothing modelled it while every map was a sealed
+// box, because there was no "below the floor" to be in. With open edges there
+// is, and without this an entity falling past a platform drifts straight
+// through its side and out the far face.
+//
+// It also removes a question rather than answering it: an entity can no longer
+// arrive underneath a platform, so nothing has to decide whether a floor
+// catches something approaching from below.
+SweepContact push_out_of_slab(const geom::MapData& map, u32 sector, fx2& p,
+                              fx radius) noexcept;
+
+// Resolve a cylinder in the void against EVERY platform slab it overlaps.
+//
+// Not just the sector its centre is in: a body overlaps a platform's edge well
+// before its centre crosses the footprint, and a test that starts from "which
+// sector am I in" lets it sink a full radius into the edge before reacting.
+SweepContact resolve_void_slabs(const geom::MapData& map, fx2& p, fx radius,
+                                fx feet_z, fx body_height) noexcept;
+
 // Nearest side within `radius` of `p` carrying `flag`, or -1.
 //
 // Used by climbing (CLIMBABLE) and by direct grapple attachment (GRAPPLE).

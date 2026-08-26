@@ -10,6 +10,7 @@
 
 #include "dnp/geom/map.hpp"
 #include "dnp/math/rng.hpp"
+#include "dnp/math/trig.hpp"
 #include "dnp/physics/collide.hpp"
 
 using namespace dnp;
@@ -38,7 +39,7 @@ static void test_point_in_sector() {
 
     // Unit square, counter-clockwise.
     static const fx2 pts[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
-    static const Sector secs[] = {{0, 4, 0, 0, F(0), F(8), 0}};
+    static const Sector secs[] = {{0, 4, 0, 0, F(0), F(8), fx::zero(), 0}};
     MapData map{pts, 4, secs, 1, nullptr, 0};
 
     CHECK(point_in_sector(map, 0, fx2{F(5), F(5)}));
@@ -57,7 +58,7 @@ static void test_point_in_sector() {
     static const fx2 lpts[] = {
         {F(0), F(0)}, {F(10), F(0)}, {F(10), F(4)}, {F(4), F(4)}, {F(4), F(10)}, {F(0), F(10)}
     };
-    static const Sector lsecs[] = {{0, 6, 0, 0, F(0), F(8), 0}};
+    static const Sector lsecs[] = {{0, 6, 0, 0, F(0), F(8), fx::zero(), 0}};
     MapData lmap{lpts, 6, lsecs, 1, nullptr, 0};
 
     CHECK(point_in_sector(lmap, 0, fx2{F(2), F(2)}));
@@ -109,8 +110,8 @@ struct TwoRoom {
         pts[4] = {F(20), F(0)};
         pts[5] = {F(20), F(10)};
 
-        secs[0] = {0, 4, 0, 4, floor_a, ceil, 0};
-        secs[1] = {0, 0, 4, 4, floor_b, ceil, 0};
+        secs[0] = {0, 4, 0, 4, floor_a, ceil, fx::zero(), 0};
+        secs[1] = {0, 0, 4, 4, floor_b, ceil, fx::zero(), 0};
 
         // Left room's sides; the x=10 edge faces the right room.
         sides[0] = {0, 1, NO_SECTOR, 0};
@@ -135,8 +136,8 @@ static void build_two_room(fx2* pts, Sector* secs, Side* sides, MapData& map,
     pts[4] = {F(10), F(0)};  pts[5] = {F(20), F(0)};
     pts[6] = {F(20), F(10)}; pts[7] = {F(10), F(10)};
 
-    secs[0] = {0, 4, 0, 4, floor_a, ceil, 0};
-    secs[1] = {4, 4, 4, 4, floor_b, ceil, 0};
+    secs[0] = {0, 4, 0, 4, floor_a, ceil, fx::zero(), 0};
+    secs[1] = {4, 4, 4, 4, floor_b, ceil, fx::zero(), 0};
 
     sides[0] = {0, 1, NO_SECTOR, 0};
     sides[1] = {1, 2, 1, 0};
@@ -418,7 +419,7 @@ static MapData make_platform(u8 flags, Sector* sec, Side* sides, const fx2* pts)
     for (int i = 0; i < 4; ++i) {
         sides[i] = Side{static_cast<u16>(i), static_cast<u16>((i + 1) % 4), NO_SECTOR, flags};
     }
-    *sec = Sector{0, 4, 0, 4, F(4), F(40), 0, 0, 0};
+    *sec = Sector{0, 4, 0, 4, F(4), F(40), fx::zero(), 0, 0, 0};
     MapData m;
     m.points = pts; m.point_count = 4;
     m.sectors = sec; m.sector_count = 1;
@@ -495,7 +496,7 @@ static void test_walking_off_a_ledge() {
 }
 
 static void test_falling_past_a_platform() {
-    std::printf("ledge: a falling entity passes under a platform, never onto it\n");
+    std::printf("ledge: a platform's slab is solid -- you fall beside it, not through it\n");
 
     // Two platforms in a row, both open-edged, both floating at z = 4:
     //   A: x 0..10   B: x 20..30      (a 10-unit gap, y 0..10 for both)
@@ -504,8 +505,8 @@ static void test_falling_past_a_platform() {
         {F(20), F(0)}, {F(30), F(0)}, {F(30), F(10)}, {F(20), F(10)}
     };
     Sector secs[2] = {
-        Sector{0, 4, 0, 4, F(4), F(40), 0, 0, 0},
-        Sector{4, 4, 4, 4, F(4), F(40), 0, 0, 0}
+        Sector{0, 4, 0, 4, F(4), F(40), F(3), 0, 0, 0},
+        Sector{4, 4, 4, 4, F(4), F(40), F(3), 0, 0, 0}
     };
     Side sides[8]{};
     for (int s = 0; s < 2; ++s) {
@@ -522,26 +523,25 @@ static void test_falling_past_a_platform() {
 
     // A missed jump: leaves A heading east, not fast enough to clear the gap.
     const fx dt = Ff(1, 60);
+    const fx radius = Ff(1, 2);
     MoveInput in;
     in.pos = fx3{F(9), F(5), F(4)};
     in.vel = fx3{F(12), fx::zero(), F(4)};
+    in.radius = radius;
     in.sector = 0;
     in.grounded = false;
 
     bool entered_void = false;
     bool ever_grounded_after_void = false;
-    // Sampled WHILE it is beneath platform B, not at the end of the run: at
-    // 12 units per second it crosses the whole 10-unit slab in under a second
-    // and is long past it by tick 240. The first version of this asserted the
-    // final position was under B and failed for exactly that reason.
-    int ticks_under_b = 0;
-    fx lowest = in.pos.z;
+    int  ticks_inside_slab = 0;
+    fx   furthest_east = in.pos.x;
     for (int t = 0; t < 240; ++t) {
         const MoveResult r = move(m, in, dt);
         if (r.sector == NO_SECTOR) entered_void = true;
         if (entered_void && r.grounded) ever_grounded_after_void = true;
-        if (r.pos.x > F(20) && r.pos.x < F(30) && r.pos.z < F(4)) ++ticks_under_b;
-        lowest = r.pos.z < lowest ? r.pos.z : lowest;
+        // The space B occupies: inside its footprint and below its floor.
+        if (r.pos.x > F(20) && r.pos.x < F(30) && r.pos.z < F(4)) ++ticks_inside_slab;
+        if (r.pos.x > furthest_east) furthest_east = r.pos.x;
         in.pos = r.pos;
         in.vel = r.vel;
         in.sector = r.sector;
@@ -550,18 +550,35 @@ static void test_falling_past_a_platform() {
     }
 
     CHECK(entered_void);
-    // It really did pass through the space beneath B rather than missing it.
-    CHECK(ticks_under_b > 10);
-    // Never snapped up onto it, and still falling at the end.
+    // It reached B and was stopped by its face -- not before it, and not through
+    // it. Resting contact leaves the centre exactly one radius clear.
+    CHECK(furthest_east > F(19));
+
+    // NO PENETRATION AT ALL, not merely "ejected eventually".
+    //
+    // The first version of this resolved the slab only for the sector the
+    // centre was inside, so the body sank into the edge for three ticks --
+    // centre at 19.6, 19.8, 20.0 -- before anything reacted, and was then
+    // pushed back out. Asserting the final position would have passed. This
+    // asserts the position on EVERY tick, which is the difference between
+    // reacting to an edge and clipping through it and recovering.
+    CHECK(furthest_east == F(20) - radius);
+    // Never once inside the platform.
+    CHECK(ticks_inside_slab == 0);
+    // Still falling, beside it, and never caught by anything.
     CHECK(!ever_grounded_after_void);
     CHECK(in.sector == NO_SECTOR);
-    CHECK(lowest < F(-40));
+    CHECK(in.pos.z < F(-40));
+    // The into-wall velocity was removed on contact, so it drops down the face
+    // rather than grinding against it.
+    CHECK(in.vel.x == fx::zero());
 
-    // The control: from ABOVE, the same platform still catches it. Otherwise
-    // "never lands" would be satisfied by a floor that had stopped working.
+    // The control: from ABOVE, the same platform still catches it. Without this,
+    // "never lands" would be satisfied just as well by a floor that had stopped
+    // working entirely.
     MoveInput from_above;
     from_above.pos = fx3{F(25), F(5), F(30)};
-    from_above.vel = fx3{fx::zero(), fx::zero(), fx::zero()};
+    from_above.radius = radius;
     from_above.sector = NO_SECTOR;      // arriving out of the void
     bool landed = false;
     for (int t = 0; t < 240 && !landed; ++t) {
@@ -576,6 +593,213 @@ static void test_falling_past_a_platform() {
     CHECK(landed);
     CHECK(from_above.pos.z == F(4));
     CHECK(from_above.sector == 1);
+}
+
+static void test_platform_underside() {
+    std::printf("ledge: a platform's underside stops a body rising into it\n");
+
+    // One platform, x 0..10, y 0..10, floor at 10, three units thick -- so the
+    // slab occupies z 7..10 and everything under z 7 is open void.
+    static const fx2 pts[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
+    Sector sec{0, 4, 0, 4, F(10), F(40), F(3), 0, 0, 0};
+    Side sides[4]{};
+    for (int i = 0; i < 4; ++i) {
+        sides[i] = Side{static_cast<u16>(i), static_cast<u16>((i + 1) % 4),
+                        NO_SECTOR, side_flag::LEDGE};
+    }
+    MapData m;
+    m.points = pts; m.point_count = 4;
+    m.sectors = &sec; m.sector_count = 1;
+    m.sides = sides; m.side_count = 4;
+
+    const fx dt = Ff(1, 60);
+
+    // Fired straight up from directly underneath, hard.
+    MoveInput up;
+    up.pos = fx3{F(5), F(5), F(0)};
+    up.vel = fx3{fx::zero(), fx::zero(), F(30)};
+    up.sector = NO_SECTOR;
+    fx highest = up.pos.z;
+    bool ever_grounded = false;
+    for (int t = 0; t < 120; ++t) {
+        const MoveResult r = move(m, up, dt);
+        if (r.pos.z > highest) highest = r.pos.z;
+        if (r.grounded) ever_grounded = true;
+        up.pos = r.pos;
+        up.vel = r.vel;
+        up.sector = r.sector;
+        up.grounded = r.grounded;
+        up.vel.z -= F(16) * dt;
+    }
+
+    // Its head stops at the underside: z = 7 minus the body height.
+    CHECK(highest <= F(7) - up.height);
+    // And it never got through onto the top.
+    CHECK(!ever_grounded);
+    CHECK(highest < F(10));
+
+    // The control: the SAME shot at a platform with no thickness passes
+    // straight through, because a sector with no slab has no underside. Without
+    // this, "stopped" would be satisfied by a jump that was simply too weak.
+    Sector thin = sec;
+    thin.thickness = fx::zero();
+    MapData tm = m;
+    tm.sectors = &thin;
+    MoveInput up2;
+    up2.pos = fx3{F(5), F(5), F(0)};
+    up2.vel = fx3{fx::zero(), fx::zero(), F(30)};
+    up2.sector = NO_SECTOR;
+    fx highest2 = up2.pos.z;
+    for (int t = 0; t < 120; ++t) {
+        const MoveResult r = move(tm, up2, dt);
+        if (r.pos.z > highest2) highest2 = r.pos.z;
+        up2.pos = r.pos;
+        up2.vel = r.vel;
+        up2.sector = r.sector;
+        up2.grounded = r.grounded;
+        up2.vel.z -= F(16) * dt;
+    }
+    CHECK(highest2 > F(10));
+
+    // And a body entirely BELOW the slab travels under the platform freely --
+    // a finite box, not a half-space.
+    MoveInput under;
+    under.pos = fx3{F(-5), F(5), F(0)};
+    under.vel = fx3{F(10), fx::zero(), fx::zero()};
+    under.sector = NO_SECTOR;
+    int ticks_under = 0;
+    // 120 ticks at 10 units/s is 20 units, from x = -5 to x = 15 -- clear of the
+    // platform's far edge. 90 ticks lands on exactly x = 10, which is the edge
+    // itself and not past it.
+    for (int t = 0; t < 120; ++t) {
+        const MoveResult r = move(m, under, dt);
+        if (r.pos.x > F(1) && r.pos.x < F(9)) ++ticks_under;
+        under.pos = r.pos;
+        under.vel = r.vel;
+        under.sector = r.sector;
+    }
+    CHECK(ticks_under > 20);
+    CHECK(under.pos.x > F(10));
+}
+
+static void test_hexagon_containment() {
+    std::printf("hexagon: diagonal walls contain a body driven at them from every angle\n");
+
+    // A hexagonal ROOM -- walls, not ledges. Every other sector in every test
+    // and every map here is axis-aligned, and that is precisely the case
+    // push_out_of_sector's normals are exact for: it uses the side's own normal
+    // because an axis-aligned wall gives a clean one, where deriving it from the
+    // position leaks a little velocity between the axes on every tick of
+    // contact. A hexagon has four edges that are not axis-aligned, so it
+    // exercises what that optimisation does not cover.
+    //
+    // 12 * sqrt(3)/2, to nine places. Approximated deliberately and visibly
+    // here rather than by any code below.
+    const fx H = fx::from_frac(10392304845LL, 1000000000LL);
+    const fx R = F(12);
+    static fx2 hex[6];
+    hex[0] = fx2{R, fx::zero()};
+    hex[1] = fx2{F(6), H};
+    hex[2] = fx2{-F(6), H};
+    hex[3] = fx2{-R, fx::zero()};
+    hex[4] = fx2{-F(6), -H};
+    hex[5] = fx2{F(6), -H};
+
+    Sector sec{0, 6, 0, 6, F(0), F(40), fx::zero(), 0, 0, 0};
+    Side sides[6]{};
+    for (int i = 0; i < 6; ++i) {
+        sides[i] = Side{static_cast<u16>(i), static_cast<u16>((i + 1) % 6), NO_SECTOR, 0};
+    }
+    MapData m;
+    m.points = hex; m.point_count = 6;
+    m.sectors = &sec; m.sector_count = 1;
+    m.sides = sides; m.side_count = 6;
+
+    CHECK(point_in_sector(m, 0, fx2{fx::zero(), fx::zero()}));
+    CHECK(!point_in_sector(m, 0, fx2{F(20), fx::zero()}));
+
+    // Fired from the centre in 64 directions, far faster than one tick of
+    // travel, so the swept path is what has to hold rather than resting
+    // contact. None of them may end up outside.
+    int escapes = 0;
+    int outside_ticks = 0;
+    for (int d = 0; d < 64; ++d) {
+        const brad angle = brad(static_cast<u32>((static_cast<u64>(d) << 32) / 64));
+        const fx2 dir = fx_dir(angle);
+
+        MoveInput in;
+        in.pos = fx3{fx::zero(), fx::zero(), fx::zero()};
+        in.vel = fx3{dir.x * F(400), dir.y * F(400), fx::zero()};
+        in.sector = 0;
+        in.grounded = true;
+
+        for (int t = 0; t < 60; ++t) {
+            const MoveResult r = move(m, in, Ff(1, 60));
+            if (!point_in_sector(m, 0, fx2{r.pos.x, r.pos.y})) ++outside_ticks;
+            if (r.sector != 0) ++escapes;
+            in.pos = r.pos;
+            in.vel = r.vel;
+            in.sector = r.sector;
+            in.grounded = r.grounded;
+        }
+    }
+    CHECK(escapes == 0);
+    CHECK(outside_ticks == 0);
+
+    // And it is not vacuous: without the walls, the same shots leave at once.
+    Side open_sides[6]{};
+    for (int i = 0; i < 6; ++i) {
+        open_sides[i] = Side{static_cast<u16>(i), static_cast<u16>((i + 1) % 6),
+                             NO_SECTOR, side_flag::LEDGE};
+    }
+    MapData om = m;
+    om.sides = open_sides;
+    MoveInput out_in;
+    out_in.pos = fx3{fx::zero(), fx::zero(), fx::zero()};
+    out_in.vel = fx3{F(400), fx::zero(), fx::zero()};
+    out_in.sector = 0;
+    // Run until it leaves rather than expecting it in one tick: 400 units/s
+    // covers 6.67 units per tick and the hexagon's radius is 12, so a
+    // single-tick assertion fails on the arithmetic rather than on the
+    // behaviour. It was written that way first.
+    bool left = false;
+    for (int t = 0; t < 10 && !left; ++t) {
+        const MoveResult ro = move(om, out_in, Ff(1, 60));
+        left = ro.sector == NO_SECTOR;
+        out_in.pos = ro.pos;
+        out_in.vel = ro.vel;
+        out_in.sector = ro.sector;
+    }
+    CHECK(left);
+
+    // Pressed steadily into ONE diagonal wall, a body must settle rather than
+    // creep along it. A normal a hair off-axis projects a little velocity into
+    // the tangent every tick, which is invisible per tick and is how an entity
+    // ends up somewhere the level author did not put it.
+    MoveInput lean;
+    lean.pos = fx3{fx::zero(), fx::zero(), fx::zero()};
+    lean.sector = 0;
+    lean.grounded = true;
+    const fx2 into = normalize(fx2{F(6), H});   // straight at vertex-adjacent wall
+    for (int t = 0; t < 600; ++t) {
+        lean.vel = fx3{into.x * F(8), into.y * F(8), fx::zero()};
+        const MoveResult r = move(m, lean, Ff(1, 60));
+        lean.pos = r.pos;
+        lean.sector = r.sector;
+        lean.grounded = r.grounded;
+    }
+    const fx2 settled{lean.pos.x, lean.pos.y};
+    for (int t = 0; t < 600; ++t) {
+        lean.vel = fx3{into.x * F(8), into.y * F(8), fx::zero()};
+        const MoveResult r = move(m, lean, Ff(1, 60));
+        lean.pos = r.pos;
+        lean.sector = r.sector;
+        lean.grounded = r.grounded;
+    }
+    const fx2 later{lean.pos.x, lean.pos.y};
+    // Ten more seconds of pressing must not move it at all.
+    CHECK(settled == later);
+    CHECK(point_in_sector(m, 0, later));
 }
 
 static void test_ledge_does_not_leak_into_closed_maps() {
@@ -645,6 +869,8 @@ int main() {
     test_ceiling_and_containment();
     test_walking_off_a_ledge();
     test_falling_past_a_platform();
+    test_platform_underside();
+    test_hexagon_containment();
     test_ledge_does_not_leak_into_closed_maps();
     test_determinism_of_move();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

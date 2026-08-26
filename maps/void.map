@@ -24,7 +24,7 @@
 # touch; everything else needs a jump, and a missed jump is a fall.
 
 # --- 1: the starting slab -----------------------------------------------
-sector floor 6 ceil 60 tag 1 light 210 floortex PLATE1 skirt 2
+sector floor 6 ceil 60 tag 1 light 210 floortex PLATE1 thickness 2
   vertex  4  32   open tex EDGE1
   vertex 36  32   open tex EDGE1
   vertex 36  48   open tex EDGE1
@@ -32,7 +32,7 @@ sector floor 6 ceil 60 tag 1 light 210 floortex PLATE1 skirt 2
 end
 
 # --- 2: a mid step, half a unit up, reachable on foot from 1 ------------
-sector floor 6.4 ceil 60 tag 2 light 190 floortex PLATE2 skirt 2
+sector floor 6.4 ceil 60 tag 2 light 190 floortex PLATE2 thickness 2
   vertex 36  20   open tex EDGE1
   vertex 56  20   open tex EDGE1
   vertex 56  36   open tex EDGE1
@@ -40,7 +40,7 @@ sector floor 6.4 ceil 60 tag 2 light 190 floortex PLATE2 skirt 2
 end
 
 # --- 3: across a gap, needs a jump --------------------------------------
-sector floor 6 ceil 60 tag 3 light 230 floortex PLATE3 skirt 3
+sector floor 6 ceil 60 tag 3 light 230 floortex PLATE3 thickness 3
   vertex 62  32   open tex EDGE2
   vertex 84  32   open tex EDGE2
   vertex 84  48   open tex EDGE2
@@ -48,7 +48,7 @@ sector floor 6 ceil 60 tag 3 light 230 floortex PLATE3 skirt 3
 end
 
 # --- 4: higher still, a double jump --------------------------------------
-sector floor 11 ceil 60 tag 4 light 255 floortex PLATE3 skirt 2
+sector floor 11 ceil 60 tag 4 light 255 floortex PLATE3 thickness 2
   vertex 40  52   open tex EDGE2
   vertex 60  52   open tex EDGE2
   vertex 60  68   open tex EDGE2
@@ -56,7 +56,7 @@ sector floor 11 ceil 60 tag 4 light 255 floortex PLATE3 skirt 2
 end
 
 # --- 5: a lower slab under the gap, to land on when you miss ------------
-sector floor 0 ceil 60 tag 5 light 150 floortex PLATE2 skirt 4
+sector floor 0 ceil 60 tag 5 light 150 floortex PLATE2 thickness 4
   vertex  8   0   open tex EDGE1
   vertex 44   0   open tex EDGE1
   vertex 44  16   open tex EDGE1
@@ -68,3 +68,79 @@ spawn mid    46 28 8
 spawn far    72 40 8
 spawn high   50 60 13
 spawn low    26  8 2
+
+# --- 6: an L, concave ----------------------------------------------------
+#
+# Deliberately not a box. A convex quad is the one shape where ear clipping
+# cannot go wrong and where "is the point inside" has no interesting cases, so a
+# map made only of boxes tests neither. This one has a reflex corner: the
+# crossing-number test has to get the notch right, and a body walking the inside
+# of the corner has two walls to resolve against at once.
+sector floor 6 ceil 60 tag 6 light 200 floortex PLATE2 thickness 2
+  vertex  -8  20   open tex EDGE2
+  vertex  16  20   open tex EDGE2
+  vertex  16  28   open tex EDGE2
+  vertex   0  28   open tex EDGE2
+  vertex   0  44   open tex EDGE2
+  vertex  -8  44   open tex EDGE2
+end
+
+# --- 7: a plus, four reflex corners --------------------------------------
+#
+# Twelve vertices, four of them reflex. Ear clipping has to skip every reflex
+# vertex and come back to it, and the fixed-point predicates have to agree about
+# which is which on all three build targets -- a shape that triangulates one way
+# natively and another under wasm would desync client from server.
+sector floor 9 ceil 60 tag 7 light 245 floortex PLATE3 thickness 1.5
+  vertex  70   4   open tex EDGE2
+  vertex  78   4   open tex EDGE2
+  vertex  78  12   open tex EDGE2
+  vertex  86  12   open tex EDGE2
+  vertex  86  20   open tex EDGE2
+  vertex  78  20   open tex EDGE2
+  vertex  78  28   open tex EDGE2
+  vertex  70  28   open tex EDGE2
+  vertex  70  20   open tex EDGE2
+  vertex  62  20   open tex EDGE2
+  vertex  62  12   open tex EDGE2
+  vertex  70  12   open tex EDGE2
+end
+
+# --- 8: a long thin spur, with a sliver at the tip -----------------------
+#
+# Near-degenerate on purpose. The tip is a very shallow triangle, which is where
+# an ear-clipping bug shows up first and where a normal computed from an almost
+# zero-length edge would come out as noise.
+sector floor 6 ceil 60 tag 8 light 175 floortex PLATE1 thickness 1
+  vertex -30  36   open tex EDGE1
+  vertex  -2  38   open tex EDGE1
+  vertex -30  40   open tex EDGE1
+end
+
+spawn ell    4 24 8
+spawn plus  74 16 11
+
+# --- 9: a hexagon -------------------------------------------------------
+#
+# Every other sector in every map here is axis-aligned, and that is the one case
+# push_out_of_sector's normals are EXACT for -- it takes the side's own normal
+# precisely because an axis-aligned wall yields a clean normal and deriving one
+# from the position instead leaks a little velocity between the axes on every
+# tick of contact. A hexagon has no axis-aligned edge at all except two, so it
+# exercises the case the optimisation does not cover.
+#
+# The coordinates are 12 * sqrt(3)/2 written to nine decimal places. mapc parses
+# decimals as exact rationals rather than through a double, so what lands in the
+# map is exactly the number written here -- irrational geometry is approximated
+# by the AUTHOR, deliberately and visibly, never by the compiler behind their
+# back.
+sector floor 8 ceil 60 tag 9 light 235 floortex PLATE3 thickness 2
+  vertex 28          78          open tex EDGE2
+  vertex 22          88.392304845 open tex EDGE2
+  vertex 10          88.392304845 open tex EDGE2
+  vertex  4          78          open tex EDGE2
+  vertex 10          67.607695155 open tex EDGE2
+  vertex 22          67.607695155 open tex EDGE2
+end
+
+spawn hex   16 78 10

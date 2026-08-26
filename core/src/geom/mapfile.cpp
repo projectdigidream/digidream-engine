@@ -43,6 +43,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u16v(s.side_count);
         w.fxraw(s.floor_z);
         w.fxraw(s.ceil_z);
+        w.fxraw(s.thickness);
         w.u16v(s.tag);
         w.u32v(s.first_tri);
         w.u16v(s.tri_count);
@@ -107,7 +108,6 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u16v(r.floor_tex);
         w.u16v(r.ceil_tex);
         w.u8v(r.light_level);
-        w.fxraw(r.skirt);
     }
     for (u32 i = 0; i < m.side_count; ++i) {
         const SideRender& r = rd.side(i);
@@ -177,7 +177,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     struct PendingSector {
         u16 first_point, point_count, first_side, side_count, tag, tri_count;
         u32 first_tri;
-        fx floor_z, ceil_z;
+        fx floor_z, ceil_z, thickness;
     };
     PendingSector pend[MAX_MAP_SECTORS];
     for (u32 i = 0; i < sector_count; ++i) {
@@ -188,6 +188,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         s.side_count = r.u16v();
         s.floor_z = r.fxraw();
         s.ceil_z = r.fxraw();
+        s.thickness = r.fxraw();
         s.tag = r.u16v();
         s.first_tri = r.u32v();
         s.tri_count = r.u16v();
@@ -250,6 +251,10 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
 
         const u32 idx = store.add_sector(poly, s.point_count, s.floor_z, s.ceil_z, s.tag);
         if (idx != i) { store.clear(); return MapLoadStatus::BadIndex; }
+        // Thickness is not an add_sector parameter: it is meaningful only for a
+        // sector with an open edge, and threading it through every construction
+        // site would put a zero in most of them.
+        store.sector_mut(idx).thickness = s.thickness;
 
         r.seek(sides_at + static_cast<size_t>(s.first_side) * SIDE_BYTES);
         for (u16 k = 0; k < s.side_count; ++k) {
@@ -423,7 +428,6 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         const u16 floor_tex = r.u16v();
         const u16 ceil_tex = r.u16v();
         const u8 light = r.u8v();
-        const fx skirt = r.fxraw();
         if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
         if (!texture_ok(floor_tex) || !texture_ok(ceil_tex)) {
             store.clear(); return MapLoadStatus::BadIndex;
@@ -432,7 +436,6 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         sr.floor_tex = floor_tex;
         sr.ceil_tex = ceil_tex;
         sr.light_level = light;
-        sr.skirt = skirt;
     }
 
     for (u32 i = 0; i < side_count; ++i) {

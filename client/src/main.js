@@ -83,7 +83,7 @@ const agent = world.spawn(spawn)
 // (§3.1's crushing takes the same shape -- the engine detects, Lua decides).
 // A kill plane baked into the core would be a rule no server could opt out of.
 // So this lives in the demo harness, where it is honestly a convenience.
-const lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.skirt ?? 0)))
+const lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
 const VOID_FLOOR = lowestFloor - 40
 let falls = 0
 

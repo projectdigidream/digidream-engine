@@ -35,11 +35,10 @@ export const SURFACE = {
   UPPER: 'upper',
   MIDDLE: 'middle',
   LOWER: 'lower',
-  // A floating platform's edge and underside. Both are drawn ONLY -- nothing
-  // collides with either, and the physics core has never heard of them. That is
-  // the whole reason a sector's skirt depth lives in SectorRender: giving a
-  // platform visible thickness must not give it a hitbox, or the client and the
-  // server would have to agree about a surface that exists to be looked at.
+  // A floating platform's edge and underside, drawn from sector.thickness --
+  // the SAME number the physics core treats as solid. What you see is exactly
+  // what you collide with, because there is one number and not two to keep in
+  // agreement.
   SKIRT: 'skirt',
   UNDERSIDE: 'underside'
 }
@@ -163,9 +162,11 @@ export function buildSectorSurfaces (map, sectorIndex) {
     [SURFACE.FLOOR, s.floorZ, s.floorTex, true],
     [SURFACE.CEIL, s.ceilZ, s.ceilTex, false]
   ]
-  // A skirted platform gets a bottom, facing down. Without it a floating slab
-  // is hollow from below, and in an isometric view you are under half of them.
-  if (s.skirt > 0) flats.push([SURFACE.UNDERSIDE, s.floorZ - s.skirt, s.floorTex, false])
+  // A slab gets a bottom, facing down -- and it is a real surface, not a
+  // decoration: the physics core stops a body rising into it at exactly this
+  // height, from the SAME sector.thickness the mesh is built from. What you see
+  // is what you collide with.
+  if (s.thickness > 0) flats.push([SURFACE.UNDERSIDE, s.floorZ - s.thickness, s.floorTex, false])
 
   for (const [kind, z, tex, up] of flats) {
     if (tex === NO_TEXTURE) continue
@@ -227,10 +228,10 @@ export function buildSectorSurfaces (map, sectorIndex) {
       // IS drawn is the platform's thickness, hanging below its floor -- and
       // only if the map asked for one, because a skirt on a sector that is not
       // floating would appear as a curtain hanging into the room below.
-      if (s.skirt > 0 && side.middle !== NO_TEXTURE) {
+      if (s.thickness > 0 && side.middle !== NO_TEXTURE) {
         out.push(wallQuad({
           kind: SURFACE.SKIRT, sector: s, sectorIndex, side, sideIndex,
-          texture: side.middle, zBot: s.floorZ - s.skirt, zTop: s.floorZ,
+          texture: side.middle, zBot: s.floorZ - s.thickness, zTop: s.floorZ,
           // Top-anchored at the floor, so the skirt's texture starts where the
           // platform's surface does however deep it is drawn.
           anchorZ: s.floorZ, a, b,

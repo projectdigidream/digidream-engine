@@ -306,6 +306,7 @@ u64 MapStorage::hash() const noexcept {
         h.u32v(s.first_point); h.u32v(s.point_count);
         h.u32v(s.first_side);  h.u32v(s.side_count);
         h.fxv(s.floor_z);      h.fxv(s.ceil_z);
+        h.fxv(s.thickness);
         h.u32v(s.tag);
         h.u32v(s.tri_count);
         for (u32 t = 0; t < static_cast<u32>(s.tri_count) * 3; ++t) h.u32v(tris_[s.first_tri + t]);
@@ -352,7 +353,7 @@ u64 MapStorage::hash() const noexcept {
     }
     for (u32 i = 0; i < sector_count_; ++i) {
         const SectorRender& r = sector_render_[i];
-        h.u32v(r.floor_tex); h.u32v(r.ceil_tex); h.byte(r.light_level); h.fxv(r.skirt);
+        h.u32v(r.floor_tex); h.u32v(r.ceil_tex); h.byte(r.light_level);
     }
     for (u32 i = 0; i < side_count_; ++i) {
         const SideRender& r = side_render_[i];

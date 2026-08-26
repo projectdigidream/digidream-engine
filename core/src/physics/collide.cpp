@@ -150,20 +150,19 @@ SweepContact push_out_of_sector(const MapData& map, u32 s, fx2& p, fx3* vel, fx 
     return out;
 }
 
-SweepContact sweep_out_of_sector(const MapData& map, u32 s, fx2& p, fx radius,
-                                 fx feet_z, fx body_height) noexcept {
+namespace {
+
+// Keep a cylinder out of a sector treated as a solid volume.
+//
+// Shared by the two callers that need it. They ask the same geometric question
+// for different reasons -- a sector that has MOVED into an entity (§3.1.3), and
+// the slab beneath a floating platform's floor -- and they decide solidity
+// differently, so that stays the caller's answer to give.
+SweepContact push_out_volume(const MapData& map, u32 s, fx2& p, fx radius,
+                             bool volume_solid) noexcept {
     SweepContact out;
     const fx2 start = p;
     const Sector& sec = map.sector(s);
-
-    // A moving sector is a solid VOLUME to this agent exactly when the agent
-    // could not stand in it. That is the whole rule, and it is deliberately not
-    // the per-side passability test push_out_of_sector uses: passability asks
-    // "may I leave through this wall", which is the wrong question once the
-    // wall has swept past and the agent is standing inside the polygon. Asked
-    // the wrong way round, every side reports the agent's own room as a
-    // perfectly good destination and the piston slides through it untouched.
-    const bool volume_solid = !sector_admits(map, s, feet_z, body_height);
 
     const u128 r_sq = static_cast<u128>(static_cast<i128>(radius.raw) * radius.raw);
 
@@ -232,6 +231,68 @@ SweepContact sweep_out_of_sector(const MapData& map, u32 s, fx2& p, fx radius,
         p += n * (radius - dist);
     }
 
+    out.escape = p - start;
+    return out;
+}
+
+}  // namespace
+
+SweepContact sweep_out_of_sector(const MapData& map, u32 s, fx2& p, fx radius,
+                                 fx feet_z, fx body_height) noexcept {
+    // A moving sector is a solid VOLUME to this agent exactly when the agent
+    // could not stand in it. That is the whole rule, and it is deliberately not
+    // the per-side passability test push_out_of_sector uses: passability asks
+    // "may I leave through this wall", which is the wrong question once the
+    // wall has swept past and the agent is standing inside the polygon. Asked
+    // the wrong way round, every side reports the agent's own room as a
+    // perfectly good destination and the piston slides through it untouched.
+    return push_out_volume(map, s, p, radius, !sector_admits(map, s, feet_z, body_height));
+}
+
+SweepContact push_out_of_slab(const MapData& map, u32 s, fx2& p, fx radius) noexcept {
+    // Unconditionally solid: the caller has already established that the entity
+    // is below this sector's floor, and below a floor there is platform.
+    return push_out_volume(map, s, p, radius, true);
+}
+
+bool slab_overlaps(const Sector& sec, fx feet_z, fx body_height) noexcept {
+    // The slab occupies [floor - thickness, floor] inside the footprint. A body
+    // occupies [feet, feet + height]. They overlap on the standard interval
+    // test, and a sector with no thickness has no slab at all -- which is every
+    // sector in a sealed room, where "below the floor" is not a place.
+    if (sec.thickness <= fx::zero()) return false;
+    if (feet_z >= sec.floor_z) return false;                       // above it
+    if (feet_z + body_height <= sec.floor_z - sec.thickness) return false;  // below it
+    return true;
+}
+
+SweepContact resolve_void_slabs(const MapData& map, fx2& p, fx radius, fx feet_z,
+                                fx body_height) noexcept {
+    SweepContact out;
+    const fx2 start = p;
+
+    // EVERY sector whose floor is above the body, not just the one the centre
+    // happens to be inside.
+    //
+    // That distinction is the whole bug this fixes. A cylinder overlaps a
+    // platform's edge while its centre is still outside the footprint, so a
+    // test that starts from "which sector am I in" reports nothing until the
+    // centre has crossed -- by which point the body has sunk a full radius into
+    // the edge. Measured at three ticks of visible penetration before anything
+    // reacted.
+    //
+    // The vertical overlap test is slab_overlaps: a slab is a finite box, not a
+    // half-space, so a body can be entirely beneath one and pass under it.
+    for (u32 s = 0; s < map.sector_count; ++s) {
+        if (!slab_overlaps(map.sector(s), feet_z, body_height)) continue;
+        const SweepContact hit = push_out_of_slab(map, s, p, radius);
+        if (hit.contacted) out.contacted = true;
+    }
+
+    // Ascending sector order, one pass. Order matters because two pushes can
+    // disagree, and index order is the one both the client and the server will
+    // always agree on. A linear scan is also what find_sector already does; the
+    // broadphase grid that fixes both is the same piece of work.
     out.escape = p - start;
     return out;
 }
@@ -339,6 +400,25 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     // Push out of any wall the agent is resting against. The sweep prevents
     // crossing; this prevents overlap, which is a separate condition.
     {
+        // A body in the void meets every platform slab it overlaps, resolved
+        // BEFORE asking which sector its centre is in -- see resolve_void_slabs.
+        if (in.sector == NO_SECTOR) {
+            const SweepContact hit =
+                resolve_void_slabs(map, pos2, in.radius, r.pos.z, in.height);
+            if (hit.contacted) {
+                r.hit_wall = true;
+                // Wall slide, so a falling body brushing a platform's edge
+                // drops alongside it instead of stopping dead in mid-air.
+                const fx2 n = normalize(hit.escape);
+                const fx2 v2 = fx2{r.vel.x, r.vel.y};
+                if ((n.x.raw != 0 || n.y.raw != 0) && dot(v2, n) < fx::zero()) {
+                    const fx2 slid = project_out(v2, n);
+                    r.vel.x = slid.x;
+                    r.vel.y = slid.y;
+                }
+            }
+        }
+
         const SurfaceQuery q = query_surface(map, pos2, r.sector);
         if (q.in_map) {
             r.sector = q.sector;
@@ -399,6 +479,25 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     }
 
     r.pos.z += r.vel.z * dt;
+
+    // The UNDERSIDE of a platform.
+    //
+    // A body in the void beneath a slab must not rise into it. This is the
+    // ceiling rule applied to a surface that is not a ceiling: a sector's
+    // ceil_z bounds the room above its floor, and says nothing about the solid
+    // hanging below it. Without this you can jump straight up through a
+    // platform from underneath and land on top of it.
+    if (!in_world && q.in_map) {
+        const geom::Sector& sec = map.sector(static_cast<u32>(q.sector));
+        if (sec.thickness > fx::zero()) {
+            const fx underside = sec.floor_z - sec.thickness;
+            if (r.pos.z + in.height > underside && r.pos.z < underside) {
+                r.pos.z = underside - in.height;
+                if (r.vel.z > fx::zero()) r.vel.z = fx::zero();
+                r.hit_ceiling = true;
+            }
+        }
+    }
 
     if (in_world && r.pos.z <= floor_z) {
         r.pos.z = floor_z;

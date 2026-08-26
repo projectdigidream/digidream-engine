@@ -19,7 +19,7 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 4;   // 4 added the platform skirt depth
+inline constexpr u16 MAP_VERSION = 5;   // 5 moved slab thickness into Sector, where it collides
 
 enum class MapLoadStatus : u8 {
     Ok = 0,

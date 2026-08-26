@@ -75,7 +75,7 @@ export function readMap (map) {
       firstTri: u32[b32 + 5], triCount: u32[b32 + 6],
       floorTex: u32[b32 + 7], ceilTex: u32[b32 + 8],
       light: u32[b32 + 9],
-      skirt: fxToFloat(i64[b64 + 2])
+      thickness: fxToFloat(i64[b64 + 2])
     }
   }
 

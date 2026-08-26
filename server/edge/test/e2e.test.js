@@ -300,7 +300,15 @@ await sleep(200)
   // Now run ahead deliberately: burst a run of future ticks and confirm the
   // server reports them as buffered.
   const snapsBefore = a.snapshots.length
-  for (let i = 0; i < 12; i++) await a.sendInput({ moveX: 0 })
+  // Every write ISSUED before any is awaited. Awaiting between them yields to
+  // the event loop each time, so on a loaded machine each input can take longer
+  // than a 60 Hz tick to leave -- the server then consumes them as fast as they
+  // arrive, no backlog ever forms, and the margin reads 0. That is a real
+  // measurement of a race this test lost, not of the thing it is checking, and
+  // it is how this failed once under a software renderer running alongside it.
+  const sends = []
+  for (let i = 0; i < 12; i++) sends.push(a.sendInput({ moveX: 0 }))
+  await Promise.all(sends)
   await waitFor(() => a.snapshots.length > snapsBefore + 1, 3000, 'snapshot after burst')
 
   const peak = Math.max(...a.snapshots.slice(snapsBefore).map((s) => s.inputMargin))

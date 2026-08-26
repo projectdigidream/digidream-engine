@@ -44,7 +44,7 @@ struct Room {
         pts[1] = {F(40), F(0)};
         pts[2] = {F(40), F(40)};
         pts[3] = {F(0), F(40)};
-        secs[0] = {0, 4, 0, 4, F(0), F(40), 0};
+        secs[0] = {0, 4, 0, 4, F(0), F(40), fx::zero(), 0};
         sides[0] = {0, 1, NO_SECTOR, 0};
         sides[1] = {1, 2, NO_SECTOR, side_flag::GRAPPLE};    // east wall
         sides[2] = {2, 3, NO_SECTOR, 0};
@@ -389,7 +389,7 @@ static void test_grapple_occlusion() {
     // Two rooms with a solid divider; the far room's wall is grapple-flagged.
     fx2 pts[8] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)},
                   {F(10), F(0)}, {F(20), F(0)}, {F(20), F(10)}, {F(10), F(10)}};
-    Sector secs[2] = {{0, 4, 0, 4, F(0), F(20), 0}, {4, 4, 4, 4, F(0), F(20), 0}};
+    Sector secs[2] = {{0, 4, 0, 4, F(0), F(20), fx::zero(), 0}, {4, 4, 4, 4, F(0), F(20), fx::zero(), 0}};
     Side sides[8] = {
         {0, 1, NO_SECTOR, 0}, {1, 2, 1, side_flag::BLOCKING}, {2, 3, NO_SECTOR, 0}, {3, 0, NO_SECTOR, 0},
         {4, 5, NO_SECTOR, 0}, {5, 6, NO_SECTOR, side_flag::GRAPPLE}, {6, 7, NO_SECTOR, 0}, {7, 4, 0, side_flag::BLOCKING}

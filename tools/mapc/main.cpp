@@ -175,6 +175,7 @@ int main(int argc, char** argv) {
     fx floor_z{}, ceil_z{};
     u16 tag = 0;
     SectorRender sector_render{};
+    fx thickness{};
     int sector_start_line = 0;
 
     char buf[1024];
@@ -193,6 +194,7 @@ int main(int argc, char** argv) {
             ceil_z = fx::from_int(32);
             tag = 0;
             sector_render = SectorRender{};
+            thickness = fx::zero();
             sector_start_line = lineno;
             for (size_t i = 1; i + 1 < tok.size(); i += 2) {
                 if (tok[i] == "floor") { if (!parse_fx(tok[i + 1], floor_z)) err(lineno, "bad floor '%s'", tok[i + 1].c_str()); }
@@ -203,9 +205,11 @@ int main(int argc, char** argv) {
                     if (v < 0 || v > 255) err(lineno, "light must be 0..255, got '%s'", tok[i + 1].c_str());
                     else sector_render.light_level = static_cast<u8>(v);
                 }
-                else if (tok[i] == "skirt") {
-                    if (!parse_fx(tok[i + 1], sector_render.skirt)) {
-                        err(lineno, "bad skirt '%s'", tok[i + 1].c_str());
+                else if (tok[i] == "thickness" || tok[i] == "skirt") {
+                    // `skirt` is kept as a spelling because it says what you
+                    // SEE; the field says what you hit. They are one number.
+                    if (!parse_fx(tok[i + 1], thickness)) {
+                        err(lineno, "bad thickness '%s'", tok[i + 1].c_str());
                     }
                 }
                 else if (tok[i] == "floortex") sector_render.floor_tex = intern(lineno, store, tok[i + 1]);
@@ -299,6 +303,7 @@ int main(int argc, char** argv) {
             }
 
             store.sector_render_mut(si) = sector_render;
+            store.sector_mut(si).thickness = thickness;
 
             // The index the NEXT side will land at. Deliberately not
             // sector.first_side: that field is assigned lazily by the first
