@@ -24,7 +24,7 @@
 # touch; everything else needs a jump, and a missed jump is a fall.
 
 # --- 1: the starting slab -----------------------------------------------
-sector floor 6 ceil 60 tag 1 light 105 floortex PLATE1 thickness 2
+sector floor 6 ceil 60 tag 1 light 105 floortex PLATE1 
   vertex  4  32   open tex EDGE1
   vertex 36  32   open tex EDGE1
   vertex 36  48   open tex EDGE1

@@ -44,6 +44,14 @@ HOST_ARCH="$(uname -m)"
 # box, and the only one where walking off an edge is a fall rather than a wall.
 "./build/$HOST_ARCH/mapc" maps/void.map   "build/$HOST_ARCH/void.dnpm"
 
+# A generated stress map: a few hundred irregular concave sectors, regenerated
+# from a fixed seed so it is the same map every run. The hand-authored maps have
+# a dozen sectors and most of them are boxes, which exercises neither the
+# triangulator's reflex-vertex handling nor the broadphase nor a MAP_DATA
+# transfer long enough to need more than one chunk.
+node tools/mapgen/mapgen.js --cells 16 --seed 1 --out maps/big.map
+"./build/$HOST_ARCH/mapc" maps/big.map    "build/$HOST_ARCH/big.dnpm"
+
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
 # before any third-party toolchain is installed.
@@ -110,6 +118,8 @@ else
      && node test/e2e.test.js 2>/dev/null | tail -2 \
      && node test/delta.test.js 2>/dev/null | tail -2 \
      && node test/mapdata.test.js 2>/dev/null | tail -2 \
+     && DNP_MAP="$ROOT/build/$HOST_ARCH/big.dnpm" DNP_WT_PORT=34471 DNP_LINK_PORT=34541 \
+        node test/mapdata.test.js 2>/dev/null | tail -2 \
      && node test/platform.test.js 2>/dev/null | tail -2 \
      && node test/crush.test.js 2>/dev/null | tail -2 \
      && node test/phase3.test.js 2>/dev/null | tail -2 \

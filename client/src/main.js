@@ -161,10 +161,21 @@ if (LIVE) {
 } else {
   // Solo has no Lua, so it reads the authored tag convention purely so a lift
   // is moving while you look at it. On a server this is Lua's decision.
+  //
+  // Bounded to 100..131, and capped. The convention is a Phase 3 bridge, and an
+  // unbounded "tag >= 100 means a mover" reaches into a range a map may be
+  // using for anything: a generated map that numbered its sectors sequentially
+  // arrived with sixty-four islands silently bobbing up and down.
+  const MOVER_TAG_MIN = 100
+  const MOVER_TAG_MAX = 131
   for (let i = 0; i < mapData.sectors.length; i++) {
     const tag = mapData.sectors[i].tag
-    if (tag < 100) continue
-    const rise = tag - 100
+    if (tag < MOVER_TAG_MIN || tag > MOVER_TAG_MAX) continue
+    if (movers.length >= 32) {
+      console.warn('[solo] more than 32 tagged movers; ignoring the rest')
+      break
+    }
+    const rise = tag - MOVER_TAG_MIN
     if (world.applyMotionSet({
       sector: i, motionType: 1, motionTarget: 0,
       from: { x: 0n, y: 0n, z: 0n },
