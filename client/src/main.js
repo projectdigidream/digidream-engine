@@ -17,8 +17,8 @@ import * as THREE from 'three'
 import { Core } from './core.js'
 import { readMap, fxToFloat } from './mapdata.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
-import { MapView, makeIsoCamera, resizeIsoCamera, makeAgentMesh } from './render/scene.js'
-import { Camera, cameraOffset, screenRelativeMove } from './camera.js'
+import { MapView, makeCamera, resizeCamera, distanceFor, makeAgentMesh, PROJECTIONS } from './render/scene.js'
+import { Camera, cameraOffset, screenRelativeMove, DEFAULT_DISTANCE } from './camera.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
@@ -43,6 +43,11 @@ const SPAWN = params.get('spawn') ?? 'start'
 const START_ZOOM = Number(params.get('zoom') ?? 44)
 const START_YAW = Number(params.get('yaw') ?? 45) * Math.PI / 180
 const PAUSED = params.get('paused') === '1'
+// Perspective by default. ?proj=orthographic gives the parallel projection of
+// design §4 -- the two are framed from the same viewHeight, so switching
+// between them changes the projection and nothing else.
+const PROJECTION = PROJECTIONS.includes(params.get('proj')) ? params.get('proj') : 'perspective'
+const FOV = Number(params.get('fov') ?? 50)
 
 const hud = document.getElementById('hud')
 const status = document.getElementById('status')
@@ -231,16 +236,21 @@ const others = new EntityView({
 })
 
 let viewHeight = START_ZOOM
-const cam3 = makeIsoCamera(innerWidth / innerHeight, viewHeight)
+const cam3 = makeCamera(PROJECTION, innerWidth / innerHeight, viewHeight, FOV)
 const camera = new Camera()
+
+// Under perspective, zooming MOVES the camera; under orthographic it reshapes
+// the frustum and the position is irrelevant to framing. One number drives
+// both.
+const camDistance = () => distanceFor(cam3, viewHeight, DEFAULT_DISTANCE)
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight)
-  resizeIsoCamera(cam3, innerWidth / innerHeight, viewHeight)
+  resizeCamera(cam3, innerWidth / innerHeight, viewHeight)
 })
 addEventListener('wheel', (e) => {
   viewHeight = Math.min(140, Math.max(8, viewHeight * (e.deltaY > 0 ? 1.1 : 1 / 1.1)))
-  resizeIsoCamera(cam3, innerWidth / innerHeight, viewHeight)
+  resizeCamera(cam3, innerWidth / innerHeight, viewHeight)
 }, { passive: true })
 
 // --- input -----------------------------------------------------------------
@@ -374,7 +384,7 @@ function frame (now) {
 
   // The camera follows the PREDICTED position -- here, whichever of the two
   // modes produced it. Never a snapshot: see camera.js.
-  camera.cfg.offset = cameraOffset(yaw)
+  camera.cfg.offset = cameraOffset(yaw, camDistance())
   const eye = camera.update(subject, dt)
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
@@ -386,7 +396,7 @@ function frame (now) {
 
   const st = predictor?.stats
   hud.textContent =
-    `${LIVE ? 'LIVE' : 'solo'}  tick ${ticks}   ${fps} fps\n` +
+    `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps\n` +
     `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
     `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
     `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +

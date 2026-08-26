@@ -45,10 +45,25 @@ export const DEFAULTS = {
   // feel ends up varying by machine.
   smoothing: 8,
 
-  // Where the camera sits relative to its target, in three-space. The
-  // isometric angle: equal x and z with a greater height.
+  // Where the camera sits relative to its target, in three-space. Replaced
+  // every frame by the caller as yaw and zoom change; this is only where it
+  // starts. See cameraOffset() for how the direction is fixed and only the
+  // distance varies.
   offset: { x: 24, y: 30, z: 24 }
 }
+
+// The angle the world is viewed from, measured up from the horizontal.
+//
+// atan2(30, 24): the elevation the original fixed offset described. Kept as
+// that exact angle rather than rounded to a nicer one, so that switching
+// between an orthographic and a perspective projection changes the PROJECTION
+// and nothing else -- a camera that also moved would make the two impossible
+// to compare.
+export const ISO_ELEVATION = Math.atan2(30, 24)
+
+// hypot(24, 30): the old offset was a horizontal radius of 24 at a height of
+// 30 whatever the yaw -- three components, only two of them independent.
+export const DEFAULT_DISTANCE = Math.hypot(24, 30)
 
 export class Camera {
   constructor (opts = {}) {
@@ -173,14 +188,40 @@ export class Camera {
 // opposite to the camera -- which is a reflection, not an offset, so it does
 // not look like a lag that could be tuned out.
 
-/** Camera offset from the subject, in THREE space. */
-export function cameraOffset (yaw, radius = 24, height = 30) {
-  return { x: Math.cos(yaw) * radius, y: height, z: Math.sin(yaw) * radius }
+/**
+ * Camera offset from the subject, in THREE space.
+ *
+ * Fixed elevation and yaw, scaled by DISTANCE. Only the distance changes when
+ * you zoom, so the view angle -- and with it which faces are visible and which
+ * way "away from the camera" points -- is identical at every zoom level and
+ * under either projection. An orthographic camera ignores the distance for
+ * framing and a perspective one does not, which is exactly the difference
+ * between them and the only difference there should be.
+ */
+export function cameraOffset (yaw, distance = DEFAULT_DISTANCE) {
+  const horizontal = Math.cos(ISO_ELEVATION) * distance
+  return {
+    x: Math.cos(yaw) * horizontal,
+    y: Math.sin(ISO_ELEVATION) * distance,
+    z: Math.sin(yaw) * horizontal
+  }
+}
+
+/**
+ * How far a perspective camera must sit to frame `viewHeight` world units.
+ *
+ * Pure trigonometry, and here rather than beside the camera it configures so
+ * that it can be tested without pulling in a renderer -- the property it
+ * encodes (both projections frame the subject identically) is exactly the sort
+ * that should be asserted rather than eyeballed.
+ */
+export function distanceForFraming (fovDegrees, viewHeight) {
+  return (viewHeight / 2) / Math.tan((fovDegrees * Math.PI / 180) / 2)
 }
 
 /** The same offset expressed in ENGINE space (x, y horizontal; z up). */
-export function cameraOffsetEngine (yaw, radius = 24, height = 30) {
-  const o = cameraOffset(yaw, radius, height)
+export function cameraOffsetEngine (yaw, distance = DEFAULT_DISTANCE) {
+  const o = cameraOffset(yaw, distance)
   return { x: o.x, y: -o.z, z: o.y }
 }
 

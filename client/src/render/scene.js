@@ -13,6 +13,7 @@ import { NO_TEXTURE } from '../mapdata.js'
 import {
   VERTEX_SHADER, FRAGMENT_SHADER, lightUniforms, MAX_ACTIVE_LIGHTS
 } from './lighting.js'
+import { distanceForFraming } from '../camera.js'
 
 function geometryFromGroup (g) {
   const geo = new THREE.BufferGeometry()
@@ -146,26 +147,68 @@ export class MapView {
 }
 
 /**
- * An isometric view.
+ * The view.
  *
- * Orthographic, which is what makes it isometric rather than merely angled: a
- * perspective camera at the same angle changes an entity's apparent size with
- * its distance from the camera, and in an isometric platformer that reads as
- * the character shrinking when they walk away from nothing in particular.
+ * Two projections, one framing. Both are set up from the same number -- how
+ * many world units are visible vertically at the subject -- so switching
+ * between them changes the projection and nothing else:
+ *
+ *   ORTHOGRAPHIC. Parallel projection: an entity's size on screen does not
+ *   depend on its distance from the camera. That is what makes a view
+ *   isometric rather than merely angled, and it is what design §4 describes.
+ *
+ *   PERSPECTIVE. Converging projection, with the camera placed at the distance
+ *   where its frustum is exactly `viewHeight` tall at the subject. So the
+ *   subject is framed identically and everything else is not: near geometry
+ *   grows, far geometry shrinks, and vertical walls acquire visible convergence
+ *   instead of being drawn as parallelograms.
+ *
+ * The trade is real in both directions. Perspective reads as depth and makes
+ * the slabs look like objects rather than decals; it also means an entity's
+ * apparent size varies with where it stands, which in a platformer can make two
+ * platforms at the same height look like different sizes.
  */
-export function makeIsoCamera (aspect, viewHeight = 26) {
-  const halfH = viewHeight / 2
-  const halfW = halfH * aspect
-  const cam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.1, 4000)
+export const PROJECTIONS = ['perspective', 'orthographic']
+
+export function makeCamera (kind, aspect, viewHeight, fovDegrees = 50) {
+  if (kind === 'orthographic') {
+    const halfH = viewHeight / 2
+    const cam = new THREE.OrthographicCamera(-halfH * aspect, halfH * aspect, halfH, -halfH, 0.1, 4000)
+    cam.up.set(0, 1, 0)
+    cam.userData.kind = 'orthographic'
+    cam.userData.fov = fovDegrees
+    return cam
+  }
+  const cam = new THREE.PerspectiveCamera(fovDegrees, aspect, 0.5, 5000)
   cam.up.set(0, 1, 0)
+  cam.userData.kind = 'perspective'
   return cam
 }
 
-export function resizeIsoCamera (cam, aspect, viewHeight) {
-  const halfH = viewHeight / 2
-  const halfW = halfH * aspect
-  cam.left = -halfW; cam.right = halfW; cam.top = halfH; cam.bottom = -halfH
+export function resizeCamera (cam, aspect, viewHeight) {
+  if (cam.userData.kind === 'orthographic') {
+    const halfH = viewHeight / 2
+    cam.left = -halfH * aspect
+    cam.right = halfH * aspect
+    cam.top = halfH
+    cam.bottom = -halfH
+  } else {
+    cam.aspect = aspect
+  }
   cam.updateProjectionMatrix()
+}
+
+/**
+ * How far the camera must sit to see `viewHeight` world units at the subject.
+ *
+ * For a perspective camera this is what turns a zoom level into a position.
+ * For an orthographic one the distance does not affect framing at all, so the
+ * default is kept -- moving it would only change what the near and far planes
+ * clip.
+ */
+export function distanceFor (cam, viewHeight, fallback) {
+  if (cam.userData.kind === 'orthographic') return fallback
+  return distanceForFraming(cam.fov, viewHeight)
 }
 
 /** A stand-in body. Real entity rendering (sprites, meshes) is slice 2c. */

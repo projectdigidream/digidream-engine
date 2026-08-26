@@ -1,7 +1,10 @@
 //
 // Camera tests (design §4.1).
 //
-import { Camera, DEFAULTS, cameraOffsetEngine, screenRelativeMove } from '../src/camera.js'
+import {
+  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove,
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming
+} from '../src/camera.js'
 
 let checks = 0
 let fails = 0
@@ -195,6 +198,42 @@ console.log('\n--- movement follows the camera ---')
   const d = screenRelativeMove(1, 0, 1.1)
   check(near(Math.hypot(w.x, w.y), 1) && near(Math.hypot(d.x, d.y), 1), 'both axes are unit length')
   check(near(w.x * d.x + w.y * d.y, 0), 'and perpendicular')
+}
+
+console.log('\n--- projection ---')
+{
+  // Zooming changes the DISTANCE, never the angle. If the angle moved with the
+  // zoom, which faces are visible -- and which way "away from the camera"
+  // points, which the controls are derived from -- would change as you
+  // scrolled.
+  const elevation = (d) => {
+    const o = cameraOffset(1.1, d)
+    return Math.atan2(o.y, Math.hypot(o.x, o.z))
+  }
+  check(near(elevation(10), elevation(200), 1e-12), 'the view angle is the same at every distance')
+  check(near(elevation(38), ISO_ELEVATION, 1e-12), 'and is the elevation the constant names')
+
+  // The default distance reproduces the fixed offset this replaced, exactly, so
+  // switching projection is the only thing that changed.
+  const o = cameraOffset(0, DEFAULT_DISTANCE)
+  check(near(o.x, 24) && near(o.y, 30) && near(o.z, 0),
+        `the default is still radius 24 at height 30 (${o.x.toFixed(3)}, ${o.y.toFixed(3)})`)
+
+  // A perspective camera is placed at the distance where its frustum is exactly
+  // `viewHeight` tall at the subject. That is what makes the two projections
+  // frame the subject identically, so a comparison between them shows the
+  // projection and not a different shot.
+  const FOV = 50
+  for (const vh of [8, 26, 44, 140]) {
+    const d = distanceForFraming(FOV, vh)
+    const framed = 2 * d * Math.tan((FOV * Math.PI / 180) / 2)
+    check(near(framed, vh, 1e-9), `fov ${FOV} at viewHeight ${vh} frames exactly ${framed.toFixed(3)} units`)
+  }
+
+  // A narrower lens has to stand further back for the same framing.
+  const wide = distanceForFraming(80, 40)
+  const narrow = distanceForFraming(20, 40)
+  check(narrow > wide, `a narrower lens stands further back (${wide.toFixed(1)} -> ${narrow.toFixed(1)})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
