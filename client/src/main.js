@@ -1,17 +1,17 @@
 //
 // The browser client.
 //
-// Two modes, and the difference between them is exactly the design's central
-// claim (§7.1, §9.3) made visible:
+// Two modes, and the difference between them is the design's central claim
+// (§7.1, §9.3) made visible:
 //
 //   solo  the wasm core runs the simulation locally. No server, no network, no
-//         Lua. What you see is the physics core alone.
+//         Lua. What you see is the physics core on its own.
 //   live  the same wasm core PREDICTS while a real server is authoritative.
 //
-// Nothing in the renderer knows which mode it is in. It is handed a position
-// each frame and draws it, because prediction's whole purpose is that the two
-// look identical -- and if they ever stopped looking identical, the renderer is
-// not where the fault would be.
+// The RENDERER does not know which it is in. It is handed a position each frame
+// and draws it, because prediction's whole purpose is that the two are
+// indistinguishable -- and if they ever stop being indistinguishable, the
+// renderer is not where the fault is.
 //
 import * as THREE from 'three'
 import { Core } from './core.js'
@@ -19,11 +19,22 @@ import { readMap, fxToFloat } from './mapdata.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
 import { MapView, makeIsoCamera, resizeIsoCamera, makeAgentMesh } from './render/scene.js'
 import { Camera, cameraOffset, screenRelativeMove } from './camera.js'
+import { EntityView } from './render/entities.js'
+import { Connection } from './net.js'
+import { Predictor } from './predictor.js'
+import { MapAccumulator } from './maploader.js'
+import { MSG } from './proto.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
 
 const params = new URLSearchParams(location.search)
+
+// Live if a server is named; solo otherwise.
+const SERVER = params.get('server')
+const LIVE = SERVER !== null
+const SERVER_URL = SERVER || 'https://127.0.0.1:34433/dnp'
+
 const MAP_URL = params.get('map') ?? '/maps/test.dnpm'
 const SPAWN = params.get('spawn') ?? 'start'
 // View controls as URL parameters, so a particular framing can be reproduced --
@@ -36,53 +47,147 @@ const hud = document.getElementById('hud')
 const status = document.getElementById('status')
 const say = (m) => { status.textContent = m }
 
-// --- boot ------------------------------------------------------------------
+const LOAD_STATUS = ['Ok', 'BadMagic', 'BadVersion', 'Truncated', 'TooLarge',
+                     'BadIndex', 'HashMismatch', 'TriangleMismatch']
 
 say('loading simulation core...')
 const core = await Core.load()
 
-say(`fetching ${MAP_URL}...`)
-const bytes = new Uint8Array(await (await fetch(MAP_URL)).arrayBuffer())
-const { ok, status: loadStatus, map } = core.loadMap(bytes)
+// --- getting a map ---------------------------------------------------------
+//
+// Solo fetches one over HTTP; live receives one over the control channel. Both
+// end up parsing the SAME bytes with the same loader, which is the property
+// that makes client and server agree about geometry -- not a shared compiled-in
+// copy, and not two parsers that are believed to match.
+
+let mapBytes
+let conn = null
+let welcome = null
+const motionSets = []
+const pendingSnapshots = []
+// Declared BEFORE the connection opens. Messages start arriving during the
+// await inside open(), so a handler closing over a `const` declared further
+// down would hit the temporal dead zone on the first PARAM_UPDATE -- which is
+// to say, on a real server, immediately.
+const paramUpdates = []
+
+if (LIVE) {
+  say(`connecting to ${SERVER_URL}...`)
+  // A development edge presents a self-signed certificate. Its hash is public
+  // -- the server sends the certificate itself -- so serving the hash is not a
+  // secret being leaked; the private key is never within reach of the dev
+  // server's mounts.
+  let certHash = null
+  try {
+    const j = await (await fetch('/certhash')).json()
+    certHash = Uint8Array.from(atob(j.sha256_base64), (c) => c.charCodeAt(0))
+  } catch {
+    // No hash available: fall through with none and let WebTransport apply the
+    // ordinary trust rules, which is right for a real deployment.
+  }
+
+  const acc = new MapAccumulator()
+  conn = new Connection({
+    url: SERVER_URL,
+    certHash,
+    onControl (m) {
+      if (m.type === MSG.WELCOME) welcome = m
+      else if (m.type === MSG.MAP_DATA) acc.push(m)
+      else if (m.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
+      else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
+      else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
+    },
+    onSnapshot (s) { pendingSnapshots.push(s) },
+    onClose (e) { say(`disconnected${e ? `: ${e.message ?? e}` : ''}`) }
+  })
+  await conn.open()
+  say('connected; waiting for WELCOME...')
+
+  // Progress reported at each step of the handshake, because "connecting..."
+  // that never changes says nothing about WHICH step is stuck -- and the three
+  // are entirely different failures: no transport, no reply, or a map that
+  // never finishes arriving.
+  const deadline = Date.now() + 10000
+  while ((!welcome || !acc.complete) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 20))
+    if (acc.failed) throw new Error(`map transfer failed: ${acc.failed}`)
+    say(welcome
+      ? `receiving map... ${acc.received}/${acc.total} bytes`
+      : 'connected; waiting for WELCOME...')
+  }
+  if (!welcome) throw new Error('no WELCOME from the server')
+  if (!acc.complete) throw new Error('map transfer did not complete')
+  mapBytes = acc.bytes()
+} else {
+  say(`fetching ${MAP_URL}...`)
+  mapBytes = new Uint8Array(await (await fetch(MAP_URL)).arrayBuffer())
+}
+
+const { ok, status: loadStatus, map } = core.loadMap(mapBytes)
 if (!ok) {
-  // Named, not numbered. A client that says "status 5" sends its user to read
-  // the source; the loader already knows which of its checks refused the file.
-  const names = ['Ok', 'BadMagic', 'BadVersion', 'Truncated', 'TooLarge', 'BadIndex',
-                 'HashMismatch', 'TriangleMismatch']
-  say(`map rejected: ${names[loadStatus] ?? loadStatus}`)
-  throw new Error(`map rejected: ${names[loadStatus] ?? loadStatus}`)
+  // Named, not numbered. A client that reports "status 5" sends its user to
+  // read the source; the loader already knows which of its checks refused.
+  say(`map rejected: ${LOAD_STATUS[loadStatus] ?? loadStatus}`)
+  throw new Error(`map rejected: ${LOAD_STATUS[loadStatus] ?? loadStatus}`)
 }
 
 const mapData = readMap(map)
 const world = core.createWorld({ map })
 
-// Sector motion, from the authored tag convention. On a real server this is
-// Lua's business (§3.1.2) and arrives as SECTOR_MOTION_SET; solo mode has no
-// Lua, so it reads the same tags the server's fallback used to, purely so a
-// lift is moving while you look at it.
+if (LIVE && welcome && map.hash !== welcome.mapHash) {
+  // Same bytes, different parse: that is a build mismatch, and it is worth
+  // refusing rather than playing a game whose geometry disagrees with the
+  // server's. Every collision would differ, and it would look like a physics
+  // bug for as long as anyone was willing to look.
+  say(`map hash mismatch: client ${map.hash.toString(16)} vs server ${welcome.mapHash.toString(16)}`)
+  throw new Error('map hash mismatch')
+}
+
+// --- what moves ------------------------------------------------------------
+
 const movers = []
-for (let i = 0; i < mapData.sectors.length; i++) {
-  const tag = mapData.sectors[i].tag
-  if (tag < 100) continue
-  const rise = tag - 100
-  if (world.applyMotionSet({
-    sector: i, motionType: 1, motionTarget: 0,
-    from: { x: 0n, y: 0n, z: 0n },
-    to: { x: 0n, y: 0n, z: BigInt(Math.round(rise * 4294967296)) },
-    startTick: 0, durationTicks: 240, loopMode: 2
-  })) movers.push(i)
+if (LIVE) {
+  // Replicated. Parametric movers cost nothing after this: the client computes
+  // their position for any tick from the parameters it now holds (§3.1.2).
+  for (const m of motionSets) {
+    if (world.applyMotionSet(m)) movers.push(m.sector)
+  }
+} else {
+  // Solo has no Lua, so it reads the authored tag convention purely so a lift
+  // is moving while you look at it. On a server this is Lua's decision.
+  for (let i = 0; i < mapData.sectors.length; i++) {
+    const tag = mapData.sectors[i].tag
+    if (tag < 100) continue
+    const rise = tag - 100
+    if (world.applyMotionSet({
+      sector: i, motionType: 1, motionTarget: 0,
+      from: { x: 0n, y: 0n, z: 0n },
+      to: { x: 0n, y: 0n, z: BigInt(Math.round(rise * 4294967296)) },
+      startTick: 0, durationTicks: 240, loopMode: 2
+    })) movers.push(i)
+  }
 }
 
 const spawn = map.spawnForTag(SPAWN)
 const agent = world.spawn(spawn)
+const predictor = LIVE ? new Predictor(world, agent) : null
+if (LIVE) {
+  // Parameter updates that arrived during the handshake, applied before the
+  // first tick: a client predicting with the wrong movement rules mispredicts
+  // every tick and never recovers (docs/protocol.md §8.4).
+  for (const m of paramUpdates) {
+    world.applyParamUpdate(agent, m)
+    predictor.paramEpoch = m.epoch
+  }
+  paramUpdates.length = 0
+  world.tick = welcome.serverTick
+}
 
-// How far you may fall before this demo puts you back.
-//
-// The ENGINE does not do this. An entity that leaves the map falls forever,
-// deliberately: "you died" is a gameplay decision and gameplay is server Lua
-// (§3.1's crushing takes the same shape -- the engine detects, Lua decides).
-// A kill plane baked into the core would be a rule no server could opt out of.
-// So this lives in the demo harness, where it is honestly a convenience.
+// How far you may fall before this demo puts you back. The ENGINE does not do
+// this: an entity that leaves the map falls forever, deliberately, because "you
+// died" is a gameplay decision and gameplay is server Lua -- the same shape
+// §3.1 gives crushing. A kill plane in the core would be a rule no server could
+// opt out of. In live mode the server owns the answer, so this is solo-only.
 const lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
 const VOID_FLOOR = lowestFloor - 40
 let falls = 0
@@ -101,6 +206,13 @@ scene.add(view.root)
 
 const body = makeAgentMesh()
 scene.add(body)
+
+// Other players. Interpolated, never predicted -- predicting one means guessing
+// what another person will press (see render/entities.js).
+const others = new EntityView({
+  makeMesh: () => makeAgentMesh(0xffa066),
+  scene
+})
 
 let viewHeight = START_ZOOM
 const cam3 = makeIsoCamera(innerWidth / innerHeight, viewHeight)
@@ -123,16 +235,11 @@ addEventListener('keydown', (e) => { held.add(e.code); if (e.code === 'Space') e
 addEventListener('keyup', (e) => held.delete(e.code))
 addEventListener('blur', () => held.clear())
 
-// Camera yaw, so the map can be looked at from any side. Movement is rotated to
-// match: in an isometric view "up" means away from the camera, and a control
-// scheme where it means +y regardless would make half the rotations unplayable.
 let yaw = START_YAW
 
-// The engine's move axes are quantised to Q1.15 by the SAME function the server
-// decodes with (protocol R1). Even here, where there is no server to agree
-// with, going through it keeps solo and live modes producing identical input
-// from identical keys -- so a movement difference between them is never the
-// input path.
+// Quantised with the SAME function the server decodes with (protocol R1).
+// Reimplementing it in JS would be one more place for the two sides to
+// disagree, and the disagreement would be one ulp wide and present every tick.
 function axis (v) {
   return core.axisFromFxRaw(BigInt(Math.round(Math.max(-1, Math.min(1, v)) * 4294967296)))
 }
@@ -175,6 +282,23 @@ let ticks = 0
 let frames = 0
 let fpsAt = last
 let fps = 0
+let inputHistory = []
+let newestServerTick = 0
+
+function drainSnapshots () {
+  while (pendingSnapshots.length) {
+    const s = pendingSnapshots.shift()
+    newestServerTick = Math.max(newestServerTick, s.serverTick)
+    for (const so of s.sectorOffsets ?? []) world.setDiscreteOffset(so.sector, so.offset)
+    others.ingest(s, { fxToFloat, toThree: (x, y, z) => ({ x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) }) })
+    predictor.reconcile(s)
+  }
+  for (const m of paramUpdates) {
+    world.applyParamUpdate(agent, m)
+    predictor.paramEpoch = m.epoch
+  }
+  paramUpdates.length = 0
+}
 
 function frame (now) {
   requestAnimationFrame(frame)
@@ -190,28 +314,34 @@ function frame (now) {
   // after a stall, and for the same reason.
   let budget = PAUSED ? 0 : 8
   while (acc >= DT && budget-- > 0) {
-    world.setInput(agent, currentInput())
-    world.step()
+    const f = currentInput()
+    if (LIVE) {
+      predictor.step(f)
+      inputHistory = [f, ...inputHistory].slice(0, 8)   // redundancy, protocol §4.1
+      conn.send(predictor.tick, predictor.lastSnapshot?.serverTick ?? 0, inputHistory)
+    } else {
+      world.setInput(agent, f)
+      world.step()
+    }
     acc -= DT
     ticks++
   }
   if (acc > DT) acc = 0
 
-  // Moving sectors changed the geometry, so the mesh follows. Only the movers
-  // and what looks at them are dirty, but the whole map is re-merged -- see
-  // MapView.rebuildSectors for why that is the cheaper of the two shapes.
+  if (LIVE) drainSnapshots()
+
+  // Moving sectors changed the geometry, so the mesh follows.
   if (movers.length) {
     for (const i of movers) {
-      const s = mapData.sectors[i]
       const live = liveSector(i)
-      s.floorZ = live.floorZ
-      s.ceilZ = live.ceilZ
+      mapData.sectors[i].floorZ = live.floorZ
+      mapData.sectors[i].ceilZ = live.ceilZ
     }
     view.rebuildSectors(movers)
   }
 
   let a = world.readAgent(agent)
-  if (fxToFloat(a.pos.z) < VOID_FLOOR) {
+  if (!LIVE && fxToFloat(a.pos.z) < VOID_FLOOR) {
     falls++
     world.writeAgent(agent, { ...a, pos: spawn, vel: { x: 0n, y: 0n, z: 0n }, grounded: false })
     camera.snapTo({ x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y)) })
@@ -223,9 +353,10 @@ function frame (now) {
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
+  if (LIVE) others.update(newestServerTick, acc / DT)
 
-  // The camera follows the PREDICTED position -- here, the locally simulated
-  // one. Never a snapshot: see camera.js.
+  // The camera follows the PREDICTED position -- here, whichever of the two
+  // modes produced it. Never a snapshot: see camera.js.
   camera.cfg.offset = cameraOffset(yaw)
   const eye = camera.update(subject, dt)
   cam3.position.set(eye.x, eye.y, eye.z)
@@ -235,19 +366,24 @@ function frame (now) {
 
   frames++
   if (now - fpsAt > 500) { fps = Math.round(frames * 1000 / (now - fpsAt)); frames = 0; fpsAt = now }
+
+  const st = predictor?.stats
   hud.textContent =
-    `tick ${ticks}   ${fps} fps\n` +
+    `${LIVE ? 'LIVE' : 'solo'}  tick ${ticks}   ${fps} fps\n` +
     `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
     `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
     `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
     `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}` +
-    (falls ? `   falls ${falls}` : '')
+    (falls ? `   falls ${falls}` : '') +
+    (LIVE
+      ? `\nothers ${others.count}   exact ${st.exactMatches}   misp ${st.mispredictions}` +
+        `   starved ${st.starvedDivergences}   resync ${st.hardResyncs}`
+      : '')
 }
 
-// The live floor/ceiling of a sector, which sector motion has written back into
-// the wasm store. Read from there rather than recomputed in JS: recomputing
-// would be a second implementation of parametric_offset, and the two would
-// disagree the first time either changed.
+// The live floor/ceiling of a sector, read from the wasm store that sector
+// motion writes into. Recomputing it in JS would be a second implementation of
+// parametric_offset, and the two would disagree the first time either changed.
 function liveSector (i) {
   const M = core.M
   M._dnp_map_sector(map.ptr, i, core.buf64, core.buf32)

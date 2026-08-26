@@ -89,6 +89,23 @@ const log = (code, url) => console.log(`[dev] ${code} ${url}`)
 
 createServer(async (req, res) => {
   try {
+    // The development edge's certificate HASH, so a browser can accept exactly
+    // that self-signed certificate via serverCertificateHashes.
+    //
+    // Public by construction -- the server presents the certificate itself on
+    // every connection -- so this is not a secret being handed out. The private
+    // key sits in the same directory and is deliberately not reachable through
+    // any mount, which is why this is one named route rather than serving
+    // certs/.
+    if (req.url === '/certhash') {
+      const p = join(ROOT, 'server', 'edge', 'certs', 'cert-hash.json')
+      const body = await readFile(p).catch(() => null)
+      log(body ? 200 : 404, req.url)
+      if (!body) { res.writeHead(404).end('no dev certificate; run npm run certs in server/edge'); return }
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body)
+      return
+    }
+
     let file
     if (req.url.startsWith('/maps/')) {
       file = await findMap(req.url.slice('/maps/'.length).split('?')[0])

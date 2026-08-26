@@ -11,7 +11,6 @@
 // share the server's exact arithmetic (protocol R2/R3). This file stays useful
 // for tests, tooling and the network simulator.
 //
-import { Buffer } from 'node:buffer'
 
 export const MSG = {
   HELLO: 0x01,
@@ -84,24 +83,39 @@ export function axisFromNumber (v) {
   return Math.max(-32767, Math.min(32767, t))
 }
 
+// Uint8Array and DataView, not node's Buffer.
+//
+// This file is shared client code and the BROWSER is its primary target, so a
+// `node:buffer` import made it unloadable in the one place it matters most --
+// which went unnoticed for as long as the only client was a test harness. Node
+// keeps working either way: a Buffer IS a Uint8Array, so a decoder handed one
+// reads it unchanged.
+//
+// Little-endian everywhere, stated once here rather than at each call, because
+// it is the wire format's choice and not this class's (docs/protocol.md §2).
+const LE = true
+
 class Writer {
   constructor (size = 2048) {
-    this.buf = Buffer.alloc(size)
+    this.buf = new Uint8Array(size)
+    this.view = new DataView(this.buf.buffer)
     this.pos = 0
   }
 
-  u8 (v) { this.buf.writeUInt8(v & 0xff, this.pos); this.pos += 1; return this }
-  u16 (v) { this.buf.writeUInt16LE(v & 0xffff, this.pos); this.pos += 2; return this }
-  i16 (v) { this.buf.writeInt16LE(v, this.pos); this.pos += 2; return this }
-  u32 (v) { this.buf.writeUInt32LE(v >>> 0, this.pos); this.pos += 4; return this }
-  u64 (v) { this.buf.writeBigUInt64LE(BigInt(v), this.pos); this.pos += 8; return this }
-  bytes (b) { b.copy(this.buf, this.pos); this.pos += b.length; return this }
+  u8 (v) { this.view.setUint8(this.pos, v & 0xff); this.pos += 1; return this }
+  u16 (v) { this.view.setUint16(this.pos, v & 0xffff, LE); this.pos += 2; return this }
+  i16 (v) { this.view.setInt16(this.pos, v, LE); this.pos += 2; return this }
+  u32 (v) { this.view.setUint32(this.pos, v >>> 0, LE); this.pos += 4; return this }
+  u64 (v) { this.view.setBigUint64(this.pos, BigInt(v), LE); this.pos += 8; return this }
+  bytes (b) { this.buf.set(b, this.pos); this.pos += b.length; return this }
   done () { return this.buf.subarray(0, this.pos) }
 }
 
 class Reader {
   constructor (buf) {
-    this.buf = Buffer.isBuffer(buf) ? buf : Buffer.from(buf)
+    // Accepts any view of bytes, including a node Buffer -- which is one.
+    this.buf = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
+    this.view = new DataView(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength)
     this.pos = 0
     this.ok = true
   }
@@ -111,13 +125,13 @@ class Reader {
     return true
   }
 
-  u8 () { if (!this.need(1)) return 0; return this.buf.readUInt8(this.pos++) }
-  i8 () { if (!this.need(1)) return 0; return this.buf.readInt8(this.pos++) }
-  u16 () { if (!this.need(2)) return 0; const v = this.buf.readUInt16LE(this.pos); this.pos += 2; return v }
-  u32 () { if (!this.need(4)) return 0; const v = this.buf.readUInt32LE(this.pos); this.pos += 4; return v }
-  i32 () { if (!this.need(4)) return 0; const v = this.buf.readInt32LE(this.pos); this.pos += 4; return v }
-  i64 () { if (!this.need(8)) return 0n; const v = this.buf.readBigInt64LE(this.pos); this.pos += 8; return v }
-  u64 () { if (!this.need(8)) return 0n; const v = this.buf.readBigUInt64LE(this.pos); this.pos += 8; return v }
+  u8 () { if (!this.need(1)) return 0; return this.view.getUint8(this.pos++) }
+  i8 () { if (!this.need(1)) return 0; return this.view.getInt8(this.pos++) }
+  u16 () { if (!this.need(2)) return 0; const v = this.view.getUint16(this.pos, LE); this.pos += 2; return v }
+  u32 () { if (!this.need(4)) return 0; const v = this.view.getUint32(this.pos, LE); this.pos += 4; return v }
+  i32 () { if (!this.need(4)) return 0; const v = this.view.getInt32(this.pos, LE); this.pos += 4; return v }
+  i64 () { if (!this.need(8)) return 0n; const v = this.view.getBigInt64(this.pos, LE); this.pos += 8; return v }
+  u64 () { if (!this.need(8)) return 0n; const v = this.view.getBigUint64(this.pos, LE); this.pos += 8; return v }
 
   varint () {
     let result = 0n
@@ -143,7 +157,7 @@ class Reader {
 // ------------------------------------------------------------- control channel
 
 /** u32 length | u8 type | body  (docs/protocol.md section 8) */
-export function encodeControlMessage (type, body = Buffer.alloc(0)) {
+export function encodeControlMessage (type, body = new Uint8Array(0)) {
   const w = new Writer(body.length + 8)
   w.u32(1 + body.length).u8(type).bytes(body)
   return w.done()

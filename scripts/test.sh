@@ -99,6 +99,7 @@ else
   # arithmetic, and arithmetic is worth asserting rather than screenshotting.
   node client/test/mapgeom.test.js | tail -2
   node client/test/camera.test.js | tail -2
+  node client/test/entities.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2
@@ -111,7 +112,8 @@ else
      && node test/crush.test.js 2>/dev/null | tail -2 \
      && node test/phase3.test.js 2>/dev/null | tail -2 \
      && node test/params.test.js 2>/dev/null | tail -2 \
-     && node test/lua.test.js 2>/dev/null | tail -2)
+     && node test/lua.test.js 2>/dev/null | tail -2 \
+     && node test/live.test.js 2>/dev/null | tail -2)
 
   # The control case: a client that ignores the replicated motion parameters
   # MUST mispredict. If it does not, the replication is doing nothing and the
