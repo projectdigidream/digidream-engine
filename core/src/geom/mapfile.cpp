@@ -107,6 +107,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u16v(r.floor_tex);
         w.u16v(r.ceil_tex);
         w.u8v(r.light_level);
+        w.fxraw(r.skirt);
     }
     for (u32 i = 0; i < m.side_count; ++i) {
         const SideRender& r = rd.side(i);
@@ -422,6 +423,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         const u16 floor_tex = r.u16v();
         const u16 ceil_tex = r.u16v();
         const u8 light = r.u8v();
+        const fx skirt = r.fxraw();
         if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
         if (!texture_ok(floor_tex) || !texture_ok(ceil_tex)) {
             store.clear(); return MapLoadStatus::BadIndex;
@@ -430,6 +432,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         sr.floor_tex = floor_tex;
         sr.ceil_tex = ceil_tex;
         sr.light_level = light;
+        sr.skirt = skirt;
     }
 
     for (u32 i = 0; i < side_count; ++i) {

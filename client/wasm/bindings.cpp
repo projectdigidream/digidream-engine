@@ -156,6 +156,7 @@ void dnp_map_sector(const geom::MapStorage* m, unsigned i, long long* out64, uns
     const geom::SectorRender& r = m->render_view().sector(i);
     out64[0] = s.floor_z.raw;
     out64[1] = s.ceil_z.raw;
+    out64[2] = r.skirt.raw;
     out32[0] = s.first_point;
     out32[1] = s.point_count;
     out32[2] = s.first_side;

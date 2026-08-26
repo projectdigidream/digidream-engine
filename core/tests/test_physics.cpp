@@ -410,6 +410,206 @@ static void test_ceiling_and_containment() {
     }
 }
 
+// ------------------------------------------------------------------ ledges
+
+// One square platform, 0..10 on both axes, floating at z = 4. `flags` decides
+// whether its edges are walls or open.
+static MapData make_platform(u8 flags, Sector* sec, Side* sides, const fx2* pts) {
+    for (int i = 0; i < 4; ++i) {
+        sides[i] = Side{static_cast<u16>(i), static_cast<u16>((i + 1) % 4), NO_SECTOR, flags};
+    }
+    *sec = Sector{0, 4, 0, 4, F(4), F(40), 0, 0, 0};
+    MapData m;
+    m.points = pts; m.point_count = 4;
+    m.sectors = sec; m.sector_count = 1;
+    m.sides = sides; m.side_count = 4;
+    return m;
+}
+
+static void test_walking_off_a_ledge() {
+    std::printf("ledge: an open edge can be walked off; a wall cannot\n");
+
+    static const fx2 pts[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
+    Sector sec_open{};
+    Side sides_open[4]{};
+    const MapData open_map = make_platform(side_flag::LEDGE, &sec_open, sides_open, pts);
+
+    Sector sec_wall{};
+    Side sides_wall[4]{};
+    const MapData wall_map = make_platform(0, &sec_wall, sides_wall, pts);
+
+    // The same agent, the same walk east, on the two maps.
+    const fx dt = Ff(1, 60);
+    const auto walk = [&](const MapData& m, int ticks) {
+        MoveInput in;
+        in.pos = fx3{F(5), F(5), F(4)};
+        in.vel = fx3{F(8), fx::zero(), fx::zero()};
+        in.sector = 0;
+        in.grounded = true;
+        MoveResult r;
+        for (int t = 0; t < ticks; ++t) {
+            r = move(m, in, dt);
+            in.pos = r.pos;
+            in.vel = r.vel;
+            in.sector = r.sector;
+            in.grounded = r.grounded;
+            // Gravity, so leaving the platform actually falls.
+            in.vel.z -= F(16) * dt;
+        }
+        return r;
+    };
+
+    const MoveResult walled = walk(wall_map, 120);
+    CHECK(walled.sector == 0);
+    CHECK(walled.grounded);
+    // Stopped at the wall, radius short of it.
+    CHECK(walled.pos.x <= F(10));
+    CHECK(walled.pos.x >= F(9));
+    CHECK(walled.pos.z == F(4));
+
+    const MoveResult fell = walk(open_map, 120);
+    CHECK(fell.sector == NO_SECTOR);
+    CHECK(!fell.grounded);
+    CHECK(fell.pos.x > F(10));      // past where the wall would have been
+    CHECK(fell.pos.z < F(4));       // and below the platform
+
+    // Horizontal speed survives the fall. An entity that stopped dead the
+    // instant it left the map would make a missed jump look like hitting
+    // something invisible.
+    CHECK(fell.vel.x == F(8));
+
+    // Falling is not a floor: it keeps going, tick after tick.
+    MoveInput deep;
+    deep.pos = fell.pos;
+    deep.vel = fell.vel;
+    deep.sector = fell.sector;
+    const MoveResult a = move(open_map, deep, dt);
+    deep.pos = a.pos;
+    deep.vel = a.vel;
+    deep.vel.z -= F(16) * dt;
+    deep.sector = a.sector;
+    const MoveResult b = move(open_map, deep, dt);
+    CHECK(b.pos.z < a.pos.z);
+    CHECK(!b.grounded);
+    CHECK(b.sector == NO_SECTOR);
+}
+
+static void test_falling_past_a_platform() {
+    std::printf("ledge: a falling entity passes under a platform, never onto it\n");
+
+    // Two platforms in a row, both open-edged, both floating at z = 4:
+    //   A: x 0..10   B: x 20..30      (a 10-unit gap, y 0..10 for both)
+    static const fx2 pts[] = {
+        {F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)},
+        {F(20), F(0)}, {F(30), F(0)}, {F(30), F(10)}, {F(20), F(10)}
+    };
+    Sector secs[2] = {
+        Sector{0, 4, 0, 4, F(4), F(40), 0, 0, 0},
+        Sector{4, 4, 4, 4, F(4), F(40), 0, 0, 0}
+    };
+    Side sides[8]{};
+    for (int s = 0; s < 2; ++s) {
+        for (int i = 0; i < 4; ++i) {
+            sides[s * 4 + i] = Side{static_cast<u16>(s * 4 + i),
+                                    static_cast<u16>(s * 4 + (i + 1) % 4),
+                                    NO_SECTOR, side_flag::LEDGE};
+        }
+    }
+    MapData m;
+    m.points = pts; m.point_count = 8;
+    m.sectors = secs; m.sector_count = 2;
+    m.sides = sides; m.side_count = 8;
+
+    // A missed jump: leaves A heading east, not fast enough to clear the gap.
+    const fx dt = Ff(1, 60);
+    MoveInput in;
+    in.pos = fx3{F(9), F(5), F(4)};
+    in.vel = fx3{F(12), fx::zero(), F(4)};
+    in.sector = 0;
+    in.grounded = false;
+
+    bool entered_void = false;
+    bool ever_grounded_after_void = false;
+    // Sampled WHILE it is beneath platform B, not at the end of the run: at
+    // 12 units per second it crosses the whole 10-unit slab in under a second
+    // and is long past it by tick 240. The first version of this asserted the
+    // final position was under B and failed for exactly that reason.
+    int ticks_under_b = 0;
+    fx lowest = in.pos.z;
+    for (int t = 0; t < 240; ++t) {
+        const MoveResult r = move(m, in, dt);
+        if (r.sector == NO_SECTOR) entered_void = true;
+        if (entered_void && r.grounded) ever_grounded_after_void = true;
+        if (r.pos.x > F(20) && r.pos.x < F(30) && r.pos.z < F(4)) ++ticks_under_b;
+        lowest = r.pos.z < lowest ? r.pos.z : lowest;
+        in.pos = r.pos;
+        in.vel = r.vel;
+        in.sector = r.sector;
+        in.grounded = r.grounded;
+        in.vel.z -= F(16) * dt;
+    }
+
+    CHECK(entered_void);
+    // It really did pass through the space beneath B rather than missing it.
+    CHECK(ticks_under_b > 10);
+    // Never snapped up onto it, and still falling at the end.
+    CHECK(!ever_grounded_after_void);
+    CHECK(in.sector == NO_SECTOR);
+    CHECK(lowest < F(-40));
+
+    // The control: from ABOVE, the same platform still catches it. Otherwise
+    // "never lands" would be satisfied by a floor that had stopped working.
+    MoveInput from_above;
+    from_above.pos = fx3{F(25), F(5), F(30)};
+    from_above.vel = fx3{fx::zero(), fx::zero(), fx::zero()};
+    from_above.sector = NO_SECTOR;      // arriving out of the void
+    bool landed = false;
+    for (int t = 0; t < 240 && !landed; ++t) {
+        const MoveResult r = move(m, from_above, dt);
+        landed = r.grounded;
+        from_above.pos = r.pos;
+        from_above.vel = r.vel;
+        from_above.sector = r.sector;
+        from_above.grounded = r.grounded;
+        from_above.vel.z -= F(16) * dt;
+    }
+    CHECK(landed);
+    CHECK(from_above.pos.z == F(4));
+    CHECK(from_above.sector == 1);
+}
+
+static void test_ledge_does_not_leak_into_closed_maps() {
+    std::printf("ledge: a sector with no open edge still cannot be left\n");
+
+    static const fx2 pts[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
+    Sector sec{};
+    Side sides[4]{};
+    const MapData m = make_platform(0, &sec, sides, pts);
+
+    CHECK(!sector_has_ledge(m, 0));
+    CHECK(!sector_has_ledge(m, -1));      // defined answer, not a crash
+    CHECK(!sector_has_ledge(m, 99));
+
+    // Fired at the wall far faster than one tick of travel, so the swept path
+    // is what has to stop it rather than resting contact.
+    MoveInput in;
+    in.pos = fx3{F(5), F(5), F(4)};
+    in.vel = fx3{F(600), fx::zero(), fx::zero()};
+    in.sector = 0;
+    const MoveResult r = move(m, in, Ff(1, 60));
+    CHECK(r.sector == 0);
+    CHECK(r.pos.x < F(10));
+
+    // And with the edges opened, the SAME shot leaves.
+    Sector osec{};
+    Side osides[4]{};
+    const MapData om = make_platform(side_flag::LEDGE, &osec, osides, pts);
+    CHECK(sector_has_ledge(om, 0));
+    const MoveResult ro = move(om, in, Ff(1, 60));
+    CHECK(ro.sector == NO_SECTOR);
+    CHECK(ro.pos.x > F(10));
+}
+
 static void test_determinism_of_move() {
     std::printf("physics: move() is a pure function of its inputs\n");
     fx2 pts[8]; Sector secs[2]; Side sides[8]; MapData map;
@@ -443,6 +643,9 @@ int main() {
     test_step_symmetry();
     test_ccd();
     test_ceiling_and_containment();
+    test_walking_off_a_ledge();
+    test_falling_past_a_platform();
+    test_ledge_does_not_leak_into_closed_maps();
     test_determinism_of_move();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

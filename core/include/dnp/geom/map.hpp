@@ -28,6 +28,17 @@ namespace side_flag {
 inline constexpr u8 CLIMBABLE = 1u << 0;   // design §3.1, read by the climb state
 inline constexpr u8 GRAPPLE   = 1u << 1;   // grapple-attachable, design §7.1.1
 inline constexpr u8 BLOCKING  = 1u << 2;   // solid regardless of the neighbour
+
+// An open edge: the sector simply ENDS here, and an entity that walks off it
+// leaves the map and falls.
+//
+// Needed because "no neighbour" already means "solid wall", which is the right
+// default for a room and exactly wrong for a floating platform -- without a way
+// to say otherwise, every platform edge is an invisible wall. Marked rather
+// than inferred: a side with no neighbour and no LEDGE is still an error worth
+// catching, and inferring openness would silently turn a mis-authored map into
+// a hole.
+inline constexpr u8 LEDGE     = 1u << 3;
 }  // namespace side_flag
 
 struct Side {
@@ -143,6 +154,13 @@ struct SideRender {
 struct SectorRender {
     u16 floor_tex = NO_TEXTURE;
     u16 ceil_tex  = NO_TEXTURE;
+
+    // How far the platform's edge is drawn hanging BELOW its floor, at a LEDGE.
+    // Purely visual -- nothing collides with it -- which is why it lives here
+    // rather than in Sector: a floating platform with no skirt reads as a sheet
+    // of paper, and giving it thickness must not give it a hitbox that the
+    // client and server would then have to agree about.
+    fx  skirt{};
 
     // 0 = dark, 255 = fully lit. Defaults to LIT, not to dark: a map that
     // authored no lighting should render visibly wrong rather than render

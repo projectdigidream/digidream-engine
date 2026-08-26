@@ -22,7 +22,7 @@
 // expressible without knowing the texture's height here (see below).
 //
 
-import { NO_TEXTURE, NO_SECTOR, PEG } from './mapdata.js'
+import { NO_TEXTURE, NO_SECTOR, PEG, SIDE_FLAG } from './mapdata.js'
 
 // Engine (z-up) -> Three (y-up).
 export const toThreeX = (x) => x
@@ -34,7 +34,14 @@ export const SURFACE = {
   CEIL: 'ceil',
   UPPER: 'upper',
   MIDDLE: 'middle',
-  LOWER: 'lower'
+  LOWER: 'lower',
+  // A floating platform's edge and underside. Both are drawn ONLY -- nothing
+  // collides with either, and the physics core has never heard of them. That is
+  // the whole reason a sector's skirt depth lives in SectorRender: giving a
+  // platform visible thickness must not give it a hitbox, or the client and the
+  // server would have to agree about a surface that exists to be looked at.
+  SKIRT: 'skirt',
+  UNDERSIDE: 'underside'
 }
 
 // --- pegging ---------------------------------------------------------------
@@ -74,7 +81,12 @@ function solidAnchor (sector, peg) {
 // --- surfaces --------------------------------------------------------------
 
 function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
-                     zBot, zTop, anchorZ, a, b }) {
+                     zBot, zTop, anchorZ, a, b, outward = false }) {
+  // `outward` swaps a and b, which reverses both the winding and the direction
+  // u runs -- so the face turns around and its texture stays un-mirrored. Doing
+  // only one of the two is how a surface ends up correct from one side and
+  // backwards from the other.
+  if (outward) { const t = a; a = b; b = t }
   const dx = b.x - a.x
   const dy = b.y - a.y
   const len = Math.hypot(dx, dy)
@@ -147,10 +159,15 @@ export function buildSectorSurfaces (map, sectorIndex) {
   const triStart = s.firstTri
   const triCount = s.triCount * 3
 
-  for (const [kind, z, tex, up] of [
+  const flats = [
     [SURFACE.FLOOR, s.floorZ, s.floorTex, true],
     [SURFACE.CEIL, s.ceilZ, s.ceilTex, false]
-  ]) {
+  ]
+  // A skirted platform gets a bottom, facing down. Without it a floating slab
+  // is hollow from below, and in an isometric view you are under half of them.
+  if (s.skirt > 0) flats.push([SURFACE.UNDERSIDE, s.floorZ - s.skirt, s.floorTex, false])
+
+  for (const [kind, z, tex, up] of flats) {
     if (tex === NO_TEXTURE) continue
     const positions = []
     const normals = []
@@ -204,6 +221,26 @@ export function buildSectorSurfaces (map, sectorIndex) {
     const side = map.sides[sideIndex]
     const a = map.points[side.a]
     const b = map.points[side.b]
+
+    if (side.flags & SIDE_FLAG.LEDGE) {
+      // An open edge: the sector ends here and there is no wall to draw. What
+      // IS drawn is the platform's thickness, hanging below its floor -- and
+      // only if the map asked for one, because a skirt on a sector that is not
+      // floating would appear as a curtain hanging into the room below.
+      if (s.skirt > 0 && side.middle !== NO_TEXTURE) {
+        out.push(wallQuad({
+          kind: SURFACE.SKIRT, sector: s, sectorIndex, side, sideIndex,
+          texture: side.middle, zBot: s.floorZ - s.skirt, zTop: s.floorZ,
+          // Top-anchored at the floor, so the skirt's texture starts where the
+          // platform's surface does however deep it is drawn.
+          anchorZ: s.floorZ, a, b,
+          // Faces OUTWARD, unlike every other wall. A room's walls are seen
+          // from inside; a platform's edge is seen from the world it hangs in.
+          outward: true
+        }))
+      }
+      continue
+    }
 
     if (side.neighbor === NO_SECTOR) {
       // A solid wall has one field, floor to ceiling.

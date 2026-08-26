@@ -40,6 +40,9 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/test.map  "build/$HOST_ARCH/test.dnpm"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
+# Floating platforms with open edges -- the only map here that is not a sealed
+# box, and the only one where walking off an edge is a fall rather than a wall.
+"./build/$HOST_ARCH/mapc" maps/void.map   "build/$HOST_ARCH/void.dnpm"
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run

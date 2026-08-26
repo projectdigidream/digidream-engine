@@ -53,9 +53,23 @@ bool side_is_passable(const MapData& map, u32 side_index, u32 from,
                       fx feet_z, fx body_height) noexcept {
     const Side& sd = map.side(side_index);
     if (sd.flags & side_flag::BLOCKING) return false;
-    if (sd.neighbor == NO_SECTOR) return false;
+    if (sd.neighbor == NO_SECTOR) {
+        // An open edge. There is nothing on the far side to admit the body, and
+        // nothing it needs: walking off is allowed, and what happens next is
+        // gravity's business.
+        return (sd.flags & side_flag::LEDGE) != 0;
+    }
     (void)from;
     return sector_admits(map, static_cast<u32>(sd.neighbor), feet_z, body_height);
+}
+
+bool sector_has_ledge(const MapData& map, i32 s) noexcept {
+    if (s < 0 || static_cast<u32>(s) >= map.sector_count) return false;
+    const Sector& sec = map.sector(static_cast<u32>(s));
+    for (u16 k = 0; k < sec.side_count; ++k) {
+        if (map.side(sec.first_side + k).flags & side_flag::LEDGE) return true;
+    }
+    return false;
 }
 
 // Push `p` out of any solid side of `s` it overlaps, and remove the into-wall
@@ -244,13 +258,35 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     fx2 pos2 = fx2{r.pos.x, r.pos.y};
     fx2 remaining = delta;
 
+    // May this entity end the tick outside the map?
+    //
+    // Only from a sector that has an open edge, or if it is already out there
+    // falling. The distinction matters both ways: refusing unconditionally --
+    // which is what this did before floating platforms existed -- makes every
+    // platform edge an invisible wall, and allowing unconditionally turns a
+    // geometry error into an entity falling forever with nothing to say why.
+    const SurfaceQuery q_start = query_surface(map, pos2, r.sector);
+    bool may_leave = in.sector == NO_SECTOR || !q_start.in_map ||
+                     sector_has_ledge(map, q_start.sector);
+
     for (u32 iter = 0; iter < MAX_SLIDE_ITERATIONS; ++iter) {
         if (remaining.x.raw == 0 && remaining.y.raw == 0) break;
         r.iterations = iter + 1;
 
         const SurfaceQuery q0 = query_surface(map, pos2, r.sector);
-        if (!q0.in_map) break;
+        if (!q0.in_map) {
+            // Out in the void: no geometry, so the whole remaining displacement
+            // applies. Falling entities keep the horizontal speed they left
+            // with, which is what makes a missed jump look like a missed jump
+            // rather than like hitting something.
+            pos2 += remaining;
+            break;
+        }
         r.sector = q0.sector;
+        // Re-checked per iteration rather than only at the start: a slide can
+        // carry an entity into a neighbouring sector and out through ITS ledge
+        // within one tick.
+        if (!may_leave) may_leave = sector_has_ledge(map, q0.sector);
 
         const fx2 target = pos2 + remaining;
 
@@ -310,10 +346,15 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
                                    in.radius, r.pos.z, in.height).contacted) {
                 r.hit_wall = true;
             }
+        } else if (may_leave) {
+            // Off the edge. No sector, no floor, no contact -- the vertical
+            // pass below finds no ground and gravity does the rest.
+            r.sector = NO_SECTOR;
+            r.grounded = false;
         } else {
-            // Outside the map: refuse the move entirely. Falling out of the
-            // world is not a recoverable state, so the safe direction is to
-            // stay put.
+            // Outside the map with no way it should have got there. Refuse:
+            // staying put is a visible bug, and falling out of a closed room
+            // forever is an invisible one.
             pos2 = fx2{r.pos.x, r.pos.y};
             r.hit_wall = true;
         }
@@ -325,14 +366,32 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     // --- settle the sector, then vertical ------------------------------------
 
     const SurfaceQuery q = query_surface(map, fx2{r.pos.x, r.pos.y}, r.sector);
-    if (q.in_map) r.sector = q.sector;
 
-    const fx floor_z = q.in_map ? q.floor_z : r.pos.z;
-    const fx ceil_z = q.in_map ? q.ceil_z : (r.pos.z + in.height);
+    // Passing UNDER a platform.
+    //
+    // A sector is a 2D footprint, so an entity falling in the void that drifts
+    // sideways beneath one is "inside" it as far as the map is concerned -- and
+    // the ground rule below would snap it up onto that floor. It would be
+    // teleported, from underneath, onto the platform it had just missed.
+    //
+    // So an entity that was ALREADY outside the map does not land on a floor it
+    // is below; it keeps falling past it. Scoped to entities already in the
+    // void, which is a state that could not exist before open edges did, so no
+    // closed map's behaviour changes by a single bit. In particular a floor
+    // rising into someone standing on it still lifts them: they are in a
+    // sector, not in the void.
+    const bool under_platform =
+        q.in_map && in.sector == NO_SECTOR && r.pos.z < q.floor_z;
+    const bool in_world = q.in_map && !under_platform;
+
+    r.sector = in_world ? q.sector : NO_SECTOR;
+
+    const fx floor_z = in_world ? q.floor_z : r.pos.z;
+    const fx ceil_z = in_world ? q.ceil_z : (r.pos.z + in.height);
 
     // Step up: the horizontal move landed on ground above the feet, but within
     // the threshold, so lift onto it and keep the motion.
-    if (q.in_map && floor_z > r.pos.z && floor_z - r.pos.z <= sim::STEP_HEIGHT) {
+    if (in_world && floor_z > r.pos.z && floor_z - r.pos.z <= sim::STEP_HEIGHT) {
         r.pos.z = floor_z;
         r.stepped_up = true;
         if (r.vel.z < fx::zero()) r.vel.z = fx::zero();
@@ -341,11 +400,11 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
 
     r.pos.z += r.vel.z * dt;
 
-    if (q.in_map && r.pos.z <= floor_z) {
+    if (in_world && r.pos.z <= floor_z) {
         r.pos.z = floor_z;
         if (r.vel.z < fx::zero()) r.vel.z = fx::zero();
         r.grounded = true;
-    } else if (q.in_map && in.grounded && !r.stepped_up &&
+    } else if (in_world && in.grounded && !r.stepped_up &&
                r.pos.z - floor_z <= sim::STEP_HEIGHT && r.vel.z <= fx::zero()) {
         // Step down (ground snapping). A grounded agent crossing onto a floor
         // that drops by no more than the step threshold is snapped to it and
@@ -363,7 +422,7 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
         r.grounded = false;
     }
 
-    if (q.in_map && r.pos.z + in.height > ceil_z) {
+    if (in_world && r.pos.z + in.height > ceil_z) {
         r.pos.z = ceil_z - in.height;
         if (r.vel.z > fx::zero()) r.vel.z = fx::zero();
         r.hit_ceiling = true;

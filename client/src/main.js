@@ -76,6 +76,17 @@ for (let i = 0; i < mapData.sectors.length; i++) {
 const spawn = map.spawnForTag(SPAWN)
 const agent = world.spawn(spawn)
 
+// How far you may fall before this demo puts you back.
+//
+// The ENGINE does not do this. An entity that leaves the map falls forever,
+// deliberately: "you died" is a gameplay decision and gameplay is server Lua
+// (§3.1's crushing takes the same shape -- the engine detects, Lua decides).
+// A kill plane baked into the core would be a rule no server could opt out of.
+// So this lives in the demo harness, where it is honestly a convenience.
+const lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.skirt ?? 0)))
+const VOID_FLOOR = lowestFloor - 40
+let falls = 0
+
 // --- scene -----------------------------------------------------------------
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -199,7 +210,13 @@ function frame (now) {
     view.rebuildSectors(movers)
   }
 
-  const a = world.readAgent(agent)
+  let a = world.readAgent(agent)
+  if (fxToFloat(a.pos.z) < VOID_FLOOR) {
+    falls++
+    world.writeAgent(agent, { ...a, pos: spawn, vel: { x: 0n, y: 0n, z: 0n }, grounded: false })
+    camera.snapTo({ x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y)) })
+    a = world.readAgent(agent)
+  }
   const px = fxToFloat(a.pos.x)
   const py = fxToFloat(a.pos.y)
   const pz = fxToFloat(a.pos.z)
@@ -221,9 +238,10 @@ function frame (now) {
   hud.textContent =
     `tick ${ticks}   ${fps} fps\n` +
     `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
-    `sector ${a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
+    `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
     `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
-    `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}`
+    `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}` +
+    (falls ? `   falls ${falls}` : '')
 }
 
 // The live floor/ceiling of a sector, which sector motion has written back into

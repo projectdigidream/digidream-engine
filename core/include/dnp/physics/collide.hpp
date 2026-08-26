@@ -89,6 +89,12 @@ bool sector_admits(const geom::MapData& map, u32 s, fx feet_z, fx body_height) n
 bool side_is_passable(const geom::MapData& map, u32 side_index, u32 from,
                       fx feet_z, fx body_height) noexcept;
 
+// Does this sector have an open edge -- somewhere an entity may leave the map?
+//
+// Asked by move() before it will let anything end a tick outside the world, so
+// a floating platform lets you fall off it and a closed room still cannot.
+bool sector_has_ledge(const geom::MapData& map, i32 s) noexcept;
+
 struct SweepContact {
     bool contacted = false;
     fx2  escape{};      // total displacement applied to clear the geometry

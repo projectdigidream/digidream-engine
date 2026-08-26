@@ -29,7 +29,8 @@ export const PEG = {
 export const SIDE_FLAG = {
   CLIMBABLE: 1 << 0,
   GRAPPLE: 1 << 1,
-  BLOCKING: 1 << 2
+  BLOCKING: 1 << 2,
+  LEDGE: 1 << 3
 }
 
 /**
@@ -73,7 +74,8 @@ export function readMap (map) {
       tag: u32[b32 + 4],
       firstTri: u32[b32 + 5], triCount: u32[b32 + 6],
       floorTex: u32[b32 + 7], ceilTex: u32[b32 + 8],
-      light: u32[b32 + 9]
+      light: u32[b32 + 9],
+      skirt: fxToFloat(i64[b64 + 2])
     }
   }
 

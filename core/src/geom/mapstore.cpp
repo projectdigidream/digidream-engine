@@ -352,7 +352,7 @@ u64 MapStorage::hash() const noexcept {
     }
     for (u32 i = 0; i < sector_count_; ++i) {
         const SectorRender& r = sector_render_[i];
-        h.u32v(r.floor_tex); h.u32v(r.ceil_tex); h.byte(r.light_level);
+        h.u32v(r.floor_tex); h.u32v(r.ceil_tex); h.byte(r.light_level); h.fxv(r.skirt);
     }
     for (u32 i = 0; i < side_count_; ++i) {
         const SideRender& r = side_render_[i];

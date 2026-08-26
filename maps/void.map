@@ -1,0 +1,70 @@
+# Floating platforms over nothing.
+#
+# The point of this map is the two things a closed room cannot show:
+#
+#   `open` edges -- the sector simply ENDS, and walking off one drops you out
+#   of the map. Every other map here is a sealed box where "no neighbour" means
+#   "wall", which is the right default for a room and exactly wrong for a
+#   platform.
+#
+#   `skirt N` -- the platform's edge, drawn N units below its floor, plus an
+#   underside. Purely visual: nothing collides with a skirt. A floating sector
+#   without one reads as a sheet of paper.
+#
+# Layout, looking down. Gaps are void.
+#
+#     y
+#     56  . . . . . . . . [ 4 high ] . . . .
+#     40  [   1 start   ]        [ 3 far  ]
+#     24  . . . . . . . . [ 2 mid ] . . . .
+#      8  [ 5 low, under the gap ]
+#         0      20      40      60      80   x
+#
+# Sector 1 and 2 are one step apart, so you can walk between them where they
+# touch; everything else needs a jump, and a missed jump is a fall.
+
+# --- 1: the starting slab -----------------------------------------------
+sector floor 6 ceil 60 tag 1 light 210 floortex PLATE1 skirt 2
+  vertex  4  32   open tex EDGE1
+  vertex 36  32   open tex EDGE1
+  vertex 36  48   open tex EDGE1
+  vertex  4  48   open tex EDGE1
+end
+
+# --- 2: a mid step, half a unit up, reachable on foot from 1 ------------
+sector floor 6.4 ceil 60 tag 2 light 190 floortex PLATE2 skirt 2
+  vertex 36  20   open tex EDGE1
+  vertex 56  20   open tex EDGE1
+  vertex 56  36   open tex EDGE1
+  vertex 36  36   open tex EDGE1
+end
+
+# --- 3: across a gap, needs a jump --------------------------------------
+sector floor 6 ceil 60 tag 3 light 230 floortex PLATE3 skirt 3
+  vertex 62  32   open tex EDGE2
+  vertex 84  32   open tex EDGE2
+  vertex 84  48   open tex EDGE2
+  vertex 62  48   open tex EDGE2
+end
+
+# --- 4: higher still, a double jump --------------------------------------
+sector floor 11 ceil 60 tag 4 light 255 floortex PLATE3 skirt 2
+  vertex 40  52   open tex EDGE2
+  vertex 60  52   open tex EDGE2
+  vertex 60  68   open tex EDGE2
+  vertex 40  68   open tex EDGE2
+end
+
+# --- 5: a lower slab under the gap, to land on when you miss ------------
+sector floor 0 ceil 60 tag 5 light 150 floortex PLATE2 skirt 4
+  vertex  8   0   open tex EDGE1
+  vertex 44   0   open tex EDGE1
+  vertex 44  16   open tex EDGE1
+  vertex  8  16   open tex EDGE1
+end
+
+spawn start  20 40 8
+spawn mid    46 28 8
+spawn far    72 40 8
+spawn high   50 60 13
+spawn low    26  8 2

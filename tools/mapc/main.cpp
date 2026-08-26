@@ -14,12 +14,17 @@
 // in the meantime, and it stays useful afterwards for fixtures and diffs.
 //
 //   # comment
-//   sector floor 0 ceil 40 tag 1 light 200 floortex FLOOR4 ceiltex CEIL3
+//   sector floor 0 ceil 40 tag 1 light 200 floortex FLOOR4 ceiltex CEIL3 skirt 2
 //     vertex 0  0   wall           tex BRICK1
 //     vertex 40 0   neighbor 1     upper STEP2 lower STEP1 unpeg-lower
 //     vertex 40 40  wall           tex BRICK1 xoff 8
 //     vertex 0  40  wall climbable tex VINE1
 //   end
+//
+// `open` in place of `wall` or `neighbor` makes an edge the sector ENDS at: an
+// entity that walks off it leaves the map and falls. `skirt N` then draws the
+// platform's edge hanging N units below its floor, so a floating sector reads
+// as a slab rather than a sheet of paper.
 //
 // Rendering attributes (light, the three texture fields, offsets and pegging)
 // are OPTIONAL everywhere. A map that names none of them compiles and plays
@@ -198,6 +203,11 @@ int main(int argc, char** argv) {
                     if (v < 0 || v > 255) err(lineno, "light must be 0..255, got '%s'", tok[i + 1].c_str());
                     else sector_render.light_level = static_cast<u8>(v);
                 }
+                else if (tok[i] == "skirt") {
+                    if (!parse_fx(tok[i + 1], sector_render.skirt)) {
+                        err(lineno, "bad skirt '%s'", tok[i + 1].c_str());
+                    }
+                }
                 else if (tok[i] == "floortex") sector_render.floor_tex = intern(lineno, store, tok[i + 1]);
                 else if (tok[i] == "ceiltex") sector_render.ceil_tex = intern(lineno, store, tok[i + 1]);
                 else err(lineno, "unknown sector attribute '%s'", tok[i].c_str());
@@ -215,6 +225,13 @@ int main(int argc, char** argv) {
                 else if (tok[i] == "neighbor") {
                     if (i + 1 >= tok.size()) { err(lineno, "neighbor needs a sector index"); break; }
                     v.neighbor = std::atoi(tok[++i].c_str());
+                } else if (tok[i] == "open") {
+                    // An edge the sector simply ends at. `wall` and `open` are
+                    // both explicit because the difference is invisible in the
+                    // geometry and total in play: one is a barrier, the other
+                    // is a fall.
+                    v.neighbor = NO_SECTOR;
+                    v.flags |= side_flag::LEDGE;
                 } else if (tok[i] == "climbable") v.flags |= side_flag::CLIMBABLE;
                 else if (tok[i] == "grapple") v.flags |= side_flag::GRAPPLE;
                 else if (tok[i] == "blocking") v.flags |= side_flag::BLOCKING;
