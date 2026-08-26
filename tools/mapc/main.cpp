@@ -456,6 +456,87 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Overlapping footprints.
+    //
+    // A sector is a 2D footprint, and find_sector returns the FIRST one
+    // containing a point -- so where two footprints overlap, which sector you
+    // are in depends on the order they were declared in. Everything downstream
+    // inherits that: which floor you stand on, which ceiling crushes you, which
+    // light level shades the ground.
+    //
+    // Stacked sectors are a design feature (§3.1) that is NOT implemented, and
+    // this is what an unimplemented feature looks like when a map uses it
+    // anyway. Rejecting is far better than the alternative, which is a tower
+    // you can stand on until you walk two units north and drop through it --
+    // a bug I authored into maps/void.map and then had reported back to me.
+    //
+    // The test is one vertex of A strictly inside B. That is exact enough and
+    // has no false positives on legal maps: adjacent sectors SHARE edges, so
+    // their vertices lie ON each other's boundaries rather than inside them.
+    for (u32 a = 0; a < m.sector_count && g_errors == 0; ++a) {
+        const Sector& sa = m.sector(a);
+        for (u32 b = 0; b < m.sector_count; ++b) {
+            if (a == b) continue;
+            const Sector& sb = m.sector(b);
+
+            u32 inside = 0;
+            u32 first_inside = 0;
+            fx2 witness{};
+            for (u16 k = 0; k < sa.point_count; ++k) {
+                const fx2 v = m.point(sa.first_point + k);
+                if (!point_in_sector(m, b, v)) continue;
+
+                // On a shared boundary is not inside. An EXACT test in 128-bit
+                // integers, not distance_sq_to_segment: that projects through a
+                // division, so a point lying exactly on a segment comes back a
+                // few ulp off zero and every abutting sector reads as
+                // overlapping.
+                bool on_boundary = false;
+                for (u16 j = 0; j < sb.point_count && !on_boundary; ++j) {
+                    const fx2 p0 = m.point(sb.first_point + j);
+                    const fx2 p1 = m.point(sb.first_point + (j + 1) % sb.point_count);
+                    const i128 cross =
+                        static_cast<i128>(p1.x.raw - p0.x.raw) * (v.y.raw - p0.y.raw) -
+                        static_cast<i128>(p1.y.raw - p0.y.raw) * (v.x.raw - p0.x.raw);
+                    if (cross != 0) continue;
+                    const i64 lox = p0.x.raw < p1.x.raw ? p0.x.raw : p1.x.raw;
+                    const i64 hix = p0.x.raw < p1.x.raw ? p1.x.raw : p0.x.raw;
+                    const i64 loy = p0.y.raw < p1.y.raw ? p0.y.raw : p1.y.raw;
+                    const i64 hiy = p0.y.raw < p1.y.raw ? p1.y.raw : p0.y.raw;
+                    if (v.x.raw >= lox && v.x.raw <= hix &&
+                        v.y.raw >= loy && v.y.raw <= hiy) on_boundary = true;
+                }
+                if (on_boundary) continue;
+
+                if (inside == 0) { first_inside = k; witness = v; }
+                ++inside;
+            }
+
+            if (inside == 0) continue;
+
+            // NESTED is fine: a pillar standing in a hall, a pit sunk into a
+            // floor. geom::find_sector answers with the smallest sector
+            // containing a point, so the inner one wins and the answer does not
+            // depend on which was declared first.
+            if (inside == sa.point_count) continue;
+
+            // PARTIAL overlap is not. There is no innermost sector to prefer,
+            // so which one a point belongs to has no principled answer -- and
+            // every consequence follows from it: which floor you stand on,
+            // which ceiling crushes you, which light level shades the ground.
+            std::fprintf(stderr,
+                "sector %u partially overlaps sector %u: %u of its %u corners are inside,\n"
+                "starting at corner %u (%.3f, %.3f). Footprints may NEST -- a pillar inside\n"
+                "a hall is fine -- but a partial overlap has no innermost sector to prefer.\n"
+                "Either move it clear, or contain it entirely.\n",
+                a, b, inside, sa.point_count, first_inside,
+                static_cast<double>(witness.x.raw) / 4294967296.0,
+                static_cast<double>(witness.y.raw) / 4294967296.0);
+            ++g_errors;
+            break;
+        }
+    }
+
     if (g_errors > 0) {
         std::fprintf(stderr, "%d error(s); not writing output\n", g_errors);
         return 1;

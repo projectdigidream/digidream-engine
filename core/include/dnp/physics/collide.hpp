@@ -137,13 +137,17 @@ SweepContact sweep_out_of_sector(const geom::MapData& map, u32 sector, fx2& p,
 SweepContact push_out_of_slab(const geom::MapData& map, u32 sector, fx2& p,
                               fx radius) noexcept;
 
-// Resolve a cylinder in the void against EVERY platform slab it overlaps.
+// Resolve a cylinder against EVERY slab it overlaps.
 //
 // Not just the sector its centre is in: a body overlaps a platform's edge well
 // before its centre crosses the footprint, and a test that starts from "which
 // sector am I in" lets it sink a full radius into the edge before reacting.
-SweepContact resolve_void_slabs(const geom::MapData& map, fx2& p, fx radius,
-                                fx feet_z, fx body_height) noexcept;
+//
+// A slab blocks the body exactly when the body could not STAND in the sector
+// above it, which is sector_admits -- so a step up is unobstructed and a tower
+// is solid, from one rule rather than two.
+SweepContact resolve_slabs(const geom::MapData& map, fx2& p, fx radius,
+                           fx feet_z, fx body_height) noexcept;
 
 // Nearest side within `radius` of `p` carrying `flag`, or -1.
 //

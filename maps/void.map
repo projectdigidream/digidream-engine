@@ -113,7 +113,7 @@ end
 # zero-length edge would come out as noise.
 sector floor 6 ceil 60 tag 8 light 90 floortex PLATE1 thickness 1
   vertex -30  36   open tex EDGE1
-  vertex  -2  38   open tex EDGE1
+  vertex -12  38   open tex EDGE1
   vertex -30  40   open tex EDGE1
 end
 
@@ -145,6 +145,54 @@ end
 
 spawn hex   16 78 10
 
+# --- 10: a tower ---------------------------------------------------------
+#
+# Every other sector here is a flat slab a couple of units thick, which makes
+# this map a poor test of vertical geometry: nothing is tall enough to stand
+# between the camera and anything else, so wall occlusion never arises and the
+# lighting never has a tall surface to fall off across.
+#
+# A high floor with a deep thickness IS a tower: solid from 6 up to 26, with a
+# platform on top. The skirt draws its sides, and they are what a body walks
+# into and what a shadow falls on.
+sector floor 26 ceil 60 tag 10 light 120 floortex PLATE3 thickness 20
+  vertex 44  40   open tex EDGE2
+  vertex 56  40   open tex EDGE2
+  vertex 56  52   open tex EDGE2
+  vertex 44  52   open tex EDGE2
+end
+
+spawn tower 50 46 28
+
+# --- 11 and 12: a pillar standing INSIDE a hall --------------------------
+#
+# Nested footprints: sector 12's polygon lies entirely within sector 11's. That
+# is the arrangement a pillar in a room, or a pit in a floor, actually is, and
+# it works because geom::find_sector answers with the SMALLEST sector containing
+# a point rather than the first one declared -- so on top of the pillar you are
+# on the pillar, and beside it you are on the hall.
+#
+# Partial overlap is still rejected by mapc, and the difference is not
+# pedantry: nested has an innermost sector to prefer and partial has none.
+sector floor 4 ceil 60 tag 11 light 100 floortex PLATE1 thickness 3
+  vertex  -40  56   open tex EDGE1
+  vertex   -8  56   open tex EDGE1
+  vertex   -8  88   open tex EDGE1
+  vertex  -40  88   open tex EDGE1
+end
+
+# The pillar. Solid from 4 (the hall's floor) up to 12, with a top you can
+# stand on -- so it blocks a body walking at it AND catches one landing on it.
+sector floor 12 ceil 60 tag 12 light 130 floortex PLATE3 thickness 8
+  vertex  -30  66   open tex EDGE2
+  vertex  -18  66   open tex EDGE2
+  vertex  -18  78   open tex EDGE2
+  vertex  -30  78   open tex EDGE2
+end
+
+spawn hall   -34 62 6
+spawn pillar -24 72 14
+
 # --- lamps ---------------------------------------------------------------
 #
 # The sector light levels above are the AMBIENT FLOOR each platform is lit to,
@@ -168,3 +216,12 @@ light  4 24 13  color 150 190 255  radius 24  intensity 1.4
 light 74 16 18  color 255 236 200  radius 26  intensity 1.7
 light 16 78 18  color 190 200 255  radius 30  intensity 1.8
 light -16 38 12 color 150 190 255  radius 22  intensity 1.4
+
+# On the tower, and low beside it, so its sides are lit across their height and
+# it casts a long shadow rather than a puddle.
+light 50 46 32  color 255 240 210  radius 30  intensity 1.8
+light 40 36 10  color 255 190 140  radius 26  intensity 1.5
+
+# Over the hall and its pillar.
+light -24 72 20  color 255 230 190  radius 30  intensity 1.7
+light -36 84 12  color 170 200 255  radius 24  intensity 1.4

@@ -34,10 +34,40 @@ bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept {
 }
 
 i32 find_sector(const MapData& map, fx2 p) noexcept {
+    // The SMALLEST sector containing the point, not the first one declared.
+    //
+    // Footprints may nest -- a pillar standing inside a hall, a pit sunk into a
+    // floor -- and for a point inside the inner one, both contain it. First
+    // match makes the answer depend on declaration order, which shows up as a
+    // pillar you can be blocked by but cannot stand on: the mover asks which
+    // sector you are in, is told the hall, and drops you to the hall's floor
+    // through the pillar under your feet.
+    //
+    // Smallest-area is the most SPECIFIC answer, and it is a property of the
+    // geometry rather than of the file's ordering. Areas are exact 128-bit
+    // integers, so the choice is identical on every target -- which it must be,
+    // because this predicate decides which floor a body stands on.
+    //
+    // Partially overlapping footprints remain ill-defined and tools/mapc
+    // rejects them; nesting is the case this makes well-defined.
+    i32  best = NO_SECTOR;
+    i128 best_area = 0;
     for (u32 s = 0; s < map.sector_count; ++s) {
-        if (point_in_sector(map, s, p)) return static_cast<i32>(s);
+        if (!point_in_sector(map, s, p)) continue;
+        if (best == NO_SECTOR) { best = static_cast<i32>(s); continue; }
+
+        // Only computed once a second sector claims the point, so the ordinary
+        // case -- exactly one match -- costs nothing beyond the scan it already
+        // did.
+        if (best_area == 0) {
+            best_area = signed_area_2x(map, static_cast<u32>(best));
+            if (best_area < 0) best_area = -best_area;
+        }
+        i128 area = signed_area_2x(map, s);
+        if (area < 0) area = -area;
+        if (area < best_area) { best = static_cast<i32>(s); best_area = area; }
     }
-    return NO_SECTOR;
+    return best;
 }
 
 fx2 closest_point_on_segment(fx2 a, fx2 b, fx2 p) noexcept {

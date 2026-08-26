@@ -802,6 +802,236 @@ static void test_hexagon_containment() {
     CHECK(point_in_sector(m, 0, later));
 }
 
+static void test_tower_side_is_solid_from_a_neighbouring_sector() {
+    std::printf("ledge: a tower's side stops a body walking at it from a platform\n");
+
+    // A platform at z = 4 (x 0..20, y 0..20) with a TOWER abutting it along
+    // x = 20: floor at 24, twenty units thick, so it is solid from 4 up to 24.
+    // A body standing on the platform is inside the tower's slab range and must
+    // be stopped by its side.
+    //
+    // This is the case the slab test missed while it ran for entities in the
+    // VOID only: a body standing on a platform IS in a sector, so slabs were
+    // never consulted for it and it walked straight through.
+    static const fx2 pts[] = {
+        {F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)}, {F(0), F(20)},
+        {F(20), F(0)}, {F(40), F(0)}, {F(40), F(20)}, {F(20), F(20)}
+    };
+    Sector secs[2] = {
+        Sector{0, 4, 0, 4, F(4),  F(60), F(2),  0, 0, 0},   // the platform
+        Sector{4, 4, 4, 4, F(24), F(60), F(20), 0, 0, 0}    // the tower
+    };
+    Side sides[8]{};
+    for (int s = 0; s < 2; ++s) {
+        for (int i = 0; i < 4; ++i) {
+            sides[s * 4 + i] = Side{static_cast<u16>(s * 4 + i),
+                                    static_cast<u16>(s * 4 + (i + 1) % 4),
+                                    NO_SECTOR, side_flag::LEDGE};
+        }
+    }
+    MapData m;
+    m.points = pts; m.point_count = 8;
+    m.sectors = secs; m.sector_count = 2;
+    m.sides = sides; m.side_count = 8;
+
+    const fx dt = Ff(1, 60);
+    const fx radius = Ff(1, 2);
+
+    MoveInput in;
+    in.pos = fx3{F(10), F(10), F(4)};
+    in.vel = fx3{F(8), fx::zero(), fx::zero()};
+    in.radius = radius;
+    in.sector = 0;
+    in.grounded = true;
+
+    fx furthest = in.pos.x;
+    bool ever_left_platform = false;
+    for (int t = 0; t < 180; ++t) {
+        const MoveResult r = move(m, in, dt);
+        if (r.pos.x > furthest) furthest = r.pos.x;
+        if (r.pos.z < F(4) - Ff(1, 64)) ever_left_platform = true;
+        in.pos = r.pos;
+        in.vel = r.vel;
+        in.sector = r.sector;
+        in.grounded = r.grounded;
+        in.vel.z -= F(16) * dt;
+    }
+
+    // Stopped one radius clear of the tower's face, and NEVER inside it -- the
+    // position is checked on every tick, not only at the end.
+    CHECK(furthest == F(20) - radius);
+    CHECK(!ever_left_platform);
+    CHECK(in.sector == 0);
+    CHECK(in.grounded);
+
+    // The step-up rule must survive this. A neighbouring sector only half a
+    // unit higher ADMITS the body, so its slab does not stand in the way of the
+    // step onto it -- which is the same predicate deciding both, and the reason
+    // this does not need a second rule.
+    Sector step[2] = {
+        Sector{0, 4, 0, 4, F(4), F(60), F(2), 0, 0, 0},
+        Sector{4, 4, 4, 4, F(4) + sim::STEP_HEIGHT, F(60), F(2), 0, 0, 0}
+    };
+    Side ssides[8]{};
+    for (int i = 0; i < 4; ++i) {
+        ssides[i] = Side{static_cast<u16>(i), static_cast<u16>((i + 1) % 4), 1, 0};
+        ssides[4 + i] = Side{static_cast<u16>(4 + i), static_cast<u16>(4 + (i + 1) % 4), 0, 0};
+    }
+    MapData sm = m;
+    sm.sectors = step;
+    sm.sides = ssides;
+
+    MoveInput up;
+    up.pos = fx3{F(10), F(10), F(4)};
+    up.vel = fx3{F(8), fx::zero(), fx::zero()};
+    up.radius = radius;
+    up.sector = 0;
+    up.grounded = true;
+    for (int t = 0; t < 180; ++t) {
+        const MoveResult r = move(sm, up, dt);
+        up.pos = r.pos;
+        up.vel = r.vel;
+        up.sector = r.sector;
+        up.grounded = r.grounded;
+        up.vel.z -= F(16) * dt;
+    }
+    CHECK(up.pos.x > F(20));
+    CHECK(up.sector == 1);
+    CHECK(up.pos.z == F(4) + sim::STEP_HEIGHT);
+}
+
+static void test_nested_sector_pillar() {
+    std::printf("nesting: a pillar inside a hall blocks from beside and holds from above\n");
+
+    // Sector 0 is a hall, x/y 0..40 with its floor at 2. Sector 1 is a PILLAR
+    // wholly inside it: x/y 14..26, floor at 12, TEN units thick -- so its slab
+    // runs from 2, the hall's own floor, up to 12, and it has a top to stand on.
+    //
+    // Ten and not eight. At eight the slab bottoms out at 4, and a two-unit body
+    // standing on the hall floor at 2 fits underneath it exactly, head grazing
+    // the underside -- so it walks straight through and the test measures a gap
+    // rather than a pillar. Which is what the first version of this did.
+    static const fx2 pts[] = {
+        {F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)},
+        {F(14), F(14)}, {F(26), F(14)}, {F(26), F(26)}, {F(14), F(26)}
+    };
+    Sector secs[2] = {
+        Sector{0, 4, 0, 4, F(2),  F(60), F(2), 0, 0, 0},
+        Sector{4, 4, 4, 4, F(12), F(60), F(10), 0, 0, 0}
+    };
+    Side sides[8]{};
+    for (int s = 0; s < 2; ++s) {
+        for (int i = 0; i < 4; ++i) {
+            sides[s * 4 + i] = Side{static_cast<u16>(s * 4 + i),
+                                    static_cast<u16>(s * 4 + (i + 1) % 4),
+                                    NO_SECTOR, side_flag::LEDGE};
+        }
+    }
+    MapData m;
+    m.points = pts; m.point_count = 8;
+    m.sectors = secs; m.sector_count = 2;
+    m.sides = sides; m.side_count = 8;
+
+    // find_sector prefers the SMALLEST sector containing the point, so which
+    // one you are in does not depend on which was declared first.
+    CHECK(find_sector(m, fx2{F(20), F(20)}) == 1);     // over the pillar
+    CHECK(find_sector(m, fx2{F(5), F(5)}) == 0);       // out in the hall
+    CHECK(find_sector(m, fx2{F(50), F(50)}) == NO_SECTOR);
+
+    // ... and it is order-independent: the same map with the pillar declared
+    // FIRST answers identically. First-match would answer 0 for both.
+    static const fx2 rpts[] = {
+        {F(14), F(14)}, {F(26), F(14)}, {F(26), F(26)}, {F(14), F(26)},
+        {F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}
+    };
+    Sector rsecs[2] = {
+        Sector{0, 4, 0, 4, F(12), F(60), F(10), 0, 0, 0},
+        Sector{4, 4, 4, 4, F(2),  F(60), F(2),  0, 0, 0}
+    };
+    MapData rm = m;
+    rm.points = rpts;
+    rm.sectors = rsecs;
+    CHECK(find_sector(rm, fx2{F(20), F(20)}) == 0);    // still the pillar
+    CHECK(find_sector(rm, fx2{F(5), F(5)}) == 1);      // still the hall
+
+    const fx dt = Ff(1, 60);
+    const fx radius = Ff(1, 2);
+
+    // From BESIDE: walking at the pillar is stopped by its side, one radius
+    // clear, and the body never enters its footprint.
+    MoveInput in;
+    in.pos = fx3{F(5), F(20), F(2)};
+    in.vel = fx3{F(8), fx::zero(), fx::zero()};
+    in.radius = radius;
+    in.sector = 0;
+    in.grounded = true;
+    fx furthest = in.pos.x;
+    for (int t = 0; t < 180; ++t) {
+        const MoveResult r = move(m, in, dt);
+        if (r.pos.x > furthest) furthest = r.pos.x;
+        in.pos = r.pos;
+        in.vel = r.vel;
+        in.sector = r.sector;
+        in.grounded = r.grounded;
+        in.vel.z -= F(16) * dt;
+    }
+    CHECK(furthest == F(14) - radius);
+    CHECK(in.sector == 0);
+    CHECK(in.grounded);
+    CHECK(in.pos.z == F(2));
+
+    // From ABOVE: landing on the pillar lands on the PILLAR's floor, not the
+    // hall's. This is the half that first-match got wrong -- the mover would
+    // have been told "the hall" and dropped the body through the pillar it was
+    // standing on.
+    MoveInput drop;
+    drop.pos = fx3{F(20), F(20), F(40)};
+    drop.radius = radius;
+    drop.sector = NO_SECTOR;
+    bool landed = false;
+    for (int t = 0; t < 240 && !landed; ++t) {
+        const MoveResult r = move(m, drop, dt);
+        landed = r.grounded;
+        drop.pos = r.pos;
+        drop.vel = r.vel;
+        drop.sector = r.sector;
+        drop.grounded = r.grounded;
+        drop.vel.z -= F(16) * dt;
+    }
+    CHECK(landed);
+    CHECK(drop.pos.z == F(12));
+    CHECK(drop.sector == 1);
+
+    // And walking OFF the pillar's top drops to the hall, not into the void:
+    // the hall's footprint is still under it.
+    //
+    // FOUR units a second, worked out rather than picked. The body leaves the
+    // pillar's west face at x = 13.5 and the fall from 12 to 2 under gravity 16
+    // takes sqrt(2*10/16) = 1.118 s, so it lands at 13.5 - 4*1.118 = 9.0 --
+    // comfortably inside a hall that ends at x = 0. At ten units a second it
+    // lands at 2.3, and the first version of this used ten and drifted out of
+    // the hall entirely before touching down, asserting against a body still
+    // falling through the void.
+    MoveInput off;
+    off.pos = fx3{F(20), F(20), F(12)};
+    off.vel = fx3{-F(4), fx::zero(), fx::zero()};
+    off.radius = radius;
+    off.sector = 1;
+    off.grounded = true;
+    for (int t = 0; t < 200; ++t) {
+        const MoveResult r = move(m, off, dt);
+        off.pos = r.pos;
+        off.vel = r.vel;
+        off.sector = r.sector;
+        off.grounded = r.grounded;
+        off.vel.z -= F(16) * dt;
+    }
+    CHECK(off.sector == 0);
+    CHECK(off.pos.x > F(1) && off.pos.x < F(13));   // it landed IN the hall
+    CHECK(off.grounded);
+    CHECK(off.pos.z == F(2));
+}
+
 static void test_ledge_does_not_leak_into_closed_maps() {
     std::printf("ledge: a sector with no open edge still cannot be left\n");
 
@@ -871,6 +1101,8 @@ int main() {
     test_falling_past_a_platform();
     test_platform_underside();
     test_hexagon_containment();
+    test_tower_side_is_solid_from_a_neighbouring_sector();
+    test_nested_sector_pillar();
     test_ledge_does_not_leak_into_closed_maps();
     test_determinism_of_move();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

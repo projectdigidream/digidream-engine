@@ -8,7 +8,9 @@
 // makes lighting look wrong everywhere at once -- the falloff curve, the
 // orientation term, and above all whether a lamp adds or multiplies.
 //
-import { attenuation, lightAt, MAX_ACTIVE_LIGHTS, FRAGMENT_SHADER } from '../src/render/lighting.js'
+import {
+  attenuation, lightAt, occlusionAlpha, MAX_ACTIVE_LIGHTS, FRAGMENT_SHADER
+} from '../src/render/lighting.js'
 
 let checks = 0
 let fails = 0
@@ -117,6 +119,63 @@ console.log('\n--- a lamp ADDS to the sector light, it does not scale with it --
         `${(mulDark - darkSector).toFixed(3)} instead of ${added.toFixed(3)}`)
 }
 
+console.log('\n--- wall occlusion (§4) ---')
+{
+  // Camera above and behind; player at the origin. Geometry between the two is
+  // faded in a soft window around the line of sight.
+  const cam = { x: 0, y: 20, z: 30 }
+  const subj = { x: 0, y: 0, z: 0 }
+  const on = (p) => occlusionAlpha(p, cam, subj)
+
+  // Directly in the way, halfway along.
+  const blocking = on({ x: 0, y: 10, z: 15 })
+  check(blocking < 0.25, `something square in the way is faded hard (${blocking.toFixed(3)})`)
+
+  // The fade is soft, not a hole with a rim.
+  const edge = on({ x: 3, y: 10, z: 15 })
+  const outside = on({ x: 8, y: 10, z: 15 })
+  check(blocking < edge && edge < outside, `soft-edged (${blocking.toFixed(2)} < ${edge.toFixed(2)} < ${outside.toFixed(2)})`)
+  check(outside === 1, 'and fully opaque outside the window')
+
+  // Monotonic across the window, so the edge has no ring in it.
+  let mono = true
+  let prev = -1
+  for (let d = 0; d <= 6; d += 0.2) {
+    const a = on({ x: d, y: 10, z: 15 })
+    if (a < prev - 1e-12) mono = false
+    prev = a
+  }
+  check(mono, 'and rises monotonically outward')
+
+  // Nothing BEHIND the player is touched: it is not in the way of anything.
+  check(on({ x: 0, y: -10, z: -15 }) === 1, 'geometry behind the player is untouched')
+  check(on({ x: 0, y: -1, z: -2 }) === 1, 'even just behind it')
+
+  // Nor is the floor at the player's own feet, which is the failure the gap
+  // exists to prevent: a window centred on the player would otherwise punch a
+  // hole in the ground they are standing on.
+  check(on({ x: 0.5, y: 0, z: 0.5 }) === 1, 'and the floor at the player\'s feet is not punched through')
+
+  // Off to the side of the camera entirely -- behind it along the ray.
+  check(on({ x: 0, y: 30, z: 45 }) === 1, 'geometry behind the CAMERA is untouched')
+
+  // Degenerate: camera at the player. No line of sight, so no window.
+  check(occlusionAlpha({ x: 1, y: 1, z: 1 }, subj, subj) === 1,
+        'a camera sitting on the player fades nothing')
+
+  // Strength zero turns it off entirely, which is what a viewer with no player
+  // uses -- a hole following the origin around would be worse than none.
+  check(occlusionAlpha({ x: 0, y: 10, z: 15 }, cam, subj, { strength: 0 }) === 1,
+        'strength 0 disables it')
+
+  // The window is a WORLD distance from the ray, not a screen-space radius, so
+  // it does not swallow the room as you zoom in. Same geometry, camera twice as
+  // far: the same world point is still just inside.
+  const far = { x: 0, y: 40, z: 60 }
+  check(occlusionAlpha({ x: 3, y: 10, z: 15 }, far, subj) < 1,
+        'the window keeps its world size as the camera pulls back')
+}
+
 console.log('\n--- the shader is the twin of the tested function ---')
 {
   // Not a proof -- GLSL is not executed here. It does catch the two edits that
@@ -127,6 +186,10 @@ console.log('\n--- the shader is the twin of the tested function ---')
   check(FRAGMENT_SHADER.includes('lit += '), 'and ADDS to the sector light rather than scaling it')
   check(FRAGMENT_SHADER.includes(`i < ${MAX_ACTIVE_LIGHTS}`),
         'and its loop bound matches the uniform array size')
+  check(FRAGMENT_SHADER.includes('dFrag < dSubj - occludeGap'),
+        'and its occlusion test keeps the same gap in front of the player')
+  check(FRAGMENT_SHADER.includes('smoothstep(0.0, occludeRadius'),
+        'and the same soft edge')
 }
 
 console.log(`\nlighting: ${checks} checks, ${fails} failures`)

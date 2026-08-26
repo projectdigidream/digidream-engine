@@ -58,7 +58,14 @@ export class MapView {
       },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
-      side: THREE.FrontSide
+      side: THREE.FrontSide,
+      // Transparent so the occlusion window can fade, but depth is still
+      // WRITTEN: everything outside the window is at alpha 1, where blending is
+      // identical to opaque. Turning depth writing off -- the usual reflex for
+      // a transparent material -- would make the entire map sort per object
+      // instead of per fragment, and a map is a handful of merged meshes.
+      transparent: true,
+      depthWrite: true
     }))
 
     // Anything the map left untextured. Visible rather than invisible: a
@@ -81,6 +88,18 @@ export class MapView {
    * and no recompilation -- which is what makes a flickering lamp or a light
    * riding a lift cost nothing per frame.
    */
+  /**
+   * Aim the occlusion window at a point, or turn it off with a null target.
+   *
+   * One uniform write, shared by every material -- the window follows the
+   * player at no per-frame cost beyond this.
+   */
+  setOcclusionTarget (target, strength = 0.82) {
+    if (!target) { this.lightUniforms.occludeStrength.value = 0; return }
+    this.lightUniforms.occludeTarget.value.set(target.x, target.y, target.z)
+    this.lightUniforms.occludeStrength.value = strength
+  }
+
   setLights (lights) {
     const n = Math.min(lights.length, MAX_ACTIVE_LIGHTS)
     for (let i = 0; i < MAX_ACTIVE_LIGHTS; i++) {

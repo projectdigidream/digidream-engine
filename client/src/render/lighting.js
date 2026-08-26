@@ -65,6 +65,63 @@ export function lightAt (point, normal, lights) {
   return { r, g, b }
 }
 
+// --- wall occlusion (design §4) --------------------------------------------
+//
+// Geometry standing between the camera and the player is faded out in a soft
+// window around the line of sight. PURELY COSMETIC: nothing about collision,
+// visibility filtering or the simulation changes, and the fragment is still
+// there -- it is drawn at reduced alpha and nothing else.
+//
+// Done in the fragment shader rather than by picking whole objects, because the
+// map is merged into one mesh per texture: fading "the object in the way" would
+// fade every wall in the map that happened to share a texture with it.
+//
+// The window is a distance from the camera-to-subject RAY, not a screen-space
+// radius, so it stays the same size in the world as you zoom -- a screen-space
+// window would swallow the whole room when zoomed in.
+
+/**
+ * How opaque a fragment should be, given what it stands in front of.
+ *
+ * The JS twin of the shader below, and the part worth testing: the geometry of
+ * "is this between the camera and the player" is where this goes wrong, and it
+ * goes wrong in ways that look like a rendering glitch rather than like a
+ * predicate error.
+ */
+export function occlusionAlpha (fragment, camera, subject, {
+  radius = 3.5, gap = 2.5, strength = 0.82
+} = {}) {
+  const bx = subject.x - camera.x
+  const by = subject.y - camera.y
+  const bz = subject.z - camera.z
+  const bb = bx * bx + by * by + bz * bz
+  if (bb < 1e-9) return 1
+
+  const ax = fragment.x - camera.x
+  const ay = fragment.y - camera.y
+  const az = fragment.z - camera.z
+
+  // Only geometry NEARER than the subject can be in front of it -- and by a
+  // margin, so the floor at the player's own feet is not punched through.
+  const dFrag = Math.sqrt(ax * ax + ay * ay + az * az)
+  const dSubj = Math.sqrt(bb)
+  if (dFrag >= dSubj - gap) return 1
+
+  // Perpendicular distance from the line of sight.
+  const t = (ax * bx + ay * by + az * bz) / bb
+  if (t <= 0) return 1
+  const cx = ax - bx * t
+  const cy = ay - by * t
+  const cz = az - bz * t
+  const d = Math.sqrt(cx * cx + cy * cy + cz * cz)
+  if (d >= radius) return 1
+
+  // Soft-edged, so the window is a fade rather than a hole with a rim.
+  const e = d / radius
+  const smooth = e * e * (3 - 2 * e)
+  return 1 - strength * (1 - smooth)
+}
+
 // How many lights one draw call considers. Uniform array sizes are fixed at
 // compile time in GLSL, so this is a hard limit rather than a budget: lights
 // beyond it are dropped, and dropping them silently is why the loader reports
@@ -92,6 +149,10 @@ export const FRAGMENT_SHADER = /* glsl */`
   uniform sampler2D map;
   uniform vec2 repeat;
   uniform int numLights;
+  uniform vec3 occludeTarget;
+  uniform float occludeRadius;
+  uniform float occludeGap;
+  uniform float occludeStrength;
   uniform vec3 lightPos[${MAX_ACTIVE_LIGHTS}];
   uniform vec3 lightColor[${MAX_ACTIVE_LIGHTS}];
   uniform float lightRadius[${MAX_ACTIVE_LIGHTS}];
@@ -120,7 +181,25 @@ export const FRAGMENT_SHADER = /* glsl */`
       lit += lightColor[i] * (att * ndl * lightIntensity[i]);
     }
 
-    gl_FragColor = vec4(texel.rgb * lit, 1.0);
+    // Wall occlusion: fade what stands between the camera and the player.
+    // The twin of occlusionAlpha() above.
+    float alpha = 1.0;
+    vec3 b = occludeTarget - cameraPosition;
+    float bb = dot(b, b);
+    if (occludeStrength > 0.0 && bb > 1e-9) {
+      vec3 a = vWorld - cameraPosition;
+      float dFrag = length(a);
+      float dSubj = sqrt(bb);
+      float t = dot(a, b) / bb;
+      if (dFrag < dSubj - occludeGap && t > 0.0) {
+        float d = length(a - b * t);
+        if (d < occludeRadius) {
+          alpha = 1.0 - occludeStrength * (1.0 - smoothstep(0.0, occludeRadius, d));
+        }
+      }
+    }
+
+    gl_FragColor = vec4(texel.rgb * lit, alpha);
   }
 `
 
@@ -143,6 +222,13 @@ export function lightUniforms (THREE, lights) {
     inten.push(L ? L.intensity : 0)
   }
   return {
+    // Off until something sets a target. A renderer with no player -- a map
+    // viewer, an editor preview -- should not have a hole following the origin
+    // around.
+    occludeTarget: { value: new THREE.Vector3() },
+    occludeRadius: { value: 3.5 },
+    occludeGap: { value: 2.5 },
+    occludeStrength: { value: 0 },
     numLights: { value: Math.min(lights.length, MAX_ACTIVE_LIGHTS) },
     lightPos: { value: pos },
     lightColor: { value: col },

@@ -379,6 +379,9 @@ function frame (now) {
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
+  // Aimed at the body's middle rather than its feet: a window centred on the
+  // feet leaves the head behind the wall.
+  view.setOcclusionTarget({ x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z })
   shadows.update(subject, groundUnder(subject.x, subject.z), view.lights, onGround)
   if (LIVE) others.update(newestServerTick, acc / DT)
 

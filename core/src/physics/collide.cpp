@@ -266,13 +266,14 @@ bool slab_overlaps(const Sector& sec, fx feet_z, fx body_height) noexcept {
     return true;
 }
 
-SweepContact resolve_void_slabs(const MapData& map, fx2& p, fx radius, fx feet_z,
-                                fx body_height) noexcept {
+SweepContact resolve_slabs(const MapData& map, fx2& p, fx radius, fx feet_z,
+                           fx body_height) noexcept {
     SweepContact out;
     const fx2 start = p;
 
-    // EVERY sector whose floor is above the body, not just the one the centre
-    // happens to be inside.
+    // EVERY sector whose slab the body overlaps, not just the one its centre
+    // happens to be inside -- and whether the body is in a sector at all is
+    // beside the point.
     //
     // That distinction is the whole bug this fixes. A cylinder overlaps a
     // platform's edge while its centre is still outside the footprint, so a
@@ -281,10 +282,22 @@ SweepContact resolve_void_slabs(const MapData& map, fx2& p, fx radius, fx feet_z
     // the edge. Measured at three ticks of visible penetration before anything
     // reacted.
     //
+    // This ran for entities in the VOID only until a map had a tower in it. A
+    // body standing on a platform is in a sector, so slabs were never consulted
+    // for it, and it walked straight through the tower beside it. The scope was
+    // wrong rather than the rule: "below the floor" was not a place anyone
+    // could be while every map was a sealed box, and a tower makes it one.
+    //
     // The vertical overlap test is slab_overlaps: a slab is a finite box, not a
     // half-space, so a body can be entirely beneath one and pass under it.
     for (u32 s = 0; s < map.sector_count; ++s) {
         if (!slab_overlaps(map.sector(s), feet_z, body_height)) continue;
+        // A slab blocks a body exactly when the body could not STAND in the
+        // sector above it -- the same predicate that decides whether a wall is
+        // a wall. That settles the step case for nothing: a sector half a unit
+        // higher ADMITS you, so its slab does not stand in the way of the step
+        // up onto it, while a tower fifteen units higher does not and does.
+        if (sector_admits(map, s, feet_z, body_height)) continue;
         const SweepContact hit = push_out_of_slab(map, s, p, radius);
         if (hit.contacted) out.contacted = true;
     }
@@ -400,11 +413,11 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     // Push out of any wall the agent is resting against. The sweep prevents
     // crossing; this prevents overlap, which is a separate condition.
     {
-        // A body in the void meets every platform slab it overlaps, resolved
-        // BEFORE asking which sector its centre is in -- see resolve_void_slabs.
-        if (in.sector == NO_SECTOR) {
+        // Every body meets every slab it overlaps, resolved BEFORE asking which
+        // sector its centre is in -- see resolve_slabs.
+        {
             const SweepContact hit =
-                resolve_void_slabs(map, pos2, in.radius, r.pos.z, in.height);
+                resolve_slabs(map, pos2, in.radius, r.pos.z, in.height);
             if (hit.contacted) {
                 r.hit_wall = true;
                 // Wall slide, so a falling body brushing a platform's edge
