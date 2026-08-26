@@ -169,7 +169,15 @@ export const FRAGMENT_SHADER = /* glsl */`
     // so a cutout is discarded outright rather than blended. Blending would
     // still write depth and hide whatever was behind the gap, which is the
     // opposite of what a grate is for.
-    if (texel.a < 0.5) discard;
+    //
+    // Behind a define, because a discard costs early-z rejection for the WHOLE
+    // material: a shader that might discard cannot have its depth resolved
+    // before it runs. Most textures are fully opaque and have no business
+    // paying for that, so the two cases get two programs and the extractor
+    // records which is which.
+    #ifdef CUTOUT
+      if (texel.a < 0.5) discard;
+    #endif
     vec3 n = normalize(vNormalW);
 
     // Sector light level: the floor this surface is lit to, before any lamp.
@@ -188,6 +196,13 @@ export const FRAGMENT_SHADER = /* glsl */`
 
     // Wall occlusion: fade what stands between the camera and the player.
     // The twin of occlusionAlpha() above.
+    //
+    // Resolved by DITHERING rather than by alpha blending. A blended material
+    // is sorted per object every frame, gets no early-z, and runs its fragment
+    // shader for everything it hides -- and the map was marked transparent in
+    // its entirety to support a window a few units across. A screen-door
+    // pattern keeps the material opaque and costs one discard in the small
+    // region that is actually fading.
     float alpha = 1.0;
     vec3 b = occludeTarget - cameraPosition;
     float bb = dot(b, b);
@@ -204,7 +219,26 @@ export const FRAGMENT_SHADER = /* glsl */`
       }
     }
 
-    gl_FragColor = vec4(texel.rgb * lit, alpha);
+    if (alpha < 0.999) {
+      // A 4x4 ordered Bayer threshold. Regular enough to read as a fade at this
+      // scale, and stable frame to frame -- a random threshold would shimmer.
+      const mat4 bayer = mat4(
+         0.0,  8.0,  2.0, 10.0,
+        12.0,  4.0, 14.0,  6.0,
+         3.0, 11.0,  1.0,  9.0,
+        15.0,  7.0, 13.0,  5.0);
+      int bx = int(mod(gl_FragCoord.x, 4.0));
+      int by = int(mod(gl_FragCoord.y, 4.0));
+      float t = 0.0;
+      for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+          if (i == bx && j == by) t = bayer[i][j] / 16.0;
+        }
+      }
+      if (alpha < t) discard;
+    }
+
+    gl_FragColor = vec4(texel.rgb * lit, 1.0);
   }
 `
 

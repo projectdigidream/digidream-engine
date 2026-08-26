@@ -159,23 +159,27 @@ if (LIVE) {
     if (world.applyMotionSet(m)) movers.push(m.sector)
   }
 } else {
-  // Solo has no Lua, so it reads the authored tag convention purely so a lift
-  // is moving while you look at it. On a server this is Lua's decision.
+  // Solo mode has NO movers unless you name them.
   //
-  // Bounded to 100..131, and capped. The convention is a Phase 3 bridge, and an
-  // unbounded "tag >= 100 means a mover" reaches into a range a map may be
-  // using for anything: a generated map that numbered its sectors sequentially
-  // arrived with sixty-four islands silently bobbing up and down.
-  const MOVER_TAG_MIN = 100
-  const MOVER_TAG_MAX = 131
-  for (let i = 0; i < mapData.sectors.length; i++) {
-    const tag = mapData.sectors[i].tag
-    if (tag < MOVER_TAG_MIN || tag > MOVER_TAG_MAX) continue
-    if (movers.length >= 32) {
-      console.warn('[solo] more than 32 tagged movers; ignoring the rest')
-      break
+  // It used to read a tag convention -- "tag 100+N is a lift that rises N" --
+  // which was a Phase 3 bridge from before Lua drove sector motion, and it was
+  // wrong twice over. Tags are a gameplay handle a map may use for anything:
+  // converted DOOM2 maps carry Doom's own sector tags, and MAP15 arrived with
+  // thirty-two of its sectors silently bobbing up and down. And guessing at
+  // motion is not solo mode's job at all -- on a server this is a Lua decision
+  // (§3.1.2), and solo mode has no Lua.
+  //
+  //   ?movers=12:2,40:1.5      sector 12 rises 2 units, sector 40 rises 1.5
+  //
+  // Sector INDICES, not tags: an index is what the map actually addresses.
+  for (const spec of (params.get('movers') ?? '').split(',').filter(Boolean)) {
+    const [idxRaw, riseRaw] = spec.split(':')
+    const i = Number(idxRaw)
+    const rise = Number(riseRaw ?? 1)
+    if (!Number.isInteger(i) || i < 0 || i >= mapData.sectors.length) {
+      console.warn(`[solo] no sector ${idxRaw}`)
+      continue
     }
-    const rise = tag - MOVER_TAG_MIN
     if (world.applyMotionSet({
       sector: i, motionType: 1, motionTarget: 0,
       from: { x: 0n, y: 0n, z: 0n },
@@ -228,7 +232,13 @@ let falls = 0
 // --- scene -----------------------------------------------------------------
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
-renderer.setPixelRatio(Math.min(2, devicePixelRatio))
+// Pixel ratio, capped and overridable.
+//
+// The fragment shader is where this renderer's time goes -- lighting, occlusion
+// and a dither, per pixel -- so the device pixel ratio multiplies the whole
+// frame cost. On a 2x display that is four times the fragments for a sharper
+// picture, which is a trade worth being able to make rather than one baked in.
+renderer.setPixelRatio(Number(params.get('px') ?? Math.min(2, devicePixelRatio)))
 renderer.setSize(innerWidth, innerHeight)
 renderer.setClearColor(0x0b0d12)
 document.body.appendChild(renderer.domElement)
@@ -236,6 +246,8 @@ document.body.appendChild(renderer.domElement)
 const scene = new THREE.Scene()
 const view = new MapView(mapData)
 scene.add(view.root)
+// Only these sectors are rebuilt per frame; everything else is built once.
+if (movers.length) view.setDynamicSectors(movers)
 
 // Real texture images, if this client has them. Not awaited: the map is already
 // on screen with generated placeholders, and each real texture replaces one as
@@ -346,6 +358,12 @@ let fps = 0
 let inputHistory = []
 let newestServerTick = 0
 
+// Where the frame's time actually goes, so this is measurable on real hardware
+// rather than argued about. Smoothed, because a single frame's numbers are
+// noise and the question is always "what is this costing on average".
+const cost = { sim: 0, mesh: 0, draw: 0 }
+const blend = (k, v) => { cost[k] += (v - cost[k]) * 0.1 }
+
 function drainSnapshots () {
   while (pendingSnapshots.length) {
     const s = pendingSnapshots.shift()
@@ -373,6 +391,7 @@ function frame (now) {
   // Bounded, so a backgrounded tab does not return and run ten thousand ticks
   // in one frame. Dropping the missed time is the same choice the server makes
   // after a stall, and for the same reason.
+  const tSim = performance.now()
   let budget = PAUSED ? 0 : 8
   while (acc >= DT && budget-- > 0) {
     const f = currentInput()
@@ -388,18 +407,22 @@ function frame (now) {
     ticks++
   }
   if (acc > DT) acc = 0
+  blend('sim', performance.now() - tSim)
 
   if (LIVE) drainSnapshots()
 
-  // Moving sectors changed the geometry, so the mesh follows.
+  // Moving sectors changed the geometry, so the mesh follows -- for the movers
+  // and their neighbours only. See MapView.setDynamicSectors.
+  const tMesh = performance.now()
   if (movers.length) {
     for (const i of movers) {
       const live = liveSector(i)
       mapData.sectors[i].floorZ = live.floorZ
       mapData.sectors[i].ceilZ = live.ceilZ
     }
-    view.rebuildSectors(movers)
+    view.rebuildDynamic()
   }
+  blend('mesh', performance.now() - tMesh)
 
   let a = world.readAgent(agent)
   if (!LIVE && fxToFloat(a.pos.z) < VOID_FLOOR) {
@@ -427,10 +450,15 @@ function frame (now) {
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
 
+  const tDraw = performance.now()
   renderer.render(scene, cam3)
+  blend('draw', performance.now() - tDraw)
 
   frames++
   if (now - fpsAt > 500) { fps = Math.round(frames * 1000 / (now - fpsAt)); frames = 0; fpsAt = now }
+
+  // What the frame actually costs, from the renderer rather than from a guess.
+  const ri = renderer.info.render
 
   const st = predictor?.stats
   hud.textContent =
@@ -438,7 +466,11 @@ function frame (now) {
     `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
     `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
     `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
-    `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}` +
+    `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}\n` +
+    `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
+    `meshes ${view.meshes.length}\n` +
+    `sim ${cost.sim.toFixed(2)}ms   mesh ${cost.mesh.toFixed(2)}ms   ` +
+    `draw ${cost.draw.toFixed(2)}ms` +
     (falls ? `   falls ${falls}` : '') +
     (LIVE
       ? `\nothers ${others.count}   exact ${st.exactMatches}   misp ${st.mispredictions}` +

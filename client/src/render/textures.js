@@ -110,6 +110,7 @@ export async function loadRealTextures (THREE, names, materials, {
     return { loaded: 0, total: names.length }
   }
   const sizes = index?.sizes ?? {}
+  const cutout = index?.cutout ?? {}
 
   const loader = new THREE.TextureLoader()
   let loaded = 0
@@ -129,6 +130,9 @@ export async function loadRealTextures (THREE, names, materials, {
       // Each texture covers its own amount of world, so the divisor is
       // per-material rather than one shared constant.
       materials[i].uniforms.repeat.value.set(pxPerUnit / dim[0], pxPerUnit / dim[1])
+      // Only a texture with a transparent pixel gets the discard, and with it
+      // the loss of early-z rejection for its whole material.
+      if (cutout[name]) materials[i].defines = { ...(materials[i].defines ?? {}), CUTOUT: '' }
       materials[i].needsUpdate = true
       loaded++
       resolve()

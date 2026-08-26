@@ -73,8 +73,10 @@ export class MapView {
     this.missing = new THREE.MeshBasicMaterial({
       color: 0xff00ff, vertexColors: true, side: THREE.FrontSide, wireframe: true
     })
-    this.meshes = []
-    this.rebuildAll()
+    this.staticMeshes = []
+    this.dynamicMeshes = []
+    this.dynamic = new Set()
+    this.rebuildStatic()
   }
 
   /** Replace the placeholders with real images where the client has them. */
@@ -117,57 +119,63 @@ export class MapView {
     this.lightUniforms.numLights.value = n
   }
 
-  disposeMeshes () {
-    for (const m of this.meshes) {
-      this.root.remove(m)
-      m.geometry.dispose()
-    }
-    this.meshes = []
-  }
-
-  rebuildAll () {
-    this.disposeMeshes()
-    for (const g of mergeByTexture(buildMapSurfaces(this.map))) {
-      const mesh = new THREE.Mesh(geometryFromGroup(g), this.materialFor(g.texture))
-      mesh.frustumCulled = false
-      this.root.add(mesh)
-      this.meshes.push(mesh)
-    }
-  }
-
   /**
-   * Rebuild only the sectors that moved, plus the ones that look at them.
+   * Split the map into a static half and a dynamic one.
    *
-   * A neighbour's upper and lower fields are drawn from ITS side of the shared
-   * boundary, so a lift rising in sector 3 changes what sector 2's wall shows
-   * even though sector 2 did not move. Rebuilding only the mover leaves the
-   * hole it climbed out of on screen.
+   * Everything not listed is built ONCE. Only the listed sectors -- and the
+   * ones that look at them -- are rebuilt per frame.
+   *
+   * That split is the whole point. A moving sector changes geometry every tick,
+   * and the first version rebuilt the entire map to follow it: every sector's
+   * surfaces re-derived, re-merged, and every BufferGeometry disposed and
+   * recreated, sixty times a second, for a lift. On a converted Doom map that
+   * was a hundred geometries a frame.
+   *
+   * A neighbour is included because upper and lower wall fields are drawn from
+   * the neighbour's side of a shared boundary: a lift rising in sector 3
+   * changes what sector 2 draws even though sector 2 did not move.
    */
-  rebuildSectors (indices) {
-    const dirty = new Set(indices)
+  setDynamicSectors (indices) {
+    this.dynamic = new Set()
     for (const i of indices) {
+      this.dynamic.add(i)
       const s = this.map.sectors[i]
+      if (!s) continue
       for (let k = 0; k < s.sideCount; k++) {
         const nb = this.map.sides[s.firstSide + k].neighbor
-        if (nb >= 0) dirty.add(nb)
+        if (nb >= 0) this.dynamic.add(nb)
       }
     }
-    // Rebuilt as one batch. The alternative -- a mesh per sector, updated in
-    // place -- trades this rebuild for one draw call per sector, and a map is
-    // far more sectors than textures.
+    this.rebuildStatic()
+    this.rebuildDynamic()
+  }
+
+  #build (indices, into) {
+    for (const m of into) { this.root.remove(m); m.geometry.dispose() }
+    into.length = 0
     const surfaces = []
-    for (let i = 0; i < this.map.sectors.length; i++) {
-      surfaces.push(...buildSectorSurfaces(this.map, i))
-    }
-    this.disposeMeshes()
+    for (const i of indices) surfaces.push(...buildSectorSurfaces(this.map, i))
     for (const g of mergeByTexture(surfaces)) {
       const mesh = new THREE.Mesh(geometryFromGroup(g), this.materialFor(g.texture))
       mesh.frustumCulled = false
       this.root.add(mesh)
-      this.meshes.push(mesh)
+      into.push(mesh)
     }
-    return dirty.size
   }
+
+  rebuildStatic () {
+    const idx = []
+    for (let i = 0; i < this.map.sectors.length; i++) if (!this.dynamic.has(i)) idx.push(i)
+    this.#build(idx, this.staticMeshes)
+  }
+
+  /** Per-frame, and only for the sectors that actually move. */
+  rebuildDynamic () {
+    if (this.dynamic.size === 0) return
+    this.#build([...this.dynamic].sort((a, b) => a - b), this.dynamicMeshes)
+  }
+
+  get meshes () { return [...this.staticMeshes, ...this.dynamicMeshes] }
 }
 
 /**
