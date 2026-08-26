@@ -165,6 +165,11 @@ export const FRAGMENT_SHADER = /* glsl */`
 
   void main () {
     vec4 texel = texture2D(map, vUv * repeat);
+    // Doom's transparency is binary -- a grate is either there or it is not --
+    // so a cutout is discarded outright rather than blended. Blending would
+    // still write depth and hide whatever was behind the gap, which is the
+    // opposite of what a grate is for.
+    if (texel.a < 0.5) discard;
     vec3 n = normalize(vNormalW);
 
     // Sector light level: the floor this surface is lit to, before any lamp.

@@ -187,6 +187,26 @@ export class WasmWorld {
     return applied
   }
 
+  /**
+   * Set one movement parameter by NAME.
+   *
+   * For solo mode, where there is no server and no Lua to send a PARAM_UPDATE.
+   * The name lookup is the engine's own, so a name that does not exist is
+   * reported rather than silently writing nothing.
+   */
+  setParamByName (idx, name, value) {
+    const bytes = new TextEncoder().encode(name)
+    const ptr = this.core.M._malloc(bytes.length + 1)
+    this.core.M.HEAPU8.set(bytes, ptr)
+    this.core.M.HEAPU8[ptr + bytes.length] = 0
+    const id = this.core.M._dnp_param_id_by_name(ptr)
+    this.core.M._free(ptr)
+    if (id < 0) return false
+    const { i64 } = this.core.views
+    i64[this.core.buf64 / 8] = BigInt(Math.round(value * 4294967296))
+    return this.core.M._dnp_world_set_param_raw(this.ptr, idx, id, this.core.buf64) !== 0
+  }
+
   /** Read one parameter back, so a test can assert what was actually applied. */
   getParamRaw (idx, fieldId) {
     this.core.M._dnp_world_get_param_raw(this.ptr, idx, fieldId, this.core.buf64)

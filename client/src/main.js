@@ -187,6 +187,22 @@ if (LIVE) {
 
 const spawn = map.spawnForTag(SPAWN)
 const agent = world.spawn(spawn)
+
+// Body proportions, for maps built at a scale other than this engine's.
+//
+// A converted Doom map is at 1/48, chosen so Doom's 24-unit step lands on our
+// 0.5 threshold -- which makes the default 2-unit body 96 Doom units tall
+// against Doom's 56, and it jams in every doorway. radius and height are
+// per-entity MoveParams, so this is what they are for; on a server it would be
+// a PARAM_UPDATE from Lua rather than a URL.
+for (const [name, key] of [['radius', 'radius'], ['height', 'height'],
+                           ['move_speed', 'speed'], ['jump_impulse', 'jump']]) {
+  const v = params.get(key)
+  if (v === null) continue
+  if (!world.setParamByName(agent, name, Number(v))) {
+    console.warn(`[solo] no movement parameter named ${name}`)
+  }
+}
 const predictor = LIVE ? new Predictor(world, agent) : null
 if (LIVE) {
   // Parameter updates that arrived during the handshake, applied before the
@@ -220,6 +236,14 @@ document.body.appendChild(renderer.domElement)
 const scene = new THREE.Scene()
 const view = new MapView(mapData)
 scene.add(view.root)
+
+// Real texture images, if this client has them. Not awaited: the map is already
+// on screen with generated placeholders, and each real texture replaces one as
+// it arrives.
+view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32) })
+  .then(({ loaded, total }) => {
+    if (loaded) console.log(`[render] ${loaded}/${total} textures loaded from /textures`)
+  })
 
 const body = makeAgentMesh()
 scene.add(body)

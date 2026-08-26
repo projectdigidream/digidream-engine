@@ -25,7 +25,8 @@ const TYPES = {
   '.wasm': 'application/wasm',
   '.json': 'application/json',
   '.dnpm': 'application/octet-stream',
-  '.map': 'application/json'
+  '.map': 'application/json',
+  '.png': 'image/png'
 }
 
 // Prefixes served, and what they resolve to. An explicit list rather than
@@ -35,6 +36,11 @@ const TYPES = {
 const MOUNTS = [
   ['/vendor/three/', join(ROOT, 'client', 'node_modules', 'three', 'build')],
   ['/src/', join(ROOT, 'client', 'src')],
+  // Texture images, keyed by the NAME a map uses. The map carries names and the
+  // client resolves them (§4) -- which is what lets one map serve clients with
+  // different asset sets, and keeps megabytes of images off the control channel
+  // that every join waits on.
+  ['/textures/', join(ROOT, 'assets', 'textures')],
   // client/wasm, not client/wasm/dist: core.js imports '../wasm/dist/...',
   // which is the layout on disk, and a mount that skipped the dist level would
   // make the source's own relative import wrong only when served.

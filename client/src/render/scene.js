@@ -8,7 +8,7 @@
 //
 import * as THREE from 'three'
 import { buildMapSurfaces, buildSectorSurfaces, mergeByTexture } from '../mapgeom.js'
-import { makeTextureSet, DEFAULT_WORLD_SIZE } from './textures.js'
+import { makeTextureSet, loadRealTextures, DEFAULT_WORLD_SIZE } from './textures.js'
 import { NO_TEXTURE } from '../mapdata.js'
 import {
   VERTEX_SHADER, FRAGMENT_SHADER, lightUniforms, MAX_ACTIVE_LIGHTS
@@ -75,6 +75,11 @@ export class MapView {
     })
     this.meshes = []
     this.rebuildAll()
+  }
+
+  /** Replace the placeholders with real images where the client has them. */
+  async loadTextures (opts) {
+    return loadRealTextures(THREE, this.map.textures, this.materials, opts)
   }
 
   materialFor (texture) {

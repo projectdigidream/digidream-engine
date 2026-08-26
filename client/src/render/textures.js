@@ -87,6 +87,56 @@ export function paintPlaceholder (ctx, name, { pixels = PIXELS } = {}) {
  * node -- the painting above is the part worth testing and it does not need a
  * renderer.
  */
+/**
+ * Swap in real texture images for the names a map uses.
+ *
+ * Asynchronous and best-effort, deliberately. Placeholders are created first
+ * and the map renders immediately; each real texture replaces one as it
+ * arrives, and a name with no image keeps its placeholder rather than leaving a
+ * hole. An asset set is a client's business (§4) -- the map carries names -- so
+ * a missing one is a client that has fewer textures, not a broken map.
+ *
+ * `pxPerUnit` is how many texture pixels span one world unit, and it is the one
+ * number that cannot be guessed: a Doom map converted at 1/48 wants 48, because
+ * a 64-pixel Doom texture covers 64 Doom units and therefore 64/48 of ours.
+ */
+export async function loadRealTextures (THREE, names, materials, {
+  baseUrl = '/textures', pxPerUnit = 32
+} = {}) {
+  let index = null
+  try {
+    index = await (await fetch(`${baseUrl}/index.json`)).json()
+  } catch {
+    return { loaded: 0, total: names.length }
+  }
+  const sizes = index?.sizes ?? {}
+
+  const loader = new THREE.TextureLoader()
+  let loaded = 0
+  await Promise.all(names.map((name, i) => new Promise((resolve) => {
+    const dim = sizes[name]
+    if (!dim || !materials[i]) { resolve(); return }
+    loader.load(`${baseUrl}/${name}.png`, (tex) => {
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+      tex.colorSpace = THREE.NoColorSpace
+      tex.magFilter = THREE.NearestFilter
+      // Mipmaps off. Doom art is 64 to 128 pixels and reads as mush the moment
+      // it is filtered down; nearest with no mips is what it was drawn for.
+      tex.minFilter = THREE.NearestFilter
+      tex.generateMipmaps = false
+      tex.flipY = false
+      materials[i].uniforms.map.value = tex
+      // Each texture covers its own amount of world, so the divisor is
+      // per-material rather than one shared constant.
+      materials[i].uniforms.repeat.value.set(pxPerUnit / dim[0], pxPerUnit / dim[1])
+      materials[i].needsUpdate = true
+      loaded++
+      resolve()
+    }, undefined, () => resolve())
+  })))
+  return { loaded, total: names.length }
+}
+
 export function makeTextureSet (THREE, names) {
   return names.map((name) => {
     const canvas = document.createElement('canvas')
