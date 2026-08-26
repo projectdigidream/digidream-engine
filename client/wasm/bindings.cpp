@@ -110,6 +110,106 @@ void dnp_map_hash(const geom::MapStorage* m, long long* out64) {
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_map_sector_count(const geom::MapStorage* m) { return m->view().sector_count; }
 
+// --- reading the map out, for the renderer ---------------------------------
+//
+// Per-element accessors filling the caller's scratch buffers, rather than
+// handing JS a pointer into the store and a struct layout to mirror. A pointer
+// would be faster and would break the first time a field was added or the
+// compiler padded differently -- silently, as a wall in the wrong place. These
+// run once per map load, so the cost is a few thousand calls and never a frame.
+//
+// This is also the RENDER BOUNDARY, and the one place fx values are allowed to
+// stop being exact. They leave as raw Q32.32 in an i64 buffer; the caller
+// converts to double for the GPU. The simulation never reads back what the
+// renderer did with them.
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_point_count(const geom::MapStorage* m) { return m->view().point_count; }
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_side_count(const geom::MapStorage* m) { return m->view().side_count; }
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_tri_index_count(const geom::MapStorage* m) { return m->view().tri_index_count; }
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_texture_count(const geom::MapStorage* m) { return m->texture_count(); }
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_point(const geom::MapStorage* m, unsigned i, long long* out64) {
+    const geom::MapData v = m->view();
+    if (i >= v.point_count) { out64[0] = 0; out64[1] = 0; return; }
+    out64[0] = v.point(i).x.raw;
+    out64[1] = v.point(i).y.raw;
+}
+
+// Geometry and rendering in ONE call, deliberately -- they are indexed the same
+// way and a caller that fetched them separately could pair sector 3's shape
+// with sector 4's light. The two views stay separate in C++, where physics can
+// be denied one of them; there is no such thing to protect on this side of the
+// boundary, where everything is for drawing.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_sector(const geom::MapStorage* m, unsigned i, long long* out64, unsigned* out32) {
+    const geom::MapData v = m->view();
+    if (i >= v.sector_count) { out32[0] = 0; return; }
+    const geom::Sector& s = v.sector(i);
+    const geom::SectorRender& r = m->render_view().sector(i);
+    out64[0] = s.floor_z.raw;
+    out64[1] = s.ceil_z.raw;
+    out32[0] = s.first_point;
+    out32[1] = s.point_count;
+    out32[2] = s.first_side;
+    out32[3] = s.side_count;
+    out32[4] = s.tag;
+    out32[5] = s.first_tri;
+    out32[6] = s.tri_count;
+    out32[7] = r.floor_tex;
+    out32[8] = r.ceil_tex;
+    out32[9] = r.light_level;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_side(const geom::MapStorage* m, unsigned i, long long* out64, unsigned* out32) {
+    const geom::MapData v = m->view();
+    if (i >= v.side_count) { out32[0] = 0; return; }
+    const geom::Side& sd = v.side(i);
+    const geom::SideRender& r = m->render_view().side(i);
+    out64[0] = r.x_offset.raw;
+    out64[1] = r.y_offset.raw;
+    out32[0] = sd.a;
+    out32[1] = sd.b;
+    // neighbor is i32 and may be -1; reinterpreted rather than cast so the
+    // caller reads it back with the same two's-complement bits it left with.
+    out32[2] = static_cast<unsigned>(sd.neighbor);
+    out32[3] = sd.flags;
+    out32[4] = r.upper;
+    out32[5] = r.middle;
+    out32[6] = r.lower;
+    out32[7] = r.peg_flags;
+}
+
+// Bulk, because a per-index call for twelve thousand indices is the one place
+// the accessor-per-element choice above would actually cost something.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_tris(const geom::MapStorage* m, unsigned short* out, unsigned cap) {
+    const geom::MapData v = m->view();
+    const unsigned n = v.tri_index_count < cap ? v.tri_index_count : cap;
+    for (unsigned i = 0; i < n; ++i) out[i] = v.tris[i];
+    return n;
+}
+
+// Writes the name and returns its length, or 0. Not NUL-terminated: the stored
+// form is NUL-PADDED, and a name that fills the field has no terminator to
+// find.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_texture_name(const geom::MapStorage* m, unsigned i, char* out, unsigned cap) {
+    if (i >= m->texture_count()) return 0;
+    const geom::TextureName& t = m->texture(i);
+    const unsigned n = t.len < cap ? t.len : cap;
+    for (unsigned k = 0; k < n; ++k) out[k] = t.name[k];
+    return n;
+}
+
 // Attach a loaded map to a world. The view is stored out of line because
 // World keeps a pointer to it.
 EMSCRIPTEN_KEEPALIVE

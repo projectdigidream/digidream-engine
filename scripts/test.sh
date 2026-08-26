@@ -92,6 +92,13 @@ else
   fi
 
   node client/test/snapshots.test.js
+  # Pure: no wasm, no GPU. The geometry rules of a Doom-style renderer are
+  # arithmetic, and arithmetic is worth asserting rather than screenshotting.
+  node client/test/mapgeom.test.js | tail -2
+  node client/test/camera.test.js | tail -2
+  # And the same rules applied to the map the server actually ships, read
+  # through the same wasm module the client predicts with.
+  node client/test/mapmesh.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2 \

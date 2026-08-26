@@ -283,7 +283,15 @@ int main(int argc, char** argv) {
 
             store.sector_render_mut(si) = sector_render;
 
-            const u16 first_side = store.view().sector(si).first_side;
+            // The index the NEXT side will land at. Deliberately not
+            // sector.first_side: that field is assigned lazily by the first
+            // add_side, so before the loop below it still reads zero -- and
+            // every sector would write its wall textures over sector 0's. That
+            // is exactly the trap add_sector's own first_side handling was
+            // fixed for once already, which is why this reads a count that is
+            // true at the moment it is read instead of a field that becomes
+            // true later.
+            u32 next_side = store.view().side_count;
             for (size_t i = 0; i < verts.size(); ++i) {
                 const u16 a = static_cast<u16>(i);
                 const u16 b = static_cast<u16>((i + 1) % verts.size());
@@ -291,11 +299,7 @@ int main(int argc, char** argv) {
                     err(sector_start_line, "could not add side %u", a);
                     continue;
                 }
-                // Sides are appended in vertex order, so side `first_side + i`
-                // is the edge leading out of vertex i. Read back from the store
-                // rather than assumed: first_side is assigned lazily on the
-                // first add_side, so it is only correct once one has happened.
-                store.side_render_mut(first_side + static_cast<u16>(i)) = verts[i].render;
+                store.side_render_mut(next_side++) = verts[i].render;
             }
         } else if (tok[0] == "rail" || tok[0] == "wire") {
             if (in_sector) { err(lineno, "rail inside a sector; missing 'end'?"); continue; }
