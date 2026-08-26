@@ -95,6 +95,86 @@ struct RailLink {
     u16 to_waypoint = 0;
 };
 
+// ---------------------------------------------------------------------------
+// Rendering attributes (design §3.1, §4).
+//
+// A SEPARATE view, deliberately. Textures, pegging and light level are not
+// simulation state: two servers that disagree about a wall's texture still owe
+// their clients identical physics, and a client that renders a sector black
+// must still collide with it the same way. Keeping them out of MapData means
+// physics cannot read them by accident -- not as a convention, but because the
+// struct it is handed does not contain them, so reaching for `light_level`
+// inside a collision routine does not compile.
+//
+// The parallel arrays are indexed by the SAME sector and side indices as the
+// physics view, so nothing needs a second lookup table to correlate them.
+// ---------------------------------------------------------------------------
+
+inline constexpr u16 NO_TEXTURE = 0xFFFFu;
+
+namespace peg_flag {
+// Doom's pegging, and it earns its place here for a reason specific to this
+// engine: sectors MOVE (§3.1.2). Pegging decides whether a wall texture's
+// origin is anchored to the top of the segment or the bottom, which is what
+// makes a door's texture slide up with the door instead of the door sliding
+// past a texture nailed to the world. Without it every mover looks like a hole
+// with a static pattern behind it.
+inline constexpr u8 UPPER_UNPEGGED = 1u << 0;
+inline constexpr u8 LOWER_UNPEGGED = 1u << 1;
+}  // namespace peg_flag
+
+// The three texture fields of a side, in Doom's sense.
+//
+// A side facing open space needs one texture. A side facing another sector
+// needs up to three: the step UP to the neighbour's floor (lower), the step
+// DOWN from the neighbour's ceiling (upper), and anything drawn across the
+// opening itself (middle -- a grate, a window frame). Which fields are visible
+// follows from the two sectors' heights and is computed at draw time, so a
+// moving sector reveals and hides them without the map being edited.
+struct SideRender {
+    u16 upper  = NO_TEXTURE;
+    u16 middle = NO_TEXTURE;
+    u16 lower  = NO_TEXTURE;
+    u8  peg_flags = 0;
+    fx  x_offset{};   // texture alignment along the wall
+    fx  y_offset{};
+};
+
+struct SectorRender {
+    u16 floor_tex = NO_TEXTURE;
+    u16 ceil_tex  = NO_TEXTURE;
+
+    // 0 = dark, 255 = fully lit. Defaults to LIT, not to dark: a map that
+    // authored no lighting should render visibly wrong rather than render
+    // nothing at all, because a black screen looks like a broken renderer and a
+    // flatly-lit one looks like exactly what it is.
+    u8 light_level = 255;
+};
+
+inline constexpr u32 MAX_TEXTURE_NAME = 24;
+
+// Texture NAMES, not texture data. The map says `BRICK1`; what BRICK1 looks
+// like is the client's business, which is what lets one map be shipped to
+// clients with entirely different asset sets and keeps image data out of a file
+// that travels over the control channel on every join.
+struct TextureName {
+    char name[MAX_TEXTURE_NAME]{};   // NUL-padded, not NUL-terminated at capacity
+    u8   len = 0;
+};
+
+struct RenderData {
+    const SectorRender* sectors      = nullptr;
+    u32                 sector_count = 0;
+    const SideRender*   sides        = nullptr;
+    u32                 side_count   = 0;
+    const TextureName*  textures     = nullptr;
+    u32                 texture_count = 0;
+
+    const SectorRender& sector(u32 i) const noexcept { return sectors[i]; }
+    const SideRender& side(u32 i) const noexcept { return sides[i]; }
+    const TextureName& texture(u32 i) const noexcept { return textures[i]; }
+};
+
 struct MapData {
     const fx2*    points       = nullptr;
     u32           point_count  = 0;

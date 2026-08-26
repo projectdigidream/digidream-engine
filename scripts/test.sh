@@ -14,6 +14,10 @@ echo "=== 1/5  purity guards ==="
 # error; now they are required to differ in one specific way, which no link
 # error can check for you.
 ./scripts/check_source_lists.sh
+# Rendering attributes arrived in Phase 5. They are structurally out of
+# MapData; this catches the other direction -- a physics routine handed a
+# RenderData because it was convenient.
+./scripts/check_render_isolation.sh
 
 echo
 echo "=== 2/5  core unit + property tests ==="

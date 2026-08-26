@@ -10,6 +10,7 @@
 #include <cstdio>
 
 #include "dnp/geom/mapfile.hpp"
+#include "dnp/physics/collide.hpp"
 #include "dnp/math/rng.hpp"
 #include "dnp/sim/testmap.hpp"
 
@@ -58,6 +59,26 @@ static void build_reference(MapStorage& s) {
 
     s.add_spawn("start", 5, fx3{F(10), F(10), F(2)});
     s.add_spawn("ledge", 5, fx3{F(50), F(20), F(2)});
+
+    // Rendering attributes, so the round-trip actually carries some. A fixture
+    // that leaves them all at their defaults would round-trip a file full of
+    // zeroes and prove nothing about the section.
+    const u16 wall = s.intern_texture("WALL1", 5);
+    const u16 floor = s.intern_texture("FLOOR1", 6);
+    const u16 step = s.intern_texture("STEP1", 5);
+    s.sector_render_mut(0).floor_tex = floor;
+    s.sector_render_mut(0).ceil_tex = wall;
+    s.sector_render_mut(0).light_level = 190;
+    s.sector_render_mut(1).light_level = 220;
+    s.sector_render_mut(2).floor_tex = step;
+    s.side_render_mut(0).middle = wall;
+    s.side_render_mut(1).lower = step;
+    s.side_render_mut(1).peg_flags = peg_flag::LOWER_UNPEGGED;
+    s.side_render_mut(3).middle = wall;
+    s.side_render_mut(3).x_offset = fx::from_frac(3, 2);
+    s.side_render_mut(3).y_offset = fx::from_int(-4);
+    s.side_render_mut(9).upper = step;
+    s.side_render_mut(9).peg_flags = peg_flag::UPPER_UNPEGGED;
 }
 
 static void test_roundtrip() {
@@ -105,6 +126,84 @@ static void test_roundtrip() {
         CHECK(a.sector(i).tri_count == b.sector(i).tri_count);
     }
     CHECK(dst.spawn_count() == 2);
+
+    // The render section, field by field. Interning must reproduce the same
+    // ids, or every side below the table would silently point at a different
+    // texture -- which is exactly the failure a hash comparison alone would
+    // catch but could not name.
+    CHECK(dst.texture_count() == src.texture_count());
+    for (u32 i = 0; i < dst.texture_count(); ++i) {
+        CHECK(dst.texture(i).len == src.texture(i).len);
+        for (u32 k = 0; k < dst.texture(i).len; ++k) {
+            CHECK(dst.texture(i).name[k] == src.texture(i).name[k]);
+        }
+    }
+    const RenderData ra = src.render_view();
+    const RenderData rb = dst.render_view();
+    CHECK(ra.sector_count == rb.sector_count);
+    CHECK(ra.side_count == rb.side_count);
+    for (u32 i = 0; i < ra.sector_count && i < rb.sector_count; ++i) {
+        CHECK(ra.sector(i).floor_tex == rb.sector(i).floor_tex);
+        CHECK(ra.sector(i).ceil_tex == rb.sector(i).ceil_tex);
+        CHECK(ra.sector(i).light_level == rb.sector(i).light_level);
+    }
+    for (u32 i = 0; i < ra.side_count && i < rb.side_count; ++i) {
+        CHECK(ra.side(i).upper == rb.side(i).upper);
+        CHECK(ra.side(i).middle == rb.side(i).middle);
+        CHECK(ra.side(i).lower == rb.side(i).lower);
+        CHECK(ra.side(i).peg_flags == rb.side(i).peg_flags);
+        CHECK(ra.side(i).x_offset == rb.side(i).x_offset);
+        CHECK(ra.side(i).y_offset == rb.side(i).y_offset);
+    }
+}
+
+// Rendering data must not be able to change what the simulation does.
+//
+// The structural guarantee is that MapData does not contain it, so physics
+// cannot read it even by mistake. This asserts the consequence: two maps
+// identical except for every rendering attribute must collide identically.
+// If this ever fails, something has reached across the separation.
+static void test_render_does_not_affect_physics() {
+    MapStorage plain;
+    build_reference(plain);
+    // Strip every rendering attribute back to its default.
+    for (u32 i = 0; i < plain.view().sector_count; ++i) plain.sector_render_mut(i) = SectorRender{};
+    for (u32 i = 0; i < plain.view().side_count; ++i) plain.side_render_mut(i) = SideRender{};
+
+    MapStorage painted;
+    build_reference(painted);
+
+    const MapData a = plain.view();
+    const MapData b = painted.view();
+
+    // Walk a grid of positions across the whole map and compare the two answers
+    // the simulation actually asks of geometry.
+    int probes = 0;
+    for (int x = -4; x <= 84; x += 2) {
+        for (int y = -4; y <= 44; y += 2) {
+            const fx2 p{F(x), F(y)};
+            CHECK(find_sector(a, p) == find_sector(b, p));
+            ++probes;
+        }
+    }
+    CHECK(probes > 1000);
+
+    for (u32 s = 0; s < a.sector_count; ++s) {
+        const Sector& sec = a.sector(s);
+        for (u16 k = 0; k < sec.side_count; ++k) {
+            const u32 si = sec.first_side + k;
+            for (int fz = 0; fz <= 6; ++fz) {
+                CHECK(physics::side_is_passable(a, si, s, F(fz), F(2)) ==
+                      physics::side_is_passable(b, si, s, F(fz), F(2)));
+            }
+        }
+    }
+
+    // And the two maps really ARE different, or every comparison above is
+    // vacuous -- it would pass just as well if build_reference had painted
+    // nothing at all.
+    CHECK(plain.hash() != painted.hash());
+    std::printf("mapfile: rendering attributes change nothing the simulation reads\n");
 }
 
 static void test_matches_hardcoded_map() {
@@ -259,6 +358,7 @@ int main() {
     test_roundtrip();
     test_matches_hardcoded_map();
     test_rejects_bad_input();
+    test_render_does_not_affect_physics();
     test_fuzz();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

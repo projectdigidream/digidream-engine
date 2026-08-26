@@ -14,6 +14,7 @@ constexpr size_t LINK_BYTES     = 8;    // four u16
 
 bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     const MapData m = store.view();
+    const RenderData rd = store.render_view();
 
     w.u32v(MAP_MAGIC);
     w.u16v(MAP_VERSION);
@@ -27,6 +28,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.u32v(store.rail_count());
     w.u32v(store.waypoint_count());
     w.u32v(store.rail_link_count());
+    w.u32v(store.texture_count());
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -91,6 +93,31 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u16v(l.to_waypoint);
     }
 
+    // Rendering attributes, last: a reader that only wants geometry -- the
+    // server's collision code, the nav graph, a diff tool -- can stop at the
+    // section it cares about, and the file is laid out so that costs a seek
+    // rather than a parse.
+    for (u32 i = 0; i < store.texture_count(); ++i) {
+        const TextureName& t = store.texture(i);
+        w.u8v(t.len);
+        for (u32 k = 0; k < t.len; ++k) w.u8v(static_cast<u8>(t.name[k]));
+    }
+    for (u32 i = 0; i < m.sector_count; ++i) {
+        const SectorRender& r = rd.sector(i);
+        w.u16v(r.floor_tex);
+        w.u16v(r.ceil_tex);
+        w.u8v(r.light_level);
+    }
+    for (u32 i = 0; i < m.side_count; ++i) {
+        const SideRender& r = rd.side(i);
+        w.u16v(r.upper);
+        w.u16v(r.middle);
+        w.u16v(r.lower);
+        w.u8v(r.peg_flags);
+        w.fxraw(r.x_offset);
+        w.fxraw(r.y_offset);
+    }
+
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
     // running different geometry from the server is a detectable condition
     // rather than an unexplained series of collision disagreements.
@@ -122,6 +149,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 rail_count = r.u32v();
     const u32 waypoint_count = r.u32v();
     const u32 rail_link_count = r.u32v();
+    const u32 texture_count = r.u32v();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
     // Bound every count BEFORE reading anything sized by it. These are
@@ -129,7 +157,8 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     if (point_count > MAX_MAP_POINTS || sector_count > MAX_MAP_SECTORS ||
         side_count > MAX_MAP_SIDES || tri_index_count > MAX_MAP_TRI_IDX ||
         spawn_count > MAX_MAP_SPAWNS || rail_count > MAX_MAP_RAILS ||
-        waypoint_count > MAX_MAP_WAYPOINTS || rail_link_count > MAX_MAP_RAIL_LINKS) {
+        waypoint_count > MAX_MAP_WAYPOINTS || rail_link_count > MAX_MAP_RAIL_LINKS ||
+        texture_count > MAX_MAP_TEXTURES) {
         store.clear();
         return MapLoadStatus::TooLarge;
     }
@@ -359,6 +388,68 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
         }
+    }
+
+    // --- rendering attributes ------------------------------------------------
+    //
+    // Read last, and read with the same suspicion as everything else: a texture
+    // id is an index like any other, and a side naming texture 9000 must be a
+    // rejected file rather than an out-of-range read the first time that wall
+    // comes on screen. Rendering data is not simulation data, but it is still
+    // attacker-supplied.
+    for (u32 i = 0; i < texture_count; ++i) {
+        const u8 len = r.u8v();
+        if (!r.ok() || len == 0 || len > MAX_TEXTURE_NAME) {
+            store.clear(); return MapLoadStatus::Truncated;
+        }
+        char name[MAX_TEXTURE_NAME];
+        for (u32 k = 0; k < len; ++k) name[k] = static_cast<char>(r.u8v());
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        // Interning must reproduce the file's own ids exactly. If two entries
+        // in the table are identical the intern collapses them, the ids shift,
+        // and every side below this point silently refers to the wrong texture
+        // -- so a file with duplicate names is malformed, not merely wasteful.
+        if (store.intern_texture(name, len) != i) {
+            store.clear(); return MapLoadStatus::BadIndex;
+        }
+    }
+
+    const auto texture_ok = [&](u16 t) {
+        return t == NO_TEXTURE || t < texture_count;
+    };
+
+    for (u32 i = 0; i < sector_count; ++i) {
+        const u16 floor_tex = r.u16v();
+        const u16 ceil_tex = r.u16v();
+        const u8 light = r.u8v();
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        if (!texture_ok(floor_tex) || !texture_ok(ceil_tex)) {
+            store.clear(); return MapLoadStatus::BadIndex;
+        }
+        SectorRender& sr = store.sector_render_mut(i);
+        sr.floor_tex = floor_tex;
+        sr.ceil_tex = ceil_tex;
+        sr.light_level = light;
+    }
+
+    for (u32 i = 0; i < side_count; ++i) {
+        const u16 upper = r.u16v();
+        const u16 middle = r.u16v();
+        const u16 lower = r.u16v();
+        const u8 peg = r.u8v();
+        const fx xo = r.fxraw();
+        const fx yo = r.fxraw();
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        if (!texture_ok(upper) || !texture_ok(middle) || !texture_ok(lower)) {
+            store.clear(); return MapLoadStatus::BadIndex;
+        }
+        SideRender& sr = store.side_render_mut(i);
+        sr.upper = upper;
+        sr.middle = middle;
+        sr.lower = lower;
+        sr.peg_flags = peg;
+        sr.x_offset = xo;
+        sr.y_offset = yo;
     }
 
     const u64 want_hash = r.u64v();

@@ -31,6 +31,7 @@ inline constexpr u32 MAX_MAP_RAILS      = 64;
 inline constexpr u32 MAX_MAP_WAYPOINTS  = 512;
 inline constexpr u32 MAX_MAP_RAIL_LINKS = 64;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
+inline constexpr u32 MAX_MAP_TEXTURES   = 256;
 
 // A named landing point. Portals name one of these in the join handshake
 // (design §3.3), so each portal can deliver its arrivals somewhere specific
@@ -113,7 +114,27 @@ public:
     fx3 spawn_for_tag(const char* tag, u32 tag_len) const noexcept;
 
     // --- access ---
+    // --- rendering attributes (design §4) ---
+    //
+    // Written by the map compiler and the loader; read by the renderer. Held in
+    // the same store because they arrive in the same file, exposed through a
+    // separate view because physics must not see them.
+
+    // Intern a texture name, returning its id. Repeated names collapse to one
+    // id, so a map that paints two hundred walls with BRICK1 carries the string
+    // once. Returns NO_TEXTURE when the table is full or the name is too long.
+    u16 intern_texture(const char* name, u32 len) noexcept;
+    u32 texture_count() const noexcept { return texture_count_; }
+    const TextureName& texture(u32 i) const noexcept { return textures_[i]; }
+
+    SectorRender& sector_render_mut(u32 i) noexcept { return sector_render_[i]; }
+    SideRender&   side_render_mut(u32 i) noexcept { return side_render_[i]; }
+
     MapData view() const noexcept;
+
+    // The parallel rendering view. Nothing in core/physics or core/sim takes
+    // one of these, and scripts/check_render_isolation.sh keeps it that way.
+    RenderData render_view() const noexcept;
     u32 sector_count() const noexcept { return sector_count_; }
     Sector& sector_mut(u32 i) noexcept { return sectors_[i]; }
     Side& side_mut(u32 i) noexcept { return sides_[i]; }
@@ -152,6 +173,14 @@ private:
 
     SpawnPoint spawns_[MAX_MAP_SPAWNS]{};
     u32        spawn_count_ = 0;
+
+    // Rendering attributes, parallel to sectors_ and sides_ and never merged
+    // into them. See RenderData in map.hpp for why the separation is
+    // structural rather than a naming convention.
+    SectorRender sector_render_[MAX_MAP_SECTORS]{};
+    SideRender   side_render_[MAX_MAP_SIDES]{};
+    TextureName  textures_[MAX_MAP_TEXTURES]{};
+    u32          texture_count_ = 0;
 
     Rail         rails_[MAX_MAP_RAILS]{};
     RailWaypoint waypoints_[MAX_MAP_WAYPOINTS]{};

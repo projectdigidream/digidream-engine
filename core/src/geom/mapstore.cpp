@@ -15,6 +15,32 @@ void MapStorage::clear() noexcept {
     rail_count_ = 0;
     waypoint_count_ = 0;
     rail_link_count_ = 0;
+    texture_count_ = 0;
+    for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_render_[i] = SectorRender{};
+    for (u32 i = 0; i < MAX_MAP_SIDES; ++i) side_render_[i] = SideRender{};
+}
+
+u16 MapStorage::intern_texture(const char* name, u32 len) noexcept {
+    if (len == 0 || len > MAX_TEXTURE_NAME) return NO_TEXTURE;
+
+    // Linear scan. A map has at most MAX_MAP_TEXTURES distinct names and this
+    // runs once at load, so the index a hash table would buy is not worth the
+    // second structure to keep consistent.
+    for (u32 i = 0; i < texture_count_; ++i) {
+        if (textures_[i].len != len) continue;
+        bool same = true;
+        for (u32 k = 0; k < len; ++k) {
+            if (textures_[i].name[k] != name[k]) { same = false; break; }
+        }
+        if (same) return static_cast<u16>(i);
+    }
+
+    if (texture_count_ >= MAX_MAP_TEXTURES) return NO_TEXTURE;
+    TextureName& t = textures_[texture_count_];
+    t = TextureName{};
+    for (u32 k = 0; k < len; ++k) t.name[k] = name[k];
+    t.len = static_cast<u8>(len);
+    return static_cast<u16>(texture_count_++);
 }
 
 u32 MapStorage::add_rail(u16 tag, u8 flags) noexcept {
@@ -258,6 +284,17 @@ MapData MapStorage::view() const noexcept {
     return m;
 }
 
+RenderData MapStorage::render_view() const noexcept {
+    RenderData r;
+    r.sectors = sector_render_;
+    r.sector_count = sector_count_;
+    r.sides = side_render_;
+    r.side_count = side_count_;
+    r.textures = textures_;
+    r.texture_count = texture_count_;
+    return r;
+}
+
 u64 MapStorage::hash() const noexcept {
     StateHasher h;
     h.u32v(point_count_);
@@ -297,6 +334,31 @@ u64 MapStorage::hash() const noexcept {
     for (u32 i = 0; i < rail_link_count_; ++i) {
         const RailLink& l = rail_links_[i];
         h.u32v(l.rail); h.u32v(l.waypoint); h.u32v(l.to_rail); h.u32v(l.to_waypoint);
+    }
+
+    // Rendering attributes ARE hashed, even though they never reach the
+    // simulation. WELCOME.map_hash answers one question -- "did we parse the
+    // same file" -- and a client whose walls are textured differently from the
+    // server's has a different file. Excluding them would make that the one
+    // kind of map divergence the check cannot see, and it costs nothing here:
+    // this hash feeds no determinism gate, so a retexture cannot move a golden
+    // vector.
+    h.u32v(texture_count_);
+    for (u32 i = 0; i < texture_count_; ++i) {
+        h.byte(textures_[i].len);
+        for (u32 k = 0; k < textures_[i].len; ++k) {
+            h.byte(static_cast<unsigned char>(textures_[i].name[k]));
+        }
+    }
+    for (u32 i = 0; i < sector_count_; ++i) {
+        const SectorRender& r = sector_render_[i];
+        h.u32v(r.floor_tex); h.u32v(r.ceil_tex); h.byte(r.light_level);
+    }
+    for (u32 i = 0; i < side_count_; ++i) {
+        const SideRender& r = side_render_[i];
+        h.u32v(r.upper); h.u32v(r.middle); h.u32v(r.lower);
+        h.byte(r.peg_flags);
+        h.fxv(r.x_offset); h.fxv(r.y_offset);
     }
 
     h.u32v(spawn_count_);

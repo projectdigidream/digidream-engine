@@ -19,7 +19,7 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 2;   // 2 added rails, wires and junctions
+inline constexpr u16 MAP_VERSION = 3;   // 3 added rendering attributes (§4)
 
 enum class MapLoadStatus : u8 {
     Ok = 0,

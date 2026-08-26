@@ -14,12 +14,16 @@
 // in the meantime, and it stays useful afterwards for fixtures and diffs.
 //
 //   # comment
-//   sector floor 0 ceil 40 tag 1
-//     vertex 0  0   wall
-//     vertex 40 0   neighbor 1
-//     vertex 40 40  wall
-//     vertex 0  40  wall climbable
+//   sector floor 0 ceil 40 tag 1 light 200 floortex FLOOR4 ceiltex CEIL3
+//     vertex 0  0   wall           tex BRICK1
+//     vertex 40 0   neighbor 1     upper STEP2 lower STEP1 unpeg-lower
+//     vertex 40 40  wall           tex BRICK1 xoff 8
+//     vertex 0  40  wall climbable tex VINE1
 //   end
+//
+// Rendering attributes (light, the three texture fields, offsets and pegging)
+// are OPTIONAL everywhere. A map that names none of them compiles and plays
+// identically -- they are read by the renderer and by nothing else.
 //
 //   spawn start 10 10 2
 //
@@ -99,6 +103,20 @@ bool parse_fx(const std::string& tok, fx& out) {
     return true;
 }
 
+// Intern a texture name, reporting the two ways it can fail rather than
+// returning a silent NO_TEXTURE -- an untextured wall and a misspelt texture
+// look identical in the output, and only one of them is what the author meant.
+u16 intern(int line, MapStorage& store, const std::string& name) {
+    if (name.size() > MAX_TEXTURE_NAME) {
+        err(line, "texture name '%s' is longer than %u characters",
+            name.c_str(), MAX_TEXTURE_NAME);
+        return NO_TEXTURE;
+    }
+    const u16 id = store.intern_texture(name.data(), static_cast<u32>(name.size()));
+    if (id == NO_TEXTURE) err(line, "too many distinct textures (max %u)", MAX_MAP_TEXTURES);
+    return id;
+}
+
 std::vector<std::string> tokenize(const std::string& line) {
     std::vector<std::string> out;
     std::string cur;
@@ -118,6 +136,10 @@ struct PendingVertex {
     fx2 pos{};
     i32 neighbor = NO_SECTOR;
     u8  flags = 0;
+
+    // Rendering, carried alongside but kept apart: these end up in the store's
+    // parallel render arrays, never in the Side the collision code reads.
+    SideRender render{};
 };
 
 }  // namespace
@@ -147,6 +169,7 @@ int main(int argc, char** argv) {
     std::vector<PendingLink> links;
     fx floor_z{}, ceil_z{};
     u16 tag = 0;
+    SectorRender sector_render{};
     int sector_start_line = 0;
 
     char buf[1024];
@@ -164,11 +187,19 @@ int main(int argc, char** argv) {
             floor_z = fx::zero();
             ceil_z = fx::from_int(32);
             tag = 0;
+            sector_render = SectorRender{};
             sector_start_line = lineno;
             for (size_t i = 1; i + 1 < tok.size(); i += 2) {
                 if (tok[i] == "floor") { if (!parse_fx(tok[i + 1], floor_z)) err(lineno, "bad floor '%s'", tok[i + 1].c_str()); }
                 else if (tok[i] == "ceil") { if (!parse_fx(tok[i + 1], ceil_z)) err(lineno, "bad ceil '%s'", tok[i + 1].c_str()); }
                 else if (tok[i] == "tag") { tag = static_cast<u16>(std::atoi(tok[i + 1].c_str())); }
+                else if (tok[i] == "light") {
+                    const int v = std::atoi(tok[i + 1].c_str());
+                    if (v < 0 || v > 255) err(lineno, "light must be 0..255, got '%s'", tok[i + 1].c_str());
+                    else sector_render.light_level = static_cast<u8>(v);
+                }
+                else if (tok[i] == "floortex") sector_render.floor_tex = intern(lineno, store, tok[i + 1]);
+                else if (tok[i] == "ceiltex") sector_render.ceil_tex = intern(lineno, store, tok[i + 1]);
                 else err(lineno, "unknown sector attribute '%s'", tok[i].c_str());
             }
         } else if (tok[0] == "vertex") {
@@ -187,6 +218,30 @@ int main(int argc, char** argv) {
                 } else if (tok[i] == "climbable") v.flags |= side_flag::CLIMBABLE;
                 else if (tok[i] == "grapple") v.flags |= side_flag::GRAPPLE;
                 else if (tok[i] == "blocking") v.flags |= side_flag::BLOCKING;
+                // Doom's three texture fields. `tex` is the middle one, which is
+                // the only one a solid wall has, so the common case stays one
+                // word rather than making every author write `middle`.
+                else if (tok[i] == "tex" || tok[i] == "middle") {
+                    if (i + 1 >= tok.size()) { err(lineno, "%s needs a texture name", tok[i].c_str()); break; }
+                    v.render.middle = intern(lineno, store, tok[++i]);
+                } else if (tok[i] == "upper") {
+                    if (i + 1 >= tok.size()) { err(lineno, "upper needs a texture name"); break; }
+                    v.render.upper = intern(lineno, store, tok[++i]);
+                } else if (tok[i] == "lower") {
+                    if (i + 1 >= tok.size()) { err(lineno, "lower needs a texture name"); break; }
+                    v.render.lower = intern(lineno, store, tok[++i]);
+                } else if (tok[i] == "xoff") {
+                    if (i + 1 >= tok.size() || !parse_fx(tok[i + 1], v.render.x_offset)) {
+                        err(lineno, "xoff needs a number"); break;
+                    }
+                    ++i;
+                } else if (tok[i] == "yoff") {
+                    if (i + 1 >= tok.size() || !parse_fx(tok[i + 1], v.render.y_offset)) {
+                        err(lineno, "yoff needs a number"); break;
+                    }
+                    ++i;
+                } else if (tok[i] == "unpeg-upper") v.render.peg_flags |= peg_flag::UPPER_UNPEGGED;
+                else if (tok[i] == "unpeg-lower") v.render.peg_flags |= peg_flag::LOWER_UNPEGGED;
                 else err(lineno, "unknown edge attribute '%s'", tok[i].c_str());
             }
             verts.push_back(v);
@@ -226,12 +281,21 @@ int main(int argc, char** argv) {
                 continue;
             }
 
+            store.sector_render_mut(si) = sector_render;
+
+            const u16 first_side = store.view().sector(si).first_side;
             for (size_t i = 0; i < verts.size(); ++i) {
                 const u16 a = static_cast<u16>(i);
                 const u16 b = static_cast<u16>((i + 1) % verts.size());
                 if (!store.add_side(si, a, b, verts[i].neighbor, verts[i].flags)) {
                     err(sector_start_line, "could not add side %u", a);
+                    continue;
                 }
+                // Sides are appended in vertex order, so side `first_side + i`
+                // is the edge leading out of vertex i. Read back from the store
+                // rather than assumed: first_side is assigned lazily on the
+                // first add_side, so it is only correct once one has happened.
+                store.side_render_mut(first_side + static_cast<u16>(i)) = verts[i].render;
             }
         } else if (tok[0] == "rail" || tok[0] == "wire") {
             if (in_sector) { err(lineno, "rail inside a sector; missing 'end'?"); continue; }

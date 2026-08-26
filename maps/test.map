@@ -8,11 +8,11 @@
 #   west wall climbs    floor +0.5        floor 4.0 (too high: a wall)
 #                       (walkable step)   east wall grapples
 
-sector floor 0 ceil 40 tag 1
-  vertex  0   0   wall
-  vertex 40   0   neighbor 1
-  vertex 40  40   wall
-  vertex  0  40   wall climbable
+sector floor 0 ceil 40 tag 1 light 190 floortex FLOOR1 ceiltex CEIL1
+  vertex  0   0   wall           tex WALL1
+  vertex 40   0   neighbor 1     lower STEP1
+  vertex 40  40   wall           tex WALL1
+  vertex  0  40   wall climbable tex VINE1
 end
 
 # tag 100+N marks a mover that rises N units. The authored map decides what
@@ -23,18 +23,18 @@ end
 # since that is exactly what the step rule is for -- so a lift a player is meant
 # to board has to be level with the ground at the bottom of its travel. The
 # engine made that a design constraint rather than a bug.
-sector floor 0 ceil 40 tag 101
-  vertex 40   0   wall
-  vertex 60   0   neighbor 2
-  vertex 60  40   wall
-  vertex 40  40   neighbor 0
+sector floor 0 ceil 40 tag 101 light 220 floortex PLAT1 ceiltex CEIL1
+  vertex 40   0   wall           tex WALL2
+  vertex 60   0   neighbor 2     lower STEP1 unpeg-lower
+  vertex 60  40   wall           tex WALL2
+  vertex 40  40   neighbor 0     lower STEP1 unpeg-lower
 end
 
-sector floor 4 ceil 40 tag 3
-  vertex 60   0   wall
-  vertex 80   0   wall grapple
-  vertex 80  40   wall
-  vertex 60  40   neighbor 1
+sector floor 4 ceil 40 tag 3 light 255 floortex PLAT2 ceiltex CEIL1
+  vertex 60   0   wall           tex WALL2
+  vertex 80   0   wall grapple   tex HOOK1
+  vertex 80  40   wall           tex WALL2
+  vertex 60  40   neighbor 1     lower STEP1
 end
 
 spawn start   10 10 2
