@@ -22,11 +22,16 @@ namespace dnp::geom {
 
 using namespace dnp;
 
-// Sector polygons are small by construction (design §3.1: simple polygons, no
-// holes -- donuts are built from several sectors). The cap bounds the O(n^2)
-// inner scan and makes the work per commit predictable.
-inline constexpr u32 MAX_POLY_POINTS = 64;
-inline constexpr u32 MAX_POLY_TRIS   = MAX_POLY_POINTS - 2;
+// One loop's worth of points. The cap bounds the O(n^2) inner scan and makes
+// the work per commit predictable.
+inline constexpr u32 MAX_POLY_POINTS = 96;
+
+// A polygon WITH holes is triangulated by bridging each hole into the outer
+// loop, which produces one simple polygon carrying every loop's vertices plus
+// two duplicates per bridge. This bounds that merged form.
+inline constexpr u32 MAX_MERGED_POINTS = 256;
+inline constexpr u32 MAX_POLY_TRIS     = MAX_MERGED_POINTS - 2;
+inline constexpr u32 MAX_POLY_HOLES    = 16;
 
 enum class TriangulateStatus : u8 {
     Ok = 0,
@@ -55,6 +60,32 @@ i128 polygon_area_2x(const fx2* pts, u32 n) noexcept;
 // plausible. Design §3.1.1 says a failed commit keeps the last valid
 // triangulation, and that is only possible if failure is unambiguous.
 TriangulateStatus triangulate(const fx2* pts, u32 n, TriangleList& out) noexcept;
+
+// One loop, as a range of indices into a shared point array.
+struct PolyLoop {
+    u16 first = 0;
+    u16 count = 0;
+};
+
+// Triangulate a polygon with holes (design §3.1, relaxing "no holes").
+//
+// Doom's model needs this and ours did not have it: a room with a pit in it is
+// an ANNULUS -- the room's floor genuinely does not exist over the pit -- and
+// no arrangement of two simple polygons expresses that. Nesting one sector
+// inside another gets a raised PLATFORM right, because the room's floor does
+// exist under a shelf; a pit is the opposite case and needs the hole to be real
+// geometry, in the mesh as much as in the collision.
+//
+// Each hole is bridged into the outer loop by a cut to a mutually visible
+// vertex, giving a single simple polygon the existing ear clipper handles. The
+// bridge's visibility is TESTED rather than chosen by a heuristic: candidate
+// vertices are tried nearest-first, and the first whose cut crosses no edge and
+// stays inside the polygon wins. Exact predicates throughout, so every target
+// bridges identically -- update_shape() re-triangulates at runtime and the
+// result is replicated.
+TriangulateStatus triangulate_with_holes(const fx2* pts, u32 outer_n,
+                                         const PolyLoop* holes, u32 hole_count,
+                                         TriangleList& out) noexcept;
 
 // Is `p` inside (or on the boundary of) the counter-clockwise triangle a,b,c?
 // Exact. Boundary counts as inside, which is the conservative choice for ear

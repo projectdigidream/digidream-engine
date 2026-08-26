@@ -17,12 +17,56 @@ void MapStorage::clear() noexcept {
     rail_link_count_ = 0;
     texture_count_ = 0;
     light_count_ = 0;
+    hole_count_ = 0;
     grid_built_ = false;
     grid_dirty_ = true;
     grid_cols_ = 0;
     grid_rows_ = 0;
     for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_render_[i] = SectorRender{};
     for (u32 i = 0; i < MAX_MAP_SIDES; ++i) side_render_[i] = SideRender{};
+}
+
+bool MapStorage::add_hole(u32 sector, const fx2* pts, u32 n) noexcept {
+    if (sector != sector_count_ - 1) return false;   // only the newest sector
+    if (n < 3 || n > MAX_POLY_POINTS) return false;
+    if (hole_count_ >= MAX_MAP_HOLES) return false;
+    if (point_count_ + n > MAX_MAP_POINTS) return false;
+
+    Sector& s = sectors_[sector];
+    // Points must be contiguous with the sector's, so nothing may have been
+    // appended since -- a side does not add points, but another sector does.
+    if (s.first_point + s.point_count != point_count_ &&
+        s.hole_count == 0) return false;
+
+    const u16 rel = static_cast<u16>(point_count_ - s.first_point);
+    // Opposite winding to the outer loop. The outer is normalised
+    // counter-clockwise by add_sector, so a hole is stored clockwise.
+    const bool ccw = polygon_area_2x(pts, n) > 0;
+    for (u32 i = 0; i < n; ++i) {
+        points_[point_count_ + i] = pts[ccw ? (n - 1 - i) : i];
+    }
+    point_count_ += n;
+
+    if (s.hole_count == 0) s.first_hole = static_cast<u16>(hole_count_);
+    holes_[hole_count_].first = rel;
+    holes_[hole_count_].count = static_cast<u16>(n);
+    ++hole_count_;
+    ++s.hole_count;
+
+    // Re-triangulate: add_sector already meshed the outer loop, and that mesh
+    // covers the hole. Leaving it would give a sector whose COLLISION excludes
+    // the hole and whose MESH does not -- a pit you fall into with a floor
+    // drawn over it.
+    if (retriangulate(sector) != CommitStatus::Ok) {
+        // Undo, so a hole that cannot be triangulated leaves the sector exactly
+        // as it was rather than meshed-without-it.
+        --hole_count_;
+        --s.hole_count;
+        point_count_ -= n;
+        retriangulate(sector);
+        return false;
+    }
+    return true;
 }
 
 bool MapStorage::add_light(const MapLight& l) noexcept {
@@ -154,7 +198,12 @@ u32 MapStorage::add_sector(const fx2* pts, u32 n, fx floor_z, fx ceil_z, u16 tag
 bool MapStorage::add_side(u32 sector, u16 local_a, u16 local_b, i32 neighbor, u8 flags) noexcept {
     if (sector >= sector_count_ || side_count_ >= MAX_MAP_SIDES) return false;
     Sector& s = sectors_[sector];
-    if (local_a >= s.point_count || local_b >= s.point_count) return false;
+    // Bounded by the sector's WHOLE point span, outer loop plus holes -- a
+    // hole's edges are sides too, and their local indices continue past the
+    // outer loop exactly as add_hole laid the points out.
+    u32 span = s.point_count;
+    for (u16 h = 0; h < s.hole_count; ++h) span += holes_[s.first_hole + h].count;
+    if (local_a >= span || local_b >= span) return false;
 
     // A Sector addresses its sides as a contiguous range, so one sector's sides
     // must be added consecutively -- but WHICH sector is being filled need not
@@ -179,7 +228,11 @@ CommitStatus MapStorage::retriangulate(u32 sector) noexcept {
     Sector& s = sectors_[sector];
 
     TriangleList tl;
-    const TriangulateStatus st = triangulate(&points_[s.first_point], s.point_count, tl);
+    const TriangulateStatus st =
+        s.hole_count == 0
+            ? triangulate(&points_[s.first_point], s.point_count, tl)
+            : triangulate_with_holes(&points_[s.first_point], s.point_count,
+                                     &holes_[s.first_hole], s.hole_count, tl);
     if (st != TriangulateStatus::Ok) return CommitStatus::TriangulationFailed;
 
     // Reuse the sector's existing range when it still fits. Triangle count is a
@@ -190,6 +243,16 @@ CommitStatus MapStorage::retriangulate(u32 sector) noexcept {
     u32 base;
     if (s.tri_count > 0 && static_cast<u32>(s.tri_count) * 3 >= need) {
         base = s.first_tri;
+    } else if (s.tri_count > 0 &&
+               s.first_tri + static_cast<u32>(s.tri_count) * 3 == tri_index_count_ &&
+               s.first_tri + need <= MAX_MAP_TRI_IDX) {
+        // The sector's range is the topmost, so it can simply GROW rather than
+        // being abandoned and re-allocated past itself. Without this, adding a
+        // hole to a sector that add_sector had just meshed left the outer
+        // loop's triangles stranded -- counted, saved, transferred, and
+        // referenced by nothing.
+        base = s.first_tri;
+        tri_index_count_ = s.first_tri + need;
     } else {
         if (tri_index_count_ + need > MAX_MAP_TRI_IDX) return CommitStatus::OutOfTriangleSpace;
         base = tri_index_count_;
@@ -382,6 +445,8 @@ MapData MapStorage::view() const noexcept {
     m.waypoint_count = waypoint_count_;
     m.rail_links = rail_links_;
     m.rail_link_count = rail_link_count_;
+    m.holes = holes_;
+    m.hole_loop_count = hole_count_;
 
     // Only offered when it is both built and current. A stale grid is never
     // handed out, so no query can silently consult one.
@@ -422,6 +487,11 @@ u64 MapStorage::hash() const noexcept {
         h.u32v(s.first_side);  h.u32v(s.side_count);
         h.fxv(s.floor_z);      h.fxv(s.ceil_z);
         h.fxv(s.thickness);
+        h.u32v(s.hole_count);
+        for (u16 k = 0; k < s.hole_count; ++k) {
+            h.u32v(holes_[s.first_hole + k].first);
+            h.u32v(holes_[s.first_hole + k].count);
+        }
         h.u32v(s.tag);
         h.u32v(s.tri_count);
         for (u32 t = 0; t < static_cast<u32>(s.tri_count) * 3; ++t) h.u32v(tris_[s.first_tri + t]);

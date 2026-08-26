@@ -48,6 +48,12 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u16v(s.tag);
         w.u32v(s.first_tri);
         w.u16v(s.tri_count);
+        w.u16v(s.hole_count);
+        for (u16 h = 0; h < s.hole_count; ++h) {
+            const PolyLoop& L = m.hole(s.first_hole + h);
+            w.u16v(L.first);
+            w.u16v(L.count);
+        }
     }
 
     for (u32 i = 0; i < m.side_count; ++i) {
@@ -187,6 +193,9 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         u16 first_point, point_count, first_side, side_count, tag, tri_count;
         u32 first_tri;
         fx floor_z, ceil_z, thickness;
+        u16 hole_count;
+        u16 hole_first[MAX_POLY_HOLES];
+        u16 hole_len[MAX_POLY_HOLES];
     };
     PendingSector pend[MAX_MAP_SECTORS];
     for (u32 i = 0; i < sector_count; ++i) {
@@ -201,6 +210,14 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         s.tag = r.u16v();
         s.first_tri = r.u32v();
         s.tri_count = r.u16v();
+        s.hole_count = r.u16v();
+        if (!r.ok() || s.hole_count > MAX_POLY_HOLES) {
+            store.clear(); return MapLoadStatus::TooLarge;
+        }
+        for (u16 h = 0; h < s.hole_count; ++h) {
+            s.hole_first[h] = r.u16v();
+            s.hole_len[h] = r.u16v();
+        }
     }
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
@@ -225,6 +242,18 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         }
         if (s.point_count < 3 || s.point_count > MAX_POLY_POINTS) {
             store.clear(); return MapLoadStatus::BadIndex;
+        }
+        // A hole's range is relative to its sector's first point and must lie
+        // beyond the outer loop and inside the map. An out-of-range hole would
+        // otherwise be triangulated against whatever points followed it.
+        for (u16 h = 0; h < s.hole_count; ++h) {
+            if (s.hole_len[h] < 3 || s.hole_len[h] > MAX_POLY_POINTS) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+            if (s.hole_first[h] < s.point_count) { store.clear(); return MapLoadStatus::BadIndex; }
+            if (static_cast<u32>(s.first_point) + s.hole_first[h] + s.hole_len[h] > point_count) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
         }
     }
     r.seek(sides_at);
@@ -265,6 +294,22 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         // site would put a zero in most of them.
         store.sector_mut(idx).thickness = s.thickness;
 
+        // Holes go in immediately, before the next sector: their points must be
+        // contiguous with their sector's.
+        for (u16 h = 0; h < s.hole_count; ++h) {
+            fx2 hpoly[MAX_POLY_POINTS];
+            r.seek(points_at +
+                   static_cast<size_t>(s.first_point + s.hole_first[h]) * POINT_BYTES);
+            for (u16 k = 0; k < s.hole_len[h]; ++k) {
+                hpoly[k].x = r.fxraw();
+                hpoly[k].y = r.fxraw();
+            }
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            if (!store.add_hole(idx, hpoly, s.hole_len[h])) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+        }
+
         r.seek(sides_at + static_cast<size_t>(s.first_side) * SIDE_BYTES);
         for (u16 k = 0; k < s.side_count; ++k) {
             const u16 a = r.u16v();
@@ -276,7 +321,15 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             // sector-local ones.
             const u16 la = static_cast<u16>(a - s.first_point);
             const u16 lb = static_cast<u16>(b - s.first_point);
-            if (la >= s.point_count || lb >= s.point_count) {
+            // Bounded by the sector's WHOLE point span, holes included. A
+            // hole's rim has sides too -- they are what a body walking into a
+            // pit collides with -- and their local indices continue past the
+            // outer loop. Checking only the outer loop rejected every map with
+            // a hole in it, as BadIndex, from the loader rather than the
+            // compiler that had just written it.
+            u32 span = s.point_count;
+            for (u16 h = 0; h < s.hole_count; ++h) span += s.hole_len[h];
+            if (la >= span || lb >= span) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
             if (!store.add_side(i, la, lb, nb, fl)) {

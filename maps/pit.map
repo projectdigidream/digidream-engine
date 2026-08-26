@@ -1,0 +1,23 @@
+# A room with a PIT in it: the shape our model could not express.
+sector floor 8 ceil 40 tag 1 light 160 floortex FLOOR1
+  vertex  0   0   wall tex WALL1
+  vertex 40   0   wall tex WALL1
+  vertex 40  40   wall tex WALL1
+  vertex  0  40   wall tex WALL1
+  hole
+    vertex 14 14  neighbor 1 lower STEP1 upper STEP1
+    vertex 26 14  neighbor 1 lower STEP1 upper STEP1
+    vertex 26 26  neighbor 1 lower STEP1 upper STEP1
+    vertex 14 26  neighbor 1 lower STEP1 upper STEP1
+  end
+end
+
+sector floor 0 ceil 40 tag 2 light 100 floortex FLOOR2
+  vertex 14 14  neighbor 0 lower STEP1 upper STEP1
+  vertex 26 14  neighbor 0 lower STEP1 upper STEP1
+  vertex 26 26  neighbor 0 lower STEP1 upper STEP1
+  vertex 14 26  neighbor 0 lower STEP1 upper STEP1
+end
+
+spawn start 6 20 10
+light 20 20 24 color 255 220 180 radius 30 intensity 1.6

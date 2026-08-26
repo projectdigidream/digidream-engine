@@ -128,6 +128,7 @@ static void test_roundtrip() {
         CHECK(a.sector(i).tag == b.sector(i).tag);
         CHECK(a.sector(i).tri_count == b.sector(i).tri_count);
         CHECK(a.sector(i).thickness == b.sector(i).thickness);
+        CHECK(a.sector(i).hole_count == b.sector(i).hole_count);
     }
     CHECK(dst.spawn_count() == 2);
 
@@ -242,6 +243,59 @@ static void test_matches_hardcoded_map() {
         CHECK(a.side(i).neighbor == b.side(i).neighbor);
         CHECK(a.side(i).flags == b.side(i).flags);
     }
+}
+
+// Holes get their OWN fixture rather than being added to build_reference.
+//
+// That reference is shared with the test comparing it against the hardcoded
+// map in core/src/sim -- which has no hole -- so a hole in it made a geometry
+// difference look like a round-trip failure. Three assertions in two tests, one
+// cause, and none of them pointing at it.
+static void test_holes_round_trip() {
+    std::printf("mapfile: a sector's holes survive save and load\n");
+
+    MapStorage src;
+    src.clear();
+    const fx2 room[] = {{F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}};
+    const u32 s0 = src.add_sector(room, 4, F(10), F(60), 7);
+    const fx2 pit[] = {{F(14), F(14)}, {F(26), F(14)}, {F(26), F(26)}, {F(14), F(26)}};
+    CHECK(src.add_hole(s0, pit, 4));
+    src.add_side(s0, 0, 1, NO_SECTOR, 0);
+    src.add_side(s0, 1, 2, NO_SECTOR, 0);
+    src.add_side(s0, 2, 3, NO_SECTOR, 0);
+    src.add_side(s0, 3, 0, NO_SECTOR, 0);
+
+    // The room is an annulus now, so it meshes as one: 8 triangles, not 2.
+    CHECK(src.view().sector(0).tri_count == 8);
+    CHECK(src.view().sector(0).hole_count == 1);
+
+    static u8 buf[1 << 16];
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+
+    MapStorage dst;
+    ByteReader r(buf, w.size());
+    CHECK(load_map(r, dst) == MapLoadStatus::Ok);
+    CHECK(dst.hash() == src.hash());
+
+    const MapData a = src.view();
+    const MapData b = dst.view();
+    CHECK(a.point_count == b.point_count);
+    CHECK(b.sector(0).hole_count == 1);
+    CHECK(b.sector(0).tri_count == 8);
+    CHECK(a.hole(a.sector(0).first_hole).first == b.hole(b.sector(0).first_hole).first);
+    CHECK(a.hole(a.sector(0).first_hole).count == b.hole(b.sector(0).first_hole).count);
+
+    // And the hole is real to the SIMULATION, not merely stored: a point over
+    // it is not in the sector at all. That is the whole reason holes exist --
+    // nesting a second sector leaves the room's floor covering the pit, and a
+    // body walks over it.
+    CHECK(!point_in_sector(b, 0, fx2{F(20), F(20)}));
+    CHECK(point_in_sector(b, 0, fx2{F(5), F(20)}));
+
+    // Area subtracts the hole: 40*40 - 12*12 = 1456.
+    const i128 want = static_cast<i128>(fx::from_int(1456).raw) * fx::one().raw * 2;
+    CHECK(signed_area_2x(b, 0) == want);
 }
 
 static void test_rejects_bad_input() {
@@ -361,6 +415,7 @@ int main() {
     std::printf("== core/geom map file suite ==\n");
     test_roundtrip();
     test_matches_hardcoded_map();
+    test_holes_round_trip();
     test_rejects_bad_input();
     test_render_does_not_affect_physics();
     test_fuzz();

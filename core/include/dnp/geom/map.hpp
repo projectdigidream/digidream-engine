@@ -15,6 +15,7 @@
 // baked map is mapped or loaded once by the caller, and both the server and the
 // wasm client point at their own copy of identical bytes.
 //
+#include "dnp/geom/triangulate.hpp"
 #include "dnp/math/fixed.hpp"
 #include "dnp/math/vec.hpp"
 
@@ -75,6 +76,25 @@ struct Sector {
     // point array, so a mesh can be uploaded without a per-sector rebase.
     u32 first_tri = 0;
     u16 tri_count = 0;
+
+    // Holes, as ranges into MapData::holes. The OUTER loop is
+    // [first_point, first_point + point_count); each hole's PolyLoop::first is
+    // relative to first_point, and its points sit immediately after the outer
+    // loop's.
+    //
+    // APPENDED, not inserted. Sector is aggregate-initialised positionally in a
+    // dozen tests and fixtures, and putting a field in the middle silently
+    // shifts every one of them by two -- which is how `thickness` broke tag and
+    // tri_count when it was added, and how these did again.
+    //
+    // Design §3.1 said simple polygons, no holes: donuts built from several
+    // sectors. That is wrong for the shape it matters most for. A room with a
+    // PIT in it is an annulus -- the room's floor genuinely does not exist over
+    // the pit -- and splitting it loses the sector's identity, which is what a
+    // lift or a light level belongs to. Doom's model has holes, and matching it
+    // removes a whole class of conversion.
+    u16 first_hole = 0;
+    u16 hole_count = 0;
 };
 
 // Rails and wires (design §3.4).
@@ -262,6 +282,8 @@ struct MapData {
     u32                 waypoint_count   = 0;
     const RailLink*     rail_links       = nullptr;
     u32                 rail_link_count  = 0;
+    const PolyLoop*     holes            = nullptr;
+    u32                 hole_loop_count  = 0;
 
     SectorGrid grid{};
 
@@ -271,9 +293,15 @@ struct MapData {
     const Rail& rail(u32 i) const noexcept { return rails[i]; }
     const RailWaypoint& waypoint(u32 i) const noexcept { return waypoints[i]; }
     const RailLink& rail_link(u32 i) const noexcept { return rail_links[i]; }
+    const PolyLoop& hole(u32 i) const noexcept { return holes[i]; }
 };
 
 // Is `p` inside sector `s`?
+//
+// Runs over the sector's outer loop AND every hole loop, toggling as it goes:
+// a point inside a hole crosses that hole's boundary an odd number of times, so
+// the even-odd rule puts it outside the sector. No special case is needed for
+// holes beyond including their edges.
 //
 // Crossing-number test written with cross products in 128-bit, so there is no
 // division and no rounding anywhere: whether a point is inside a sector must be

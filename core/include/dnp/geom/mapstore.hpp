@@ -33,6 +33,7 @@ inline constexpr u32 MAX_MAP_RAIL_LINKS = 64;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
 inline constexpr u32 MAX_MAP_TEXTURES   = 256;
 inline constexpr u32 MAX_MAP_LIGHTS     = 128;
+inline constexpr u32 MAX_MAP_HOLES      = 512;
 
 // The broadphase grid. 48x48 cells over the map's bounding box, and a cap on
 // total membership: a sector belongs to every cell its bounding box touches, so
@@ -68,6 +69,18 @@ public:
     // Returns the sector index, or MAX_MAP_SECTORS on failure.
     u32 add_sector(const fx2* pts, u32 n, fx floor_z, fx ceil_z, u16 tag) noexcept;
     bool add_side(u32 sector, u16 local_a, u16 local_b, i32 neighbor, u8 flags) noexcept;
+
+    // Add a hole to the sector most recently created.
+    //
+    // Must be called before the next add_sector: a hole's points sit
+    // immediately after its sector's outer loop, so that the triangulator can
+    // be handed one base pointer and relative offsets. Adding out of order
+    // would put another sector's points between them.
+    //
+    // Winding is normalised to the opposite of the outer loop, which is what
+    // makes the shoelace sum subtract the hole and the bridge produce a simple
+    // polygon.
+    bool add_hole(u32 sector, const fx2* pts, u32 n) noexcept;
 
     // Triangulate a sector from its current points. Called by the map compiler
     // at bake time and by commit_shape() at runtime -- the same code, so a
@@ -210,6 +223,9 @@ private:
     SideRender   side_render_[MAX_MAP_SIDES]{};
     TextureName  textures_[MAX_MAP_TEXTURES]{};
     u32          texture_count_ = 0;
+    PolyLoop     holes_[MAX_MAP_HOLES]{};
+    u32          hole_count_ = 0;
+
     MapLight     lights_[MAX_MAP_LIGHTS]{};
     u32          light_count_ = 0;
 

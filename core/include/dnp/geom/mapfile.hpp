@@ -19,7 +19,7 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 6;   // 6 added point lights (§4)
+inline constexpr u16 MAP_VERSION = 7;   // 7 added sector holes (§3.1, relaxing "no holes")
 
 enum class MapLoadStatus : u8 {
     Ok = 0,

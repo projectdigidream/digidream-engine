@@ -4,15 +4,13 @@
 
 namespace dnp::geom {
 
-bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept {
-    const Sector& sec = map.sector(s);
-    if (sec.point_count < 3) return false;
+namespace {
 
-    bool inside = false;
-    const u32 n = sec.point_count;
+// One loop's contribution to the crossing count, toggling `inside`.
+void cross_loop(const MapData& map, u32 first, u32 n, fx2 p, bool& inside) noexcept {
     for (u32 i = 0, j = n - 1; i < n; j = i++) {
-        const fx2& pi = map.point(sec.first_point + i);
-        const fx2& pj = map.point(sec.first_point + j);
+        const fx2& pi = map.point(first + i);
+        const fx2& pj = map.point(first + j);
 
         // Half-open rule on the vertical span: an edge counts if p.y lies in
         // [min, max) of its endpoints. This is what keeps a point that is
@@ -31,6 +29,20 @@ bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept {
         // The comparison flips with the edge's vertical direction, because
         // multiplying by a negative dy reverses the inequality.
         if (dy > 0 ? (lhs < rhs) : (lhs > rhs)) inside = !inside;
+    }
+}
+
+}  // namespace
+
+bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept {
+    const Sector& sec = map.sector(s);
+    if (sec.point_count < 3) return false;
+
+    bool inside = false;
+    cross_loop(map, sec.first_point, sec.point_count, p, inside);
+    for (u16 h = 0; h < sec.hole_count; ++h) {
+        const PolyLoop& L = map.hole(sec.first_hole + h);
+        cross_loop(map, sec.first_point + L.first, L.count, p, inside);
     }
     return inside;
 }
@@ -221,17 +233,30 @@ fx2 side_normal(const MapData& map, u32 side_index, u32 from_sector) noexcept {
     return n;
 }
 
-i128 signed_area_2x(const MapData& map, u32 s) noexcept {
-    const Sector& sec = map.sector(s);
+namespace {
+i128 loop_area_2x(const MapData& map, u32 first, u32 n) noexcept {
     i128 acc = 0;
-    const u32 n = sec.point_count;
     for (u32 i = 0, j = n - 1; i < n; j = i++) {
-        const fx2& pi = map.point(sec.first_point + i);
-        const fx2& pj = map.point(sec.first_point + j);
+        const fx2& pi = map.point(first + i);
+        const fx2& pj = map.point(first + j);
         // Shoelace, accumulated at raw scale 2^64. Kept in 128-bit rather than
         // reduced to fx per term: a large sector's terms would saturate.
         acc += static_cast<i128>(pj.x.raw) * pi.y.raw -
                static_cast<i128>(pi.x.raw) * pj.y.raw;
+    }
+    return acc;
+}
+}  // namespace
+
+i128 signed_area_2x(const MapData& map, u32 s) noexcept {
+    const Sector& sec = map.sector(s);
+    // Holes are stored wound opposite the outer loop, so summing subtracts
+    // them and the result is the sector's actual area -- which is what the
+    // height-free find_sector's "smallest wins" rule needs to be comparing.
+    i128 acc = loop_area_2x(map, sec.first_point, sec.point_count);
+    for (u16 h = 0; h < sec.hole_count; ++h) {
+        const PolyLoop& L = map.hole(sec.first_hole + h);
+        acc += loop_area_2x(map, sec.first_point + L.first, L.count);
     }
     return acc;
 }

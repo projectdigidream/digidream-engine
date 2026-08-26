@@ -30,6 +30,19 @@
 // are OPTIONAL everywhere. A map that names none of them compiles and plays
 // identically -- they are read by the renderer and by nothing else.
 //
+//   sector floor 8 ceil 40 tag 2
+//     vertex 0  0   wall
+//     vertex 40 0   wall
+//     vertex 40 40  wall
+//     vertex 0  40  wall
+//     hole                      # a pit: the floor does NOT exist here
+//       vertex 14 14  neighbor 3
+//       vertex 26 14  neighbor 3
+//       vertex 26 26  neighbor 3
+//       vertex 14 26  neighbor 3
+//     end
+//   end
+//
 //   spawn start 10 10 2
 //
 //   light 20 40 10 color 255 200 120 radius 18 intensity 1.0
@@ -164,6 +177,11 @@ int main(int argc, char** argv) {
     store.clear();
 
     std::vector<PendingVertex> verts;
+    // Holes are collected while the sector is open and applied at `end`,
+    // because a hole's points must go in after the outer loop's and the outer
+    // loop is not committed until then.
+    std::vector<std::vector<PendingVertex>> pending_holes;
+    bool in_hole = false;
     bool in_sector = false;
     bool in_rail = false;
     int  rail_start_line = 0;
@@ -192,6 +210,8 @@ int main(int argc, char** argv) {
             if (in_sector) { err(lineno, "sector inside sector; missing 'end'?"); continue; }
             in_sector = true;
             verts.clear();
+            pending_holes.clear();
+            in_hole = false;
             floor_z = fx::zero();
             ceil_z = fx::from_int(32);
             tag = 0;
@@ -218,6 +238,11 @@ int main(int argc, char** argv) {
                 else if (tok[i] == "ceiltex") sector_render.ceil_tex = intern(lineno, store, tok[i + 1]);
                 else err(lineno, "unknown sector attribute '%s'", tok[i].c_str());
             }
+        } else if (tok[0] == "hole") {
+            if (!in_sector) { err(lineno, "hole outside a sector"); continue; }
+            if (in_hole) { err(lineno, "hole inside a hole; missing 'end'?"); continue; }
+            in_hole = true;
+            pending_holes.push_back({});
         } else if (tok[0] == "vertex") {
             if (!in_sector) { err(lineno, "vertex outside a sector"); continue; }
             if (tok.size() < 3) { err(lineno, "vertex needs x and y"); continue; }
@@ -267,7 +292,15 @@ int main(int argc, char** argv) {
                 else if (tok[i] == "unpeg-lower") v.render.peg_flags |= peg_flag::LOWER_UNPEGGED;
                 else err(lineno, "unknown edge attribute '%s'", tok[i].c_str());
             }
-            verts.push_back(v);
+            if (in_hole) pending_holes.back().push_back(v);
+            else verts.push_back(v);
+        } else if (tok[0] == "end" && in_hole) {
+            in_hole = false;
+            if (pending_holes.back().size() < 3) {
+                err(lineno, "hole has %zu vertices; need at least 3",
+                    pending_holes.back().size());
+                pending_holes.pop_back();
+            }
         } else if (tok[0] == "end" && in_rail) {
             in_rail = false;
             // Two waypoints is the minimum that describes a line. One is a
@@ -307,6 +340,19 @@ int main(int argc, char** argv) {
             store.sector_render_mut(si) = sector_render;
             store.sector_mut(si).thickness = thickness;
 
+            // Holes before sides: a hole's points must be contiguous with the
+            // sector's outer loop, and add_side adds none.
+            for (const auto& hv : pending_holes) {
+                std::vector<fx2> hp;
+                hp.reserve(hv.size());
+                for (const auto& v : hv) hp.push_back(v.pos);
+                if (!store.add_hole(si, hp.data(), static_cast<u32>(hp.size()))) {
+                    err(sector_start_line,
+                        "hole rejected: not a simple polygon inside its sector, "
+                        "or a capacity limit was hit");
+                }
+            }
+
             // The index the NEXT side will land at. Deliberately not
             // sector.first_side: that field is assigned lazily by the first
             // add_side, so before the loop below it still reads zero -- and
@@ -324,6 +370,25 @@ int main(int argc, char** argv) {
                     continue;
                 }
                 store.side_render_mut(next_side++) = verts[i].render;
+            }
+
+            // A hole's edges are sides too -- they are what a body walking into
+            // a pit collides with, and what the renderer draws facing into it.
+            // Their local indices continue past the outer loop, which is how
+            // add_hole laid the points out.
+            u16 local = static_cast<u16>(verts.size());
+            for (const auto& hv : pending_holes) {
+                const u16 base = local;
+                for (size_t i = 0; i < hv.size(); ++i) {
+                    const u16 a2 = static_cast<u16>(base + i);
+                    const u16 b2 = static_cast<u16>(base + (i + 1) % hv.size());
+                    if (!store.add_side(si, a2, b2, hv[i].neighbor, hv[i].flags)) {
+                        err(sector_start_line, "could not add hole side %u", a2);
+                        continue;
+                    }
+                    store.side_render_mut(next_side++) = hv[i].render;
+                }
+                local = static_cast<u16>(local + hv.size());
             }
         } else if (tok[0] == "light") {
             // light <x> <y> <z> [color R G B] [radius N] [intensity N]
@@ -491,20 +556,34 @@ int main(int argc, char** argv) {
                 // division, so a point lying exactly on a segment comes back a
                 // few ulp off zero and every abutting sector reads as
                 // overlapping.
+                // Every loop of b, its holes included. A hole's rim is as much
+                // the sector's boundary as its outer edge is -- and a pit's
+                // corners lie exactly on it, so checking only the outer loop
+                // reported a sector sitting in another's hole as overlapping
+                // it.
                 bool on_boundary = false;
-                for (u16 j = 0; j < sb.point_count && !on_boundary; ++j) {
-                    const fx2 p0 = m.point(sb.first_point + j);
-                    const fx2 p1 = m.point(sb.first_point + (j + 1) % sb.point_count);
-                    const i128 cross =
-                        static_cast<i128>(p1.x.raw - p0.x.raw) * (v.y.raw - p0.y.raw) -
-                        static_cast<i128>(p1.y.raw - p0.y.raw) * (v.x.raw - p0.x.raw);
-                    if (cross != 0) continue;
-                    const i64 lox = p0.x.raw < p1.x.raw ? p0.x.raw : p1.x.raw;
-                    const i64 hix = p0.x.raw < p1.x.raw ? p1.x.raw : p0.x.raw;
-                    const i64 loy = p0.y.raw < p1.y.raw ? p0.y.raw : p1.y.raw;
-                    const i64 hiy = p0.y.raw < p1.y.raw ? p1.y.raw : p0.y.raw;
-                    if (v.x.raw >= lox && v.x.raw <= hix &&
-                        v.y.raw >= loy && v.y.raw <= hiy) on_boundary = true;
+                u32 loop_first = sb.first_point;
+                u32 loop_len = sb.point_count;
+                for (u16 loop = 0; loop <= sb.hole_count && !on_boundary; ++loop) {
+                    if (loop > 0) {
+                        const PolyLoop& L = m.hole(sb.first_hole + loop - 1);
+                        loop_first = sb.first_point + L.first;
+                        loop_len = L.count;
+                    }
+                    for (u32 j = 0; j < loop_len && !on_boundary; ++j) {
+                        const fx2 p0 = m.point(loop_first + j);
+                        const fx2 p1 = m.point(loop_first + (j + 1) % loop_len);
+                        const i128 cross =
+                            static_cast<i128>(p1.x.raw - p0.x.raw) * (v.y.raw - p0.y.raw) -
+                            static_cast<i128>(p1.y.raw - p0.y.raw) * (v.x.raw - p0.x.raw);
+                        if (cross != 0) continue;
+                        const i64 lox = p0.x.raw < p1.x.raw ? p0.x.raw : p1.x.raw;
+                        const i64 hix = p0.x.raw < p1.x.raw ? p1.x.raw : p0.x.raw;
+                        const i64 loy = p0.y.raw < p1.y.raw ? p0.y.raw : p1.y.raw;
+                        const i64 hiy = p0.y.raw < p1.y.raw ? p1.y.raw : p0.y.raw;
+                        if (v.x.raw >= lox && v.x.raw <= hix &&
+                            v.y.raw >= loy && v.y.raw <= hiy) on_boundary = true;
+                    }
                 }
                 if (on_boundary) continue;
 

@@ -211,6 +211,127 @@ static void test_determinism() {
 
 // ------------------------------------------------------- staged shape edits
 
+// Total area of a triangle list, doubled, in 128-bit.
+static i128 tri_area_2x(const fx2* pts, const TriangleList& t) {
+    i128 acc = 0;
+    for (u16 i = 0; i < t.count; ++i) {
+        const fx2 a = pts[t.indices[i * 3]];
+        const fx2 b = pts[t.indices[i * 3 + 1]];
+        const fx2 c = pts[t.indices[i * 3 + 2]];
+        acc += (static_cast<i128>(b.x.raw) - a.x.raw) * (static_cast<i128>(c.y.raw) - a.y.raw) -
+               (static_cast<i128>(b.y.raw) - a.y.raw) * (static_cast<i128>(c.x.raw) - a.x.raw);
+    }
+    return acc;
+}
+
+// How many triangles contain a point.
+//
+// A point on an internal edge is legitimately counted by BOTH triangles that
+// share it -- point_in_triangle treats the boundary as inside, deliberately, so
+// that ear detection does not clip an ear over a touching vertex. So coverage
+// is asserted as "at least one" and emptiness as "exactly none"; asserting
+// exactly one is a test of whether the probe happened to miss an edge.
+static int triangles_covering(const fx2* pts, const TriangleList& t, fx2 p) {
+    int n = 0;
+    for (u16 i = 0; i < t.count; ++i) {
+        if (point_in_triangle(pts[t.indices[i * 3]], pts[t.indices[i * 3 + 1]],
+                              pts[t.indices[i * 3 + 2]], p)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+static void test_holes() {
+    std::printf("triangulate: an annulus covers the ring and not the hole\n");
+
+    // A 40x40 room with a 12x12 hole in the middle. This is a Doom room with a
+    // pit in it, and it is the shape our model could not express: nesting a
+    // second sector inside the first leaves the room's floor covering the pit,
+    // so a body walks over it.
+    const fx2 pts[] = {
+        {F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)},        // outer
+        {F(14), F(14)}, {F(26), F(14)}, {F(26), F(26)}, {F(14), F(26)}     // hole
+    };
+    const PolyLoop holes[] = {{4, 4}};
+
+    TriangleList t;
+    CHECK(triangulate_with_holes(pts, 4, holes, 1, t) == TriangulateStatus::Ok);
+    CHECK(t.count > 0);
+
+    // Area: the ring is 40*40 - 12*12 = 1456. Doubled, at raw scale.
+    const i128 want = static_cast<i128>(fx::from_int(1456).raw) * fx::one().raw * 2;
+    CHECK(tri_area_2x(pts, t) == want);
+
+    // And every triangle is counter-clockwise, so no part of the mesh is
+    // inside out.
+    bool all_ccw = true;
+    for (u16 i = 0; i < t.count; ++i) {
+        const fx2 a = pts[t.indices[i * 3]];
+        const fx2 b = pts[t.indices[i * 3 + 1]];
+        const fx2 c = pts[t.indices[i * 3 + 2]];
+        const i128 cr = (static_cast<i128>(b.x.raw) - a.x.raw) * (static_cast<i128>(c.y.raw) - a.y.raw) -
+                        (static_cast<i128>(b.y.raw) - a.y.raw) * (static_cast<i128>(c.x.raw) - a.x.raw);
+        if (cr <= 0) all_ccw = false;
+    }
+    CHECK(all_ccw);
+
+    // Coverage, probed. Area alone would be satisfied by a mesh that covered
+    // the hole and left an equal gap somewhere else.
+    int ring_covered = 0;
+    int ring_probes = 0;
+    int hole_covered = 0;
+    int hole_probes = 0;
+    for (int x = 1; x < 40; ++x) {
+        for (int y = 1; y < 40; ++y) {
+            const fx2 p{fx::from_frac(x * 10 + 5, 10), fx::from_frac(y * 10 + 5, 10)};
+            const bool in_hole = x >= 14 && x < 26 && y >= 14 && y < 26;
+            const int n = triangles_covering(pts, t, p);
+            if (in_hole) { ++hole_probes; if (n > 0) ++hole_covered; }
+            else { ++ring_probes; if (n > 0) ++ring_covered; }
+        }
+    }
+    CHECK(ring_probes > 1000 && hole_probes > 100);
+    CHECK(ring_covered == ring_probes);
+    CHECK(hole_covered == 0);
+
+    // Two holes, and one of them concave -- the case where a bridge to the
+    // nearest visible vertex has to reach past the first hole already merged.
+    const fx2 two[] = {
+        {F(0), F(0)}, {F(60), F(0)}, {F(60), F(40)}, {F(0), F(40)},
+        {F(8), F(8)}, {F(20), F(8)}, {F(20), F(20)}, {F(14), F(20)},
+        {F(14), F(14)}, {F(8), F(14)},
+        {F(38), F(10)}, {F(52), F(10)}, {F(52), F(30)}, {F(38), F(30)}
+    };
+    const PolyLoop two_holes[] = {{4, 6}, {10, 4}};
+    TriangleList t2;
+    CHECK(triangulate_with_holes(two, 4, two_holes, 2, t2) == TriangulateStatus::Ok);
+    // 60*40 - (12*12 - 6*6) - 14*20 = 2400 - 108 - 280 = 2012
+    const i128 want2 = static_cast<i128>(fx::from_int(2012).raw) * fx::one().raw * 2;
+    CHECK(tri_area_2x(two, t2) == want2);
+    CHECK(triangles_covering(two, t2, fx2{F(10), F(10)}) == 0);    // in hole 1
+    CHECK(triangles_covering(two, t2, fx2{F(45), F(20)}) == 0);    // in hole 2
+    CHECK(triangles_covering(two, t2, fx2{F(30), F(35)}) >= 1);    // in the ring
+    // The L-shaped hole covers x 8..20 y 8..14 plus x 14..20 y 14..20; its
+    // NOTCH -- the part of the ring the hole does not reach -- is x 8..14,
+    // y 14..20. Worked out rather than eyeballed: (17,17) is inside the hole
+    // and (11,17) is the notch, and the first version of this had them the
+    // other way round.
+    CHECK(triangles_covering(two, t2, fx2{F(17), F(17)}) == 0);    // inside hole 1
+    CHECK(triangles_covering(two, t2, fx2{F(11), F(17)}) >= 1);    // hole 1's notch
+    CHECK(triangles_covering(two, t2, fx2{F(11), F(11)}) == 0);    // also inside hole 1
+
+    // Deterministic: the same input triangulates identically every time. The
+    // bridge choice is a search, and a search that depended on anything but the
+    // input would desync a client the first time update_shape ran.
+    TriangleList again;
+    CHECK(triangulate_with_holes(two, 4, two_holes, 2, again) == TriangulateStatus::Ok);
+    CHECK(again.count == t2.count);
+    bool same = true;
+    for (u16 i = 0; i < t2.count * 3; ++i) if (again.indices[i] != t2.indices[i]) same = false;
+    CHECK(same);
+}
+
 static void test_staged_commit() {
     std::printf("mapstore: staged edits are atomic and rebuild the mesh\n");
 
@@ -327,6 +448,7 @@ int main() {
     test_winding_normalised();
     test_rejects_bad_input();
     test_determinism();
+    test_holes();
     test_staged_commit();
     test_rejected_commit_is_inert();
     test_commit_determinism();
