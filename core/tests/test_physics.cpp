@@ -10,6 +10,7 @@
 
 #include "dnp/geom/map.hpp"
 #include "dnp/math/rng.hpp"
+#include "dnp/geom/mapstore.hpp"
 #include "dnp/math/trig.hpp"
 #include "dnp/physics/collide.hpp"
 
@@ -1032,6 +1033,186 @@ static void test_nested_sector_pillar() {
     CHECK(off.pos.z == F(2));
 }
 
+static void test_broadphase_agrees_with_a_linear_scan() {
+    std::printf("broadphase: the grid narrows the search and never changes the answer\n");
+
+    // A field of sectors, laid out so cells hold varying numbers of them and
+    // some sectors straddle cell boundaries -- the case a grid gets wrong.
+    static geom::MapStorage store;
+    store.clear();
+    int made = 0;
+    for (int gy = 0; gy < 12; ++gy) {
+        for (int gx = 0; gx < 12; ++gx) {
+            // Deliberately not on a regular pitch: sizes and gaps vary, so a
+            // sector's bounding box covers one cell here and four there.
+            const fx x0 = fx::from_frac(gx * 170 + (gy % 3) * 13, 10);
+            const fx y0 = fx::from_frac(gy * 170 + (gx % 5) * 11, 10);
+            const fx w = fx::from_frac(80 + (gx * 7 + gy * 3) % 90, 10);
+            const fx h = fx::from_frac(80 + (gy * 11 + gx * 5) % 90, 10);
+            const fx2 poly[4] = {{x0, y0}, {x0 + w, y0}, {x0 + w, y0 + h}, {x0, y0 + h}};
+            if (store.add_sector(poly, 4, fx::from_int(gx % 4), F(60),
+                                 static_cast<u16>(made)) < MAX_MAP_SECTORS) {
+                ++made;
+            }
+        }
+    }
+    CHECK(made == 144);
+    store.rebuild_grid();
+
+    const MapData m = store.view();
+    CHECK(m.grid.usable);
+    CHECK(m.grid.cols > 1 && m.grid.rows > 1);
+
+    // The same map with the grid switched off. Every query must agree, at every
+    // probe -- the grid decides who to ask, never what the answer is.
+    MapData plain = m;
+    plain.grid.usable = false;
+
+    Rng rng(0xB00Fu, 3);
+    int probes = 0;
+    int hits = 0;
+    int disagreements = 0;
+    for (int i = 0; i < 4000; ++i) {
+        const fx px = rng.next_fx(fx::from_int(-20), fx::from_int(220));
+        const fx py = rng.next_fx(fx::from_int(-20), fx::from_int(220));
+        const fx feet = rng.next_fx(fx::from_int(-5), fx::from_int(10));
+        const fx2 p{px, py};
+        ++probes;
+        const i32 a = find_sector(m, p);
+        const i32 b = find_sector(plain, p);
+        if (a != b) ++disagreements;
+        if (a != NO_SECTOR) ++hits;
+        if (find_sector_at(m, p, feet, F(2)) != find_sector_at(plain, p, feet, F(2))) {
+            ++disagreements;
+        }
+    }
+    CHECK(disagreements == 0);
+    // ... and the probes actually landed on sectors, or the agreement above is
+    // agreement about NO_SECTOR four thousand times.
+    CHECK(hits > probes / 4);
+
+    // Corners and edges, where a grid's rounding shows up. Every sector's own
+    // vertices and centre must resolve identically with and without it.
+    int edge_disagreements = 0;
+    for (u32 sIdx = 0; sIdx < m.sector_count; ++sIdx) {
+        const Sector& sec = m.sector(sIdx);
+        fx2 centre = fx2::zero();
+        for (u16 k = 0; k < sec.point_count; ++k) {
+            const fx2 v = m.point(sec.first_point + k);
+            centre += v;
+            if (find_sector(m, v) != find_sector(plain, v)) ++edge_disagreements;
+        }
+        centre = fx2{centre.x / sec.point_count, centre.y / sec.point_count};
+        if (find_sector(m, centre) != find_sector(plain, centre)) ++edge_disagreements;
+        if (find_sector(m, centre) != static_cast<i32>(sIdx)) ++edge_disagreements;
+    }
+    CHECK(edge_disagreements == 0);
+
+    // A moved footprint makes the grid STALE, and a stale grid is never handed
+    // out -- queries fall back to the scan until it is rebuilt. Without that, a
+    // moving sector would be looked up where it used to be.
+    store.point_mut(0) = fx2{F(-100), F(-100)};
+    CHECK(store.grid_dirty());
+    CHECK(!store.view().grid.usable);
+    store.rebuild_grid();
+    CHECK(store.view().grid.usable);
+}
+
+static void test_bridge_over_a_path() {
+    std::printf("overlap: a bridge over a path -- which floor depends on your feet\n");
+
+    // Two sectors that PARTIALLY overlap in plan and are separated in height:
+    //   path   x 0..60, y 0..12,  floor 0,  ceiling 8
+    //   bridge x 24..36, y -20..32, floor 10, thickness 2 (slab 8..10)
+    //
+    // Neither contains the other, so "smallest area" has nothing to say. What
+    // decides is where the body's feet are, which is the only thing that ever
+    // could.
+    static const fx2 pts[] = {
+        {F(0), F(0)}, {F(60), F(0)}, {F(60), F(12)}, {F(0), F(12)},
+        {F(24), -F(20)}, {F(36), -F(20)}, {F(36), F(32)}, {F(24), F(32)}
+    };
+    Sector secs[2] = {
+        Sector{0, 4, 0, 4, F(0),  F(8),  fx::zero(), 0, 0, 0},
+        Sector{4, 4, 4, 4, F(10), F(60), F(2),       0, 0, 0}
+    };
+    Side sides[8]{};
+    for (int s = 0; s < 2; ++s) {
+        for (int i = 0; i < 4; ++i) {
+            sides[s * 4 + i] = Side{static_cast<u16>(s * 4 + i),
+                                    static_cast<u16>(s * 4 + (i + 1) % 4),
+                                    NO_SECTOR, side_flag::LEDGE};
+        }
+    }
+    MapData m;
+    m.points = pts; m.point_count = 8;
+    m.sectors = secs; m.sector_count = 2;
+    m.sides = sides; m.side_count = 8;
+
+    // Under the bridge, in the overlap: feet on the path.
+    CHECK(find_sector_at(m, fx2{F(30), F(6)}, F(0), F(2)) == 0);
+    // On the bridge, same point in plan: feet on the bridge.
+    CHECK(find_sector_at(m, fx2{F(30), F(6)}, F(10), F(2)) == 1);
+    // Falling from high above lands on the bridge, which is the highest floor
+    // still at or below the feet.
+    CHECK(find_sector_at(m, fx2{F(30), F(6)}, F(40), F(2)) == 1);
+    // Falling BETWEEN them -- above the path, below the bridge -- resolves to
+    // the path, because the bridge is over your head.
+    CHECK(find_sector_at(m, fx2{F(30), F(6)}, F(5), F(2)) == 0);
+    // Outside the overlap there is only one answer either way.
+    CHECK(find_sector_at(m, fx2{F(6), F(6)}, F(0), F(2)) == 0);
+    CHECK(find_sector_at(m, fx2{F(30), F(28)}, F(10), F(2)) == 1);
+
+    // Walking the path passes UNDER the bridge without being stopped: the
+    // bridge's slab is 8..10 and a two-unit body on the floor spans 0..2.
+    const fx dt = Ff(1, 60);
+    MoveInput under;
+    under.pos = fx3{F(4), F(6), F(0)};
+    under.vel = fx3{F(10), fx::zero(), fx::zero()};
+    under.radius = Ff(1, 2);
+    under.sector = 0;
+    under.grounded = true;
+    int ticks_under_bridge = 0;
+    for (int t = 0; t < 240; ++t) {
+        const MoveResult r = move(m, under, dt);
+        if (r.pos.x > F(25) && r.pos.x < F(35)) ++ticks_under_bridge;
+        under.pos = r.pos;
+        under.vel = r.vel;
+        under.sector = r.sector;
+        under.grounded = r.grounded;
+        under.vel.z -= F(16) * dt;
+    }
+    CHECK(ticks_under_bridge > 20);
+    // 4 + 10 * (240/60) = 44, which is past the bridge's far edge at 36 and
+    // still on the path, which ends at 60. Computed, not guessed: the first
+    // version asserted x > 50 and the body could not have got there.
+    CHECK(under.pos.x > F(36));
+    CHECK(under.pos.x < F(60));
+    CHECK(under.pos.z == fx::zero());      // never lifted onto the bridge
+    CHECK(under.sector == 0);
+
+    // And walking ALONG the bridge stays on the bridge over the same ground.
+    MoveInput over;
+    over.pos = fx3{F(30), -F(16), F(10)};
+    over.vel = fx3{fx::zero(), F(10), fx::zero()};
+    over.radius = Ff(1, 2);
+    over.sector = 1;
+    over.grounded = true;
+    for (int t = 0; t < 180; ++t) {
+        const MoveResult r = move(m, over, dt);
+        over.pos = r.pos;
+        over.vel = r.vel;
+        over.sector = r.sector;
+        over.grounded = r.grounded;
+        over.vel.z -= F(16) * dt;
+    }
+    // -16 + 10 * (180/60) = 14, still well inside the bridge, which runs to 32.
+    CHECK(over.pos.y > F(12));
+    CHECK(over.pos.y < F(32));
+    CHECK(over.pos.z == F(10));
+    CHECK(over.sector == 1);
+}
+
 static void test_ledge_does_not_leak_into_closed_maps() {
     std::printf("ledge: a sector with no open edge still cannot be left\n");
 
@@ -1103,6 +1284,8 @@ int main() {
     test_hexagon_containment();
     test_tower_side_is_solid_from_a_neighbouring_sector();
     test_nested_sector_pillar();
+    test_broadphase_agrees_with_a_linear_scan();
+    test_bridge_over_a_path();
     test_ledge_does_not_leak_into_closed_maps();
     test_determinism_of_move();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

@@ -483,6 +483,12 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     // Finally, the rebuilt map is hashed and compared against the file's own.
     if (store.hash() != want_hash) { store.clear(); return MapLoadStatus::HashMismatch; }
 
+    // The broadphase is derived from the geometry, so it is REBUILT rather than
+    // stored: two peers that parsed the same file build the same grid, and
+    // there is no third thing in the file that could disagree with the first
+    // two. It is also not in the hash, for the same reason -- it is not data.
+    store.rebuild_grid();
+
     return MapLoadStatus::Ok;
 }
 

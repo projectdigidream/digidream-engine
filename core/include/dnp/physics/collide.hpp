@@ -70,7 +70,12 @@ struct SurfaceQuery {
     fx   floor_z{};
     fx   ceil_z{};
 };
-SurfaceQuery query_surface(const geom::MapData& map, fx2 p, i32 hint) noexcept;
+//
+// `feet_z` and `body_height` decide WHICH sector, where footprints overlap: a
+// bridge over a path shares floor area with it, and which floor applies depends
+// on where the body is, not on which sector is smaller or came first.
+SurfaceQuery query_surface(const geom::MapData& map, fx2 p, i32 hint,
+                           fx feet_z, fx body_height) noexcept;
 
 // Can a body of `body_height`, whose feet are at `feet_z`, occupy sector `s`?
 //

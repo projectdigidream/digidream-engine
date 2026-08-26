@@ -13,7 +13,8 @@ constexpr u32 MAX_SLIDE_ITERATIONS = 3;
 
 }  // namespace
 
-SurfaceQuery query_surface(const MapData& map, fx2 p, i32 hint) noexcept {
+SurfaceQuery query_surface(const MapData& map, fx2 p, i32 hint,
+                           fx feet_z, fx body_height) noexcept {
     SurfaceQuery q;
 
     // Try the hint first. An agent usually stays in the sector it was in, so
@@ -22,7 +23,10 @@ SurfaceQuery query_surface(const MapData& map, fx2 p, i32 hint) noexcept {
         point_in_sector(map, static_cast<u32>(hint), p)) {
         q.sector = hint;
     } else {
-        q.sector = find_sector(map, p);
+        // The height-aware query. `hint` is only accepted above because a body
+        // that is still inside the sector it was in last tick is on the same
+        // floor it was on -- the cheap case and the common one.
+        q.sector = find_sector_at(map, p, feet_z, body_height);
     }
 
     if (q.sector == NO_SECTOR) return q;
@@ -339,7 +343,7 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
     // which is what this did before floating platforms existed -- makes every
     // platform edge an invisible wall, and allowing unconditionally turns a
     // geometry error into an entity falling forever with nothing to say why.
-    const SurfaceQuery q_start = query_surface(map, pos2, r.sector);
+    const SurfaceQuery q_start = query_surface(map, pos2, r.sector, r.pos.z, in.height);
     bool may_leave = in.sector == NO_SECTOR || !q_start.in_map ||
                      sector_has_ledge(map, q_start.sector);
 
@@ -347,7 +351,7 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
         if (remaining.x.raw == 0 && remaining.y.raw == 0) break;
         r.iterations = iter + 1;
 
-        const SurfaceQuery q0 = query_surface(map, pos2, r.sector);
+        const SurfaceQuery q0 = query_surface(map, pos2, r.sector, r.pos.z, in.height);
         if (!q0.in_map) {
             // Out in the void: no geometry, so the whole remaining displacement
             // applies. Falling entities keep the horizontal speed they left
@@ -432,7 +436,7 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
             }
         }
 
-        const SurfaceQuery q = query_surface(map, pos2, r.sector);
+        const SurfaceQuery q = query_surface(map, pos2, r.sector, r.pos.z, in.height);
         if (q.in_map) {
             r.sector = q.sector;
             if (push_out_of_sector(map, static_cast<u32>(q.sector), pos2, &r.vel,
@@ -458,7 +462,7 @@ MoveResult move(const MapData& map, const MoveInput& in, fx dt) noexcept {
 
     // --- settle the sector, then vertical ------------------------------------
 
-    const SurfaceQuery q = query_surface(map, fx2{r.pos.x, r.pos.y}, r.sector);
+    const SurfaceQuery q = query_surface(map, fx2{r.pos.x, r.pos.y}, r.sector, r.pos.z, in.height);
 
     // Passing UNDER a platform.
     //

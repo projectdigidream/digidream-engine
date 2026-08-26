@@ -34,6 +34,15 @@ inline constexpr u32 MAX_SPAWN_TAG   = 32;
 inline constexpr u32 MAX_MAP_TEXTURES   = 256;
 inline constexpr u32 MAX_MAP_LIGHTS     = 128;
 
+// The broadphase grid. 48x48 cells over the map's bounding box, and a cap on
+// total membership: a sector belongs to every cell its bounding box touches, so
+// one enormous sector could otherwise claim the whole grid. Overflowing sets
+// the grid unusable rather than truncating it, and every query falls back to
+// the linear scan -- slower, and still exactly right.
+inline constexpr u32 GRID_DIM       = 48;
+inline constexpr u32 GRID_CELLS     = GRID_DIM * GRID_DIM;
+inline constexpr u32 MAX_GRID_ITEMS = 24576;
+
 // A named landing point. Portals name one of these in the join handshake
 // (design §3.3), so each portal can deliver its arrivals somewhere specific
 // rather than every portal dumping players at one generic map spawn.
@@ -147,12 +156,24 @@ public:
     Sector& sector_mut(u32 i) noexcept { return sectors_[i]; }
     Side& side_mut(u32 i) noexcept { return sides_[i]; }
 
+    // --- broadphase ---
+    //
+    // Rebuilt from the current geometry. Called after construction, and again
+    // by sector motion whenever a footprint actually moves.
+    void rebuild_grid() noexcept;
+
+    // True when a point has been written since the grid was last built. Sector
+    // motion rewrites footprints, and a grid describing where they used to be
+    // would be worse than none -- so the grid is marked unusable the moment a
+    // point moves, and every query falls back to the scan until it is rebuilt.
+    bool grid_dirty() const noexcept { return grid_dirty_; }
+
     // Direct point access, for sector motion writing base+offset each tick.
     // Deliberately NOT a general editing path: changing a point's position
     // without re-triangulating is only safe when the change cannot alter which
     // vertices are ears, which is true of a translation and of nothing else.
     // Shape edits go through stage_point/commit_shape.
-    fx2& point_mut(u32 i) noexcept { return points_[i]; }
+    fx2& point_mut(u32 i) noexcept { grid_dirty_ = true; return points_[i]; }
 
     // Content hash of the geometry. Part of the world state, so a client whose
     // map has drifted from the server's is detectable rather than mysterious.
@@ -191,6 +212,15 @@ private:
     u32          texture_count_ = 0;
     MapLight     lights_[MAX_MAP_LIGHTS]{};
     u32          light_count_ = 0;
+
+    u32  grid_start_[GRID_CELLS + 1]{};
+    u16  grid_items_[MAX_GRID_ITEMS]{};
+    fx2  grid_min_{};
+    fx   grid_cell_{};
+    u16  grid_cols_ = 0;
+    u16  grid_rows_ = 0;
+    bool grid_built_ = false;
+    bool grid_dirty_ = true;
 
     Rail         rails_[MAX_MAP_RAILS]{};
     RailWaypoint waypoints_[MAX_MAP_WAYPOINTS]{};

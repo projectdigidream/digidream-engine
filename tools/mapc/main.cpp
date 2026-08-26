@@ -520,18 +520,35 @@ int main(int argc, char** argv) {
             // depend on which was declared first.
             if (inside == sa.point_count) continue;
 
-            // PARTIAL overlap is not. There is no innermost sector to prefer,
-            // so which one a point belongs to has no principled answer -- and
-            // every consequence follows from it: which floor you stand on,
-            // which ceiling crushes you, which light level shades the ground.
+            // PARTIAL overlap is fine when the two are separated in HEIGHT.
+            //
+            // That is a bridge over a path, and geom::find_sector_at resolves it
+            // without ambiguity: which floor applies is decided by where a
+            // body's feet are. The condition is that the lower sector's ceiling
+            // is at or below the upper one's slab -- a real gap, with the upper
+            // sector's underside closing the lower one off rather than hanging
+            // inside its headroom.
+            const Sector& lo = sa.floor_z <= sb.floor_z ? sa : sb;
+            const Sector& hi = sa.floor_z <= sb.floor_z ? sb : sa;
+            if (lo.ceil_z <= hi.floor_z - hi.thickness) continue;
+
+            // Otherwise the two share space a body could occupy, and which
+            // sector it is in has no answer that geometry can give. Every
+            // consequence follows from that one: which floor it stands on,
+            // which ceiling crushes it, which light level shades the ground.
             std::fprintf(stderr,
                 "sector %u partially overlaps sector %u: %u of its %u corners are inside,\n"
-                "starting at corner %u (%.3f, %.3f). Footprints may NEST -- a pillar inside\n"
-                "a hall is fine -- but a partial overlap has no innermost sector to prefer.\n"
-                "Either move it clear, or contain it entirely.\n",
+                "starting at corner %u (%.3f, %.3f), and the two share space vertically.\n"
+                "\n"
+                "Footprints may overlap in two cases: NESTED (a pillar inside a hall), or\n"
+                "SEPARATED IN HEIGHT (a bridge over a path, where the lower sector's ceiling\n"
+                "is at or below the upper one's underside). This is neither: the lower\n"
+                "ceiling is %.3f and the upper underside is %.3f.\n",
                 a, b, inside, sa.point_count, first_inside,
                 static_cast<double>(witness.x.raw) / 4294967296.0,
-                static_cast<double>(witness.y.raw) / 4294967296.0);
+                static_cast<double>(witness.y.raw) / 4294967296.0,
+                static_cast<double>(lo.ceil_z.raw) / 4294967296.0,
+                static_cast<double>((hi.floor_z - hi.thickness).raw) / 4294967296.0);
             ++g_errors;
             break;
         }

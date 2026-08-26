@@ -1,5 +1,7 @@
 #include "dnp/geom/map.hpp"
 
+#include "dnp/sim/constants.hpp"
+
 namespace dnp::geom {
 
 bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept {
@@ -33,32 +35,63 @@ bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept {
     return inside;
 }
 
+namespace {
+
+// Candidate sectors at a point: the grid's cell if it is usable, the whole map
+// if it is not. Deliberately a SUPERSET -- the exact point_in_sector test still
+// decides, so the grid can only make the search shorter, never different.
+struct Candidates {
+    const u16* items = nullptr;   // null means "every sector, by index"
+    u32 count = 0;
+};
+
+Candidates candidates_at(const MapData& map, fx2 p) noexcept {
+    const SectorGrid& g = map.grid;
+    if (!g.usable || g.cols == 0 || g.rows == 0 || g.cell.raw <= 0) {
+        return Candidates{nullptr, map.sector_count};
+    }
+    // Integer cell coordinates. Both operands are at the same fixed-point
+    // scale, so this is exact integer division and needs no fx arithmetic.
+    const i64 dx = p.x.raw - g.min.x.raw;
+    const i64 dy = p.y.raw - g.min.y.raw;
+    if (dx < 0 || dy < 0) return Candidates{nullptr, 0};
+    const i64 cx = dx / g.cell.raw;
+    const i64 cy = dy / g.cell.raw;
+    if (cx >= g.cols || cy >= g.rows) return Candidates{nullptr, 0};
+
+    const u32 cell = static_cast<u32>(cy) * g.cols + static_cast<u32>(cx);
+    const u32 from = g.start[cell];
+    const u32 to = g.start[cell + 1];
+    return Candidates{g.items + from, to - from};
+}
+
+inline u32 candidate_at(const Candidates& c, u32 i) noexcept {
+    return c.items ? c.items[i] : i;
+}
+
+}  // namespace
+
 i32 find_sector(const MapData& map, fx2 p) noexcept {
     // The SMALLEST sector containing the point, not the first one declared.
     //
-    // Footprints may nest -- a pillar standing inside a hall, a pit sunk into a
-    // floor -- and for a point inside the inner one, both contain it. First
-    // match makes the answer depend on declaration order, which shows up as a
-    // pillar you can be blocked by but cannot stand on: the mover asks which
-    // sector you are in, is told the hall, and drops you to the hall's floor
-    // through the pillar under your feet.
+    // Footprints may nest -- a pillar standing inside a hall -- and for a point
+    // inside the inner one, both contain it. First match makes the answer
+    // depend on declaration order. Smallest-area is at least a property of the
+    // geometry, and exact: areas are 128-bit integers, so the choice is
+    // identical on every target.
     //
-    // Smallest-area is the most SPECIFIC answer, and it is a property of the
-    // geometry rather than of the file's ordering. Areas are exact 128-bit
-    // integers, so the choice is identical on every target -- which it must be,
-    // because this predicate decides which floor a body stands on.
-    //
-    // Partially overlapping footprints remain ill-defined and tools/mapc
-    // rejects them; nesting is the case this makes well-defined.
+    // It is still only an approximation of the real question, which is
+    // find_sector_at's.
+    const Candidates c = candidates_at(map, p);
     i32  best = NO_SECTOR;
     i128 best_area = 0;
-    for (u32 s = 0; s < map.sector_count; ++s) {
+    for (u32 i = 0; i < c.count; ++i) {
+        const u32 s = candidate_at(c, i);
         if (!point_in_sector(map, s, p)) continue;
         if (best == NO_SECTOR) { best = static_cast<i32>(s); continue; }
 
         // Only computed once a second sector claims the point, so the ordinary
-        // case -- exactly one match -- costs nothing beyond the scan it already
-        // did.
+        // case -- exactly one match -- costs nothing beyond the scan.
         if (best_area == 0) {
             best_area = signed_area_2x(map, static_cast<u32>(best));
             if (best_area < 0) best_area = -best_area;
@@ -68,6 +101,38 @@ i32 find_sector(const MapData& map, fx2 p) noexcept {
         if (area < best_area) { best = static_cast<i32>(s); best_area = area; }
     }
     return best;
+}
+
+i32 find_sector_at(const MapData& map, fx2 p, fx feet_z, fx body_height) noexcept {
+    (void)body_height;
+    const Candidates c = candidates_at(map, p);
+
+    // The highest floor a body at feet_z could be standing on, and -- if there
+    // is none, meaning it is beneath everything here -- the lowest floor above
+    // it, which is the "fallen under a platform" case the mover then treats as
+    // the void.
+    const fx reach = feet_z + sim::STEP_HEIGHT;
+    i32 standing = NO_SECTOR;
+    i32 lowest = NO_SECTOR;
+    for (u32 i = 0; i < c.count; ++i) {
+        const u32 s = candidate_at(c, i);
+        if (!point_in_sector(map, s, p)) continue;
+        const fx floor_z = map.sector(s).floor_z;
+
+        if (floor_z <= reach) {
+            // Strictly higher, so equal floors resolve to the lower index
+            // rather than to whichever the loop reached last.
+            if (standing == NO_SECTOR ||
+                floor_z > map.sector(static_cast<u32>(standing)).floor_z) {
+                standing = static_cast<i32>(s);
+            }
+        }
+        if (lowest == NO_SECTOR ||
+            floor_z < map.sector(static_cast<u32>(lowest)).floor_z) {
+            lowest = static_cast<i32>(s);
+        }
+    }
+    return standing != NO_SECTOR ? standing : lowest;
 }
 
 fx2 closest_point_on_segment(fx2 a, fx2 b, fx2 p) noexcept {

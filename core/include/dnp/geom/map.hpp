@@ -220,6 +220,32 @@ struct RenderData {
     const MapLight& light(u32 i) const noexcept { return lights[i]; }
 };
 
+// A uniform broadphase grid over sector footprints.
+//
+// find_sector was a linear scan over every sector, which is fine for a test map
+// and is O(sectors) on every step of every agent for a real one. Deferred until
+// there were real map sizes to size it against, which is now.
+//
+// Each cell lists the sectors whose bounding box touches it, in ascending
+// index order. A query narrows to one cell and then runs the SAME exact
+// point_in_sector test on the candidates -- the grid decides who to ask, never
+// what the answer is, so it cannot change a result. A property test asserts
+// that against a linear scan over thousands of points.
+//
+// `usable` is false when the grid is absent or stale, and every query falls
+// back to the full scan. That is what keeps a moving sector safe: horizontal
+// motion rewrites footprints, and a grid that described where they used to be
+// would be worse than none.
+struct SectorGrid {
+    bool       usable = false;
+    fx2        min{};
+    fx         cell{};
+    u16        cols = 0;
+    u16        rows = 0;
+    const u32* start = nullptr;   // cols * rows + 1 entries, CSR style
+    const u16* items = nullptr;
+};
+
 struct MapData {
     const fx2*    points       = nullptr;
     u32           point_count  = 0;
@@ -236,6 +262,8 @@ struct MapData {
     u32                 waypoint_count   = 0;
     const RailLink*     rail_links       = nullptr;
     u32                 rail_link_count  = 0;
+
+    SectorGrid grid{};
 
     const fx2& point(u32 i) const noexcept { return points[i]; }
     const Sector& sector(u32 i) const noexcept { return sectors[i]; }
@@ -255,11 +283,33 @@ struct MapData {
 // are standing on -- a divergence no amount of position correction repairs.
 bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept;
 
-// Index of the sector containing `p`, or NO_SECTOR.
+// Index of the sector containing `p`, ignoring height, or NO_SECTOR.
 //
-// Linear scan. A broadphase grid arrives in Phase 3 with real map sizes; adding
-// one now would be optimising against a guess.
+// Where footprints nest, the SMALLEST one wins -- the most specific answer
+// available without knowing where a body is vertically. That is a genuine
+// approximation and it is only correct for nesting; anything that knows the
+// body's height should ask find_sector_at instead, which answers the question
+// this one can only guess at.
+//
+// Kept for callers that have no height to offer: a renderer deciding whether a
+// shadow lands on floor at all, and the nav graph asking which sectors touch.
 i32 find_sector(const MapData& map, fx2 p) noexcept;
+
+// The sector whose floor a body standing at `feet_z` is on.
+//
+// THE height-aware query, and the one the mover uses. Among the sectors
+// containing `p`, it takes the HIGHEST floor that is at or below feet_z plus
+// the step threshold -- the topmost surface the body could actually be standing
+// on. If every floor is above that, the body is beneath all of them and the
+// lowest is returned, which is the "fallen under a platform" case.
+//
+// This is what makes overlapping footprints mean something. A bridge over a
+// path shares floor area with it, and which floor you are on is decided by
+// where your feet are, not by which sector is smaller or was declared first.
+// It subsumes the nesting rule too: standing on a pillar inside a hall, the
+// pillar's floor is the highest one at or below your feet, so it wins without
+// anything needing to know that one footprint contains the other.
+i32 find_sector_at(const MapData& map, fx2 p, fx feet_z, fx body_height) noexcept;
 
 // Nearest point to `p` on the segment a-b.
 fx2 closest_point_on_segment(fx2 a, fx2 b, fx2 p) noexcept;

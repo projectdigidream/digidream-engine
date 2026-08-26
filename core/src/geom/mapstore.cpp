@@ -17,6 +17,10 @@ void MapStorage::clear() noexcept {
     rail_link_count_ = 0;
     texture_count_ = 0;
     light_count_ = 0;
+    grid_built_ = false;
+    grid_dirty_ = true;
+    grid_cols_ = 0;
+    grid_rows_ = 0;
     for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_render_[i] = SectorRender{};
     for (u32 i = 0; i < MAX_MAP_SIDES; ++i) side_render_[i] = SideRender{};
 }
@@ -272,6 +276,96 @@ CommitStatus MapStorage::commit_shape(u32 sector) noexcept {
     return CommitStatus::Ok;
 }
 
+void MapStorage::rebuild_grid() noexcept {
+    grid_built_ = false;
+    grid_dirty_ = false;
+    grid_cols_ = 0;
+    grid_rows_ = 0;
+    if (sector_count_ == 0 || point_count_ == 0) return;
+
+    // Bounding box of every point in the map.
+    fx2 lo = points_[0];
+    fx2 hi = points_[0];
+    for (u32 i = 1; i < point_count_; ++i) {
+        if (points_[i].x < lo.x) lo.x = points_[i].x;
+        if (points_[i].y < lo.y) lo.y = points_[i].y;
+        if (points_[i].x > hi.x) hi.x = points_[i].x;
+        if (points_[i].y > hi.y) hi.y = points_[i].y;
+    }
+
+    // One cell size for both axes, so a cell is square and a query needs one
+    // divisor. Rounded UP, so GRID_DIM cells always cover the box -- rounding
+    // down leaves the far edge outside the grid, where a query would find no
+    // candidates and report empty space in the middle of a map.
+    const i64 span_x = hi.x.raw - lo.x.raw;
+    const i64 span_y = hi.y.raw - lo.y.raw;
+    const i64 span = span_x > span_y ? span_x : span_y;
+    if (span <= 0) return;
+    const i64 cell = (span + GRID_DIM - 1) / GRID_DIM + 1;
+
+    grid_min_ = lo;
+    grid_cell_ = fx::from_raw(cell);
+    grid_cols_ = static_cast<u16>(span_x / cell + 1);
+    grid_rows_ = static_cast<u16>(span_y / cell + 1);
+    const u32 cells = static_cast<u32>(grid_cols_) * grid_rows_;
+    if (cells == 0 || cells > GRID_CELLS) return;
+
+    // Counting sort into CSR: count per cell, prefix sum, then fill. Two passes
+    // over the sectors rather than a per-cell vector, because the core does not
+    // allocate.
+    for (u32 i = 0; i <= cells; ++i) grid_start_[i] = 0;
+
+    u32 total = 0;
+    for (u32 pass = 0; pass < 2; ++pass) {
+        for (u32 s = 0; s < sector_count_; ++s) {
+            const Sector& sec = sectors_[s];
+            if (sec.point_count == 0) continue;
+            fx2 slo = points_[sec.first_point];
+            fx2 shi = slo;
+            for (u16 k = 1; k < sec.point_count; ++k) {
+                const fx2& q = points_[sec.first_point + k];
+                if (q.x < slo.x) slo.x = q.x;
+                if (q.y < slo.y) slo.y = q.y;
+                if (q.x > shi.x) shi.x = q.x;
+                if (q.y > shi.y) shi.y = q.y;
+            }
+            i64 x0 = (slo.x.raw - lo.x.raw) / cell;
+            i64 x1 = (shi.x.raw - lo.x.raw) / cell;
+            i64 y0 = (slo.y.raw - lo.y.raw) / cell;
+            i64 y1 = (shi.y.raw - lo.y.raw) / cell;
+            if (x0 < 0) x0 = 0;
+            if (y0 < 0) y0 = 0;
+            if (x1 >= grid_cols_) x1 = grid_cols_ - 1;
+            if (y1 >= grid_rows_) y1 = grid_rows_ - 1;
+
+            for (i64 cy = y0; cy <= y1; ++cy) {
+                for (i64 cx = x0; cx <= x1; ++cx) {
+                    const u32 c = static_cast<u32>(cy) * grid_cols_ + static_cast<u32>(cx);
+                    if (pass == 0) {
+                        ++grid_start_[c + 1];
+                        if (++total > MAX_GRID_ITEMS) return;   // unusable; scan instead
+                    } else {
+                        grid_items_[grid_start_[c]++] = static_cast<u16>(s);
+                    }
+                }
+            }
+        }
+        if (pass == 0) {
+            for (u32 i = 0; i < cells; ++i) grid_start_[i + 1] += grid_start_[i];
+            // grid_start_[c] is now the write cursor for cell c, and the fill
+            // pass advances it. Ascending sector order is preserved within each
+            // cell, which is what makes a tie between two candidates resolve
+            // the same way on every target.
+        }
+    }
+
+    // The fill pass left each cursor at the END of its cell, which is exactly
+    // the start of the next -- so shifting by one restores the offsets.
+    for (u32 i = cells; i > 0; --i) grid_start_[i] = grid_start_[i - 1];
+    grid_start_[0] = 0;
+    grid_built_ = true;
+}
+
 MapData MapStorage::view() const noexcept {
     MapData m;
     m.points = points_;
@@ -288,6 +382,18 @@ MapData MapStorage::view() const noexcept {
     m.waypoint_count = waypoint_count_;
     m.rail_links = rail_links_;
     m.rail_link_count = rail_link_count_;
+
+    // Only offered when it is both built and current. A stale grid is never
+    // handed out, so no query can silently consult one.
+    if (grid_built_ && !grid_dirty_) {
+        m.grid.usable = true;
+        m.grid.min = grid_min_;
+        m.grid.cell = grid_cell_;
+        m.grid.cols = grid_cols_;
+        m.grid.rows = grid_rows_;
+        m.grid.start = grid_start_;
+        m.grid.items = grid_items_;
+    }
     return m;
 }
 

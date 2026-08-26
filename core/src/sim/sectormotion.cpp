@@ -161,6 +161,11 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
         if (mi < 0) continue;
         p.pos = p.base + motions_[static_cast<u32>(mi)].offset;
     }
+    // Writing a point marks the broadphase stale, so it is rebuilt here rather
+    // than left for a query to discover. Only when something actually moved
+    // horizontally: a lift travelling straight up does not change any
+    // footprint, and the overwhelmingly common case costs one boolean test.
+    if (map.grid_dirty()) map.rebuild_grid();
 }
 
 void SectorMotionSet::hash_into(StateHasher& h) const noexcept {
