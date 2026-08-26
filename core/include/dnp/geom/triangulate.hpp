@@ -24,14 +24,19 @@ using namespace dnp;
 
 // One loop's worth of points. The cap bounds the O(n^2) inner scan and makes
 // the work per commit predictable.
-inline constexpr u32 MAX_POLY_POINTS = 96;
+// 192, raised from 96 by real levels rather than by guesswork: DOOM2's MAP13,
+// MAP24 and MAP28 each have a sector loop of over a hundred vertices, and 96
+// rejected all three outright.
+inline constexpr u32 MAX_POLY_POINTS = 192;
 
 // A polygon WITH holes is triangulated by bridging each hole into the outer
 // loop, which produces one simple polygon carrying every loop's vertices plus
 // two duplicates per bridge. This bounds that merged form.
-inline constexpr u32 MAX_MERGED_POINTS = 256;
+inline constexpr u32 MAX_MERGED_POINTS = 512;
 inline constexpr u32 MAX_POLY_TRIS     = MAX_MERGED_POINTS - 2;
-inline constexpr u32 MAX_POLY_HOLES    = 16;
+// 64, raised from 16 by a real level: DOOM2 MAP18 has a room with EIGHTEEN
+// pillars in it, and each pillar is a hole.
+inline constexpr u32 MAX_POLY_HOLES    = 64;
 
 enum class TriangulateStatus : u8 {
     Ok = 0,

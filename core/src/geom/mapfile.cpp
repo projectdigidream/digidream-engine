@@ -194,8 +194,13 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         u32 first_tri;
         fx floor_z, ceil_z, thickness;
         u16 hole_count;
-        u16 hole_first[MAX_POLY_HOLES];
-        u16 hole_len[MAX_POLY_HOLES];
+        // The FILE OFFSET of this sector's hole table, not the table itself.
+        //
+        // pend[] is a local array of MAX_MAP_SECTORS entries, so every byte
+        // here is multiplied by 512. Inlining 64 hole ranges would make it
+        // 130 KB of stack -- twice the whole wasm stack -- to hold data the
+        // rebuild pass re-reads by seeking anyway.
+        size_t holes_at;
     };
     PendingSector pend[MAX_MAP_SECTORS];
     for (u32 i = 0; i < sector_count; ++i) {
@@ -214,9 +219,9 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         if (!r.ok() || s.hole_count > MAX_POLY_HOLES) {
             store.clear(); return MapLoadStatus::TooLarge;
         }
-        for (u16 h = 0; h < s.hole_count; ++h) {
-            s.hole_first[h] = r.u16v();
-            s.hole_len[h] = r.u16v();
+        s.holes_at = r.pos();
+        if (!r.skip(static_cast<size_t>(s.hole_count) * 4)) {
+            store.clear(); return MapLoadStatus::Truncated;
         }
     }
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
@@ -246,12 +251,14 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         // A hole's range is relative to its sector's first point and must lie
         // beyond the outer loop and inside the map. An out-of-range hole would
         // otherwise be triangulated against whatever points followed it.
+        r.seek(s.holes_at);
         for (u16 h = 0; h < s.hole_count; ++h) {
-            if (s.hole_len[h] < 3 || s.hole_len[h] > MAX_POLY_POINTS) {
-                store.clear(); return MapLoadStatus::BadIndex;
-            }
-            if (s.hole_first[h] < s.point_count) { store.clear(); return MapLoadStatus::BadIndex; }
-            if (static_cast<u32>(s.first_point) + s.hole_first[h] + s.hole_len[h] > point_count) {
+            const u16 hf = r.u16v();
+            const u16 hl = r.u16v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            if (hl < 3 || hl > MAX_POLY_POINTS) { store.clear(); return MapLoadStatus::BadIndex; }
+            if (hf < s.point_count) { store.clear(); return MapLoadStatus::BadIndex; }
+            if (static_cast<u32>(s.first_point) + hf + hl > point_count) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
         }
@@ -297,15 +304,19 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         // Holes go in immediately, before the next sector: their points must be
         // contiguous with their sector's.
         for (u16 h = 0; h < s.hole_count; ++h) {
+            r.seek(s.holes_at + static_cast<size_t>(h) * 4);
+            const u16 hf = r.u16v();
+            const u16 hl = r.u16v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+
             fx2 hpoly[MAX_POLY_POINTS];
-            r.seek(points_at +
-                   static_cast<size_t>(s.first_point + s.hole_first[h]) * POINT_BYTES);
-            for (u16 k = 0; k < s.hole_len[h]; ++k) {
+            r.seek(points_at + static_cast<size_t>(s.first_point + hf) * POINT_BYTES);
+            for (u16 k = 0; k < hl; ++k) {
                 hpoly[k].x = r.fxraw();
                 hpoly[k].y = r.fxraw();
             }
             if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
-            if (!store.add_hole(idx, hpoly, s.hole_len[h])) {
+            if (!store.add_hole(idx, hpoly, hl)) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
         }
@@ -328,7 +339,10 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             // a hole in it, as BadIndex, from the loader rather than the
             // compiler that had just written it.
             u32 span = s.point_count;
-            for (u16 h = 0; h < s.hole_count; ++h) span += s.hole_len[h];
+            for (u16 h = 0; h < s.hole_count; ++h) {
+                span += store.view().sector(i).hole_count > h
+                    ? store.view().hole(store.view().sector(i).first_hole + h).count : 0;
+            }
             if (la >= span || lb >= span) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }

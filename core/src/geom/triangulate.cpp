@@ -241,6 +241,16 @@ TriangulateStatus triangulate_with_holes(const fx2* pts, u32 outer_n,
 
     bool merged[MAX_POLY_HOLES] = {};
 
+    // Vertices already used as a bridge endpoint.
+    //
+    // Two holes bridging to the SAME outer vertex leaves that vertex on three
+    // loops at once -- a pinch, where the merged outline touches itself. Ear
+    // clipping cannot resolve one, and it fails with "no ear found" rather than
+    // anything that points at the cause. Observed on DOOM2 MAP09: both holes
+    // chose the same vertex, each bridged fine on its own, and together they
+    // produced a polygon with no ears at all.
+    bool used[MAX_MERGED_POINTS] = {};
+
     for (u32 oi = 0; oi < hole_count; ++oi) {
         const u32 h = order[oi];
         const PolyLoop& hole = holes[h];
@@ -283,10 +293,17 @@ TriangulateStatus triangulate_with_holes(const fx2* pts, u32 outer_n,
             }
         }
 
+        // Two passes: unused vertices first, then -- only if none of them can
+        // see the hole -- any visible vertex at all. Failing to bridge is worse
+        // than a pinch, and the ear clipper reports one honestly if it cannot
+        // cope.
         i32 chosen = -1;
+        for (u32 pass = 0; pass < 2 && chosen < 0; ++pass) {
         for (u32 ci = 0; ci < seq_n && chosen < 0; ++ci) {
             const u32 pi = cand[ci];
-            const fx2 P = pts[seq[pi]];
+            const u16 vidx = seq[pi];
+            if (pass == 0 && vidx < MAX_MERGED_POINTS && used[vidx]) continue;
+            const fx2 P = pts[vidx];
             if (P == M) continue;
 
             bool ok = true;
@@ -329,6 +346,7 @@ TriangulateStatus triangulate_with_holes(const fx2* pts, u32 outer_n,
 
             chosen = static_cast<i32>(pi);
         }
+        }
 
         if (chosen < 0) {
             out.count = 0;
@@ -350,6 +368,8 @@ TriangulateStatus triangulate_with_holes(const fx2* pts, u32 outer_n,
         seq[insert + hole.count + 1] = seq[static_cast<u32>(chosen)];
         seq_n += added;
         merged[h] = true;
+        if (seq[static_cast<u32>(chosen)] < MAX_MERGED_POINTS) used[seq[static_cast<u32>(chosen)]] = true;
+        if (hseq[mi] < MAX_MERGED_POINTS) used[hseq[mi]] = true;
     }
 
     return ear_clip(pts, seq, seq_n, out);
