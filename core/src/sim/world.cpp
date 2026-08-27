@@ -141,8 +141,24 @@ void World::step_agent(u32 i) noexcept {
     // whatever this tick's movement carried you into.
     {
         const bool swing = (cmd.buttons & act::ATTACK) != 0;
-        if (swing && !a.mv.attack_held) resolve_attack(i);
+        // A press STARTS a swing; it does not resolve one. What the collider
+        // touches is decided over the ticks that follow, and a press while one
+        // is already running is ignored -- the weapon is busy.
+        if (swing && !a.mv.attack_held && a.mv.attack_left == 0) {
+            a.mv.attack_left = params_[i].attack_ticks == 0 ? 1 : params_[i].attack_ticks;
+            a.mv.attack_hit_agents = 0;
+            a.mv.attack_hit_props[0] = 0;
+            a.mv.attack_hit_props[1] = 0;
+            a.mv.attack_hit_props[2] = 0;
+        }
         a.mv.attack_held = swing;
+
+        // Swept BEFORE the move, so the collider is placed where the swing
+        // started rather than where this tick's walking carried it.
+        if (a.mv.attack_left > 0) {
+            resolve_attack(i);
+            --a.mv.attack_left;
+        }
     }
 
     const bool was_anchored = a.mv.anchored;
@@ -465,6 +481,9 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.grapple_held);
     h.boolv(m.interact_held);
     h.boolv(m.attack_held);
+    h.u32v(m.attack_left);
+    h.u64v(m.attack_hit_agents);
+    for (u32 k = 0; k < 3; ++k) h.u64v(m.attack_hit_props[k]);
     h.fxv(m.dash_timer);
     h.fxv(m.dash_cooldown_timer);
     h.vec2(m.dash_dir);
@@ -648,48 +667,68 @@ i32 World::find_usable_prop(u32 agent) const noexcept {
 // Order is agents first then props, each by ascending index, so two targets in
 // the same swing resolve the same way on every target and on a replay.
 void World::resolve_attack(u32 agent) noexcept {
-    const AgentState& a = agents_[agent];
-    const fx2 from{a.pos.x, a.pos.y};
-    const fx  a_top = a.pos.z + params_[agent].height;
+    AgentState& a = agents_[agent];
+    const MoveParams& mp = params_[agent];
+    if (a.mv.attack_left == 0) return;
 
-    // Within the arc: the angle between the aim and the direction to the target
-    // is at most the half-arc. Compared as ANGLES rather than as a dot product
-    // against a cosine, because brad subtraction wraps exactly and a cosine
-    // would need a table lookup to say the same thing less precisely.
+    // Where the collider is THIS tick.
+    //
+    // A swing sweeps: it starts at one angle relative to the aim and ends at
+    // another, and a target that steps out of the way part-way through is
+    // missed. That is the whole difference between this and the one-tick arc
+    // test it replaces, and it is why the parameters describe a path rather
+    // than a shape.
+    //
+    // Phase runs 0..1 across the swing. attack_left counts DOWN, so the first
+    // live tick is the last value and phase has to be derived from the total.
+    const u8 total = mp.attack_ticks == 0 ? 1 : mp.attack_ticks;
+    const u8 elapsed = static_cast<u8>(total - a.mv.attack_left);
+    const fx phase = fx::from_frac(elapsed, total);
+    const fx offset = fx_lerp(mp.attack_sweep_from, mp.attack_sweep_to, phase);
+
+    // Turn fractions to brad. A turn is 2^32, so a fraction of a turn is the
+    // fraction scaled by 2^32 -- and fx is already Q32.32, so the raw value IS
+    // the answer once the integer part is discarded by the wrap.
+    const brad centre = brad(a.facing.raw + static_cast<u32>(offset.raw));
+    const u32  half   = static_cast<u32>(mp.attack_half_arc.raw);
+
+    const fx2 from{a.pos.x, a.pos.y};
+    const fx  a_top = a.pos.z + mp.height;
+
     const auto in_arc = [&](fx2 toward) {
         if (toward.x.raw == 0 && toward.y.raw == 0) return true;   // inside us
         const brad to = fx_atan2(toward.y, toward.x);
-        const u32 diff = to.raw - a.facing.raw;   // wraps, deliberately
-        return diff <= ATTACK_HALF_ARC_BRAD ||
-               diff >= (0u - ATTACK_HALF_ARC_BRAD);
+        const u32 diff = to.raw - centre.raw;   // wraps, deliberately
+        return diff <= half || diff >= (0u - half);
     };
-
     const auto reaches = [&](fx2 toward, fx surface_radius) {
-        const fx limit = ATTACK_REACH + surface_radius;
+        const fx limit = mp.attack_reach + surface_radius;
         const u128 d_sq = len_sq_raw(toward);
         return d_sq <= static_cast<u128>(static_cast<i128>(limit.raw) * limit.raw);
     };
 
     for (u32 t = 0; t < MAX_AGENTS; ++t) {
         if (t == agent || !agents_[t].active) continue;
-        // Vertically within reach of each other, so a swing does not connect
-        // with somebody on the balcony above.
-        if (a_top + ATTACK_REACH < agents_[t].pos.z) continue;
-        if (a.pos.z > agents_[t].pos.z + params_[t].height + ATTACK_REACH) continue;
+        if ((a.mv.attack_hit_agents >> t) & 1u) continue;   // already hit this swing
+        if (a_top + mp.attack_reach < agents_[t].pos.z) continue;
+        if (a.pos.z > agents_[t].pos.z + params_[t].height + mp.attack_reach) continue;
         const fx2 toward = fx2{agents_[t].pos.x, agents_[t].pos.y} - from;
         if (!reaches(toward, params_[t].radius)) continue;
         if (!in_arc(toward)) continue;
+        a.mv.attack_hit_agents |= (static_cast<u64>(1) << t);
         attacks_.push(AttackEvent{agent, t});
     }
 
     for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
-        if (a_top + ATTACK_REACH < p.pos.z) continue;
-        if (a.pos.z > p.pos.z + p.height + ATTACK_REACH) continue;
+        if ((a.mv.attack_hit_props[pi / 64] >> (pi % 64)) & 1u) continue;
+        if (a_top + mp.attack_reach < p.pos.z) continue;
+        if (a.pos.z > p.pos.z + p.height + mp.attack_reach) continue;
         const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
         if (!reaches(toward, p.radius)) continue;
         if (!in_arc(toward)) continue;
+        a.mv.attack_hit_props[pi / 64] |= (static_cast<u64>(1) << (pi % 64));
         attacks_.push(AttackEvent{agent, MAX_AGENTS + pi});
     }
 }

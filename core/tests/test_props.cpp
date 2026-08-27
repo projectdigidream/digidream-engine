@@ -329,55 +329,180 @@ static void test_use_reaches_a_usable_prop() {
 static void test_a_swing_hits_what_is_in_front_of_it() {
     std::printf("props: a swing has a reach, an arc and a height, and each of them ends\n");
 
-    // Put a target at `angle` around the agent at `dist`, swing east, and say
-    // whether it connected. The agent stands at the middle of the room so no
-    // wall interferes.
+    // Put a target at `angle` around the agent at `dist`, swing east, and run
+    // the whole swing -- because a swing is a volume moving through time and
+    // asking what it touched on tick one asks where the sword STARTED.
     auto swing_at = [](double angle_turns, double dist, fx z) {
         static Room r;
         static World w;
         w.reset();
         r.attach(w);
         const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
-        // Placed by hand in fixed point rather than via trig, so the test does
-        // not depend on the engine's own trig being right.
+        // Placed by hand rather than via the engine's trig, so the test does
+        // not depend on the thing it is testing being right.
         const fx dx = fx::from_frac(static_cast<i64>(dist * 1000.0 * __builtin_cos(angle_turns * 6.283185307179586)), 1000);
         const fx dy = fx::from_frac(static_cast<i64>(dist * 1000.0 * __builtin_sin(angle_turns * 6.283185307179586)), 1000);
         const u32 p = w.spawn_prop(10, fx3{F(20) + dx, F(20) + dy, z});
         w.prop_mut(p).radius = fx::from_frac(1, 5);
         w.prop_mut(p).height = fx::from_frac(9, 10);
 
-        proto::InputFrame f;
-        f.buttons = proto::button::ATTACK_PRIMARY;
-        f.aim = brad(0u);                       // east
-        w.set_input(a, f);
-        w.step();
-
-        for (u32 i = 0; i < w.attacks().count(); ++i) {
-            if (w.attacks().at(i).target == p) return true;
+        bool hit = false;
+        for (u32 t = 0; t < 20; ++t) {
+            proto::InputFrame f;
+            // Pressed on the first tick only: a swing is started by a press and
+            // then runs on its own.
+            if (t == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+            f.aim = brad(0u);                       // east
+            w.set_input(a, f);
+            w.step();
+            for (u32 i = 0; i < w.attacks().count(); ++i) {
+                if (w.attacks().at(i).target == p) hit = true;
+            }
         }
-        return false;
+        return hit;
     };
 
-    // Straight ahead, well inside the reach.
+    // Straight ahead, well inside the reach. The sweep passes through it.
     CHECK(swing_at(0.0, 1.0, F(0)));
-    // Reach is 2.0 to the SURFACE, and this prop's radius is 0.2, so 2.2 from
+    // Reach is 2.0 to the SURFACE and this prop's radius is 0.2, so 2.2 from
     // centre to centre is the boundary. Inside it and outside it:
     CHECK(swing_at(0.0, 2.0, F(0)));
     CHECK(!swing_at(0.0, 3.0, F(0)));
 
-    // The arc is 45 degrees either side. An eighth of a turn is exactly 45, so
-    // a sixteenth is comfortably inside and three sixteenths is outside.
-    CHECK(swing_at(1.0 / 16.0, 1.0, F(0)));
-    CHECK(swing_at(-1.0 / 16.0, 1.0, F(0)));
-    CHECK(!swing_at(3.0 / 16.0, 1.0, F(0)));
-    CHECK(!swing_at(-3.0 / 16.0, 1.0, F(0)));
+    // The sweep runs from -1/8 of a turn to +1/8 with a half-arc of 1/8, so
+    // over its whole travel it covers -1/4 to +1/4 -- a quarter turn either
+    // side. Inside that, and outside it:
+    CHECK(swing_at(1.0 / 8.0, 1.0, F(0)));
+    CHECK(swing_at(-1.0 / 8.0, 1.0, F(0)));
+    CHECK(!swing_at(3.0 / 8.0, 1.0, F(0)));
+    CHECK(!swing_at(-3.0 / 8.0, 1.0, F(0)));
 
-    // CONTROL: directly behind. If this connected, the arc would not be an arc.
+    // CONTROL: directly behind. If this connected, the arc would not be one.
     CHECK(!swing_at(0.5, 1.0, F(0)));
 
-    // And height: a barrel on a balcony well above is not hit by a swing at
-    // floor level. Reach is 2.0, so 8 up is clear of it.
+    // And height: a barrel well above is not hit by a swing at floor level.
     CHECK(!swing_at(0.0, 1.0, F(8)));
+}
+
+// The swing takes time, and that is observable rather than decorative.
+//
+// Two things follow from a collider that moves, and neither is true of the
+// one-tick arc test this replaces: a target is hit on the tick the sweep
+// REACHES it, not on the tick the button went down; and a target that leaves
+// before the sweep arrives is missed.
+static void test_the_swing_is_not_instantaneous() {
+    std::printf("props: the collider sweeps, so WHEN it connects depends on where the target is\n");
+
+    // Two targets, at the two ends of the sweep. The one the sweep starts at is
+    // hit first; the one it ends at is hit last. If the swing were an instant,
+    // both would land on the same tick.
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    // -1/8 turn from east is south-east; +1/8 is north-east.
+    const u32 first = w.spawn_prop(10, fx3{fx::from_frac(20707, 1000), fx::from_frac(19293, 1000), F(0)});
+    const u32 last  = w.spawn_prop(10, fx3{fx::from_frac(20707, 1000), fx::from_frac(20707, 1000), F(0)});
+    w.prop_mut(first).radius = fx::from_frac(1, 5);
+    w.prop_mut(last).radius  = fx::from_frac(1, 5);
+
+    i32 first_tick = -1;
+    i32 last_tick = -1;
+    for (u32 t = 0; t < 20; ++t) {
+        proto::InputFrame f;
+        if (t == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+        for (u32 i = 0; i < w.attacks().count(); ++i) {
+            const u32 target = w.attacks().at(i).target;
+            if (target == first && first_tick < 0) first_tick = static_cast<i32>(t);
+            if (target == last && last_tick < 0) last_tick = static_cast<i32>(t);
+        }
+    }
+
+    std::printf("   swept onto the near target at tick %d, the far one at tick %d\n",
+                first_tick, last_tick);
+    CHECK(first_tick >= 0);
+    CHECK(last_tick >= 0);
+    // The whole claim: they are not the same tick, and they are in sweep order.
+    CHECK(last_tick > first_tick);
+
+    // And each was hit ONCE, not once per tick the collider covered it. A
+    // ten-tick swing that reported ten hits would make every script deduplicate
+    // something the engine knows and it does not.
+    int first_hits = 0;
+    w.reset();
+    r.attach(w);
+    const u32 b = w.spawn(fx3{F(20), F(20), F(0)});
+    const u32 p = w.spawn_prop(10, fx3{fx::from_frac(21, 1), F(20), F(0)});
+    w.prop_mut(p).radius = fx::from_frac(1, 5);
+    for (u32 t = 0; t < 20; ++t) {
+        proto::InputFrame f;
+        if (t == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(b, f);
+        w.step();
+        for (u32 i = 0; i < w.attacks().count(); ++i) {
+            if (w.attacks().at(i).target == p) ++first_hits;
+        }
+    }
+    CHECK(first_hits == 1);
+}
+
+// The characteristics are per-entity parameters, so a script can change them.
+static void test_the_swing_is_shaped_by_parameters() {
+    std::printf("props: reach and arc come from the parameter table, not from the engine\n");
+
+    auto reaches = [](fx reach, fx dist) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        w.params_mut(a).attack_reach = reach;
+        const u32 p = w.spawn_prop(10, fx3{F(20) + dist, F(20), F(0)});
+        w.prop_mut(p).radius = fx::from_frac(1, 5);
+        bool hit = false;
+        for (u32 t = 0; t < 20; ++t) {
+            proto::InputFrame f;
+            if (t == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+            f.aim = brad(0u);
+            w.set_input(a, f);
+            w.step();
+            for (u32 i = 0; i < w.attacks().count(); ++i) if (w.attacks().at(i).target == p) hit = true;
+        }
+        return hit;
+    };
+
+    // A target at 5 units is out of a default 2-unit reach and inside a spear's.
+    CHECK(!reaches(F(2), F(5)));
+    CHECK(reaches(F(8), F(5)));
+
+    // A thrust -- from and to the same angle -- does not sweep, so it covers
+    // only its own arc and misses what a swing would have caught on the way.
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    w.params_mut(a).attack_sweep_from = fx::zero();
+    w.params_mut(a).attack_sweep_to   = fx::zero();
+    w.params_mut(a).attack_half_arc   = fx::from_frac(1, 32);   // narrow
+    // North-east, which a default swing reaches and a narrow thrust does not.
+    const u32 p = w.spawn_prop(10, fx3{fx::from_frac(20707, 1000), fx::from_frac(20707, 1000), F(0)});
+    w.prop_mut(p).radius = fx::from_frac(1, 5);
+    bool hit = false;
+    for (u32 t = 0; t < 20; ++t) {
+        proto::InputFrame f;
+        if (t == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+        for (u32 i = 0; i < w.attacks().count(); ++i) if (w.attacks().at(i).target == p) hit = true;
+    }
+    CHECK(!hit);
 }
 
 // Not swinging hits nothing, and holding the button is one swing.
@@ -472,6 +597,8 @@ static void test_a_swing_reports_agents_and_props_alike() {
 int main() {
     test_props_share_the_entity_index_space();
     test_a_swing_hits_what_is_in_front_of_it();
+    test_the_swing_is_not_instantaneous();
+    test_the_swing_is_shaped_by_parameters();
     test_the_swing_is_edge_triggered();
     test_a_swing_reports_agents_and_props_alike();
     test_a_solid_prop_stops_a_body();

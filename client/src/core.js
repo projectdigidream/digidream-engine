@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 19
-const BUF32_LEN = 18
+const BUF32_LEN = 19
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -23,7 +23,7 @@ export const IDX = {
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18
 }
 
 export class Core {
@@ -34,6 +34,15 @@ export class Core {
    * arrow that disagreed with the reach would show you standing in range of a
    * door that will not open.
    */
+  /**
+   * How many movement parameters the engine has.
+   *
+   * From the engine, so a test can say "the full set" rather than a literal --
+   * which was correct until MoveParams grew five fields and then silently
+   * described a different claim.
+   */
+  get paramCount () { return this.M._dnp_param_count() }
+
   get interactReach () {
     this.M._dnp_interact_reach(this.buf64)
     return Number(this.views.i64[this.buf64 / 8]) / 4294967296
@@ -260,6 +269,24 @@ export class WasmWorld {
     return this.core.M._dnp_world_set_param_raw(this.ptr, idx, id, this.core.buf64) !== 0
   }
 
+  /**
+   * The wire id for a parameter name, or -1.
+   *
+   * The engine's own lookup. A client that hardcoded these numbers would be
+   * keeping the same table in two programs, and appending one field to
+   * MoveParams would silently shift every id after it -- which is exactly what
+   * happened the first time the swing collider was drawn, using ids five short.
+   */
+  paramId (name) {
+    const bytes = new TextEncoder().encode(name)
+    const ptr = this.core.M._malloc(bytes.length + 1)
+    this.core.M.HEAPU8.set(bytes, ptr)
+    this.core.M.HEAPU8[ptr + bytes.length] = 0
+    const id = this.core.M._dnp_param_id_by_name(ptr)
+    this.core.M._free(ptr)
+    return id
+  }
+
   /** Read one parameter back, so a test can assert what was actually applied. */
   getParamRaw (idx, fieldId) {
     this.core.M._dnp_world_get_param_raw(this.ptr, idx, fieldId, this.core.buf64)
@@ -338,6 +365,7 @@ export class WasmWorld {
       grappleHeld: u32[b32 + IDX.GRAP_HELD] !== 0,
       interactHeld: u32[b32 + IDX.INTR_HELD] !== 0,
       attackHeld: u32[b32 + IDX.ATK_HELD] !== 0,
+      attackLeft: u32[b32 + IDX.ATK_LEFT],
       climbing: u32[b32 + IDX.CLIMBING] !== 0,
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
@@ -387,6 +415,7 @@ export class WasmWorld {
     u32[b32 + IDX.GRAP_HELD] = s.grappleHeld ? 1 : 0
     u32[b32 + IDX.INTR_HELD] = s.interactHeld ? 1 : 0
     u32[b32 + IDX.ATK_HELD] = s.attackHeld ? 1 : 0
+    u32[b32 + IDX.ATK_LEFT] = s.attackLeft ?? 0
     u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0

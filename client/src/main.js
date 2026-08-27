@@ -30,6 +30,7 @@ import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
+import { sweepOffset, makeSwingMesh } from './render/swing.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
@@ -306,6 +307,30 @@ let bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
 
 let body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
 scene.add(body)
+
+// The swing collider, drawn while a swing is running.
+//
+// Rebuilt from the parameter table rather than replicated: the client already
+// has these numbers because it predicts with them, so this cannot disagree with
+// the simulation except by getting the arithmetic wrong -- which is what
+// sweepOffset's test is for. ?swing=0 hides it.
+// Resolved by NAME through the engine's own table. Hardcoding the numbers put
+// this five ids short the moment MoveParams grew a field, which is the same
+// two-programs-one-number trap the prop catalogue exists to avoid.
+const par = (name) => Number(world.getParamRaw(agent, world.paramId(name))) / 4294967296
+const swingShape = {
+  reach: par('attack_reach'),
+  halfArc: par('attack_half_arc'),
+  from: par('attack_sweep_from'),
+  to: par('attack_sweep_to'),
+  // A U8 parameter is stored as an integer, not a fixed-point fraction.
+  ticks: Number(world.getParamRaw(agent, world.paramId('attack_ticks')))
+}
+const SHOW_SWING = params.get('swing') !== '0'
+const swing = SHOW_SWING
+  ? makeSwingMesh(THREE, { reachUnits: swingShape.reach, halfArcTurns: swingShape.halfArc })
+  : null
+if (swing) scene.add(swing)
 
 // Which way the agent is looking, and how far it can reach to work a door.
 // On by default because it is the only way to see either; ?arrow=0 hides it.
@@ -652,6 +677,20 @@ function frame (now) {
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
+  if (swing) {
+    // The engine's own numbers, run through the engine's own formula. See
+    // render/swing.js: the offset is a turn fraction from the aim.
+    const off = sweepOffset({ ...swingShape, left: a.attackLeft })
+    swing.visible = off !== null
+    if (off !== null) {
+      swing.position.set(subject.x, subject.y + 0.15, subject.z)
+      // facing is a brad; the wedge opens along +X and three's Y rotation runs
+      // the opposite way from the engine's yaw, which is the same reflection
+      // billboardYaw and facingDirection each had to get right.
+      const turns = (a.facing >>> 0) / 4294967296 + off
+      swing.rotation.y = -turns * Math.PI * 2
+    }
+  }
   if (arrow) {
     // From the body's middle, which is roughly where a reach comes from and is
     // where you look when you are judging whether a door is in range.

@@ -65,7 +65,8 @@ constexpr int BUF32_ANCHORED  = 15;
 // halves disagree about which slot means "grounded".
 constexpr int BUF32_INTR_HELD = 16;
 constexpr int BUF32_ATK_HELD  = 17;
-constexpr int BUF32_LEN       = 18;
+constexpr int BUF32_ATK_LEFT  = 18;
+constexpr int BUF32_LEN       = 19;
 
 }  // namespace
 
@@ -390,6 +391,12 @@ void dnp_world_get_param_raw(const sim::World* w, unsigned idx, unsigned field_i
 EMSCRIPTEN_KEEPALIVE
 int dnp_param_id_by_name(const char* name) { return physics::param_id_by_name(name); }
 
+// How many parameters there are. Exported so a test can say "the full set"
+// rather than "29" -- a literal that was correct until MoveParams grew five
+// fields, and then silently described a different claim.
+EMSCRIPTEN_KEEPALIVE
+int dnp_param_count() { return physics::PARAM_COUNT; }
+
 // Crush and pin events from the last step (design §3.1).
 //
 // Exposed even though the client cannot act on them: the consequence is server
@@ -457,6 +464,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_ANCHORED]  = m.anchored ? 1u : 0u;
     out32[BUF32_INTR_HELD] = m.interact_held ? 1u : 0u;
     out32[BUF32_ATK_HELD]  = m.attack_held ? 1u : 0u;
+    out32[BUF32_ATK_LEFT]  = m.attack_left;
 }
 
 // Adopt authoritative state. This is step 2 of reconciliation
@@ -509,6 +517,7 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.anchored = in32[BUF32_ANCHORED] != 0;
     m.interact_held = in32[BUF32_INTR_HELD] != 0;
     m.attack_held = in32[BUF32_ATK_HELD] != 0;
+    m.attack_left = static_cast<u8>(in32[BUF32_ATK_LEFT]);
 }
 
 // Input quantisation, exposed so the client uses the SAME function the server

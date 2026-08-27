@@ -258,7 +258,7 @@ const drain = () => {
       if (e.displayId === PROP_KEY_BLUE) keyIndex = index
     }
     const r = predictor.reconcile(s)
-    if (r?.verdict) verdicts.push(r.verdict)
+    if (r?.verdict) verdicts.push({ v: r.verdict, tick: s.serverTick })
   }
 }
 
@@ -362,8 +362,10 @@ if (NO_SCRIPT) {
     // excuse.
     let worst = 0
     let run = 0
+    const bad = verdicts.filter((v) => v.v === 'mispredicted')
+    if (bad.length) console.log('  mispredicted ticks: ' + bad.map((v) => v.tick).join(' '))
     for (const v of verdicts) {
-      if (v === 'lua-applied') { run++; worst = Math.max(worst, run) } else run = 0
+      if (v.v === 'lua-applied') { run++; worst = Math.max(worst, run) } else run = 0
     }
     console.log(`  longest consecutive lua-applied run: ${worst}`)
     check(worst <= 2, `each geometry change self-heals within a tick (longest run ${worst})`)

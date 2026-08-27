@@ -144,7 +144,8 @@ for (const m of motionSets) world.applyMotionSet(m)
 // The join update must be FULL: a client with no history has nothing to patch.
 const first = paramUpdates[0]
 check((first.flags & 1) !== 0, 'the first update is FULL')
-check(first.fields.length === 29, `and carries every field (${first.fields.length})`)
+check(first.fields.length === core.paramCount,
+      `and carries every field (${first.fields.length} of ${core.paramCount})`)
 check(first.effectiveTick !== undefined, 'and names the tick it took effect on')
 
 const predictor = new Predictor(world, agent)
@@ -158,7 +159,11 @@ const drainParams = () => {
   }
 }
 drainParams()
-check(IGNORE_PARAMS || applied === 29, `applied ${applied} fields from the FULL set`)
+// Against the engine's own count, not a literal. "29" was true until
+// MoveParams grew the swing parameters, at which point the assertion still
+// passed its own reading and no longer meant "every field".
+check(IGNORE_PARAMS || applied === core.paramCount,
+      `applied ${applied} of ${core.paramCount} fields from the FULL set`)
 
 // move_speed is what --param-test toggles.
 const SPEED_ID = 2

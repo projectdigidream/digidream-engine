@@ -189,6 +189,20 @@ export class Predictor {
     // separately, otherwise ordinary network jitter would be indistinguishable
     // from a real desync and the zero-mispredictions claim would be untestable.
     let serverRepeats = 0
+    // The FIRST comparable snapshot has nothing to measure advancement against.
+    //
+    // Starvation is detected by comparing how far the server's clock moved with
+    // how far its consumption of our input moved, and both need a previous
+    // snapshot. On the first one the answer is not "zero", it is "unknown" --
+    // and a client that has just joined is precisely when the server is most
+    // likely to have run ticks with no input from it, because our first
+    // datagram has not finished its round trip.
+    //
+    // Treated as starved rather than as a defect, because calling it a defect
+    // asserts something this data cannot support. It costs one snapshot of
+    // detector sensitivity per session and removes a false positive that
+    // appeared in roughly one netcode run in three.
+    const firstComparison = this.lastSnapshot === null
     if (this.lastSnapshot) {
       const ticksAdvanced = snapshot.serverTick - this.lastSnapshot.serverTick
       const inputsAdvanced = t - this.lastSnapshot.lastInputTick
@@ -213,7 +227,7 @@ export class Predictor {
       if (mine.hash === snapshot.self.stateHash) {
         this.stats.exactMatches += 1
         verdict = 'exact'
-      } else if (serverRepeats > 0) {
+      } else if (serverRepeats > 0 || firstComparison) {
         this.stats.starvedDivergences += 1
         verdict = 'starved'
       } else if (!this.ignoreLuaFlag && (snapshot.flags & SNAP_FLAG.LUA_APPLIED) !== 0) {

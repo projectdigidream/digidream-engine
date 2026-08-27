@@ -76,6 +76,32 @@ struct MoveParams {
     fx   grapple_range   = fx::from_int(14);
     fx   swing_damping   = fx::from_frac(3, 1000);   // energy lost per tick
     fx   pull_speed      = fx::from_int(18);
+
+    // --- the swing (§7.1.1's attacks) ---
+    //
+    // A swing is a VOLUME MOVING THROUGH TIME, not an instant. These are what
+    // shape it, and they live in the parameter table rather than in a constant
+    // or a catalogue for a specific reason: the table is already replicated,
+    // already predicted, and already settable from Lua. So one entity can carry
+    // a spear and another a hammer, a script can lengthen a swing mid-match,
+    // and the client predicts both without the engine learning what a weapon
+    // is.
+    //
+    // Angles are TURN FRACTIONS, not radians and not degrees: a turn is the
+    // engine's own unit (brad is a turn in 2^32), it wraps exactly, and 1/8 of
+    // a turn reads as an eighth of the way round rather than as 0.7853981634.
+    fx attack_reach     = fx::from_int(2);            // to the target's surface
+    fx attack_half_arc  = fx::from_frac(1, 8);        // 45 degrees either side
+    // Where the collider starts and ends, relative to the aim. The default
+    // sweeps right to left through the front, which is what a swing looks like;
+    // equal values make a thrust that does not rotate at all.
+    fx attack_sweep_from = fx::from_frac(-1, 8);
+    fx attack_sweep_to   = fx::from_frac(1, 8);
+    // How long the collider is live. A swing that lands on the tick it is
+    // pressed is the thing this replaces: with a duration, a target that steps
+    // out of the way mid-swing is missed, which is the entire point of a
+    // collider that moves.
+    u8 attack_ticks      = 10;
 };
 
 // Runtime state the abilities carry between ticks.
@@ -112,6 +138,17 @@ struct MoveState {
     // second -- and the rate a weapon can actually swing at is a parameter a
     // script sets, not something the engine should have an opinion about.
     bool attack_held   = false;
+
+    // Ticks of swing left, counting down. Non-zero means the collider is live
+    // this tick and sweeping; the client reads it to draw the thing.
+    u8   attack_left   = 0;
+    // Targets already hit by the swing in progress, as a bitmask over entity
+    // slots. A swing lasting ten ticks must hit a barrel once, not ten times,
+    // and "once per swing" is a property of the swing rather than of the
+    // script -- a script deduplicating it would have to know when a swing
+    // started, which is exactly what this is.
+    u64  attack_hit_agents = 0;
+    u64  attack_hit_props[3]{};
 
     fx  dash_timer{};
     fx  dash_cooldown_timer{};
