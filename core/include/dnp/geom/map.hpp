@@ -332,6 +332,15 @@ bool point_in_sector(const MapData& map, u32 s, fx2 p) noexcept;
 // shadow lands on floor at all, and the nav graph asking which sectors touch.
 i32 find_sector(const MapData& map, fx2 p) noexcept;
 
+// Every sector whose broadphase cell is within `radius` of `p`, written to
+// `out` and deduplicated, returning how many.
+//
+// A SUPERSET, like all broadphase answers: it may name sectors that turn out to
+// be irrelevant, and it never omits one that is relevant. Callers that need to
+// look at geometry NEAR a point rather than AT it -- reaching for a switch, and
+// nothing else yet -- would otherwise have to scan the whole map.
+u32 sectors_near(const MapData& map, fx2 p, fx radius, u16* out, u32 cap) noexcept;
+
 // The sector whose floor a body standing at `feet_z` is on.
 //
 // THE height-aware query, and the one the mover uses. Among the sectors

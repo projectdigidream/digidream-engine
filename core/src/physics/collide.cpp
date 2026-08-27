@@ -583,31 +583,67 @@ i32 find_side_with_flag(const MapData& map, i32 sector, fx2 p, fx radius,
 }
 
 i32 find_interact_side(const MapData& map, i32 sector, fx2 p, brad facing,
-                      fx reach, fx feet_z, fx body_height) noexcept {
+                       fx reach, fx feet_z, fx body_height) noexcept {
     (void)feet_z;
     (void)body_height;
-    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return -1;
 
+    // A short RAY along the aim, and the FIRST side it crosses wins.
+    //
+    // This started out as "the nearest side of your own sector that lies in
+    // front of you", on the reasoning that a ray through a doorframe misses the
+    // frame. Real maps settled it: on converted DOOM2 levels that rule reached
+    // only 8 of MAP01's 11 switches, 11 of MAP02's 30, and 5 of MAP07's 9,
+    // because a switch's line very often belongs to a sector you are not
+    // standing in -- a Doom sector splits into several of ours, and a doorway's
+    // line belongs to the door rather than to the room you press it from.
+    //
+    // The ray is also what Doom itself does (P_UseLines, USERANGE 64), and it
+    // buys occlusion for free: a wall between you and a switch is crossed
+    // first, so you cannot work a switch through it. When the first side
+    // crossed has no meaning, nothing happens -- which is Doom's "that doesn't
+    // work" and not a bug.
+    //
+    // Candidates come from the broadphase over the reach disc rather than from
+    // one sector, which is what fixes the miss. A superset is fine: the
+    // intersection test decides.
     const fx2 dir = fx_dir(facing);
-    const Sector& sec = map.sector(static_cast<u32>(sector));
-    const u128 reach_sq = static_cast<u128>(static_cast<i128>(reach.raw) * reach.raw);
+    const fx2 to = p + dir * reach;
 
-    i32  best = -1;
-    u128 best_d = reach_sq;
-    for (u16 k = 0; k < sec.side_count; ++k) {
-        const u32 si = sec.first_side + k;
-        const Side& sd = map.side(si);
-        const fx2 closest = closest_point_on_segment(map.point(sd.a), map.point(sd.b), p);
-        const fx2 toward = closest - p;
-        const u128 d_sq = len_sq_raw(toward);
-        // Strictly nearer, so ties resolve to the lower side index rather than
-        // to whichever the loop reached last.
-        if (d_sq >= best_d) continue;
-        // In FRONT. Without this an entity standing between two doors works the
-        // one behind it whenever that one happens to be marginally closer.
-        if (dot(dir, toward) <= fx::zero()) continue;
-        best_d = d_sq;
-        best = static_cast<i32>(si);
+    u16 near[64];
+    const u32 n = geom::sectors_near(map, p, reach, near, 64);
+
+    i32 best = -1;
+    i32 best_owner = -1;
+    fx  best_t = fx::one() + fx::one();   // beyond any valid t in [0, 1]
+    for (u32 c = 0; c < n; ++c) {
+        const Sector& sec = map.sector(near[c]);
+        for (u16 k = 0; k < sec.side_count; ++k) {
+            const u32 si = sec.first_side + k;
+            const Side& sd = map.side(si);
+            fx t{};
+            if (!geom::segment_intersect(p, to, map.point(sd.a), map.point(sd.b), t)) continue;
+            if (t > best_t) continue;
+
+            if (t == best_t && best >= 0) {
+                // A TIE is the shared boundary between two sectors seen from
+                // both owners: one physical wall, two side records, the same
+                // crossing point. Which of them the player is pressing is not
+                // arbitrary -- it is the face on their side of it, so the one
+                // whose sector they are standing in wins.
+                //
+                // Falling back to the lower index here instead reached the
+                // wrong half of every two-sided door line in DOOM2, and since
+                // an action is registered on one half only, the door did
+                // nothing. That is what "the door does not open" was.
+                const bool cand_is_mine = static_cast<i32>(near[c]) == sector;
+                const bool best_is_mine = best_owner == sector;
+                if (best_is_mine && !cand_is_mine) continue;
+                if (cand_is_mine == best_is_mine && static_cast<i32>(si) >= best) continue;
+            }
+            best_t = t;
+            best = static_cast<i32>(si);
+            best_owner = static_cast<i32>(near[c]);
+        }
     }
     return best;
 }

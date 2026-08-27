@@ -83,6 +83,53 @@ inline u32 candidate_at(const Candidates& c, u32 i) noexcept {
 
 }  // namespace
 
+u32 sectors_near(const MapData& map, fx2 p, fx radius, u16* out, u32 cap) noexcept {
+    if (cap == 0) return 0;
+    const SectorGrid& g = map.grid;
+
+    // No usable grid means every sector is a candidate, which is correct and
+    // slow -- the same fallback find_sector takes, and for the same reason: the
+    // grid may only ever make the search SHORTER, never different.
+    if (!g.usable || g.cols == 0 || g.rows == 0 || g.cell.raw <= 0) {
+        const u32 n = map.sector_count < cap ? map.sector_count : cap;
+        for (u32 i = 0; i < n; ++i) out[i] = static_cast<u16>(i);
+        return n;
+    }
+
+    // The cells the reach disc touches. Clamped rather than rejected: a point
+    // outside the grid can still be within reach of a sector inside it.
+    const i64 lo_x = (p.x.raw - radius.raw) - g.min.x.raw;
+    const i64 lo_y = (p.y.raw - radius.raw) - g.min.y.raw;
+    const i64 hi_x = (p.x.raw + radius.raw) - g.min.x.raw;
+    const i64 hi_y = (p.y.raw + radius.raw) - g.min.y.raw;
+    i64 cx0 = lo_x < 0 ? 0 : lo_x / g.cell.raw;
+    i64 cy0 = lo_y < 0 ? 0 : lo_y / g.cell.raw;
+    i64 cx1 = hi_x < 0 ? -1 : hi_x / g.cell.raw;
+    i64 cy1 = hi_y < 0 ? -1 : hi_y / g.cell.raw;
+    if (cx1 >= g.cols) cx1 = g.cols - 1;
+    if (cy1 >= g.rows) cy1 = g.rows - 1;
+    if (cx1 < cx0 || cy1 < cy0) return 0;
+
+    u32 n = 0;
+    for (i64 cy = cy0; cy <= cy1; ++cy) {
+        for (i64 cx = cx0; cx <= cx1; ++cx) {
+            const u32 cell = static_cast<u32>(cy) * g.cols + static_cast<u32>(cx);
+            for (u32 i = g.start[cell]; i < g.start[cell + 1]; ++i) {
+                const u16 s = g.items[i];
+                // Linear dedupe. A reach disc spans a handful of cells and each
+                // holds a handful of sectors, so the set is tiny and a hash
+                // would be a second structure to keep deterministic.
+                bool seen = false;
+                for (u32 k = 0; k < n && !seen; ++k) seen = out[k] == s;
+                if (seen) continue;
+                if (n >= cap) return n;
+                out[n++] = s;
+            }
+        }
+    }
+    return n;
+}
+
 i32 find_sector(const MapData& map, fx2 p) noexcept {
     // The SMALLEST sector containing the point, not the first one declared.
     //
@@ -166,7 +213,11 @@ fx2 closest_point_on_segment(fx2 a, fx2 b, fx2 p) noexcept {
 
     // t in Q32.32: (dot << 32) / len_sq. Both sides are at scale 2^64, so the
     // shift restores the fractional scale.
-    const i128 t_raw = (dot_raw << fx::FRAC) / static_cast<i128>(len_sq);
+    // dot_raw is known positive here (the two branches above returned for <= 0),
+    // so the shift is defined -- but written as a multiply anyway, so the file
+    // holds one rule rather than one rule and an exception to remember.
+    constexpr i128 ONE_SHIFTED = static_cast<i128>(1) << fx::FRAC;
+    const i128 t_raw = (dot_raw * ONE_SHIFTED) / static_cast<i128>(len_sq);
     const fx t = fx::from_raw(static_cast<i64>(t_raw));
     return a + ab * t;
 }
@@ -204,7 +255,17 @@ bool segment_intersect(fx2 p0, fx2 p1, fx2 a, fx2 b, fx& t_out) noexcept {
         if (num_u > 0 || num_u < denom) return false;
     }
 
-    t_out = fx::from_raw(static_cast<i64>((num_t << fx::FRAC) / denom));
+    // MULTIPLIED, not shifted. num_t is signed and routinely negative -- any
+    // crossing where the target segment runs the other way across the ray -- and
+    // left-shifting a negative value is undefined behaviour in C++17. It
+    // happened to produce the right answer on both native targets, which is the
+    // worst way for undefined behaviour to behave: the first compiler to
+    // disagree would have moved a determinism hash rather than crashed.
+    //
+    // UBSan found it the moment the interact search started casting rays in
+    // every direction instead of only along a wall's outward side.
+    constexpr i128 ONE_SHIFTED = static_cast<i128>(1) << fx::FRAC;
+    t_out = fx::from_raw(static_cast<i64>((num_t * ONE_SHIFTED) / denom));
     return true;
 }
 

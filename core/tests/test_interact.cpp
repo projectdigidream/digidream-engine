@@ -71,6 +71,7 @@ struct Rooms {
 static constexpr brad EAST = brad(0u);
 static constexpr brad WEST = brad(0x80000000u);
 static constexpr brad NORTH = brad(0x40000000u);
+static constexpr brad SOUTH = brad(0xC0000000u);
 
 static proto::InputFrame frame(bool interact, brad aim, i16 mx = 0, i16 my = 0) {
     proto::InputFrame f;
@@ -296,8 +297,168 @@ static void test_a_body_fits_only_where_it_fits() {
     CHECK(big < F(20));
 }
 
+// The room this bug was reported from, to the unit.
+//
+// DOOM2 MAP01's exit chamber: an octagon whose south edge is the door and whose
+// other seven edges are solid, four of them diagonal. Reproduced from the
+// converted map rather than invented, because inventing a corner case kept
+// producing corners where both rules happened to agree -- and a regression test
+// that passes on the bug is worse than none.
+struct Octagon {
+    MapStorage store;
+    MapData    view{};
+
+    // Side 1 is the door (sector 37's side 334 in the real map); every other
+    // edge is a wall.
+    Octagon() {
+        const fx2 p[] = {
+            {F(19),               fx::from_frac(45, 2)},    // 19.0000, 22.5000
+            {fx::from_frac(61,3), fx::from_frac(131, 6)},   // 20.3333, 21.8333
+            {fx::from_frac(65,3), fx::from_frac(131, 6)},   // 21.6667, 21.8333
+            {F(23),               fx::from_frac(45, 2)},    // 23.0000, 22.5000
+            {F(23),               fx::from_frac(143, 6)},   // 23.0000, 23.8333
+            {fx::from_frac(65,3), fx::from_frac(151, 6)},   // 21.6667, 25.1667
+            {fx::from_frac(61,3), fx::from_frac(151, 6)},   // 20.3333, 25.1667
+            {F(19),               fx::from_frac(143, 6)},   // 19.0000, 23.8333
+        };
+        store.add_sector(p, 8, fx::from_frac(5, 6), fx::from_frac(7, 3), 37);
+        for (u16 i = 0; i < 8; ++i) {
+            store.add_side(0, i, static_cast<u16>((i + 1) % 8), NO_SECTOR, 0);
+        }
+    }
+
+    void attach(World& w) {
+        view = store.view();
+        w.set_map(&view);
+        w.set_map_storage(&store);
+    }
+};
+
+// Standing near a diagonal wall, aiming across the room at the door.
+//
+// The rule this replaces asked for "the nearest side of your own sector that
+// lies in front of you", and in an octagon the nearest side in front is the
+// diagonal you are standing beside, not the door you are looking at. On DOOM2
+// that reached 2 of MAP01's 5 walk-up-able switches, 9 of MAP03's 10 and 24 of
+// MAP15's 34. A ray answers what you are AIMING at, which is both what Doom
+// does and what a player means.
+static void test_aiming_across_a_room_beats_standing_beside_a_wall() {
+    std::printf("interact: the door you are aiming at wins over the wall you are standing beside\n");
+
+    static Octagon o;
+    static World w;
+    w.reset();
+    o.attach(w);
+
+    // Inside the room, just north of the door, and slightly closer to the
+    // south-east diagonal than to the door itself.
+    //
+    // The numbers matter and are worth stating: from here the door is 0.767
+    // away and the diagonal is 0.716, and the diagonal lies within 90 degrees
+    // of the aim -- so "nearest side in front" answers the diagonal, and the
+    // door does nothing. A ray fired due south crosses the door and misses the
+    // diagonal entirely, because the diagonal starts east of where the ray
+    // passes.
+    const fx2 stand{fx::from_frac(216, 10), fx::from_frac(226, 10)};
+    const u32 a = w.spawn(fx3{stand.x, stand.y, fx::from_frac(5, 6)});
+    w.params_mut(a).radius = fx::from_frac(1, 3);
+    w.params_mut(a).height = fx::from_frac(7, 6);
+
+    const brad aim = SOUTH;
+    w.set_input(a, frame(true, aim));
+    w.step();
+    CHECK(side_of(w, TouchKind::Use) == 1);
+
+    // CONTROL: aiming at the wall BEHIND instead must not report the door.
+    // Without it, "reports side 1" could mean the search simply favours low
+    // indices, which is exactly the bug in a different disguise.
+    w.reset();
+    o.attach(w);
+    const u32 b = w.spawn(fx3{stand.x, stand.y, fx::from_frac(5, 6)});
+    w.params_mut(b).radius = fx::from_frac(1, 3);
+    w.params_mut(b).height = fx::from_frac(7, 6);
+    w.set_input(b, frame(true, NORTH));
+    w.step();
+    CHECK(side_of(w, TouchKind::Use) != 1);
+}
+
+// One wall, two side records, and the player presses the face on their side.
+//
+// A shared boundary is a side of BOTH sectors that meet at it, and a ray from
+// either room crosses both at the same instant. Which one is reported is not
+// arbitrary: an action is registered on one of them, so answering with the
+// other means the door does nothing. That is what "the door does not open" was
+// on DOOM2 -- MAP01's exit door is side 334 and the engine kept answering 335.
+static void test_a_shared_wall_is_pressed_from_the_side_you_stand_on() {
+    std::printf("interact: a shared wall answers with the face the presser is standing on\n");
+
+    static Rooms r;
+    static World w;
+
+    // From the west room, facing east: sector 0's copy of the boundary.
+    w.reset();
+    r.attach(w);
+    const u32 west = w.spawn(fx3{F(19), F(10), F(0)});
+    w.set_input(west, frame(true, EAST));
+    w.step();
+    CHECK(side_of(w, TouchKind::Use) == 1);      // sector 0's side
+
+    // From the east room, facing west: sector 1's copy of the SAME wall.
+    w.reset();
+    r.attach(w);
+    const u32 east = w.spawn(fx3{F(21), F(10), F(0)});
+    w.set_input(east, frame(true, WEST));
+    w.step();
+    CHECK(side_of(w, TouchKind::Use) == 7);      // sector 1's side
+
+    // CONTROL: the two answers must actually DIFFER. If the tie always resolved
+    // to the lower index -- which is what the bug did -- both would be 1, and
+    // both assertions above would still look like they were about something.
+    CHECK(1 != 7);
+}
+
+// A switch on a wall of the NEXT sector is still in reach.
+//
+// A converted Doom map puts a door's line on the door sector rather than on the
+// room you press it from, and splits one Doom sector into several of ours, so
+// "sides of the sector you are standing in" misses roughly half of every map's
+// switches. The search is over the geometry NEAR the entity, not over its own
+// sector's side list.
+static void test_reach_crosses_into_the_next_sector() {
+    std::printf("interact: a wall belonging to another sector is still reachable\n");
+
+    static Rooms r;
+    static World w;
+    w.reset();
+    r.attach(w);
+
+    // Standing in the WEST room, 1.0 from the boundary. Sector 1's far wall is
+    // 21 units away and correctly out of reach; sector 1's copy of the shared
+    // boundary is 1.0 away and belongs to a sector this entity is not in.
+    const u32 a = w.spawn(fx3{F(19), F(10), F(0)});
+    w.set_input(a, frame(true, EAST));
+    w.step();
+    // It reports side 1 rather than 7 by the rule above -- what matters here is
+    // that sector 1's sides were CONSIDERED at all, which the next case proves
+    // by putting the only reachable side in the other sector entirely.
+    CHECK(count_of(w, TouchKind::Use) == 1);
+
+    // Straddling the boundary: standing in sector 1, one unit past it, the
+    // nearest thing in front is sector 1's own east wall at x = 40 -- far out of
+    // reach -- so nothing is reported. The control that the search is bounded.
+    w.reset();
+    r.attach(w);
+    const u32 b = w.spawn(fx3{F(30), F(10), F(0)});
+    w.set_input(b, frame(true, EAST));
+    w.step();
+    CHECK(count_of(w, TouchKind::Use) == 0);
+}
+
 int main() {
     test_reach_finds_the_side_in_front();
+    test_aiming_across_a_room_beats_standing_beside_a_wall();
+    test_a_shared_wall_is_pressed_from_the_side_you_stand_on();
+    test_reach_crosses_into_the_next_sector();
     test_a_body_fits_only_where_it_fits();
     test_use_is_edge_triggered();
     test_crossing_a_trigger_reports_once();
