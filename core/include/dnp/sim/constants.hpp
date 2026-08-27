@@ -45,4 +45,20 @@ inline constexpr fx CCD_DISPLACEMENT_THRESHOLD = fx::from_frac(1, 4);
 // about 72 at a converted Doom map's scale, against Doom's own 64.
 inline constexpr fx INTERACT_REACH = fx::from_frac(3, 2);
 
+// How far a close-range attack reaches, measured to the SURFACE of what it
+// hits, so a big target is hittable from further away.
+//
+// A CONSTANT for the same reason INTERACT_REACH is: a client predicts against
+// these rules. What a swing DOES -- damage, knockback, whether it hits at all --
+// is a script's decision, and a script that wants a longer weapon expresses it
+// by widening what it accepts rather than by changing what the engine reports.
+// 2.0 units is about 96 at a converted Doom map's scale, against Doom's own
+// 64-unit melee.
+inline constexpr fx ATTACK_REACH = fx::from_int(2);
+
+// The half-angle of the swing, as a fraction of a turn. 1/8 of a turn is 45
+// degrees either side: a 90-degree arc, which is wide enough that hitting what
+// you are looking at does not require precision the camera cannot offer.
+inline constexpr u32 ATTACK_HALF_ARC_BRAD = 0xFFFFFFFFu / 8;
+
 }  // namespace dnp::sim

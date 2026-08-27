@@ -22,7 +22,8 @@ import {
   makeFacingArrow, aimFacingArrow
 } from './render/scene.js'
 import {
-  Camera, cameraOffset, screenRelativeMove, facingDirection, aimFor, DEFAULT_DISTANCE
+  Camera, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
+  DEFAULT_DISTANCE
 } from './camera.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
@@ -521,6 +522,9 @@ function currentInput () {
   // would make the change look like a regression in whatever it lands on.
   if (held.has('KeyE')) buttons |= BUTTON.INTERACT
   if (held.has('KeyC')) buttons |= BUTTON.CROUCH
+  // Left mouse would be the obvious binding and is not wired yet: the canvas
+  // has no pointer capture, so a click would leave the page rather than swing.
+  if (held.has('KeyF')) buttons |= BUTTON.ATTACK_PRIMARY
 
   // Held across a stop, so letting go of the keys leaves the agent facing where
   // it was walking rather than snapping east. See aimFor.
@@ -666,11 +670,11 @@ function frame (now) {
       // Independent phases would make a row of keys shimmer in a way nobody
       // could name.
       props.update(now / 1000)
-      // Billboarding: yaw only. Facing the camera in all three axes is what
-      // THREE.Sprite does, and under this camera's tilt it lays a key flat as
-      // you rotate. A Doom sprite stays upright in the world and turns.
+      // Billboarding: yaw only, and derived rather than guessed. See
+      // billboardYaw -- the first version had the sign of yaw backwards.
+      const bb = billboardYaw(yaw)
       for (const ent of others.entities.values()) {
-        if (ent.kind) ent.mesh.rotation.y = yaw + Math.PI / 2
+        if (ent.kind) ent.mesh.rotation.y = bb
       }
     }
   }

@@ -108,6 +108,10 @@ struct MoveState {
     // a door every tick. The flag is simulation state and is hashed, so a
     // reconciliation replay resumes from the right edge rather than re-pressing.
     bool interact_held = false;
+    // Edge-triggered like the rest. A held button is one swing, not sixty a
+    // second -- and the rate a weapon can actually swing at is a parameter a
+    // script sets, not something the engine should have an opinion about.
+    bool attack_held   = false;
 
     fx  dash_timer{};
     fx  dash_cooldown_timer{};
@@ -138,6 +142,7 @@ inline constexpr u16 FLIGHT  = 1u << 4;
 inline constexpr u16 GRAPPLE = 1u << 5;
 inline constexpr u16 PULL     = 1u << 6;   // modifier: reel in instead of swing
 inline constexpr u16 INTERACT = 1u << 7;   // work a switch, door or lift
+inline constexpr u16 ATTACK   = 1u << 8;   // swing at whatever is in front
 }  // namespace act
 
 struct MoveCommand {

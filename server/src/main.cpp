@@ -789,6 +789,26 @@ struct Server : lua::MapChangeSink {
             lua::push_prop(L.vm.state(), L.ctx, e.prop);
             L.vm.end_hook(hook, t, 2);
         }
+        // Swings that connected. One hook per target, in the order the engine
+        // reported them, so a script that damages several things in one swing
+        // does it in an order a replay reproduces.
+        const sim::AttackLog& hits = L.world.attacks();
+        for (u32 i = 0; i < hits.count(); ++i) {
+            const sim::AttackEvent& e = hits.at(i);
+            if (!L.vm.begin_hook("on_attack")) break;
+            lua::push_entity(L.vm.state(), L.ctx, e.attacker);
+            // The target is an entity index, which is a prop or an agent. Both
+            // are pushed as the handle type they are, so a script tells them
+            // apart by asking rather than by comparing a number to MAX_AGENTS.
+            if (sim::World::is_prop(e.target)) lua::push_prop(L.vm.state(), L.ctx, e.target);
+            else                               lua::push_entity(L.vm.state(), L.ctx, e.target);
+            L.vm.end_hook("on_attack", t, 2);
+        }
+        if (hits.dropped() > 0) {
+            std::fprintf(stderr, "[srv] tick %u: %u attack events dropped (log full)\n",
+                         t, hits.dropped());
+        }
+
         if (pe.dropped() > 0) {
             std::fprintf(stderr, "[srv] tick %u: %u prop events dropped (log full)\n",
                          t, pe.dropped());

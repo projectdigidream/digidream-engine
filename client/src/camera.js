@@ -253,6 +253,28 @@ export function aimFor (wx, wy, lastAim) {
 }
 
 /**
+ * The Y rotation that turns an upright plane to face the camera.
+ *
+ * A PlaneGeometry lies in the XY plane with its normal along +Z, so after
+ * `rotation.y = t` that normal points along `(sin t, 0, cos t)`. The camera sits
+ * at `cameraOffset(yaw)`, whose horizontal direction is `(cos yaw, _, sin yaw)`.
+ * Equating the two gives `t = pi/2 - yaw`.
+ *
+ * YAW ONLY, which is what separates this from THREE.Sprite: a Sprite faces the
+ * camera in all three axes, and under this camera's elevation that lays a key
+ * flat on the floor as you rotate. A Doom sprite stays upright in the world and
+ * turns about the vertical.
+ *
+ * A function with a test rather than a line in the render loop, because the
+ * first version had the sign of `yaw` backwards -- which looks entirely
+ * plausible until something turns, and is the same failure the engine-to-three
+ * direction conversion shipped with once already.
+ */
+export function billboardYaw (yaw) {
+  return Math.PI / 2 - yaw
+}
+
+/**
  * An agent's facing, as a unit direction in THREE space.
  *
  * `raw` is a brad: a full turn in 2^32, which is how the engine stores an angle

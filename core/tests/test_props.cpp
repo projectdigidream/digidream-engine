@@ -320,8 +320,160 @@ static void test_use_reaches_a_usable_prop() {
     }
 }
 
+// A swing hits what is in front of it, and the arc has edges.
+//
+// Every assertion here is paired with the same swing that must NOT connect,
+// because "the attack found something" is satisfied by an implementation that
+// hits everything in the room. What is being pinned down is the SHAPE: a
+// bounded reach, a bounded arc, and a bounded height.
+static void test_a_swing_hits_what_is_in_front_of_it() {
+    std::printf("props: a swing has a reach, an arc and a height, and each of them ends\n");
+
+    // Put a target at `angle` around the agent at `dist`, swing east, and say
+    // whether it connected. The agent stands at the middle of the room so no
+    // wall interferes.
+    auto swing_at = [](double angle_turns, double dist, fx z) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        // Placed by hand in fixed point rather than via trig, so the test does
+        // not depend on the engine's own trig being right.
+        const fx dx = fx::from_frac(static_cast<i64>(dist * 1000.0 * __builtin_cos(angle_turns * 6.283185307179586)), 1000);
+        const fx dy = fx::from_frac(static_cast<i64>(dist * 1000.0 * __builtin_sin(angle_turns * 6.283185307179586)), 1000);
+        const u32 p = w.spawn_prop(10, fx3{F(20) + dx, F(20) + dy, z});
+        w.prop_mut(p).radius = fx::from_frac(1, 5);
+        w.prop_mut(p).height = fx::from_frac(9, 10);
+
+        proto::InputFrame f;
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);                       // east
+        w.set_input(a, f);
+        w.step();
+
+        for (u32 i = 0; i < w.attacks().count(); ++i) {
+            if (w.attacks().at(i).target == p) return true;
+        }
+        return false;
+    };
+
+    // Straight ahead, well inside the reach.
+    CHECK(swing_at(0.0, 1.0, F(0)));
+    // Reach is 2.0 to the SURFACE, and this prop's radius is 0.2, so 2.2 from
+    // centre to centre is the boundary. Inside it and outside it:
+    CHECK(swing_at(0.0, 2.0, F(0)));
+    CHECK(!swing_at(0.0, 3.0, F(0)));
+
+    // The arc is 45 degrees either side. An eighth of a turn is exactly 45, so
+    // a sixteenth is comfortably inside and three sixteenths is outside.
+    CHECK(swing_at(1.0 / 16.0, 1.0, F(0)));
+    CHECK(swing_at(-1.0 / 16.0, 1.0, F(0)));
+    CHECK(!swing_at(3.0 / 16.0, 1.0, F(0)));
+    CHECK(!swing_at(-3.0 / 16.0, 1.0, F(0)));
+
+    // CONTROL: directly behind. If this connected, the arc would not be an arc.
+    CHECK(!swing_at(0.5, 1.0, F(0)));
+
+    // And height: a barrel on a balcony well above is not hit by a swing at
+    // floor level. Reach is 2.0, so 8 up is clear of it.
+    CHECK(!swing_at(0.0, 1.0, F(8)));
+}
+
+// Not swinging hits nothing, and holding the button is one swing.
+static void test_the_swing_is_edge_triggered() {
+    std::printf("props: holding attack swings once, and not pressing it swings never\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    const u32 p = w.spawn_prop(10, fx3{F(21), F(20), F(0)});
+    w.prop_mut(p).radius = fx::from_frac(1, 5);
+
+    // CONTROL: standing right next to it, facing it, and not pressing.
+    // Without this every assertion below could be satisfied by an
+    // implementation that reports a hit on every tick regardless of input.
+    int idle = 0;
+    for (u32 t = 0; t < 10; ++t) {
+        proto::InputFrame f;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+        idle += static_cast<int>(w.attacks().count());
+    }
+    CHECK(idle == 0);
+
+    // Held down for thirty ticks is one swing.
+    int hits = 0;
+    for (u32 t = 0; t < 30; ++t) {
+        proto::InputFrame f;
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+        hits += static_cast<int>(w.attacks().count());
+    }
+    CHECK(hits == 1);
+
+    // Released and pressed again is a second.
+    {
+        proto::InputFrame f;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+    }
+    {
+        proto::InputFrame f;
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+    }
+    CHECK(w.attacks().count() == 1);
+}
+
+// Agents and props come back through one list, which is what lets a script that
+// damages both write it once.
+static void test_a_swing_reports_agents_and_props_alike() {
+    std::printf("props: a swing reports agents and props through one list\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    const u32 victim = w.spawn(fx3{fx::from_frac(21, 1), F(20), F(0)});
+    const u32 barrel = w.spawn_prop(10, fx3{fx::from_frac(211, 10), F(20), F(0)});
+    w.prop_mut(barrel).radius = fx::from_frac(1, 5);
+
+    proto::InputFrame f;
+    f.buttons = proto::button::ATTACK_PRIMARY;
+    f.aim = brad(0u);
+    w.set_input(a, f);
+    w.step();
+
+    bool hit_agent = false;
+    bool hit_prop = false;
+    for (u32 i = 0; i < w.attacks().count(); ++i) {
+        const AttackEvent& e = w.attacks().at(i);
+        CHECK(e.attacker == a);
+        if (e.target == victim) hit_agent = true;
+        if (e.target == barrel) hit_prop = true;
+    }
+    CHECK(hit_agent);
+    CHECK(hit_prop);
+    // And never the attacker itself, which a radius test written without the
+    // exclusion reports first because the distance is zero.
+    for (u32 i = 0; i < w.attacks().count(); ++i) CHECK(w.attacks().at(i).target != a);
+}
+
 int main() {
     test_props_share_the_entity_index_space();
+    test_a_swing_hits_what_is_in_front_of_it();
+    test_the_swing_is_edge_triggered();
+    test_a_swing_reports_agents_and_props_alike();
     test_a_solid_prop_stops_a_body();
     test_a_solid_prop_is_not_a_wall_from_above();
     test_use_reaches_a_usable_prop();

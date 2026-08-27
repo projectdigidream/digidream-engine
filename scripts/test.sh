@@ -132,6 +132,7 @@ else
      && node test/params.test.js 2>/dev/null | tail -2 \
      && node test/lua.test.js 2>/dev/null | tail -2 \
      && node test/doors.test.js 2>/dev/null | tail -2 \
+     && node test/attack.test.js 2>/dev/null | tail -2 \
      && node test/levels.test.js 2>/dev/null | tail -2 \
      && node test/live.test.js 2>/dev/null | tail -2)
 
@@ -160,6 +161,10 @@ else
   # would be carrying no information.
   (cd server/edge && DNP_IGNORE_LUA=1 DNP_WT_PORT=34495 DNP_LINK_PORT=34569 \
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
+  # A solid prop that stops you, and a swing that removes it: without the swing
+  # the same walk must end in the same place, or `solid` is doing nothing.
+  (cd server/edge && DNP_NO_ATTACK=1 DNP_WT_PORT=34499 DNP_LINK_PORT=34573 \
+     node test/attack.test.js 2>/dev/null | grep -E "CONTROL|attack:")
   # A map change must be a move to the NEXT level, not any reset at all: with
   # only one level loaded the exit has nowhere to go and must move nobody.
   (cd server/edge && DNP_ONE_LEVEL=1 DNP_WT_PORT=34497 DNP_LINK_PORT=34571 \

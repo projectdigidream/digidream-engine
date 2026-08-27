@@ -67,9 +67,13 @@ sprite 6 size 0.35 billboard state 0 fps 6 frames RSKUA0,RSKUB0
 # A barrel is solid: you walk into it and stop. Doom's own explodes, which is a
 # script's decision -- on_prop_use and on_touch are where that would live.
 
-prop 10 barrel radius 0.35 height 0.8 solid
-sprite 10 size 0.8 billboard state 0 fps 0 frames BAR1A0
-sprite 10 state 1 fps 12 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0
+# Doom's barrel is a 10-unit radius, 42-unit tall solid thing that explodes when
+# hit. At 1/48 that is 0.21 and 0.875. Two states, and the SERVER declares which
+# -- state 1 is the explosion, and how fast it plays is the client's business.
+
+prop 10 barrel radius 0.21 height 0.875 solid
+sprite 10 size 0.875 billboard state 0 fps 2 frames BAR1A0,BAR1B0
+sprite 10 state 1 fps 14 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0,BEXPE0
 
 # A wall switch you press rather than a wall you press. Two states, and the
 # server declares WHICH -- the client decides how fast it plays.

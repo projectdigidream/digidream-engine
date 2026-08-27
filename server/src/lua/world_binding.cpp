@@ -755,6 +755,34 @@ int l_dnp_spawn_prop(lua_State* L) {
     return 1;
 }
 
+// dnp.prop(i) -> prop, or nil. `i` is an ENTITY index, which is what
+// prop:index() returns and what an event carries.
+int l_dnp_prop(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const int i = static_cast<int>(luaL_checknumber(L, 1));
+    if (i < 0 || !sim::World::is_prop(static_cast<u32>(i))) { lua_pushnil(L); return 1; }
+    push_prop(L, ctx, static_cast<u32>(i));
+    return 1;
+}
+
+// dnp.props() -> { prop, ... }
+//
+// Ascending entity index, always. Any order would be deterministic on its own,
+// but a script iterating props has to see the same order the server's own loops
+// use or a replay of the command log stops matching -- the same rule
+// dnp.entities() follows.
+int l_dnp_props(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    lua_newtable(L);
+    int n = 0;
+    for (u32 e = sim::MAX_AGENTS; e < sim::MAX_ENTITIES; ++e) {
+        if (!ctx.world->prop(e).active) continue;
+        push_prop(L, ctx, e);
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 int l_dnp_stale_ops(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(ctx_of(L).stats.stale_handle_ops));
     return 1;
@@ -767,6 +795,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"sectors", l_dnp_sectors},
     {"sector", l_dnp_sector},
     {"spawn_prop", l_dnp_spawn_prop},
+    {"prop", l_dnp_prop},
+    {"props", l_dnp_props},
     {"side", l_dnp_side},
     {"random", l_dnp_random},
     {"stale_handle_ops", l_dnp_stale_ops},

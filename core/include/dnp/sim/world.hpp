@@ -77,6 +77,36 @@ struct PropState {
     bool active = false;
 };
 
+// An agent swung at something and connected.
+//
+// The engine answers "what was in the arc"; whether that hurts, breaks, or does
+// nothing at all is gameplay. Targets are ENTITY indices, so an agent and a prop
+// are reported the same way and a script that damages both writes it once.
+struct AttackEvent {
+    u32 attacker = 0;
+    u32 target = 0;      // an entity index: an agent below MAX_AGENTS, else a prop
+};
+
+inline constexpr u32 MAX_ATTACK_EVENTS = 64;
+
+class AttackLog {
+public:
+    void clear() noexcept { count_ = 0; dropped_ = 0; }
+    void push(const AttackEvent& e) noexcept {
+        if (count_ >= MAX_ATTACK_EVENTS) { ++dropped_; return; }
+        events_[count_++] = e;
+    }
+    u32 count() const noexcept { return count_; }
+    const AttackEvent& at(u32 i) const noexcept { return events_[i]; }
+    u32 dropped() const noexcept { return dropped_; }
+    void hash_into(StateHasher& h) const noexcept;
+
+private:
+    AttackEvent events_[MAX_ATTACK_EVENTS]{};
+    u32 count_ = 0;
+    u32 dropped_ = 0;
+};
+
 enum class PropEventKind : u8 {
     // An agent is standing inside the prop's cylinder. Reported every tick it
     // holds -- see detect_prop_events for why that is not an edge trigger.
@@ -160,6 +190,9 @@ public:
 
     // What happened between agents and props this tick.
     const PropEventLog& prop_events() const noexcept { return prop_events_; }
+
+    // Everything an agent's swing connected with this tick.
+    const AttackLog& attacks() const noexcept { return attacks_; }
 
     // Input for the tick about to be stepped. An agent with no input this tick
     // keeps its previous frame -- the server must simulate SOMETHING, and
@@ -248,6 +281,7 @@ private:
     void detect_prop_events() noexcept;
     void resolve_prop_collisions(u32 agent) noexcept;
     i32  find_usable_prop(u32 agent) const noexcept;
+    void resolve_attack(u32 agent) noexcept;
     void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;
 
     // The frame positions are hashed in: the offset of an unpredictable anchor,
@@ -273,6 +307,7 @@ private:
     AgentState           agents_[MAX_AGENTS]{};
     PropState            props_[MAX_PROPS]{};
     PropEventLog         prop_events_{};
+    AttackLog            attacks_{};
     // One generation table over the whole index space, so a handle to slot 70
     // is validated exactly the way a handle to slot 3 is.
     u8                   generation_[MAX_ENTITIES]{};

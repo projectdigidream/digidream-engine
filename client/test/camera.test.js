@@ -2,7 +2,7 @@
 // Camera tests (design §4.1).
 //
 import {
-  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor,
+  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
   ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming
 } from '../src/camera.js'
 
@@ -318,6 +318,43 @@ console.log('\n--- aim is held across a stop ---')
   const d = facingDirection(aimFor(0, 0, NORTH))
   check(near(d.x, 0, 1e-6) && near(d.z, -1, 1e-6),
         `a held north aim still points north (${d.x.toFixed(3)}, ${d.z.toFixed(3)})`)
+}
+
+console.log('\n--- billboarding ---')
+{
+  // Asserted as a RELATIONSHIP to cameraOffset, not as the formula restated.
+  // Restating pi/2 - yaw here would agree with any implementation that happened
+  // to match it, including the one with the sign of yaw backwards -- which is
+  // what shipped, and what a player noticed before a test did.
+  for (const deg of [0, 30, 45, 90, 137, 180, 250, 315]) {
+    const yaw = deg * Math.PI / 180
+    const t = billboardYaw(yaw)
+
+    // A plane's normal after rotation.y = t.
+    const n = { x: Math.sin(t), z: Math.cos(t) }
+    // The horizontal direction from the sprite toward the camera.
+    const off = cameraOffset(yaw)
+    const len = Math.hypot(off.x, off.z)
+    const toCam = { x: off.x / len, z: off.z / len }
+
+    const dot = n.x * toCam.x + n.z * toCam.z
+    check(near(dot, 1, 1e-9), `yaw ${deg}: the plane faces the camera (dot ${dot.toFixed(6)})`)
+  }
+
+  // CONTROL: the sign error. `yaw + pi/2` must point the plane AWAY from the
+  // camera everywhere except where the two happen to coincide -- and if it did
+  // not, the assertions above would be satisfied by either version.
+  let wrong = 0
+  for (const deg of [30, 45, 137, 250, 315]) {
+    const yaw = deg * Math.PI / 180
+    const t = yaw + Math.PI / 2
+    const n = { x: Math.sin(t), z: Math.cos(t) }
+    const off = cameraOffset(yaw)
+    const len = Math.hypot(off.x, off.z)
+    const dot = n.x * (off.x / len) + n.z * (off.z / len)
+    if (!near(dot, 1, 1e-6)) wrong++
+  }
+  check(wrong === 5, `CONTROL: the wrong sign fails at all 5 off-axis angles (${wrong})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

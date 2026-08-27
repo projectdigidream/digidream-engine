@@ -215,7 +215,8 @@ check(liftParkedFloor === 3, `the lift starts parked (floor at ${liftParkedFloor
 // one; it is checking that the number arrives and that the entity behaves like
 // an entity.
 const propsSeen = new Map()
-let propGone = false
+let keyIndex = null
+let keyGone = false
 const PROP_KEY_BLUE = 1        // assets/props.txt
 
 const applied = new Set()
@@ -246,10 +247,15 @@ const drain = () => {
     for (const e of s.entities ?? []) {
       const index = handleIndex(e.handle)
       if (e.mask & ENT_FIELD.DESTROYED) {
-        if (propsSeen.has(index)) propGone = true
+        if (index === keyIndex) keyGone = true
         continue
       }
-      if (e.displayId) propsSeen.set(index, e.displayId)
+      if (!e.displayId) continue
+      propsSeen.set(index, e.displayId)
+      // Tracked by the KIND it declared rather than by counting what arrived:
+      // this map carries a barrel too, and a test that asserted "one prop"
+      // was measuring the fixture rather than the replication.
+      if (e.displayId === PROP_KEY_BLUE) keyIndex = index
     }
     const r = predictor.reconcile(s)
     if (r?.verdict) verdicts.push(r.verdict)
@@ -364,16 +370,15 @@ if (NO_SCRIPT) {
   }
   // A prop reached the client as an ordinary entity, carrying what it IS.
   console.log(`  props seen: ${[...propsSeen].map(([i, k]) => `${i}:kind ${k}`).join(', ') || 'none'}`)
-  check(propsSeen.size === 1, `one prop replicated (${propsSeen.size})`)
-  check([...propsSeen.values()][0] === PROP_KEY_BLUE,
-        `and it declared its kind (${[...propsSeen.values()][0]})`)
+  check(propsSeen.size >= 1, `${propsSeen.size} props replicated`)
+  check(keyIndex !== null, `the blue key declared its kind (entity ${keyIndex})`)
   // Its index is above the agents, which is what lets it share the entity
   // space with players and need no message of its own.
-  check([...propsSeen.keys()][0] > 64, `in an entity slot above the agents (${[...propsSeen.keys()][0]})`)
+  check(keyIndex > 64, `in an entity slot above the agents (${keyIndex})`)
   // Walking into it picked it up, and the pickup reached the client as a
   // destruction rather than as an entity that quietly stopped being mentioned
   // -- absence means "unchanged" in a delta-encoded snapshot.
-  check(propGone, 'and walking into it destroyed it')
+  check(keyGone, 'and walking into it destroyed it')
   check(serverLog.includes('picked up the blue key'), 'the script granted the key')
 
   // And the other half of a door.

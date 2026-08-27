@@ -21,6 +21,7 @@ void World::reset() noexcept {
         generation_[MAX_AGENTS + i] = 1;
     }
     prop_events_.clear();
+    attacks_.clear();
     tick_ = 0;
 }
 
@@ -95,6 +96,7 @@ MoveCommand to_command(const proto::InputFrame& f) noexcept {
     if (f.buttons & proto::button::GRAPPLE) b |= act::GRAPPLE;
     if (f.buttons & proto::button::CROUCH)  b |= act::PULL;   // grapple modifier
     if (f.buttons & proto::button::INTERACT) b |= act::INTERACT;
+    if (f.buttons & proto::button::ATTACK_PRIMARY) b |= act::ATTACK;
     c.buttons = b;
     return c;
 }
@@ -132,6 +134,15 @@ void World::step_agent(u32 i) noexcept {
             }
         }
         a.mv.interact_held = want;
+    }
+
+    // A swing, on the press edge and before the move, for the same reason use
+    // is: what you hit is what was in front of you when you pressed, not
+    // whatever this tick's movement carried you into.
+    {
+        const bool swing = (cmd.buttons & act::ATTACK) != 0;
+        if (swing && !a.mv.attack_held) resolve_attack(i);
+        a.mv.attack_held = swing;
     }
 
     const bool was_anchored = a.mv.anchored;
@@ -357,6 +368,7 @@ void World::step() noexcept {
     crushes_.clear();
     interacts_.clear();
     prop_events_.clear();
+    attacks_.clear();
 
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from
@@ -452,6 +464,7 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.dash_held);
     h.boolv(m.grapple_held);
     h.boolv(m.interact_held);
+    h.boolv(m.attack_held);
     h.fxv(m.dash_timer);
     h.fxv(m.dash_cooldown_timer);
     h.vec2(m.dash_dir);
@@ -473,6 +486,20 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.hovering);
     h.boolv(m.flying);
     return h.value();
+}
+
+void AttackLog::hash_into(StateHasher& h) const noexcept {
+    // Hashed like every other engine-detected event, and for the same reason:
+    // this adds no information about the world, it adds coverage of the
+    // DETECTION. A swing that connected on one target under wasm and another
+    // natively would otherwise be found by a player whose barrel did not
+    // explode.
+    h.u32v(count_);
+    h.u32v(dropped_);
+    for (u32 i = 0; i < count_; ++i) {
+        h.u32v(events_[i].attacker);
+        h.u32v(events_[i].target);
+    }
 }
 
 void PropEventLog::hash_into(StateHasher& h) const noexcept {
@@ -606,6 +633,67 @@ i32 World::find_usable_prop(u32 agent) const noexcept {
     return best;
 }
 
+// Everything in the arc of a swing.
+//
+// The engine's whole contribution to combat: who was in front of whom, close
+// enough, and within the arc. Damage, knockback, whether a weapon was even
+// equipped -- all script, for the same reason a door's behaviour is: a client
+// predicts the swing because the button is in its own input frame, and it must
+// not have to predict the consequence.
+//
+// Targets are ENTITY indices, so agents and props come back through one list.
+// A script that damages both writes it once, and a prop that becomes an enemy
+// later changes nothing here.
+//
+// Order is agents first then props, each by ascending index, so two targets in
+// the same swing resolve the same way on every target and on a replay.
+void World::resolve_attack(u32 agent) noexcept {
+    const AgentState& a = agents_[agent];
+    const fx2 from{a.pos.x, a.pos.y};
+    const fx  a_top = a.pos.z + params_[agent].height;
+
+    // Within the arc: the angle between the aim and the direction to the target
+    // is at most the half-arc. Compared as ANGLES rather than as a dot product
+    // against a cosine, because brad subtraction wraps exactly and a cosine
+    // would need a table lookup to say the same thing less precisely.
+    const auto in_arc = [&](fx2 toward) {
+        if (toward.x.raw == 0 && toward.y.raw == 0) return true;   // inside us
+        const brad to = fx_atan2(toward.y, toward.x);
+        const u32 diff = to.raw - a.facing.raw;   // wraps, deliberately
+        return diff <= ATTACK_HALF_ARC_BRAD ||
+               diff >= (0u - ATTACK_HALF_ARC_BRAD);
+    };
+
+    const auto reaches = [&](fx2 toward, fx surface_radius) {
+        const fx limit = ATTACK_REACH + surface_radius;
+        const u128 d_sq = len_sq_raw(toward);
+        return d_sq <= static_cast<u128>(static_cast<i128>(limit.raw) * limit.raw);
+    };
+
+    for (u32 t = 0; t < MAX_AGENTS; ++t) {
+        if (t == agent || !agents_[t].active) continue;
+        // Vertically within reach of each other, so a swing does not connect
+        // with somebody on the balcony above.
+        if (a_top + ATTACK_REACH < agents_[t].pos.z) continue;
+        if (a.pos.z > agents_[t].pos.z + params_[t].height + ATTACK_REACH) continue;
+        const fx2 toward = fx2{agents_[t].pos.x, agents_[t].pos.y} - from;
+        if (!reaches(toward, params_[t].radius)) continue;
+        if (!in_arc(toward)) continue;
+        attacks_.push(AttackEvent{agent, t});
+    }
+
+    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+        const PropState& p = props_[pi];
+        if (!p.active) continue;
+        if (a_top + ATTACK_REACH < p.pos.z) continue;
+        if (a.pos.z > p.pos.z + p.height + ATTACK_REACH) continue;
+        const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
+        if (!reaches(toward, p.radius)) continue;
+        if (!in_arc(toward)) continue;
+        attacks_.push(AttackEvent{agent, MAX_AGENTS + pi});
+    }
+}
+
 // Which agents are standing inside which props.
 //
 // A cylinder test, not the collision system: touching is about being in the same
@@ -645,6 +733,7 @@ u64 World::hash() const noexcept {
     crushes_.hash_into(h);
     interacts_.hash_into(h);
     prop_events_.hash_into(h);
+    attacks_.hash_into(h);
     for (u32 i = 0; i < MAX_PROPS; ++i) {
         h.boolv(props_[i].active);
         if (!props_[i].active) continue;

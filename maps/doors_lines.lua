@@ -34,5 +34,8 @@ doom.load{
   -- compiled with any knowledge of what a key is.
   props = {
     {name="key_blue", x=384, y=240, z=48},
+    -- North of the spawn, off the path the door test walks. Solid, so walking
+    -- into it stops you; swung at, it goes.
+    {name="barrel", x=240, y=384, z=48},
   },
 }
