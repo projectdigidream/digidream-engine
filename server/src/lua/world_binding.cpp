@@ -151,6 +151,95 @@ int l_entity_change_map(lua_State* L) {
     return 1;
 }
 
+// entity:set_input(move_x, move_y, aim [, buttons])
+//
+// Drives a scripted agent through the SAME controller a player runs. An enemy
+// that moved by having its position written would be a second mover, and the
+// two would disagree about steps, slopes, doors and being crushed -- which is
+// exactly the thing the physics contract exists to prevent. So an enemy presses
+// buttons.
+//
+// Refused for an agent a session is sitting at: a script that could write a
+// player's input could walk them into a pit, and no amount of client prediction
+// would survive it.
+int l_entity_set_input(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) return 0;
+    if (!ctx.world->agent(static_cast<u32>(a)).scripted) {
+        return luaL_error(L, "entity %d is a player; its input comes from its session", a);
+    }
+
+    // Axes are Q1.15 on the wire, and a script writes them the same way, so a
+    // scripted agent's input is byte-identical to one that arrived over the
+    // network. Clamped rather than wrapped: a script asking to move at 3 gets
+    // full speed, not a reversal.
+    const auto axis = [&](int idx) {
+        const fx v = check_fx(L, idx);
+        const fx one = fx::one();
+        const fx c = v > one ? one : (v < -one ? -one : v);
+        return static_cast<i16>((c.raw * 32767) >> 32);
+    };
+
+    proto::InputFrame f;
+    f.move_x = axis(2);
+    f.move_y = axis(3);
+    f.aim = brad(static_cast<u32>(luaL_checknumber(L, 4)));
+    f.buttons = static_cast<u16>(lua_isnoneornil(L, 5) ? 0 : luaL_checknumber(L, 5));
+    ctx.world->set_input(static_cast<u32>(a), f);
+    return 0;
+}
+
+// entity:set_animation(n) -- the STATE, never the frame or the timing.
+int l_entity_set_animation(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) return 0;
+    const int n = static_cast<int>(luaL_checknumber(L, 2));
+    if (n < 0 || n > 65535) return luaL_error(L, "animation state %d is out of range", n);
+    ctx.world->agent_mut(static_cast<u32>(a)).animation_state = static_cast<u16>(n);
+    return 0;
+}
+
+int l_entity_kind(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->agent(static_cast<u32>(a)).kind);
+    return 1;
+}
+
+int l_entity_name(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.props == nullptr) { lua_pushnil(L); return 1; }
+    const char* n = ctx.props->name_of(ctx.world->agent(static_cast<u32>(a)).kind);
+    if (n == nullptr) { lua_pushnil(L); return 1; }
+    lua_pushstring(L, n);
+    return 1;
+}
+
+int l_entity_facing(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->agent(static_cast<u32>(a)).facing.raw);
+    return 1;
+}
+
+int l_entity_despawn(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushboolean(L, 0); return 1; }
+    if (!ctx.world->agent(static_cast<u32>(a)).scripted) {
+        return luaL_error(L, "entity %d is a player; a script cannot remove it", a);
+    }
+    ctx.effects->clear_agent(static_cast<u32>(a));
+    ctx.world->despawn(static_cast<u32>(a));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int l_entity_add_impulse(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -270,6 +359,12 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"sector", l_entity_sector},
     {"index", l_entity_index_of},
     {"teleport", l_entity_teleport},
+    {"set_input", l_entity_set_input},
+    {"set_animation", l_entity_set_animation},
+    {"kind", l_entity_kind},
+    {"name", l_entity_name},
+    {"facing", l_entity_facing},
+    {"despawn", l_entity_despawn},
     {"change_map", l_entity_change_map},
     {"add_impulse", l_entity_add_impulse},
     {"set_velocity", l_entity_set_velocity},
@@ -391,6 +486,28 @@ int l_prop_pos(lua_State* L) {
 // between clips is the client's decision (design §4) -- a server that shipped
 // frame numbers would be deciding the frame rate of a machine it has never
 // seen, and would have to be right about it sixty times a second.
+// prop:set_pos(v)
+//
+// Immediate, like the rest of the prop mutators and for the same reason:
+// nothing sweeps against a prop, so moving one cannot invalidate a resolution
+// in progress. This is how a projectile travels -- a fireball is a gameplay
+// object, and what it does when it arrives is a decision the engine has no
+// opinion about.
+int l_prop_set_pos(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) return 0;
+    const fx3 p = check_vec3(L, 2);
+    // Quantised, for the reason spawn_prop is: a solid prop is simulated on
+    // both sides and entity positions are quantised on the wire, so a value
+    // the wire cannot carry exactly makes the two copies disagree.
+    ctx.world->prop_mut(static_cast<u32>(e)).pos =
+        fx3{proto::fxq_to_fx(proto::fx_to_fxq(p.x)),
+            proto::fxq_to_fx(proto::fx_to_fxq(p.y)),
+            proto::fxq_to_fx(proto::fx_to_fxq(p.z))};
+    return 0;
+}
+
 int l_prop_set_animation(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
@@ -436,6 +553,7 @@ const luaL_Reg PROP_METHODS[] = {
     {"set_solid", l_prop_set_solid},
     {"pos", l_prop_pos},
     {"set_animation", l_prop_set_animation},
+    {"set_pos", l_prop_set_pos},
     {"despawn", l_prop_despawn},
     {nullptr, nullptr},
 };
@@ -771,6 +889,37 @@ int l_dnp_spawn_prop(lua_State* L) {
 
 // dnp.prop(i) -> prop, or nil. `i` is an ENTITY index, which is what
 // prop:index() returns and what an event carries.
+// dnp.spawn_enemy(name, position) -> entity, or nil
+//
+// An agent nobody is sitting at, drawn from the catalogue like a prop and moved
+// through the controller like a player. Both halves matter: it is a thing you
+// can see, and a thing the same physics applies to.
+int l_dnp_spawn_enemy(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    size_t len = 0;
+    const char* name = luaL_checklstring(L, 1, &len);
+    const fx3 pos = check_vec3(L, 2);
+
+    if (ctx.props == nullptr || ctx.props->empty()) {
+        return luaL_error(L,
+            "cannot spawn '%s': the prop catalogue is empty or missing "
+            "(see --props, default assets/props.txt)", name);
+    }
+    const u16 kind = ctx.props->kind_by_name(name, len);
+    if (kind == 0) return luaL_error(L, "no entry named '%s' in the prop catalogue", name);
+
+    const u32 a = ctx.world->spawn_scripted(kind, pos);
+    if (a >= sim::MAX_AGENTS) { lua_pushnil(L); return 1; }
+    // Its body comes from the catalogue, the same numbers a prop's collider
+    // does -- so an imp is as wide as its sprite says and the map's own body
+    // proportions do not silently apply to it.
+    ctx.world->params_mut(a).radius = ctx.prop_radius(kind);
+    ctx.world->params_mut(a).height = ctx.prop_height(kind);
+    ctx.effects->set_base(a, ctx.world->params(a));
+    push_entity(L, ctx, a);
+    return 1;
+}
+
 int l_dnp_prop(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const int i = static_cast<int>(luaL_checknumber(L, 1));
@@ -797,6 +946,123 @@ int l_dnp_props(lua_State* L) {
     return 1;
 }
 
+// dnp.hitscan(from_entity, range) -> hit_entity | nil, x, y, z
+//
+// A shot that arrives instantly: the ray stops at the first agent or prop in
+// its path, or at the first wall. Doom's own zombies and shotgunners work this
+// way, and so does every tracer weapon since.
+//
+// The ENGINE answers where the ray ended and what was there. Whether that hurts
+// -- and by how much, and whether the shooter had ammunition -- is script, the
+// same division a swing draws. Returning the impact point as well as the target
+// is what lets a script draw a tracer that ends on the wall rather than at
+// infinity.
+int l_dnp_hitscan(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    const fx range = check_fx(L, 2);
+    const geom::MapData* m = ctx.world->map();
+    if (m == nullptr) { lua_pushnil(L); return 1; }
+
+    const sim::AgentState& sh = ctx.world->agent(static_cast<u32>(a));
+    // From the middle of the body, not its feet: a shot from ankle height is
+    // stopped by every step in the map.
+    const fx eye = sh.pos.z + ctx.world->params(static_cast<u32>(a)).height / 2;
+    const fx2 from{sh.pos.x, sh.pos.y};
+    const fx2 dir = fx_dir(sh.facing);
+    const fx2 to = from + dir * range;
+
+    // Nearest ENTITY along the ray, by the same "in front and within the
+    // corridor" test a swing uses -- a cylinder test rather than an exact
+    // capsule intersection, which for bodies this size differs only where a
+    // shot grazes an edge.
+    i32  best = -1;
+    fx   best_t = fx::one() + fx::one();
+    const auto consider = [&](fx2 p, fx r, fx z0, fx z1, i32 entity) {
+        if (eye < z0 || eye > z1) return;               // over or under it
+        const fx2 toward = p - from;
+        const fx along = dot(dir, toward);
+        if (along <= fx::zero() || along > range) return;
+        // Perpendicular distance from the ray to the centre.
+        const fx2 closest = from + dir * along;
+        const u128 off_sq = len_sq_raw(p - closest);
+        if (off_sq > static_cast<u128>(static_cast<i128>(r.raw) * r.raw)) return;
+        const fx t = along / range;
+        if (t >= best_t) return;
+        best_t = t;
+        best = entity;
+    };
+
+    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+        if (i == static_cast<u32>(a) || !ctx.world->agent(i).active) continue;
+        const sim::AgentState& e = ctx.world->agent(i);
+        consider(fx2{e.pos.x, e.pos.y}, ctx.world->params(i).radius,
+                 e.pos.z, e.pos.z + ctx.world->params(i).height, static_cast<i32>(i));
+    }
+    for (u32 e = sim::MAX_AGENTS; e < sim::MAX_ENTITIES; ++e) {
+        if (!ctx.world->prop(e).active) continue;
+        const sim::PropState& p = ctx.world->prop(e);
+        consider(fx2{p.pos.x, p.pos.y}, p.radius, p.pos.z, p.pos.z + p.height,
+                 static_cast<i32>(e));
+    }
+
+    // And the geometry, which OCCLUDES: a wall between the shooter and a target
+    // stops the shot, so the wall is consulted even when a body was found.
+    const physics::RayHit wall =
+        physics::raycast(*m, sh.mv.sector, from, dir, range, 0);
+    fx2 end = to;
+    if (wall.hit) {
+        const fx wall_t = wall.distance / range;
+        if (best < 0 || wall_t < best_t) { best = -1; best_t = wall_t; }
+        end = wall.point;
+    }
+    if (best >= 0) end = from + dir * (range * best_t);
+
+    if (best < 0) lua_pushnil(L);
+    else if (sim::World::is_prop(static_cast<u32>(best))) push_prop(L, ctx, static_cast<u32>(best));
+    else push_entity(L, ctx, static_cast<u32>(best));
+    push_vec3(L, fx3{end.x, end.y, eye});
+    return 2;
+}
+
+// dnp.vfx(kind, position [, direction] [, param])
+//
+// A transient visual: a tracer, a flash, an impact. Fire and forget, off the
+// entity replication path (§9.2) -- it has no identity, nothing refers to it,
+// and a client that missed one has missed nothing it needs to stay consistent.
+//
+// The engine attaches no meaning to `kind` or `param`. What a 1 looks like is
+// between the catalogue and the renderer, exactly as it is for a prop.
+int l_dnp_vfx(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    sim::PendingVfx v;
+    v.kind = static_cast<u16>(luaL_checknumber(L, 1));
+    v.pos = check_vec3(L, 2);
+    v.dir = brad(lua_isnoneornil(L, 3) ? 0u : static_cast<u32>(luaL_checknumber(L, 3)));
+    v.param = lua_isnoneornil(L, 4) ? 0u : static_cast<u32>(luaL_checknumber(L, 4));
+    lua_pushboolean(L, ctx.world->push_vfx(v) ? 1 : 0);
+    return 1;
+}
+
+// dnp.atan2(y, x) -> a brad
+//
+// The engine's own CORDIC, not libm: a script computing an aim with a
+// double-precision atan2 would produce an angle the simulation could not have
+// produced, and the difference would show up as a monster facing a fraction of
+// a degree off on one machine.
+int l_dnp_atan2(lua_State* L) {
+    lua_pushnumber(L, fx_atan2(check_fx(L, 1), check_fx(L, 2)).raw);
+    return 1;
+}
+
+// dnp.dir(brad) -> a unit vec3 in the XY plane
+int l_dnp_dir(lua_State* L) {
+    const fx2 d = fx_dir(brad(static_cast<u32>(luaL_checknumber(L, 1))));
+    push_vec3(L, fx3{d.x, d.y, fx::zero()});
+    return 1;
+}
+
 int l_dnp_stale_ops(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(ctx_of(L).stats.stale_handle_ops));
     return 1;
@@ -809,6 +1075,11 @@ const luaL_Reg DNP_FUNCS[] = {
     {"sectors", l_dnp_sectors},
     {"sector", l_dnp_sector},
     {"spawn_prop", l_dnp_spawn_prop},
+    {"spawn_enemy", l_dnp_spawn_enemy},
+    {"hitscan", l_dnp_hitscan},
+    {"atan2", l_dnp_atan2},
+    {"dir", l_dnp_dir},
+    {"vfx", l_dnp_vfx},
     {"prop", l_dnp_prop},
     {"props", l_dnp_props},
     {"side", l_dnp_side},

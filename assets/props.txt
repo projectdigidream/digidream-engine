@@ -81,3 +81,53 @@ sprite 10 state 1 fps 14 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0,BEXPE0
 prop 11 lever radius 0.4 height 1.0 solid usable
 sprite 11 size 1.0 billboard state 0 fps 0 frames SW1BRNGN
 sprite 11 state 1 fps 0 frames SW2BRNGN
+
+# --- enemies -----------------------------------------------------------------
+#
+# An enemy is an AGENT, not a prop: it walks, falls, steps up, slides along
+# walls and is stopped by doors, and all of that is the controller a player
+# already runs. It is drawn from these records all the same, because "what a
+# thing looks like" is one question whether the thing moves or not.
+#
+# Doom's own sizes: a zombieman is a 20-unit radius, 56 tall; an imp the same.
+# At 1/48 that is 0.417 and 1.167.
+#
+# ANIMATION STATES, declared by the server and timed by the client (design §4):
+#   0 idle   1 walk   2 attack   3 pain   4 die
+#
+# Only the front-facing sprite of each frame is used. Doom stores eight angles
+# per frame and picking one by the viewer's bearing is a renderer feature this
+# does not have yet -- so an imp seen from behind looks like an imp seen from
+# the front. Stated rather than left to be discovered.
+
+prop 20 zombieman radius 0.417 height 1.167 solid
+sprite 20 size 1.167 billboard state 0 fps 0  frames POSSA1
+sprite 20 state 1 fps 6  frames POSSA1,POSSB1,POSSC1,POSSD1
+sprite 20 state 2 fps 5  frames POSSE1,POSSF1
+sprite 20 state 3 fps 0  frames POSSG1
+sprite 20 state 4 fps 8  frames POSSH0,POSSI0,POSSJ0,POSSK0,POSSL0,POSSM0
+
+prop 21 imp radius 0.417 height 1.167 solid
+sprite 21 size 1.167 billboard state 0 fps 0  frames TROOA1
+sprite 21 state 1 fps 6  frames TROOA1,TROOB1,TROOC1,TROOD1
+sprite 21 state 2 fps 5  frames TROOE1,TROOF1,TROOG1
+sprite 21 state 3 fps 0  frames TROOH1
+sprite 21 state 4 fps 8  frames TROOI0,TROOJ0,TROOK0,TROOL0,TROOM0
+
+# The imp's fireball. A prop rather than an agent: it has no controller, it does
+# not walk, and what it needs is a straight line and something to hit.
+prop 22 fireball radius 0.13 height 0.26
+sprite 22 size 0.4 billboard state 0 fps 10 frames BAL1A0,BAL1B0
+sprite 22 state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
+
+# --- transient effects -------------------------------------------------------
+#
+#   vfx <kind> tracer [colour <hex>] [width <w>] [life <seconds>]
+#
+# Fire and forget, off the entity path: a tracer has no identity and nothing
+# refers to it. The engine reports "effect 1 happened here, pointing that way";
+# what a 1 IS lives here, which is what makes it customisable without touching
+# either binary.
+
+vfx 1 tracer colour ffee88 width 0.035 life 0.10
+vfx 2 tracer colour ff8844 width 0.05  life 0.16

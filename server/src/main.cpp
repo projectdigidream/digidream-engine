@@ -1129,8 +1129,11 @@ struct Server : lua::MapChangeSink {
                     now.present         = a.active;
                     now.pos             = a.pos;
                     now.facing          = a.facing;
-                    now.animation_state = 0;
-                    now.display_id      = 0;
+                    // An enemy is an agent with a kind, so it replicates
+                    // through exactly the path a player does and is drawn from
+                    // exactly the records a prop is. Zero stays "a player".
+                    now.animation_state = a.animation_state;
+                    now.display_id      = a.kind;
                 }
 
                 if (!now.present) {
@@ -1177,6 +1180,22 @@ struct Server : lua::MapChangeSink {
                     record.entities[i] = was;
                     ++omitted;
                 }
+            }
+
+            // Transients, after the entities. Fire and forget: whatever does
+            // not fit is dropped rather than deferred, because a tracer that
+            // arrived a snapshot late would be drawn at a moment that has
+            // already passed. This is the first thing to send them -- the
+            // encoder has existed and been unit-tested since Phase 1 and had
+            // never been called.
+            for (u32 v = 0; v < world.vfx_count(); ++v) {
+                const sim::PendingVfx& pv = world.vfx(v);
+                proto::VfxEvent ev;
+                ev.kind = pv.kind;
+                ev.pos = pv.pos;
+                ev.dir = pv.dir;
+                ev.param = pv.param;
+                if (!w.try_vfx(ev)) break;
             }
 
             s.last_snapshot_sent = world.tick();

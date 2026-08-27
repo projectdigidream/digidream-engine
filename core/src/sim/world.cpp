@@ -22,6 +22,9 @@ void World::reset() noexcept {
     }
     prop_events_.clear();
     attacks_.clear();
+    // Transients last exactly one tick. A tracer held over would be drawn
+    // again on a snapshot that had nothing to do with it.
+    vfx_count_ = 0;
     tick_ = 0;
 }
 
@@ -407,6 +410,9 @@ void World::step() noexcept {
     interacts_.clear();
     prop_events_.clear();
     attacks_.clear();
+    // Transients last exactly one tick. One held over would be drawn again on a
+    // snapshot that had nothing to do with it.
+    vfx_count_ = 0;
 
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from
@@ -496,6 +502,8 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.i32v(m.sector);
     h.i32v(m.anchor);
     h.boolv(m.anchored);
+    h.u32v(a.kind);
+    h.u32v(a.animation_state);
     h.byte(m.jumps_used);
     h.byte(m.dashes_used);
     h.boolv(m.jump_held);
@@ -575,6 +583,14 @@ u32 World::spawn_prop(PropKind kind, fx3 pos) noexcept {
         return MAX_AGENTS + i;
     }
     return MAX_ENTITIES;
+}
+
+u32 World::spawn_scripted(PropKind kind, fx3 pos) noexcept {
+    const u32 i = spawn(pos);
+    if (i >= MAX_AGENTS) return MAX_AGENTS;
+    agents_[i].kind = kind;
+    agents_[i].scripted = true;
+    return i;
 }
 
 bool World::place_prop(u32 entity, PropKind kind, fx3 pos,

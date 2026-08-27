@@ -77,6 +77,25 @@ struct PropState {
     bool active = false;
 };
 
+// A transient visual the server asked for: a tracer, a muzzle flash, an impact.
+//
+// FIRE AND FORGET, off the entity replication path (docs/protocol.md §9.2).
+// A tracer is not an entity -- it has no identity, nothing refers to it, and a
+// client that missed one has missed nothing it needs to stay consistent. Making
+// it an entity would mean spawning and destroying a thing sixty times a second
+// to draw a line that lasts a tenth of a second.
+//
+// The engine attaches no meaning to `kind` or `param`; the catalogue and the
+// renderer agree on what they mean, exactly as they do for a prop.
+struct PendingVfx {
+    u16  kind = 0;
+    fx3  pos{};
+    brad dir{};
+    u32  param = 0;
+};
+
+inline constexpr u32 MAX_PENDING_VFX = 32;
+
 // An agent swung at something and connected.
 //
 // The engine answers "what was in the arc"; whether that hurts, breaks, or does
@@ -152,6 +171,29 @@ struct AgentState {
     brad facing{};
     bool active = false;
 
+    // What this agent IS, for anything that is not a player.
+    //
+    // Zero means a player, which the client draws as a body. Anything else is a
+    // catalogue kind and is drawn from the same sprite records a prop uses --
+    // so an enemy needs no second rendering path, and a prop that grows legs
+    // needs no new one either.
+    //
+    // An enemy is an AGENT and not a prop because it MOVES: it walks, falls,
+    // steps up, slides along walls and is stopped by doors, and all of that
+    // already exists in the controller a player runs. Giving props a mover
+    // instead would be a second implementation of the thing the physics
+    // contract exists to keep singular.
+    PropKind kind = 0;
+
+    // Which animation the client should play. The server declares the STATE and
+    // never the timing, exactly as for props (design §4).
+    u16  animation_state = 0;
+
+    // Set by a script for an agent it drives. A player's input arrives from its
+    // session; an enemy's is written here, so both run the same controller and
+    // an enemy cannot do anything a player could not.
+    bool scripted = false;
+
     physics::MoveState mv{};
 };
 
@@ -177,6 +219,10 @@ public:
 
     u32  spawn(fx3 pos) noexcept;
     void despawn(u32 index) noexcept;
+
+    // An agent nobody is sitting at: an enemy, driven by a script through
+    // set_input. Returns MAX_AGENTS when full.
+    u32  spawn_scripted(PropKind kind, fx3 pos) noexcept;
 
     // Props, addressed by ENTITY index (>= MAX_AGENTS). Returns MAX_ENTITIES
     // when the world is full.
@@ -216,6 +262,20 @@ public:
 
     // Everything an agent's swing connected with this tick.
     const AttackLog& attacks() const noexcept { return attacks_; }
+
+    // Transient visuals queued this tick, drained by the server into snapshots.
+    //
+    // NOT hashed and not part of the simulation: a tracer changes nothing, and
+    // a client that draws one has not diverged from a client that dropped it.
+    // Cleared every tick, so a dropped datagram loses the effect rather than
+    // replaying it late.
+    u32 vfx_count() const noexcept { return vfx_count_; }
+    const PendingVfx& vfx(u32 i) const noexcept { return vfx_[i]; }
+    bool push_vfx(const PendingVfx& v) noexcept {
+        if (vfx_count_ >= MAX_PENDING_VFX) return false;
+        vfx_[vfx_count_++] = v;
+        return true;
+    }
 
     // Input for the tick about to be stepped. An agent with no input this tick
     // keeps its previous frame -- the server must simulate SOMETHING, and
@@ -332,6 +392,8 @@ private:
     PropEventLog         prop_events_{};
     u32                  prop_epoch_ = 0;
     AttackLog            attacks_{};
+    PendingVfx           vfx_[MAX_PENDING_VFX]{};
+    u32                  vfx_count_ = 0;
     // One generation table over the whole index space, so a handle to slot 70
     // is validated exactly the way a handle to slot 3 is.
     u8                   generation_[MAX_ENTITIES]{};

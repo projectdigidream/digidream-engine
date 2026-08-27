@@ -9,6 +9,12 @@
 --   sides 11,21  the trip-wire at x = 17, crossed either way
 --   side 18      the exit switch
 
+-- Two monsters, north of the spawn where the door test does not walk. Placed
+-- from here rather than by the converter because this is a hand-authored map:
+-- what a map contains is the map's business.
+enemies.spawn("zombieman", 240, 480, 48)
+enemies.spawn("imp",       144, 480, 48)
+
 doom.load{
   name = "doors",
   lines = {
