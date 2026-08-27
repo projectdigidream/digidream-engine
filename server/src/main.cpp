@@ -1205,6 +1205,7 @@ struct Server : lua::MapChangeSink {
             // already passed. This is the first thing to send them -- the
             // encoder has existed and been unit-tested since Phase 1 and had
             // never been called.
+            u32 vfx_dropped = 0;
             for (u32 v = 0; v < world.vfx_count(); ++v) {
                 const sim::PendingVfx& pv = world.vfx(v);
                 proto::VfxEvent ev;
@@ -1212,7 +1213,7 @@ struct Server : lua::MapChangeSink {
                 ev.pos = pv.pos;
                 ev.dir = pv.dir;
                 ev.param = pv.param;
-                if (!w.try_vfx(ev)) break;
+                if (!w.try_vfx(ev)) { vfx_dropped = world.vfx_count() - v; break; }
             }
 
             s.last_snapshot_sent = world.tick();
@@ -1221,6 +1222,16 @@ struct Server : lua::MapChangeSink {
                 // Protocol R10: never silently cap.
                 std::fprintf(stderr, "[srv] tick %u session %u: %u entities omitted (budget)\n",
                              world.tick(), id, omitted);
+            }
+            if (vfx_dropped > 0) {
+                // Same rule, and it had been broken here: transients are sent
+                // AFTER the entities, so on a crowded map the entity list fills
+                // the datagram and every tracer is discarded -- silently, since
+                // `omitted` counts only entities. Twenty-nine monsters is
+                // enough to do it, and the symptom is "the hitscan enemies
+                // never draw anything", with nothing in any log.
+                std::fprintf(stderr, "[srv] tick %u session %u: %u vfx dropped (budget)\n",
+                             world.tick(), id, vfx_dropped);
             }
             s.bytes_sent += n;
             s.snapshots_sent += 1;

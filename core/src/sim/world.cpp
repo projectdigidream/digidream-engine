@@ -640,8 +640,78 @@ void World::despawn_prop(u32 entity) noexcept {
 //
 // Iterated in index order so two overlapping props resolve the same way on
 // every target, which is the whole reason this is in core and not in a script.
+// Put a body back inside the world after something displaced it.
+//
+// Every push in this file -- out of a solid prop, out of another body -- moves a
+// cylinder along the line between two centres and asks nothing about the map.
+// That is fine in open floor and wrong against a wall: a monster walking into a
+// player standing in a doorway pushed the player straight through it and out of
+// the level. Reported from a browser as "enemies can push the player out of
+// bounds if the player tries to move in the direction of enemies", which is
+// exactly what it is -- the push is a teleport, and a teleport that skips
+// collision skips the walls too.
+//
+// THREE steps, because there are three ways to end up somewhere impossible, and
+// the first one is the one that actually bites.
+//
+// The push is a jump, not a walk, so it can cross a wall entirely: start on one
+// side, land on the other, and never be inside it at any moment a resting
+// contact test could notice. push_out_of_sector cannot help -- by the time it
+// looks, the body is legitimately standing in a sector it is allowed to be in,
+// just not the one it should have reached. A single flat room hides this
+// completely, which is why the first fixture written for it passed with the
+// whole fix commented out. So the push is SWEPT first, against the same ray the
+// mover's own CCD uses (§7.1.1: aiming and collision must not disagree about
+// what is in the way).
+//
+// Then ordinary resting contact, which resolves the shallow case by sliding
+// along the wall. Then, last, the case neither can resolve -- pushed clean out
+// of the map, where there is no sector to be pushed out of -- and there the
+// honest answer is to refuse the push. Two bodies briefly overlapping is a
+// cosmetic problem; a body outside the world is not recoverable.
+void World::keep_in_map(u32 i, fx2 before) noexcept {
+    if (!map_) return;
+    AgentState& a = agents_[i];
+    fx2 p{a.pos.x, a.pos.y};
+
+    // 1. Did the push cross something solid on its way?
+    const fx2 step{p.x - before.x, p.y - before.y};
+    const fx dist = length(step);
+    if (dist > fx::zero()) {
+        const fx2 dir{step.x / dist, step.y / dist};
+        const physics::RayHit hit =
+            physics::raycast(*map_, a.mv.sector, before, dir, dist + params_[i].radius, 0);
+        if (hit.blocked) {
+            // Stop a radius short of the surface, which is where a body resting
+            // against it would be.
+            const fx back = hit.distance - params_[i].radius;
+            const fx go = back > fx::zero() ? back : fx::zero();
+            p.x = before.x + dir.x * go;
+            p.y = before.y + dir.y * go;
+            a.pos.x = p.x;
+            a.pos.y = p.y;
+        }
+    }
+
+    const physics::SurfaceQuery q =
+        physics::query_surface(*map_, p, a.mv.sector, a.pos.z, params_[i].height);
+    if (!q.in_map) { a.pos.x = before.x; a.pos.y = before.y; return; }
+
+    a.mv.sector = q.sector;
+    physics::push_out_of_sector(*map_, static_cast<u32>(q.sector), p, &a.vel,
+                                params_[i].radius, a.pos.z, params_[i].height);
+
+    const physics::SurfaceQuery after =
+        physics::query_surface(*map_, p, q.sector, a.pos.z, params_[i].height);
+    if (!after.in_map) { a.pos.x = before.x; a.pos.y = before.y; return; }
+    a.pos.x = p.x;
+    a.pos.y = p.y;
+    a.mv.sector = after.sector;
+}
+
 void World::resolve_prop_collisions(u32 agent) noexcept {
     AgentState& a = agents_[agent];
+    const fx2 before{a.pos.x, a.pos.y};
     const fx r_a = params_[agent].radius;
     const fx h_a = params_[agent].height;
 
@@ -680,6 +750,7 @@ void World::resolve_prop_collisions(u32 agent) noexcept {
             a.vel.y -= n.y * into;
         }
     }
+    keep_in_map(agent, before);
 }
 
 // Bodies do not stand inside one another.
@@ -713,6 +784,7 @@ void World::resolve_agent_collisions(const fx3* was) noexcept {
     for (u32 j = 0; j < MAX_AGENTS; ++j) {
         if (!agents_[j].active) continue;
         AgentState& b = agents_[j];
+        const fx2 before{b.pos.x, b.pos.y};
         const fx r_b = params_[j].radius;
         const fx h_b = params_[j].height;
 
@@ -746,8 +818,40 @@ void World::resolve_agent_collisions(const fx3* was) noexcept {
                               ? fx2{j > i ? fx::one() : -fx::one(), fx::zero()}
                               : normalize(fx2{dx, dy});
 
-            b.pos.x = a.x + n.x * want;
-            b.pos.y = a.y + n.y * want;
+            // How far this body may be moved by the resolution: AS FAR AS IT
+            // TRAVELLED, and no further.
+            //
+            // This is what makes a body block rather than shove, and the
+            // version without it only looked like it did. Resolving against
+            // start-of-tick positions means a standing player is not displaced
+            // on the tick a monster first reaches them -- but on every tick
+            // after, the two genuinely overlap, both resolve, and the player is
+            // walked steadily backwards by whatever is chasing them. Into a
+            // pit, over a ledge, or through a doorway they were standing in.
+            //
+            // Capping the push at the body's own displacement says: you can be
+            // put back where you came from, never pushed past it. A body that
+            // did not move cannot be moved by this at all -- so the monster,
+            // whose own movement created the overlap, is the one that gets
+            // pushed out of it, which is the whole idea.
+            //
+            // Plus a small allowance, or two bodies that are already inside
+            // each other and both standing still would stay that way forever --
+            // a spawn on an occupied tag, or a script placing something on top
+            // of you. A slow unstick rather than a shove.
+            const fx2 travelled{b.pos.x - was[j].x, b.pos.y - was[j].y};
+            const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
+
+            const fx2 target{a.x + n.x * want, a.y + n.y * want};
+            const fx2 correction{target.x - b.pos.x, target.y - b.pos.y};
+            const fx need = length(correction);
+            if (need > budget) {
+                b.pos.x += correction.x * budget / need;
+                b.pos.y += correction.y * budget / need;
+            } else {
+                b.pos.x = target.x;
+                b.pos.y = target.y;
+            }
 
             const fx into = dot(n, fx2{b.vel.x, b.vel.y});
             if (into < fx::zero()) {
@@ -755,6 +859,7 @@ void World::resolve_agent_collisions(const fx3* was) noexcept {
                 b.vel.y -= n.y * into;
             }
         }
+        keep_in_map(j, before);
     }
 }
 

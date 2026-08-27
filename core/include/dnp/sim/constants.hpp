@@ -29,6 +29,21 @@ inline constexpr fx DT = fx::from_frac(1, TICK_RATE_HZ);
 // incrementally, not a separate parameter.
 inline constexpr fx STEP_HEIGHT = fx::from_frac(1, 2);
 
+// How far a body that did not move may be pushed out of another body, per tick.
+//
+// A CONSTANT and part of the universal contract, like STEP_HEIGHT, because a
+// client predicts against it: a server that unstuck bodies faster would put
+// every client's prediction slightly behind its own.
+//
+// It exists so that two bodies already inside each other -- spawned on the same
+// tag, or one placed on top of the other by a script -- can separate at all,
+// while a body being walked into is not shoved: the resolution is otherwise
+// capped at how far the body itself travelled, so a standing body's cap is
+// zero. A twentieth of a unit a tick is three units a second, which unsticks a
+// spawn overlap in well under a second and is far too slow to push anyone
+// anywhere they did not intend to go.
+inline constexpr fx DEPENETRATE_PER_TICK = fx::from_frac(1, 20);
+
 // Default gravity. Per-entity `gravity_scale` (design 7.2) multiplies this;
 // Lua tunes the scale, never the base.
 inline constexpr fx GRAVITY = fx::from_frac(-1600, 100);

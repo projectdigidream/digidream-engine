@@ -31,7 +31,7 @@ import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { sweepOffset, makeSwingMesh, swingYaw } from './render/swing.js'
-import { parseVfx, VfxView } from './render/vfx.js'
+import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
@@ -231,11 +231,27 @@ if (LIVE) {
 let spawn = map.spawnForTag(SPAWN)
 let agent = world.spawn(spawn)
 
-// The index the SERVER gave us, which is not this world's slot number: it has
-// one agent and the server's has many. Needed so the body mirroring below does
-// not mirror us into our own path.
-if (LIVE && welcome) myAgentIndex = (welcome.selfHandle & 0x00ffffff) - 1
-MIRROR_BASE = core.M._dnp_mirror_base()
+// Our own entity index, as the SERVER numbers it -- not this world's slot
+// number, which is always 0 because this world has one agent and the server's
+// has many. The body-collision rule is decided by index, so predicting it needs
+// ours, and the mirroring below needs it to avoid mirroring us into our own
+// path.
+//
+// Declared HERE rather than beside the renderer state further down. It was
+// down there, assigned from up here, which is a temporal dead zone: `let` does
+// not hoist an initialisation, so this line threw before the declaration it
+// referred to had run. The fix is the ordinary one -- declare a binding where
+// it is first needed.
+let myAgentIndex = (LIVE && welcome) ? (welcome.selfHandle & 0x00ffffff) - 1 : null
+
+// Where mirrored bodies live in this client's own world: the band of prop slots
+// the engine reserves for exactly this. spawn_prop never allocates there, so a
+// mirror can never land on a real prop.
+//
+// Asked of the engine rather than written down here. The last constant this
+// client kept its own copy of was the agent buffer length, and the copy going
+// stale cost a day and looked like a determinism bug.
+const MIRROR_BASE = core.M._dnp_mirror_base()
 
 // Body proportions, for maps built at a scale other than this engine's.
 //
@@ -378,17 +394,6 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // and says so once.
 let props = null
 let vfx = null
-// Where mirrored bodies live in this client's own world: the band of prop slots
-// the engine reserves for exactly this. spawn_prop never allocates there, so a
-// mirror can never land on a real prop.
-//
-// Asked of the engine rather than written down here. The last constant this
-// client kept its own copy of was the agent buffer length, and the copy going
-// stale cost a day and looked like a determinism bug.
-let MIRROR_BASE = 0
-// Our own entity index, from WELCOME's handle. The collision rule is decided by
-// index, so predicting it needs to know ours.
-let myAgentIndex = null
 try {
   const text = await (await fetch('/props.txt')).text()
   const catalogue = parseProps(text)
@@ -663,16 +668,10 @@ function drainSnapshots () {
     // hit.
     for (const v of s.vfx ?? []) {
       if (!vfx) continue
-      const len = v.param / 256
-      const turns = (v.dir >>> 0) / 4294967296
-      const dx = Math.cos(turns * Math.PI * 2) * len
-      const dy = Math.sin(turns * Math.PI * 2) * len
-      const x = fxToFloat(v.pos.x)
-      const y = fxToFloat(v.pos.y)
-      const z = fxToFloat(v.pos.z)
+      const { from, to } = tracerEnds(v, fxToFloat)
       vfx.spawn(v.kind,
-                { x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) },
-                { x: toThreeX(x + dx), y: toThreeY(z), z: toThreeZ(y + dy) },
+                { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
+                { x: toThreeX(to.x), y: toThreeY(to.z), z: toThreeZ(to.y) },
                 performance.now() / 1000)
     }
     for (const so of s.sectorOffsets ?? []) world.setDiscreteOffset(so.sector, so.offset)

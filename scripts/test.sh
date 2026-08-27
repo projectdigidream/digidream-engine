@@ -118,8 +118,11 @@ else
   node client/test/entities.test.js | tail -2
   node client/test/lighting.test.js | tail -2
   node client/test/shadows.test.js | tail -2
+  # Static, and about the one client file nothing else loads.
+  node client/test/tdz.test.js | tail -2
   node client/test/props.test.js | tail -2
   node client/test/swing.test.js | tail -2
+  node client/test/vfx.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2

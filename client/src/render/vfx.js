@@ -46,6 +46,39 @@ export function parseVfx (text) {
 }
 
 /**
+ * The two ends of a tracer, in world coordinates.
+ *
+ * The event carries where the shot STARTED, which way it went, and how long it
+ * was -- not where it ended. A client given only a direction would draw a line
+ * to infinity through whatever the shot hit, and one given only the far end
+ * would not know where it came from.
+ *
+ * `param` is the length in 1/256 world units, which is a hundredth of a Doom
+ * unit at this scale and comfortably inside the u32 the event carries. `dir` is
+ * a brad -- a turn in 2^32 -- so dividing by 2^32 gives turns directly and the
+ * conversion cannot pick up a stray factor of pi.
+ *
+ * Extracted from main.js so it can be tested at all. main.js needs a DOM, a
+ * WebGL context and a live session, so every line in it is a line no suite
+ * runs -- and this particular calculation has a bad history: the sprite
+ * billboard and the swing collider both shipped mirrored, both because an angle
+ * convention was reasoned about instead of checked.
+ */
+export function tracerEnds (v, fxToFloat) {
+  const len = v.param / 256
+  const turns = (v.dir >>> 0) / 4294967296
+  const a = turns * Math.PI * 2
+  const x = fxToFloat(v.pos.x)
+  const y = fxToFloat(v.pos.y)
+  const z = fxToFloat(v.pos.z)
+  return {
+    from: { x, y, z },
+    to: { x: x + Math.cos(a) * len, y: y + Math.sin(a) * len, z },
+    length: len
+  }
+}
+
+/**
  * How visible an effect is, `age` seconds in.
  *
  * Linear, and 0 once it has outlived its life. A pure function so the decay can

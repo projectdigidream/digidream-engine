@@ -286,7 +286,7 @@ bool Vm::run_file(const char* path, const char* name) {
         return false;
     }
 
-    current_ = name;
+    set_current(name);
     used_this_call_ = 0;
     killed_ = false;
 
@@ -301,6 +301,10 @@ bool Vm::run_file(const char* path, const char* name) {
     // Collect whatever hooks this chunk defined before the next one runs.
     harvest_hooks();
     return true;
+}
+
+void Vm::set_current(const char* name) noexcept {
+    std::snprintf(current_, sizeof(current_), "%s", name ? name : "");
 }
 
 void Vm::begin_tick() {
@@ -330,6 +334,15 @@ void Vm::end_tick(u32 tick) {
 // The registry table holding every hook's handler list.
 static const char* const HOOKS_KEY = "dnp.hooks";
 
+// And, parallel to it, the name of the script each handler came from.
+//
+// Without this the stall warning always named the LAST script loaded, whatever
+// was actually running -- `current_` was set at load time and never touched
+// again. So the one line whose entire purpose is "which script did this" was
+// answering a different question, confidently. A handler's owner is known at
+// harvest time and nowhere else, so it is recorded there.
+static const char* const OWNERS_KEY = "dnp.hookowners";
+
 // Every hook the engine dispatches. Named in one place so harvesting and
 // calling cannot disagree about what a hook is.
 static const char* const HOOK_NAMES[] = {
@@ -339,13 +352,13 @@ static const char* const HOOK_NAMES[] = {
 
 // Push the handler list for `fn_name`, creating it if absent. Leaves the table
 // on the stack.
-static void push_hook_list(lua_State* L, const char* fn_name) {
-    lua_getfield(L, LUA_REGISTRYINDEX, HOOKS_KEY);
+static void push_list(lua_State* L, const char* key, const char* fn_name) {
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
     if (!lua_istable(L, -1)) {
         lua_pop(L, 1);
         lua_newtable(L);
         lua_pushvalue(L, -1);
-        lua_setfield(L, LUA_REGISTRYINDEX, HOOKS_KEY);
+        lua_setfield(L, LUA_REGISTRYINDEX, key);
     }
     lua_getfield(L, -1, fn_name);
     if (!lua_istable(L, -1)) {
@@ -355,6 +368,13 @@ static void push_hook_list(lua_State* L, const char* fn_name) {
         lua_setfield(L, -3, fn_name);
     }
     lua_remove(L, -2);   // drop the outer hooks table
+}
+
+static void push_hook_list(lua_State* L, const char* fn_name) {
+    push_list(L, HOOKS_KEY, fn_name);
+}
+static void push_owner_list(lua_State* L, const char* fn_name) {
+    push_list(L, OWNERS_KEY, fn_name);
 }
 
 void Vm::harvest_hooks() {
@@ -368,6 +388,13 @@ void Vm::harvest_hooks() {
         lua_pushvalue(L_, -2);          // the function
         lua_rawseti(L_, -2, n + 1);
         lua_pop(L_, 2);                 // list, function
+
+        // Same slot in the parallel list: who registered it. current_ is the
+        // script being loaded right now, which is exactly the answer.
+        push_owner_list(L_, name);
+        lua_pushstring(L_, current_);
+        lua_rawseti(L_, -2, n + 1);
+        lua_pop(L_, 1);
 
         // Cleared, so the NEXT script starts from nothing. Without this a
         // script would see the previous one's handler as a global and the old
@@ -387,6 +414,12 @@ u32 Vm::hook_count(const char* fn_name) const {
 
 bool Vm::begin_hook_at(const char* fn_name, u32 i) {
     if (!L_) return false;
+    // Blame the script that registered THIS handler, for as long as it runs.
+    push_owner_list(L_, fn_name);
+    lua_rawgeti(L_, -1, static_cast<int>(i) + 1);
+    if (const char* owner = lua_tostring(L_, -1)) set_current(owner);
+    lua_pop(L_, 2);
+
     push_hook_list(L_, fn_name);
     lua_rawgeti(L_, -1, static_cast<int>(i) + 1);
     lua_remove(L_, -2);

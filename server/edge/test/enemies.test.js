@@ -65,7 +65,7 @@ const waitFor = async (fn, ms, l) => {
 
 function mapPath () {
   for (const arch of [process.arch === 'x64' ? 'x86_64' : 'arm64', 'arm64', 'x86_64', 'native']) {
-    const p = join(ROOT, 'build', arch, 'monsters.dnpm')
+    const p = join(ROOT, 'build', arch, process.env.DNP_MAP_NAME ?? 'monsters.dnpm')
     if (existsSync(p)) return p
   }
   return null
@@ -282,5 +282,19 @@ if (IDLE_ONLY) {
 try { wt.close() } catch {}
 await edge.stop()
 server.kill('SIGTERM')
+// Lua stalls the server logged while this ran.
+//
+// Surfaced rather than swallowed. A monster script that gets slower does not
+// fail an assertion -- it makes the server miss ticks, and a server that falls
+// behind presents to every client as a burst of corrections, which is the
+// hardest thing in this engine to tell apart from a determinism bug. The server
+// already names the responsible script; this is what makes the test say it.
+const stalls = serverLog.split('\n').filter((l) => l.includes('budget warn'))
+if (stalls.length) {
+  console.log(`  ${stalls.length} Lua stall warning(s), worst last:`)
+  for (const l of stalls.slice(-4)) console.log(`     ${l.trim()}`)
+}
+check(stalls.length === 0, `the monster script kept up (${stalls.length} stalls)`)
+
 console.log(`\nenemies: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

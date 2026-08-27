@@ -82,6 +82,9 @@ local shots = {}
 -- level that does not.
 local players = {}
 local players_tick = -1
+-- Whether the monsters have already been put down for the night. A flag rather
+-- than doing it every tick: the point of the check is to stop doing work.
+local asleep = false
 
 local function refresh_players(tick)
   if players_tick == tick then return end
@@ -200,6 +203,51 @@ local function fire_projectile(m, from, aim)
   shots[p:index()] = { p = p, dir = dir, speed = m.def.speed_shot, born = dnp.tick() }
 end
 
+-- Projectiles in flight, and the bursts they leave behind.
+--
+-- Lifted out of on_tick so that the empty-level short circuit above can
+-- still run it. A fireball with nobody left to hit still has to expire --
+-- skipping it would leak a prop slot per shot, which is a slower and much
+-- more confusing failure than a stall.
+local function update_shots(tick)
+  -- Fireballs whose burst has finished playing.
+  if M.expire then
+    for idx, x in pairs(M.expire) do
+      if tick >= x.at then
+        if x.p:valid() then x.p:despawn() end
+        M.expire[idx] = nil
+      end
+    end
+  end
+
+  -- Fireballs. Moved here rather than by the engine because a projectile is a
+  -- gameplay object: what it does when it arrives is a decision, and the engine
+  -- has no opinion about any of it.
+  for idx, s in pairs(shots) do
+    if not s.p:valid() then
+      shots[idx] = nil
+    elseif tick - s.born > 300 then
+      s.p:despawn()
+      shots[idx] = nil
+    else
+      local p = s.p:pos()
+      local step = s.speed / fx.int(60)
+      -- Does it reach? A projectile that ignored geometry sailed through every
+      -- wall in the map, which is not a fireball, it is a rumour.
+      local blocked, at = dnp.sweep(p, s.dir, step)
+      if blocked then
+        s.p:set_pos(at)
+        s.p:set_animation(1)
+        shots[idx] = nil
+        M.expire = M.expire or {}
+        M.expire[idx] = { p = s.p, at = tick + 20 }
+      else
+        s.p:set_pos(vec3.new(p.x + s.dir.x * step, p.y + s.dir.y * step, p.z))
+      end
+    end
+  end
+end
+
 -- No chaining needed, and none possible.
 --
 -- The engine collects each script's hooks after it loads and calls every one of
@@ -212,6 +260,36 @@ function on_tick()
 
 
   refresh_players(tick)
+
+  -- NOBODY HERE: stop.
+  --
+  -- A level stays loaded and keeps ticking after the last player leaves it, and
+  -- every level runs its own copy of this script over its own monsters. So on a
+  -- server where clients have walked through several maps, most of the monster
+  -- work each tick is being done on behalf of empty rooms -- and the stall
+  -- warnings arrive four at a time for one tick, once per level, which is
+  -- exactly what that looks like from the outside.
+  --
+  -- Nothing a monster does is defined without a player: it chases one, it aims
+  -- at one, it decides whether it can see one. The only state that has to be
+  -- right when somebody arrives is the animation, and that is set once on the
+  -- transition rather than every tick.
+  if #players == 0 then
+    if not asleep then
+      asleep = true
+      for _, m in pairs(live) do
+        if m.e:valid() then
+          m.e:set_animation(IDLE)
+          m.e:set_input(ZERO, ZERO, m.e:facing() or 0)
+        end
+      end
+    end
+    -- Fireballs still in flight are finished off below; a projectile with
+    -- nobody to hit still has to stop existing.
+    update_shots(tick)
+    return
+  end
+  asleep = false
 
   for idx, m in pairs(live) do
     if not m.e:valid() then
@@ -273,42 +351,8 @@ function on_tick()
     end
   end
 
-  -- Fireballs whose burst has finished playing.
-  if M.expire then
-    for idx, x in pairs(M.expire) do
-      if tick >= x.at then
-        if x.p:valid() then x.p:despawn() end
-        M.expire[idx] = nil
-      end
-    end
-  end
+  update_shots(tick)
 
-  -- Fireballs. Moved here rather than by the engine because a projectile is a
-  -- gameplay object: what it does when it arrives is a decision, and the engine
-  -- has no opinion about any of it.
-  for idx, s in pairs(shots) do
-    if not s.p:valid() then
-      shots[idx] = nil
-    elseif tick - s.born > 300 then
-      s.p:despawn()
-      shots[idx] = nil
-    else
-      local p = s.p:pos()
-      local step = s.speed / fx.int(60)
-      -- Does it reach? A projectile that ignored geometry sailed through every
-      -- wall in the map, which is not a fireball, it is a rumour.
-      local blocked, at = dnp.sweep(p, s.dir, step)
-      if blocked then
-        s.p:set_pos(at)
-        s.p:set_animation(1)
-        shots[idx] = nil
-        M.expire = M.expire or {}
-        M.expire[idx] = { p = s.p, at = tick + 20 }
-      else
-        s.p:set_pos(vec3.new(p.x + s.dir.x * step, p.y + s.dir.y * step, p.z))
-      end
-    end
-  end
 end
 
 -- A fireball that touches something goes off. Reported by the engine's overlap

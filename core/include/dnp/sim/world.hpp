@@ -389,6 +389,10 @@ private:
     // `was` is every agent's position at the start of the tick -- see the
     // definition for why the resolution reads that rather than live positions.
     void resolve_agent_collisions(const fx3* was) noexcept;
+
+    // Undo, or resolve, a push that put a body somewhere the map does not
+    // allow. `before` is where it was before the push.
+    void keep_in_map(u32 i, fx2 before) noexcept;
     i32  find_usable_prop(u32 agent) const noexcept;
     void resolve_attack(u32 agent) noexcept;
     void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;

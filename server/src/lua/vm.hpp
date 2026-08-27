@@ -181,7 +181,18 @@ private:
     u32  used_this_tick_ = 0;
     u32  used_this_call_ = 0;
     bool killed_ = false;
-    const char* current_ = "";
+
+    // The script being blamed in a log line -- OWNED, not borrowed.
+    //
+    // This was a `const char*` assigned straight from the caller's argument,
+    // and main.cpp passes `path.c_str()` from a std::string that dies at the
+    // end of the loop iteration that loaded the script. Every stall warning
+    // after the first therefore printed freed memory: `[lua] tick 1426: 8381 us
+    // in script '<mojibake>'`. A borrowed pointer outliving its owner is not
+    // something a caller can be expected to get right, so the class holds a
+    // copy.
+    char current_[128] = "";
+    void set_current(const char* name) noexcept;
 
     u64 tick_start_us_ = 0;
 };

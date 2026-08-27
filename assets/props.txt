@@ -136,5 +136,14 @@ sprite 22 state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
 # what a 1 IS lives here, which is what makes it customisable without touching
 # either binary.
 
-vfx 1 tracer colour ffee88 width 0.035 life 0.10
-vfx 2 tracer colour ff8844 width 0.05  life 0.16
+# Wide enough and slow enough to actually SEE.
+#
+# These were 0.035 wide and lasted a tenth of a second, which at 1/48 Doom
+# scale is a sub-pixel line for about six frames -- correct, drawn, and
+# invisible, which is indistinguishable from broken and was reported as such
+# three times. A tracer is not a simulation object: nothing collides with it and
+# nothing depends on its size, so the only question it has to answer is whether
+# a person can tell a shot was fired. These are the numbers to turn down if they
+# turn out to be gaudy, and turning them down needs no recompile.
+vfx 1 tracer colour ffee88 width 0.09 life 0.35
+vfx 2 tracer colour ff8844 width 0.12 life 0.45
