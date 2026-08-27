@@ -122,6 +122,35 @@ int l_entity_teleport(lua_State* L) {
     return 0;
 }
 
+// entity:change_map([index]) -> true if the request was accepted
+//
+// With no argument, the next level in the server's progression -- which is the
+// order the maps were given on the command line. With an index, that level.
+//
+// DEFERRED like every other mutation here, and more so: this one despawns the
+// entity from the world the calling script belongs to. Applied after every
+// level has stepped (see Server::tick), so a script never pulls a body out from
+// under the tick that is iterating it.
+//
+// A stale handle is the usual defined no-op: a player who disconnected between
+// touching the exit and the flush point is not an error.
+int l_entity_change_map(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushboolean(L, 0); return 1; }
+    if (ctx.map_changes == nullptr) {
+        // No progression configured -- one map, or a test harness. Saying so
+        // beats a silent no-op, because "the exit does nothing" is exactly what
+        // a broken map script looks like.
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const i32 to = lua_isnoneornil(L, 2) ? -1 : static_cast<i32>(luaL_checknumber(L, 2));
+    ctx.map_changes->request_map_change(ctx.level, static_cast<u32>(a), to);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int l_entity_add_impulse(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -241,6 +270,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"sector", l_entity_sector},
     {"index", l_entity_index_of},
     {"teleport", l_entity_teleport},
+    {"change_map", l_entity_change_map},
     {"add_impulse", l_entity_add_impulse},
     {"set_velocity", l_entity_set_velocity},
     {"param", l_entity_param},

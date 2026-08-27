@@ -37,9 +37,28 @@ struct WorldBindingStats {
 
 // Everything the bindings need, in one place, so the Lua side never reaches
 // for a global.
+// Where a script's request to move a player to another map goes.
+//
+// An interface rather than a direct call into the server, for the reason every
+// mutation in this file is deferred: a map change despawns an entity from one
+// world and spawns it in another, and doing that from inside a callback would
+// mutate the entity set a tick is iterating. The host queues it and applies it
+// at a defined point.
+struct MapChangeSink {
+    virtual ~MapChangeSink() = default;
+    // `to` is a level index, or negative for "the next one".
+    virtual void request_map_change(u32 level, u32 agent, i32 to) = 0;
+};
+
 struct WorldContext {
     sim::World*       world = nullptr;
     geom::MapStorage* map_store = nullptr;
+
+    // Which level this context belongs to, and where to send a map change. The
+    // level index is fixed at load; a script never names its own level, it just
+    // says "next".
+    u32               level = 0;
+    MapChangeSink*    map_changes = nullptr;
 
     // Deterministic, seeded from the map hash and the script name -- never from
     // a clock or /dev/urandom. A script that behaved differently on replay

@@ -17,6 +17,11 @@ inline constexpr u32 INPUT_RING = 128;
 class Session {
 public:
     u32  id            = 0;
+
+    // Which level this session is IN. A server hosts one simulation per map, so
+    // an agent index means nothing without it: slot 3 in MAP01 and slot 3 in
+    // MAP02 are two different players.
+    u32  level         = 0;
     u32  agent         = 0;
     bool has_agent     = false;
     bool hello_done    = false;
@@ -44,6 +49,26 @@ public:
     u64 bytes_sent = 0;
     u64 snapshots_sent = 0;
     u64 entities_omitted = 0;
+
+    // Forget everything about the world this session was watching, without
+    // touching who it is or what it has sent us.
+    //
+    // Called when a session changes level. The snapshot history is a set of
+    // baselines describing entities in the map just left: delta-encoding this
+    // map's entities against those would produce a valid-looking snapshot full
+    // of nonsense, and the input ring would replay presses aimed at a room that
+    // no longer exists.
+    void forget_history() noexcept {
+        history.reset();
+        for (u32 i = 0; i < INPUT_RING; ++i) { have_[i] = false; ring_[i] = proto::InputFrame{}; }
+        last_applied_tick = 0;
+        ack_snapshot_tick = 0;
+        last_snapshot_sent = 0;
+        newest_input_tick = 0;
+        next_tick_ = 0;
+        started_ = false;
+        last_applied_frame_ = proto::InputFrame{};
+    }
 
     void reset() noexcept {
         history.reset();

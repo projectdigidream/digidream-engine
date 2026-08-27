@@ -127,4 +127,16 @@ export class EntityView {
   }
 
   get count () { return this.entities.size }
+
+  /**
+   * Forget every entity and take its mesh out of the scene.
+   *
+   * For a map change: the entity indices in the next map's snapshots address
+   * different players entirely, so a view that kept its old ones would
+   * interpolate a stranger's body from wherever the last map left it toward
+   * wherever this one starts.
+   */
+  clear () {
+    for (const index of [...this.entities.keys()]) this.#remove(index)
+  }
 }

@@ -1,0 +1,23 @@
+# Level B: where level A's exit leads.
+#
+# Two sectors and a different footprint, so "the client is in a different map"
+# is observable as a fact about the geometry rather than only as a changed hash.
+
+body radius 0.3333 height 1.1667
+
+sector floor 0 ceil 6 tag 1 light 180 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 0 0    wall tex BRICK5
+  vertex 30 0   wall tex BRICK5
+  vertex 30 7   neighbor 1
+  vertex 30 14  wall tex BRICK5
+  vertex 0 14   wall tex BRICK5
+end
+
+sector floor 0 ceil 6 tag 2 light 120 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 30 0   wall tex BRICK5
+  vertex 40 0   wall tex BRICK5
+  vertex 40 7   wall tex BRICK5
+  vertex 30 7   neighbor 0
+end
+
+spawn start 5 7 1

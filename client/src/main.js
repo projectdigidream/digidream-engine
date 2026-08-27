@@ -77,6 +77,9 @@ const core = await Core.load()
 let mapBytes
 let conn = null
 let welcome = null
+// A map change in flight: the new WELCOME, and the map arriving behind it.
+let pendingWelcome = null
+let movingMap = null
 const motionSets = []
 const pendingSnapshots = []
 // Declared BEFORE the connection opens. Messages start arriving during the
@@ -105,8 +108,15 @@ if (LIVE) {
     url: SERVER_URL,
     certHash,
     onControl (m) {
-      if (m.type === MSG.WELCOME) welcome = m
-      else if (m.type === MSG.MAP_DATA) acc.push(m)
+      if (m.type === MSG.WELCOME) {
+        // A SECOND welcome is the server saying "you are in a different map
+        // now". The join sequence is re-sent in full -- welcome, map, motions,
+        // parameters -- because that is exactly what arriving somewhere needs,
+        // and one code path on each side beats two that drift.
+        if (welcome) { pendingWelcome = m; movingMap = new MapAccumulator() }
+        else welcome = m
+      }
+      else if (m.type === MSG.MAP_DATA) (movingMap ?? acc).push(m)
       else if (m.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
       else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
@@ -137,7 +147,7 @@ if (LIVE) {
   mapBytes = new Uint8Array(await (await fetch(MAP_URL)).arrayBuffer())
 }
 
-const { ok, status: loadStatus, map } = core.loadMap(mapBytes)
+let { ok, status: loadStatus, map } = core.loadMap(mapBytes)
 if (!ok) {
   // Named, not numbered. A client that reports "status 5" sends its user to
   // read the source; the loader already knows which of its checks refused.
@@ -145,8 +155,8 @@ if (!ok) {
   throw new Error(`map rejected: ${LOAD_STATUS[loadStatus] ?? loadStatus}`)
 }
 
-const mapData = readMap(map)
-const world = core.createWorld({ map })
+let mapData = readMap(map)
+let world = core.createWorld({ map })
 
 if (LIVE && welcome && map.hash !== welcome.mapHash) {
   // Same bytes, different parse: that is a build mismatch, and it is worth
@@ -159,7 +169,7 @@ if (LIVE && welcome && map.hash !== welcome.mapHash) {
 
 // --- what moves ------------------------------------------------------------
 
-const movers = []
+let movers = []
 
 // A sector that is now known to move.
 //
@@ -214,8 +224,8 @@ if (LIVE) {
   }
 }
 
-const spawn = map.spawnForTag(SPAWN)
-const agent = world.spawn(spawn)
+let spawn = map.spawnForTag(SPAWN)
+let agent = world.spawn(spawn)
 
 // Body proportions, for maps built at a scale other than this engine's.
 //
@@ -232,7 +242,7 @@ for (const [name, key] of [['radius', 'radius'], ['height', 'height'],
     console.warn(`[solo] no movement parameter named ${name}`)
   }
 }
-const predictor = LIVE ? new Predictor(world, agent) : null
+let predictor = LIVE ? new Predictor(world, agent) : null
 if (LIVE) {
   // Parameter updates that arrived during the handshake, applied before the
   // first tick: a client predicting with the wrong movement rules mispredicts
@@ -250,8 +260,8 @@ if (LIVE) {
 // died" is a gameplay decision and gameplay is server Lua -- the same shape
 // §3.1 gives crushing. A kill plane in the core would be a rule no server could
 // opt out of. In live mode the server owns the answer, so this is solo-only.
-const lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
-const VOID_FLOOR = lowestFloor - 40
+let lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
+let VOID_FLOOR = lowestFloor - 40
 let falls = 0
 
 // --- scene -----------------------------------------------------------------
@@ -269,7 +279,7 @@ renderer.setClearColor(0x0b0d12)
 document.body.appendChild(renderer.domElement)
 
 const scene = new THREE.Scene()
-const view = new MapView(mapData)
+let view = new MapView(mapData)
 scene.add(view.root)
 // Only these sectors are rebuilt per frame; everything else is built once.
 if (movers.length) view.setDynamicSectors(movers)
@@ -289,10 +299,10 @@ view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32) })
 // which is the exact opposite of what a debug view is for.
 const RADIUS_ID = 0
 const HEIGHT_ID = 1
-const bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
-const bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
+let bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
+let bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
 
-const body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
+let body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
 scene.add(body)
 
 // Which way the agent is looking, and how far it can reach to work a door.
@@ -325,6 +335,74 @@ const others = new EntityView({
   makeMesh: () => makeAgentMesh(0xffa066, bodyRadius, bodyHeight),
   scene
 })
+
+/**
+ * Take up residence in a new map, mid-session.
+ *
+ * The server hosts one simulation per map and moves a session between them, so
+ * a second WELCOME means "you are somewhere else now". Everything downstream of
+ * the geometry is rebuilt: the world, the agent, the predictor, the meshes, the
+ * shadow's body size, and the set of sectors known to move.
+ *
+ * Everything NOT downstream of the geometry is deliberately kept -- the
+ * renderer, the scene, the camera and its yaw, the held keys. Rebuilding those
+ * would flash the canvas and snap the view for no reason: the player is the
+ * same player, looking the same way, and only the world under them changed.
+ */
+function adoptMap (bytes, w) {
+  const loaded = core.loadMap(bytes)
+  if (!loaded.ok) {
+    say(`new map rejected: ${LOAD_STATUS[loaded.status] ?? loaded.status}`)
+    return false
+  }
+  map = loaded.map
+  mapData = readMap(map)
+
+  world = core.createWorld({ map })
+  spawn = map.spawnForTag(SPAWN)
+  agent = world.spawn(spawn)
+  world.tick = w.serverTick
+  predictor = new Predictor(world, agent)
+
+  bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
+  bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
+
+  lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
+  VOID_FLOOR = lowestFloor - 40
+
+  // The old geometry leaves the scene explicitly. Dropping the reference would
+  // leak every buffer in it -- a map change is not a page load, and nothing
+  // else is going to collect a GPU allocation.
+  for (const m of view.meshes) { view.root.remove(m); m.geometry.dispose() }
+  scene.remove(view.root)
+  view = new MapView(mapData)
+  scene.add(view.root)
+  view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32) })
+
+  movers = []
+
+  scene.remove(body)
+  body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
+  scene.add(body)
+  shadows.setBody(bodyRadius, bodyHeight)
+
+  // Other players in the map just left are not other players here: the indices
+  // in the next snapshot address a different set of people.
+  others.clear()
+
+  // The snapshot stream is about the new world from the next one onward;
+  // anything still queued describes the old one.
+  pendingSnapshots.length = 0
+  motionSets.length = 0
+  inputHistory = []
+  newestServerTick = w.serverTick
+
+  camera.snapTo({
+    x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y))
+  })
+  say(`entered a new map (${mapData.sectors.length} sectors)`)
+  return true
+}
 
 let viewHeight = START_ZOOM
 const cam3 = makeCamera(PROJECTION, innerWidth / innerHeight, viewHeight, FOV)
@@ -435,6 +513,25 @@ function frame (now) {
   requestAnimationFrame(frame)
   const dt = Math.min(0.25, (now - last) / 1000)
   last = now
+
+  // A map change lands FIRST, before any input is sampled or any tick is
+  // simulated. Stepping the old world for even one frame after the server has
+  // moved us would send inputs addressed to a room we are no longer in.
+  //
+  // And only once the whole map has arrived: a MapAccumulator that is still
+  // filling is not a map, and adopting a partial one would fail the load and
+  // leave the session with no geometry at all.
+  if (pendingWelcome && movingMap?.complete) {
+    const w = pendingWelcome
+    const bytes = movingMap.bytes()
+    pendingWelcome = null
+    movingMap = null
+    if (adoptMap(bytes, w)) welcome = w
+  } else if (movingMap?.failed) {
+    say(`map change failed: ${movingMap.failed}`)
+    pendingWelcome = null
+    movingMap = null
+  }
 
   if (held.has('KeyQ')) yaw -= 1.5 * dt
   if (held.has('KeyR')) yaw += 1.5 * dt

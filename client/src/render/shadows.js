@@ -174,12 +174,25 @@ function blobTexture (THREE) {
 }
 
 export class ShadowCaster {
+  /**
+   * Resize the body being projected.
+   *
+   * A map change can change the scale the world is built at, and a shadow cast
+   * from the wrong body is drawn at the wrong size for the whole map -- subtly
+   * enough to look like a lighting bug rather than a stale number.
+   */
+  setBody (radius, bodyHeight) {
+    this.radius = radius
+    this.bodyHeight = bodyHeight
+  }
+
   constructor ({ THREE, scene, radius = 0.75, bodyHeight = 2 }) {
     this.THREE = THREE
     this.scene = scene
     this.radius = radius
     this.bodyHeight = bodyHeight
     this.tex = blobTexture(THREE)
+
 
     const material = () => new THREE.MeshBasicMaterial({
       map: this.tex,

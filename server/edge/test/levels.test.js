@@ -1,0 +1,217 @@
+//
+// Changing map for ONE client (design §3.3's shape, without the second server).
+//
+// The server hosts one simulation per map and moves a session between them, so
+// this asserts three separate things that are easy to confuse:
+//
+//   1. the player who touched the exit is now somewhere else -- a different
+//      map hash, a different sector count, a different spawn;
+//   2. the player who did NOT touch it is still exactly where they were, and
+//      still receiving snapshots of the map they are standing in;
+//   3. the mover can still predict. A map change resets the world under a
+//      client, and a client whose predictor kept its old baseline would
+//      mispredict forever afterwards -- which would look like a determinism
+//      bug and is really a bookkeeping one.
+//
+// (2) is the whole point of the exercise. A server-wide map change would pass
+// (1) and (3) and be a completely different feature.
+//
+import { spawn } from 'node:child_process'
+import { readFileSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { Buffer } from 'node:buffer'
+import { WebTransport } from '@fails-components/webtransport'
+import { Edge } from '../src/edge.js'
+import { Core } from '../../../client/src/core.js'
+import { MapAccumulator } from '../../../client/src/maploader.js'
+import {
+  encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
+  axisFromNumber, fxToNumber, MSG, BUTTON
+} from '../../../client/src/proto.js'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const ROOT = join(HERE, '..', '..', '..')
+const CERTS = join(HERE, '..', 'certs')
+const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34496)
+const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34570)
+// CONTROL: with only one level loaded there is nowhere to go, so the exit must
+// leave the player exactly where they are. Without it, "the map changed" could
+// be any reset at all rather than a move to the NEXT level.
+const ONE_LEVEL = process.env.DNP_ONE_LEVEL === '1'
+
+let checks = 0
+let fails = 0
+const check = (ok, label) => {
+  checks++
+  console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`)
+  if (!ok) fails++
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const withTimeout = (p, ms, l) =>
+  Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout: ${l}`)), ms))])
+const waitFor = async (fn, ms, l) => {
+  const end = Date.now() + ms
+  while (Date.now() < end) { if (fn()) return true; await sleep(20) }
+  throw new Error(`timeout: ${l}`)
+}
+
+function mapPath (name) {
+  for (const arch of [process.arch === 'x64' ? 'x86_64' : 'arm64', 'arm64', 'x86_64', 'native']) {
+    const p = join(ROOT, 'build', arch, name)
+    if (existsSync(p)) return p
+  }
+  return null
+}
+const A = mapPath('level_a.dnpm')
+const B = mapPath('level_b.dnpm')
+if (!A || !B) { console.error('no baked level_a/level_b'); process.exit(2) }
+
+const certHash = Buffer.from(
+  JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
+const core = await Core.load()
+
+const args = ['--port', String(LINK_PORT), '--map', A]
+if (!ONE_LEVEL) args.push('--map', B)
+args.push('--script', join(ROOT, 'maps', 'scripts', 'doom.lua'))
+
+const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
+                     { stdio: ['ignore', 'inherit', 'pipe'] })
+let serverLog = ''
+server.stderr.on('data', (d) => { serverLog += d.toString() })
+process.on('exit', () => { try { server.kill('SIGKILL') } catch {} })
+await waitFor(() => serverLog.includes('listening for edge'), 5000, 'server')
+
+const edge = new Edge({
+  port: WT_PORT, host: '127.0.0.1', path: '/dnp', upstreamPort: LINK_PORT,
+  cert: readFileSync(join(CERTS, 'cert.pem')),
+  privKey: readFileSync(join(CERTS, 'key.pem')),
+  log: () => {}
+})
+await edge.start()
+await waitFor(() => serverLog.includes('edge connected'), 8000, 'edge')
+
+// One connected player, tracking every welcome it receives rather than only the
+// first -- a second WELCOME is the server saying "you are somewhere else now".
+async function connect (name) {
+  const wt = new WebTransport(`https://127.0.0.1:${WT_PORT}/dnp`, {
+    serverCertificateHashes: [{ algorithm: 'sha-256', value: certHash }]
+  })
+  await withTimeout(wt.ready, 8000, `${name} ready`)
+  const control = await wt.createBidirectionalStream()
+  const cw = control.writable.getWriter()
+  const dw = wt.datagrams.createWritable().getWriter()
+
+  const P = {
+    name, wt, cw, dw,
+    welcomes: [],
+    acc: new MapAccumulator(),
+    maps: [],           // one accumulator per welcome
+    snapshots: [],
+    tick: 0,
+    history: []
+  }
+
+  ;(async () => {
+    const r = control.readable.getReader()
+    let buf = Buffer.alloc(0)
+    try {
+      for (;;) {
+        const { value, done } = await r.read()
+        if (done) break
+        buf = Buffer.concat([buf, Buffer.from(value)])
+        while (buf.length >= 4) {
+          const len = buf.readUInt32LE(0)
+          if (buf.length < 4 + len) break
+          const m = decodeControlMessage(buf.subarray(0, 4 + len))
+          buf = buf.subarray(4 + len)
+          if (m?.type === MSG.WELCOME) { P.welcomes.push(m); P.maps.push(new MapAccumulator()) }
+          else if (m?.type === MSG.MAP_DATA) P.maps[P.maps.length - 1]?.push(m)
+        }
+      }
+    } catch {}
+  })()
+
+  ;(async () => {
+    const r = wt.datagrams.readable.getReader()
+    try {
+      for (;;) {
+        const { value, done } = await r.read()
+        if (done) break
+        const s = decodeSnapshot(Buffer.from(value))
+        if (s) P.snapshots.push(s)
+      }
+    } catch {}
+  })()
+
+  await cw.write(encodeHello())
+  await waitFor(() => P.welcomes.length >= 1, 8000, `${name} welcome`)
+  await waitFor(() => P.maps[0].complete, 8000, `${name} map`)
+  return P
+}
+
+async function send (P, buttons, moveX) {
+  P.tick++
+  const f = { buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 }
+  P.history = [f, ...P.history].slice(0, 12)
+  await P.dw.write(encodeInputBundle({
+    clientTick: P.tick,
+    ackSnapshotTick: P.snapshots.at(-1)?.serverTick ?? 0,
+    frames: P.history
+  }))
+}
+
+const mover = await connect('mover')
+const stayer = await connect('stayer')
+
+const hashOf = (P, i) => P.welcomes[i].mapHash
+const sectorsOf = (P, i) => {
+  const { ok, map } = core.loadMap(P.maps[i].bytes())
+  return ok ? map.sectorCount : -1
+}
+
+check(hashOf(mover, 0) === hashOf(stayer, 0), 'both players start in the same map')
+check(sectorsOf(mover, 0) === 1, `level A has one sector (${sectorsOf(mover, 0)})`)
+
+// Both walk east; only the mover presses use at the wall.
+for (let i = 0; i < 90; i++) { await send(mover, 0, 1); await send(stayer, 0, 1); await sleep(12) }
+const stayerBefore = stayer.snapshots.at(-1)
+for (let i = 0; i < 6; i++) { await send(mover, BUTTON.INTERACT, 0); await send(stayer, 0, 0); await sleep(12) }
+for (let i = 0; i < 60; i++) { await send(mover, 0, 0); await send(stayer, 0, 0); await sleep(12) }
+await sleep(400)
+
+console.log(`  mover got ${mover.welcomes.length} welcome(s), stayer got ${stayer.welcomes.length}`)
+
+if (ONE_LEVEL) {
+  check(mover.welcomes.length === 1,
+        'CONTROL: with nowhere to go, the exit does not move anyone')
+  check(serverLog.includes('finished the last level'),
+        'CONTROL: and the server says so rather than failing silently')
+} else {
+  // (1) the mover is somewhere else.
+  check(mover.welcomes.length === 2, `the mover was moved (${mover.welcomes.length} welcomes)`)
+  if (mover.welcomes.length === 2) {
+    await waitFor(() => mover.maps[1].complete, 5000, 'second map')
+    check(hashOf(mover, 1) !== hashOf(mover, 0), 'to a map with a different hash')
+    check(sectorsOf(mover, 1) === 2, `with two sectors, not one (${sectorsOf(mover, 1)})`)
+  }
+
+  // (2) THE POINT: the other player did not move.
+  check(stayer.welcomes.length === 1, `the stayer stayed (${stayer.welcomes.length} welcome)`)
+  const stayerAfter = stayer.snapshots.at(-1)
+  check(stayerAfter && stayerAfter.serverTick > (stayerBefore?.serverTick ?? 0),
+        'and is still being simulated in the map it is standing in')
+  const sx = fxToNumber(stayerAfter.self.pos.x)
+  check(sx > 16, `still at the east wall of level A (x=${sx.toFixed(2)})`)
+
+  // (3) the mover is a working client again: snapshots keep arriving, and their
+  // ticks belong to the new level's world.
+  const after = mover.snapshots.filter((s) => s.serverTick > 0).length
+  check(after > 0, `${after} snapshots since the change`)
+}
+
+for (const P of [mover, stayer]) { try { P.wt.close() } catch {} }
+await edge.stop()
+server.kill('SIGTERM')
+console.log(`\nlevels: ${checks} checks, ${fails} failures`)
+process.exit(fails === 0 ? 0 : 1)

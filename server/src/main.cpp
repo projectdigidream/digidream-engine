@@ -51,67 +51,104 @@ constexpr auto TICK_PERIOD = std::chrono::nanoseconds(1'000'000'000 / sim::TICK_
 // a slow client does not stall behind one enormous write.
 constexpr size_t MAP_CHUNK_BYTES = 8192;
 
-struct Server {
-    net::LinkServer      link;
-    sim::World           world;
+// One map, and everything that exists per map.
+//
+// A LEVEL, not a server. The request that shaped this is "move that client to
+// the next map, and only that client", which means two players can be standing
+// in different maps at the same moment -- and a simulation is defined against
+// one set of geometry, so there has to be one simulation per map. Everything
+// below was a Server member until that was true: the world, the map, the
+// scripts, and every piece of per-agent bookkeeping that is indexed by an agent
+// slot, because slot 3 in MAP01 and slot 3 in MAP02 are different players.
+//
+// The consequence is worth stating rather than discovering: players in
+// different levels cannot see each other, cannot collide, and appear in none of
+// each other's snapshots. That is what "a different map" means.
+//
+// Heap-allocated by the server (roughly 700 KB each), so hosting the whole of
+// DOOM2 is about twenty megabytes and the count is not a thing to ration.
+struct Level {
+    std::string      path;
+    sim::World       world;
+    geom::MapStorage map_store;
+    nav::NavGraph    nav_graph;
+    std::vector<u8>  map_bytes;   // exactly what clients receive
+    u64              map_hash = 0;
 
-    // Heap, not a member by value: MapStorage is a few hundred KB of fixed
-    // arrays and Server is a stack local.
-    // Which named spawn arriving players land on. Portals supply this per
-    // player via entry_spawn_tag (design §3.3); until then it is server-wide.
-    const char* spawn_tag = "start";
-    u32         spawn_tag_len = 5;
+    // The view the world reads geometry through. A member, not a
+    // function-local static: one static was correct while there was exactly one
+    // map and would have made every level after the first alias the last one
+    // loaded -- a bug that presents as "the map renders right and collides
+    // wrong".
+    geom::MapData    view{};
 
-    std::unique_ptr<geom::MapStorage> map_store;
-
-    // The sector graph (design §3.2.4). Nothing routes over it yet -- enemies
-    // are Phase 4 -- but building it at load turns a map whose rooms cannot
-    // reach each other into a line in the startup log rather than into an
-    // enemy that stands still and a bug report six weeks later.
-    std::unique_ptr<nav::NavGraph>    nav_graph;
-
-    // The script runtime. Nothing is bound to it yet -- that is the next slice
-    // -- but it runs on the tick so its budget, GC and stall accounting are
-    // exercised from the first commit rather than bolted on once scripts
-    // already depend on the timing.
-    lua::Vm            script_vm;
-    const char*        script_path = nullptr;
-    lua::CommandQueue  lua_commands;
-    lua::EffectStack   lua_effects;
-    lua::WorldContext  lua_ctx;
+    // One VM per level, which is not merely convenient: a converted map's
+    // script is written against its own side indices and sector tags, and two
+    // of them sharing a global `on_interact` would have the second silently
+    // replace the first.
+    lua::Vm            vm;
+    lua::CommandQueue  commands;
+    lua::EffectStack   effects;
+    lua::WorldContext  ctx;
+    bool               scripted = false;
 
     // The tick at which a script last changed each agent. Compared against the
     // tick of the last snapshot sent to a session, so LUA_APPLIED is set for
     // the observers a change actually concerns and nobody else -- setting it
     // globally would excuse every client's mismatch on every scripted tick.
-    u32 lua_touched_tick[sim::MAX_AGENTS]{};
-    std::vector<u8>                   map_bytes;   // exactly what clients receive
-    u64                               map_hash = 0;
+    u32  lua_touched_tick[sim::MAX_AGENTS]{};
 
-    Server() : map_store(new geom::MapStorage()), nav_graph(new nav::NavGraph()) {
-        // Until a map is loaded, fall back to the built-in one so the server is
-        // still runnable. Phase 3 retires this once every deployment ships a
-        // baked map.
-        world.set_map(&sim::test_map());
-    }
+    u32  crush_reported_tick[sim::MAX_AGENTS]{};
+    bool crush_seen[sim::MAX_AGENTS]{};
+    u8   param_epoch[sim::MAX_AGENTS]{};
+
+    // The motion descriptors every client in THIS level has been told about.
+    sim::SectorMotion sent_motions[sim::MAX_MOVING_SECTORS]{};
+    u32 sent_motion_count = 0;
+    u32 motion_changed_tick = 0;
 
     // Sectors whose motion is scripted-discrete, collected once per tick so the
     // snapshot encoder does not rescan.
     proto::SectorOffset discrete_offsets[proto::MAX_SECTOR_OFFSETS];
     u16                 discrete_count = 0;
+};
 
-    void collect_discrete_offsets() {
-        discrete_count = 0;
-        const auto& ms = world.motions();
-        for (u32 i = 0; i < ms.count() && discrete_count < proto::MAX_SECTOR_OFFSETS; ++i) {
+struct Server : lua::MapChangeSink {
+    net::LinkServer      link;
+
+    // Which named spawn arriving players land on. Portals supply this per
+    // player via entry_spawn_tag (design §3.3); until then it is server-wide.
+    const char* spawn_tag = "start";
+    u32         spawn_tag_len = 5;
+
+    // The levels this server hosts, in the order they were given on the command
+    // line -- which IS the progression order. `--map a --map b --map c` means an
+    // exit in a takes you to b.
+    std::vector<std::unique_ptr<Level>> levels;
+
+    // Scripts loaded into every level, before that level's own. The shared
+    // action library lives here; the map's own data file is found beside its
+    // .dnpm and loaded per level.
+    std::vector<const char*> shared_scripts;
+
+    lua::VmConfig vm_config{};
+    bool          scripts_enabled = false;
+
+    Level& level(u32 i) { return *levels[i]; }
+    u32 level_count() const { return static_cast<u32>(levels.size()); }
+
+    void collect_discrete_offsets(Level& L) {
+        L.discrete_count = 0;
+        const auto& ms = L.world.motions();
+        for (u32 i = 0; i < ms.count() && L.discrete_count < proto::MAX_SECTOR_OFFSETS; ++i) {
             const sim::SectorMotion& m = ms.at(i);
             // Parametric movers are deliberately absent: the client computes
             // theirs from the parameters it already holds, and sending it too
             // would create a second source of truth that could disagree.
             if (m.type != sim::MotionType::ScriptedDiscrete) continue;
-            discrete_offsets[discrete_count].sector = m.sector;
-            discrete_offsets[discrete_count].offset = m.offset;
-            ++discrete_count;
+            L.discrete_offsets[L.discrete_count].sector = m.sector;
+            L.discrete_offsets[L.discrete_count].offset = m.offset;
+            ++L.discrete_count;
         }
     }
 
@@ -138,8 +175,8 @@ struct Server {
         link.send_control(id, buf, end);
     }
 
-    void send_motion_sets(u32 id) {
-        const auto& ms = world.motions();
+    void send_motion_sets(Level& L, u32 id) {
+        const auto& ms = L.world.motions();
         for (u32 i = 0; i < ms.count(); ++i) send_motion(id, ms.at(i));
     }
 
@@ -161,18 +198,22 @@ struct Server {
     // forever (§3.1.2) -- but only if the message arrives. Losing it would leave
     // a client walking into a door that is open on the server, which no later
     // snapshot repairs, because snapshots carry entities and not geometry.
-    void replicate_motion_changes() {
-        const auto& ms = world.motions();
+    void replicate_motion_changes(u32 li) {
+        Level& L = level(li);
+        const auto& ms = L.world.motions();
         for (u32 i = 0; i < ms.count(); ++i) {
             const sim::SectorMotion& m = ms.at(i);
-            if (i < sent_motion_count && same_motion(sent_motions[i], m)) continue;
-            sent_motions[i] = m;
-            motion_changed_tick = world.tick() + 1;
+            if (i < L.sent_motion_count && same_motion(L.sent_motions[i], m)) continue;
+            L.sent_motions[i] = m;
+            L.motion_changed_tick = L.world.tick() + 1;
+            // Only the sessions IN this level. A door opening in MAP01 is not
+            // news to somebody standing in MAP02, and sending it would name a
+            // sector index that means something else entirely there.
             for (auto& [id, s] : sessions) {
-                if (s.hello_done) send_motion(id, m);
+                if (s.hello_done && s.level == li) send_motion(id, m);
             }
         }
-        if (ms.count() > sent_motion_count) sent_motion_count = ms.count();
+        if (ms.count() > L.sent_motion_count) L.sent_motion_count = ms.count();
     }
 
     // --- movement parameters (docs/protocol.md 8.4) --------------------------
@@ -182,19 +223,19 @@ struct Server {
     // every tick and never recovers, so these go on the reliable channel and
     // carry a generation the snapshot echoes back.
 
-    u8 param_epoch[sim::MAX_AGENTS]{};
+
 
     // Send one agent's parameters. `full` sends every field, which is what a
     // joining client needs because it has no history to patch.
-    void send_param_update(u32 id, u32 agent, bool full,
+    void send_param_update(Level& L, u32 id, u32 agent, bool full,
                            const u16* ids = nullptr, u16 id_count = 0) {
         proto::ParamUpdate p;
-        p.handle         = proto::Handle::make(agent + 1, world.generation(agent));
-        p.epoch          = param_epoch[agent];
-        p.effective_tick = world.tick();
+        p.handle         = proto::Handle::make(agent + 1, L.world.generation(agent));
+        p.epoch          = L.param_epoch[agent];
+        p.effective_tick = L.world.tick();
         p.flags          = full ? proto::param_flag::FULL : 0;
 
-        const physics::MoveParams& mp = world.params(agent);
+        const physics::MoveParams& mp = L.world.params(agent);
         if (full) {
             p.count = physics::PARAM_COUNT;
             for (u16 i = 0; i < physics::PARAM_COUNT; ++i) {
@@ -237,15 +278,16 @@ struct Server {
     // entities carry parameters, and a rule that is "reliable for one observer
     // and absent for the rest" is the kind of asymmetry that is discovered
     // years later.
-    void set_param(u32 agent, u16 field_id, i64 raw) {
+    void set_param(u32 li, u32 agent, u16 field_id, i64 raw) {
+        Level& L = level(li);
         if (agent >= sim::MAX_AGENTS) return;
-        if (!physics::param_set_raw(world.params_mut(agent), field_id, raw)) return;
+        if (!physics::param_set_raw(L.world.params_mut(agent), field_id, raw)) return;
         // Wraps deliberately; only equality is ever tested (docs/protocol.md
         // 10.1.2), and 255 intervening changes cannot happen inside one round
         // trip.
-        param_epoch[agent] = static_cast<u8>(param_epoch[agent] + 1);
+        L.param_epoch[agent] = static_cast<u8>(L.param_epoch[agent] + 1);
         for (auto& [id, s] : sessions) {
-            if (s.hello_done) send_param_update(id, agent, false, &field_id, 1);
+            if (s.hello_done && s.level == li) send_param_update(L, id, agent, false, &field_id, 1);
         }
     }
 
@@ -253,74 +295,73 @@ struct Server {
     // without a script attached. Sector motion no longer needs an equivalent:
     // maps/scripts/init.lua drives it.
     bool param_test = false;
-    void drive_param_test() {
+    void drive_param_test(u32 li) {
         if (!param_test) return;
-        if (world.tick() % 120 != 0) return;
+        Level& L = level(li);
+        if (L.world.tick() % 120 != 0) return;
         const i32 id = physics::param_id_by_name("move_speed");
         if (id < 0) return;
-        const bool fast = (world.tick() / 120) % 2 == 1;
+        const bool fast = (L.world.tick() / 120) % 2 == 1;
         const fx want = fast ? fx::from_int(16) : fx::from_int(8);
         for (auto& [sid, s] : sessions) {
-            if (!s.has_agent) continue;
-            if (world.params(s.agent).move_speed == want) continue;
-            set_param(s.agent, static_cast<u16>(id), want.raw);
+            if (!s.has_agent || s.level != li) continue;
+            if (L.world.params(s.agent).move_speed == want) continue;
+            set_param(li, s.agent, static_cast<u16>(id), want.raw);
             std::fprintf(stderr, "[srv] tick %u: agent %u move_speed -> %lld (epoch %u)\n",
-                         world.tick(), s.agent,
-                         static_cast<long long>(want.raw >> 32), param_epoch[s.agent]);
+                         L.world.tick(), s.agent,
+                         static_cast<long long>(want.raw >> 32), L.param_epoch[s.agent]);
         }
     }
 
-    bool load_map_file(const char* path) {
+    // Load one map as a new level, appended to the progression.
+    //
+    // Each level owns its MapData view, which used to be a function-local
+    // `static` -- fine when there was exactly one map and a silent aliasing bug
+    // the moment there were two.
+    bool add_level(const char* path) {
+        auto lp = std::make_unique<Level>();
+        Level& L = *lp;
+        L.path = path;
+
         std::FILE* f = std::fopen(path, "rb");
         if (!f) { std::fprintf(stderr, "[srv] cannot open map %s\n", path); return false; }
         std::fseek(f, 0, SEEK_END);
         const long n = std::ftell(f);
         std::fseek(f, 0, SEEK_SET);
         if (n <= 0) { std::fclose(f); return false; }
-        map_bytes.resize(static_cast<size_t>(n));
-        const size_t got = std::fread(map_bytes.data(), 1, map_bytes.size(), f);
+        L.map_bytes.resize(static_cast<size_t>(n));
+        const size_t got = std::fread(L.map_bytes.data(), 1, L.map_bytes.size(), f);
         std::fclose(f);
-        if (got != map_bytes.size()) { map_bytes.clear(); return false; }
+        if (got != L.map_bytes.size()) return false;
 
-        ByteReader r(map_bytes.data(), map_bytes.size());
-        const geom::MapLoadStatus st = geom::load_map(r, *map_store);
+        ByteReader r(L.map_bytes.data(), L.map_bytes.size());
+        const geom::MapLoadStatus st = geom::load_map(r, L.map_store);
         if (st != geom::MapLoadStatus::Ok) {
             std::fprintf(stderr, "[srv] map %s rejected: %s\n", path,
                          geom::map_load_status_text(st));
-            map_bytes.clear();
             return false;
         }
 
-        // Point the world at the loaded map. The view is stable for the
-        // lifetime of the store, which outlives the world.
-        static geom::MapData loaded;
-        loaded = map_store->view();
-        world.set_map(&loaded);
-        map_hash = map_store->hash();
-        world.set_map_storage(map_store.get());
+        L.view = L.map_store.view();
+        L.world.set_map(&L.view);
+        L.world.set_map_storage(&L.map_store);
+        L.map_hash = L.map_store.hash();
 
-        // Sector motion is the MAP'S business now, not the engine's.
-        //
-        // This is where the 100/200/300/400 tag branches used to live, marked
-        // "Lua takes this over in Phase 4". maps/scripts/init.lua implements the
-        // same convention, so every existing map behaves identically -- what
-        // changed is who decides. Run without --script and nothing moves, which
-        // is the control that proves the takeover is real rather than a second
-        // implementation running alongside the first.
-
-        std::fprintf(stderr, "[srv] map %s: %u sectors, %u sides, hash %016llX\n",
-                     path, loaded.sector_count, loaded.side_count,
-                     static_cast<unsigned long long>(map_hash));
+        std::fprintf(stderr, "[srv] level %u  %s: %u sectors, %u sides, hash %016llX\n",
+                     level_count(), path, L.view.sector_count, L.view.side_count,
+                     static_cast<unsigned long long>(L.map_hash));
 
         // Nav graph, plus a reachability report from the default spawn. This is
         // a map-authoring signal, not a runtime one: "17 of 40 sectors are
         // reachable" is something the author wants to hear at load, and is
         // otherwise only discovered by watching an enemy fail to path.
-        if (!nav_graph->build(loaded)) {
+        if (!L.nav_graph.build(L.view)) {
             std::fprintf(stderr, "[srv] map has more sectors than the nav graph holds\n");
             return false;
         }
-        report_reachability(loaded);
+        report_reachability(L);
+
+        levels.push_back(std::move(lp));
         return true;
     }
 
@@ -329,12 +370,13 @@ struct Server {
     // A flood fill over the same edge test A* uses, so it reports what pathing
     // would actually find rather than what the topology suggests. Sectors are
     // counted once; the queue is the caller's stack-free scratch.
-    void report_reachability(const geom::MapData& map) {
+    void report_reachability(Level& L) {
+        const geom::MapData& map = L.view;
         static u8  seen[nav::MAX_NAV_NODES];
         static u32 queue[nav::MAX_NAV_NODES];
-        for (u32 i = 0; i < nav_graph->node_count(); ++i) seen[i] = 0;
+        for (u32 i = 0; i < L.nav_graph.node_count(); ++i) seen[i] = 0;
 
-        const fx3 origin = map_store->spawn_for_tag(spawn_tag, spawn_tag_len);
+        const fx3 origin = L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len);
         const i32 start = geom::find_sector(map, fx2{origin.x, origin.y});
         if (start < 0) {
             std::fprintf(stderr, "[srv] spawn '%s' is not inside any sector\n", spawn_tag);
@@ -347,11 +389,11 @@ struct Server {
         seen[start] = 1;
         while (head < tail) {
             const u32 cur = queue[head++];
-            const nav::NavNode& n = nav_graph->node(cur);
+            const nav::NavNode& n = L.nav_graph.node(cur);
             for (u32 k = 0; k < n.edge_count; ++k) {
-                const nav::NavEdge& e = nav_graph->edge(n.first_edge + k);
+                const nav::NavEdge& e = L.nav_graph.edge(n.first_edge + k);
                 if (seen[e.to]) continue;
-                if (!nav_graph->edge_is_open(map, cur, e, body)) continue;
+                if (!L.nav_graph.edge_is_open(map, cur, e, body)) continue;
                 seen[e.to] = 1;
                 queue[tail++] = e.to;
                 ++found;
@@ -360,19 +402,20 @@ struct Server {
 
         std::fprintf(stderr, "[srv] nav: %u nodes, %u edges; %u of %u sectors reachable "
                              "on foot from spawn '%s'\n",
-                     nav_graph->node_count(), nav_graph->edge_count(), found,
-                     nav_graph->node_count(), spawn_tag);
-        if (found < nav_graph->node_count()) {
+                     L.nav_graph.node_count(), L.nav_graph.edge_count(), found,
+                     L.nav_graph.node_count(), spawn_tag);
+        if (found < L.nav_graph.node_count()) {
             // Not an error. Sectors reachable only by jumping, grappling or a
             // lift at the top of its travel are legitimate level design, and
             // the walk-only graph is expected to miss them (design §3.2.2:
             // enemies do not jump). Worth saying out loud all the same.
             std::fprintf(stderr, "[srv] nav: %u sector(s) need more than walking to reach\n",
-                         nav_graph->node_count() - found);
+                         L.nav_graph.node_count() - found);
         }
     }
 
-    void send_map(u32 id) {
+    void send_map(Level& L, u32 id) {
+        const std::vector<u8>& map_bytes = L.map_bytes;
         if (map_bytes.empty()) return;
         for (size_t off = 0; off < map_bytes.size(); off += MAP_CHUNK_BYTES) {
             const size_t n = map_bytes.size() - off < MAP_CHUNK_BYTES
@@ -398,6 +441,152 @@ struct Server {
     std::map<u32, Session> sessions;   // ordered: iteration order must not vary
     u32                  snapshot_divisor = 2;   // 60 Hz sim, 30 Hz snapshots
 
+    // Put a session into a level: spawn it, tell it where it is, hand it the
+    // geometry and the rules.
+    //
+    // ONE routine for joining and for changing map, because they are the same
+    // event from the client's side -- "here is a world, here is who you are in
+    // it, here is everything you need to predict". Two implementations would
+    // drift, and the way they would drift is that the second one forgets a
+    // message and the symptom is a client predicting against the wrong map.
+    //
+    // Returns false only when the target level is full.
+    bool place_in_level(Session& s, u32 id, u32 li) {
+        if (li >= level_count()) return false;
+        Level& L = level(li);
+
+        // Leave the old one first. A player who has moved on must stop
+        // occupying a slot in the map they left -- otherwise their body stands
+        // there forever, in everyone else's snapshots, being collided with.
+        if (s.has_agent) {
+            Level& old = level(s.level);
+            old.effects.clear_agent(s.agent);
+            old.world.despawn(s.agent);
+            s.has_agent = false;
+        }
+
+        const fx3 spawn_pos = L.map_bytes.empty()
+            ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
+            : L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len);
+        const u32 agent = L.world.spawn(spawn_pos);
+        if (agent >= sim::MAX_AGENTS) return false;
+
+        // The body the MAP is built for, before anything captures this agent's
+        // parameters as its base.
+        //
+        // A converted Doom map is at 1/48, where Doom's 56-unit-tall player is
+        // 1.167 of our units and the engine's default 2.0 body is 96 Doom units
+        // -- taller than most of the doorways it is expected to walk through.
+        // Both fields are replicated parameters (ids 0 and 1), so the full
+        // PARAM_UPDATE below carries them and prediction agrees from the first
+        // tick. Per LEVEL, because two maps may be at different scales.
+        physics::MoveParams& p = L.world.params_mut(agent);
+        p.radius = L.map_store.body_radius();
+        p.height = L.map_store.body_height();
+
+        // Capture the authored parameters as this agent's base. Everything
+        // effects do is computed from here, never from the live value --
+        // see server/src/lua/effects.hpp for why that matters.
+        L.effects.set_base(agent, L.world.params(agent));
+
+        s.level = li;
+        s.agent = agent;
+        s.has_agent = true;
+        // The snapshot bookkeeping is about a world this session has just left.
+        // Carrying a baseline across a map change would delta this map's
+        // entities against the last one's.
+        s.forget_history();
+
+        u8 buf[128];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);   // patched below
+        w.u8v(proto::MSG_WELCOME);
+        w.u16v(proto::PROTOCOL_VERSION);
+        w.u64v(0x444E5030u);                       // server_id
+        w.u16v(proto::TICK_RATE_HZ);
+        w.u16v(static_cast<u16>(sim::TICK_RATE_HZ / snapshot_divisor));
+        w.u32v(L.world.tick());
+        w.u32v(proto::Handle::make(agent + 1, L.world.generation(agent)).raw);
+        w.u64v(L.map_hash);
+        const size_t end = w.size();
+        const u32 body_len = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body_len >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body_len >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body_len >> 24) & 0xFF);
+        link.send_control(id, buf, end);
+
+        // The map follows WELCOME immediately. A client must not start
+        // predicting before it lands (docs/protocol.md 8.0) -- physics against
+        // no geometry is wrong on every tick, and the corrections would arrive
+        // as a burst of mispredictions explained nowhere near the symptom.
+        send_map(L, id);
+        // Motion parameters follow the map. Parametric movers cost nothing
+        // after this; the client computes them for any tick. A door already
+        // open when you arrive is one of these.
+        send_motion_sets(L, id);
+        // And the movement parameters. FULL, because a client arriving in a
+        // level has no history to patch (docs/protocol.md 8.4). Sent before the
+        // first snapshot so it is never predicting with rules it has not been
+        // told.
+        send_param_update(L, id, agent, true);
+        return true;
+    }
+
+    // Bring up one level's script VM and load its scripts.
+    //
+    // The SHARED scripts first, then the map's own -- found beside its .dnpm
+    // with the same basename, which is exactly where the Doom converter writes
+    // it. A map without one is fine; a map with one gets its doors.
+    bool start_scripts(u32 li, const char* const* shared, u32 shared_count) {
+        Level& L = level(li);
+        if (!L.vm.open(vm_config)) {
+            std::fprintf(stderr, "[srv] cannot start Lua for %s: %s\n",
+                         L.path.c_str(), L.vm.last_error());
+            return false;
+        }
+        L.ctx.world       = &L.world;
+        L.ctx.commands    = &L.commands;
+        L.ctx.effects     = &L.effects;
+        L.ctx.map_store   = &L.map_store;
+        L.ctx.level       = li;
+        L.ctx.map_changes = this;
+        // Seeded from the map, so a scripted-discrete schedule is unpredictable
+        // to a client but replayable by the server. Per level, or two maps
+        // would draw the same "random" sequence.
+        L.ctx.rng = Rng(L.map_hash ^ 0x9E3779B97F4A7C15ull, 11);
+        // Installed BEFORE any chunk runs: a script's top level is allowed to
+        // look at the world, and `dnp` being nil at load time would be a
+        // baffling first experience.
+        lua::open_world(L.vm.state(), &L.ctx);
+
+        for (u32 k = 0; k < shared_count; ++k) {
+            if (!L.vm.run_file(shared[k], shared[k])) {
+                std::fprintf(stderr, "[srv] script failed: %s\n", L.vm.last_error());
+                return false;
+            }
+        }
+
+        // The map's own script, beside its .dnpm. Silently absent is fine --
+        // most maps have none -- but a map whose script FAILS is not, because
+        // the map will load and quietly have no doors.
+        std::string own = L.path;
+        const size_t dot = own.rfind('.');
+        if (dot != std::string::npos) own = own.substr(0, dot);
+        own += ".lua";
+        if (std::FILE* f = std::fopen(own.c_str(), "rb")) {
+            std::fclose(f);
+            if (!L.vm.run_file(own.c_str(), own.c_str())) {
+                std::fprintf(stderr, "[srv] script failed: %s\n", L.vm.last_error());
+                return false;
+            }
+            std::fprintf(stderr, "[srv] level %u: %s\n", li, own.c_str());
+        }
+        L.scripted = true;
+        return true;
+    }
+
     void on_open(u32 id) {
         Session s;
         s.reset();
@@ -410,8 +599,9 @@ struct Server {
         auto it = sessions.find(id);
         if (it == sessions.end()) return;   // defined no-op
         if (it->second.has_agent) {
-            lua_effects.clear_agent(it->second.agent);
-            world.despawn(it->second.agent);
+            Level& L = level(it->second.level);
+            L.effects.clear_agent(it->second.agent);
+            L.world.despawn(it->second.agent);
         }
         const Session& c = it->second;
         const double avg = c.snapshots_sent ? static_cast<double>(c.bytes_sent) / c.snapshots_sent : 0.0;
@@ -453,29 +643,7 @@ struct Server {
                 return;
             }
 
-            // Spawn at the map's tagged landing point. entry_spawn_tag comes
-            // from the portal that sent the player (design §3.3); until portals
-            // land, everyone arrives at the default.
-            const fx3 spawn_pos = map_bytes.empty()
-                ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
-                : map_store->spawn_for_tag(spawn_tag, spawn_tag_len);
-            const u32 agent = world.spawn(spawn_pos);
-            if (agent < sim::MAX_AGENTS && map_store) {
-                // The body the MAP is built for, before anything captures this
-                // agent's parameters as its base.
-                //
-                // A converted Doom map is at 1/48, where Doom's 56-unit-tall
-                // player is 1.167 of our units and the engine's default 2.0
-                // body is 96 Doom units -- taller than most of the doorways it
-                // is expected to walk through. Both fields are replicated
-                // parameters (ids 0 and 1), so the full PARAM_UPDATE below
-                // carries them to the client and prediction agrees from the
-                // first tick.
-                physics::MoveParams& p = world.params_mut(agent);
-                p.radius = map_store->body_radius();
-                p.height = map_store->body_height();
-            }
-            if (agent >= sim::MAX_AGENTS) {
+            if (!place_in_level(s, id, 0)) {
                 u8 buf[64];
                 ByteWriter w(buf, sizeof(buf));
                 w.u32v(1 + 2);
@@ -485,52 +653,8 @@ struct Server {
                 link.close_session(id, 2);
                 return;
             }
-
-            // Capture the authored parameters as this agent's base. Everything
-            // effects do is computed from here, never from the live value --
-            // see server/src/lua/effects.hpp for why that matters.
-            lua_effects.set_base(agent, world.params(agent));
-
-            s.agent = agent;
-            s.has_agent = true;
             s.hello_done = true;
-
-            u8 buf[128];
-            ByteWriter w(buf, sizeof(buf));
-            const size_t len_pos = w.mark();
-            w.u32v(0);   // patched below
-            w.u8v(proto::MSG_WELCOME);
-            w.u16v(proto::PROTOCOL_VERSION);
-            w.u64v(0x444E5030u);                       // server_id
-            w.u16v(proto::TICK_RATE_HZ);
-            w.u16v(static_cast<u16>(sim::TICK_RATE_HZ / snapshot_divisor));
-            w.u32v(world.tick());
-            w.u32v(proto::Handle::make(agent + 1, world.generation(agent)).raw);
-            w.u64v(map_hash);
-            const size_t end = w.size();
-            const u32 body_len = static_cast<u32>(end - len_pos - 4);
-            buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
-            buf[len_pos + 1] = static_cast<u8>((body_len >> 8) & 0xFF);
-            buf[len_pos + 2] = static_cast<u8>((body_len >> 16) & 0xFF);
-            buf[len_pos + 3] = static_cast<u8>((body_len >> 24) & 0xFF);
-            link.send_control(id, buf, end);
-
-            // The map follows WELCOME immediately. A client must not start
-            // predicting before it lands (docs/protocol.md 8.0) -- physics
-            // against no geometry is wrong on every tick, and the corrections
-            // would arrive as a burst of mispredictions explained nowhere near
-            // the symptom.
-            send_map(id);
-            // Motion parameters follow the map. Parametric movers cost nothing
-            // after this; the client computes them for any tick.
-            send_motion_sets(id);
-            // And the movement parameters. FULL, because a joining client has
-            // no history to patch (docs/protocol.md 8.4). Sent before the first
-            // snapshot so the client is never predicting with rules it has not
-            // been told.
-            send_param_update(id, agent, true);
-
-            std::fprintf(stderr, "[srv] session %u -> agent %u\n", id, agent);
+            std::fprintf(stderr, "[srv] session %u -> level 0 agent %u\n", id, s.agent);
         }
     }
 
@@ -560,47 +684,34 @@ struct Server {
     // Rate-limited per entity: a body held under a closing ceiling raises an
     // event on every tick it stays there, and a line per tick per player would
     // bury everything else in the log within seconds.
-    u32 crush_reported_tick[sim::MAX_AGENTS]{};
-    bool crush_seen[sim::MAX_AGENTS]{};
-
-    // The motion descriptors every client has been told about, so a change can
-    // be recognised as a change. Indexed the same way SectorMotionSet indexes
-    // its own -- motions are never removed, only redefined, so the index is
-    // stable for the life of the map.
-    sim::SectorMotion sent_motions[sim::MAX_MOVING_SECTORS]{};
-    u32 sent_motion_count = 0;
-    // The tick a motion descriptor last changed, for the same +1 reason
-    // lua_touched_tick uses: "since the last snapshot" is a strict comparison.
-    u32 motion_changed_tick = 0;
-
-    void report_crushes() {
+    void report_crushes(Level& L) {
         bool now[sim::MAX_AGENTS]{};
-        const sim::CrushLog& log = world.crushes();
+        const sim::CrushLog& log = L.world.crushes();
         for (u32 i = 0; i < log.count(); ++i) {
             const sim::CrushEvent& e = log.at(i);
             if (e.entity >= sim::MAX_AGENTS) continue;
             now[e.entity] = true;
-            if (crush_seen[e.entity]) continue;   // already reported this episode
-            crush_seen[e.entity] = true;
-            crush_reported_tick[e.entity] = world.tick();
+            if (L.crush_seen[e.entity]) continue;   // already reported this episode
+            L.crush_seen[e.entity] = true;
+            L.crush_reported_tick[e.entity] = L.world.tick();
             std::fprintf(stderr, "[srv] tick %u: agent %u %s by sector %u (depth %.3f)\n",
-                         world.tick(), e.entity,
+                         L.world.tick(), e.entity,
                          e.kind == sim::CrushKind::Vertical ? "crushed" : "pinned",
                          e.sector, static_cast<double>(e.depth.raw) / 4294967296.0);
         }
         // An episode ends when the geometry lets go, so escaping and being
         // caught again reports twice.
         for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
-            if (!now[i] && crush_seen[i]) {
+            if (!now[i] && L.crush_seen[i]) {
                 std::fprintf(stderr, "[srv] tick %u: agent %u released after %u ticks\n",
-                             world.tick(), i, world.tick() - crush_reported_tick[i]);
-                crush_seen[i] = false;
+                             L.world.tick(), i, L.world.tick() - L.crush_reported_tick[i]);
+                L.crush_seen[i] = false;
             }
         }
         if (log.dropped() > 0) {
             // Never silently cap -- the same rule R10 applies to snapshots.
             std::fprintf(stderr, "[srv] tick %u: %u crush events dropped (log full)\n",
-                         world.tick(), log.dropped());
+                         L.world.tick(), log.dropped());
         }
     }
 
@@ -614,11 +725,11 @@ struct Server {
     // Dispatched in a fixed order (crushes, then interactions, each in the
     // order the log recorded, which is ascending agent index) so that two
     // scripts racing for the same door resolve the same way on a replay.
-    void dispatch_events() {
-        if (!script_vm.is_open()) return;
-        const u32 t = world.tick();
+    void dispatch_events(Level& L) {
+        if (!L.vm.is_open()) return;
+        const u32 t = L.world.tick();
 
-        const sim::CrushLog& crushes = world.crushes();
+        const sim::CrushLog& crushes = L.world.crushes();
         for (u32 i = 0; i < crushes.count(); ++i) {
             const sim::CrushEvent& e = crushes.at(i);
             if (e.entity >= sim::MAX_AGENTS) continue;
@@ -626,28 +737,28 @@ struct Server {
             // logs: a script that took damage sixty times a second while a
             // ceiling sat on someone would be a different design decision, and
             // one a script can make for itself from on_tick.
-            if (crush_reported_tick[e.entity] != t || !crush_seen[e.entity]) continue;
-            if (!script_vm.begin_hook("on_crush")) break;
-            lua::push_entity(script_vm.state(), lua_ctx, e.entity);
-            lua::push_sector(script_vm.state(), e.sector);
-            lua_pushstring(script_vm.state(),
+            if (L.crush_reported_tick[e.entity] != t || !L.crush_seen[e.entity]) continue;
+            if (!L.vm.begin_hook("on_crush")) break;
+            lua::push_entity(L.vm.state(), L.ctx, e.entity);
+            lua::push_sector(L.vm.state(), e.sector);
+            lua_pushstring(L.vm.state(),
                            e.kind == sim::CrushKind::Vertical ? "vertical" : "pinned");
-            script_vm.end_hook("on_crush", t, 3);
+            L.vm.end_hook("on_crush", t, 3);
         }
 
-        const sim::InteractLog& uses = world.interactions();
+        const sim::InteractLog& uses = L.world.interactions();
         for (u32 i = 0; i < uses.count(); ++i) {
             const sim::InteractEvent& e = uses.at(i);
             if (e.entity >= sim::MAX_AGENTS || e.sector < 0) continue;
             const char* hook = e.kind == sim::TouchKind::Use ? "on_interact" : "on_cross";
-            if (!script_vm.begin_hook(hook)) continue;
-            lua::push_entity(script_vm.state(), lua_ctx, e.entity);
+            if (!L.vm.begin_hook(hook)) continue;
+            lua::push_entity(L.vm.state(), L.ctx, e.entity);
             // The SIDE INDEX, as a plain number, because that is the key a
             // generated script indexes its table of doors by. dnp.side(i)
             // turns it into neighbour and flags when the script wants them.
-            lua_pushnumber(script_vm.state(), e.side);
-            lua::push_sector(script_vm.state(), static_cast<u32>(e.sector));
-            script_vm.end_hook(hook, t, 3);
+            lua_pushnumber(L.vm.state(), e.side);
+            lua::push_sector(L.vm.state(), static_cast<u32>(e.sector));
+            L.vm.end_hook(hook, t, 3);
         }
         if (uses.dropped() > 0) {
             std::fprintf(stderr, "[srv] tick %u: %u interact events dropped (log full)\n",
@@ -661,19 +772,20 @@ struct Server {
     // exactly the identity, and in fixed point an incremental version is not
     // (effects.hpp). The diff against the live values is what keeps this from
     // sending a full parameter set every tick an effect is running.
-    void refresh_effect_params() {
-        if (!script_vm.is_open()) return;
+    void refresh_effect_params(u32 li) {
+        Level& L = level(li);
+        if (!L.vm.is_open()) return;
 
-        const bool expired = lua_effects.expire(world.tick());
-        if (!expired && !lua_ctx.effects_dirty) return;
-        lua_ctx.effects_dirty = false;
+        const bool expired = L.effects.expire(L.world.tick());
+        if (!expired && !L.ctx.effects_dirty) return;
+        L.ctx.effects_dirty = false;
 
         for (auto& [id, s] : sessions) {
-            if (!s.has_agent) continue;
+            if (!s.has_agent || s.level != li) continue;
             const u32 a = s.agent;
 
-            const physics::MoveParams want = lua_effects.compute(a);
-            physics::MoveParams& live = world.params_mut(a);
+            const physics::MoveParams want = L.effects.compute(a);
+            physics::MoveParams& live = L.world.params_mut(a);
 
             u16 changed[physics::PARAM_COUNT];
             u16 n = 0;
@@ -689,86 +801,169 @@ struct Server {
             // field: an effect touching four parameters is one change to the
             // rules, and four epochs would make the client look stale three
             // extra times for no reason.
-            param_epoch[a] = static_cast<u8>(param_epoch[a] + 1);
+            L.param_epoch[a] = static_cast<u8>(L.param_epoch[a] + 1);
             for (auto& [oid, os] : sessions) {
-                if (os.hello_done) send_param_update(oid, a, false, changed, n);
+                if (os.hello_done && os.level == li) send_param_update(L, oid, a, false, changed, n);
             }
         }
     }
 
-    void flush_lua_commands() {
-        if (!script_vm.is_open()) return;
-        const u32 now = world.tick();
-        lua_commands.apply(world, [&](u32 agent) {
-            if (agent < sim::MAX_AGENTS) lua_touched_tick[agent] = now + 1;
+    void flush_lua_commands(Level& L) {
+        if (!L.vm.is_open()) return;
+        const u32 now = L.world.tick();
+        L.commands.apply(L.world, [&](u32 agent) {
+            if (agent < sim::MAX_AGENTS) L.lua_touched_tick[agent] = now + 1;
         });
-        if (lua_commands.dropped() > 0) {
+        if (L.commands.dropped() > 0) {
             // R10's rule again: never silently cap.
             std::fprintf(stderr, "[srv] tick %u: %u Lua commands dropped (queue full)\n",
-                         now, lua_commands.dropped());
-            lua_commands.clear();
+                         now, L.commands.dropped());
+            L.commands.clear();
         }
     }
 
-    void tick() {
+    // One level's tick. Every level runs every tick, in load order.
+    //
+    // In load order and not, say, "only levels with players in them", because a
+    // level whose clock stopped while it was empty would hand the next arrival
+    // a lift frozen mid-travel and a door that has been closing for four
+    // minutes. Cheap enough that the question does not arise yet -- an empty
+    // level with no movers is a handful of early-outs -- and the moment it is
+    // not, the fix is to make an idle level cheap rather than to make time
+    // conditional.
+    void tick_level(u32 li) {
+        Level& L = level(li);
         for (auto& [id, s] : sessions) {
-            if (s.has_agent) world.set_input(s.agent, s.take());
+            if (s.has_agent && s.level == li) L.world.set_input(s.agent, s.take());
         }
-        // Before the step, so the offsets a snapshot reports are the ones the
-        // tick actually ran with. Deciding after would ship the client an
-        // offset the server had not used yet.
-        // Lua runs OUTSIDE world.step(), always. The client predicts by
-        // running the same step; anything Lua did has to reach it as replicated
-        // state, never as a second implementation of physics.
-        if (script_vm.is_open()) {
-            script_vm.begin_tick();
+        // Lua runs OUTSIDE world.step(), always. The client predicts by running
+        // the same step; anything Lua did has to reach it as replicated state,
+        // never as a second implementation of physics.
+        if (L.vm.is_open()) {
+            L.vm.begin_tick();
             // Timers and per-tick logic run BEFORE the step, in the same place
             // sector motion used to be driven from, and for the same reason:
             // what a snapshot reports must be what the tick actually ran with.
-            script_vm.call_hook("on_tick", world.tick());
+            L.vm.call_hook("on_tick", L.world.tick());
         }
         // After the callbacks, before the step: what the tick runs with is what
         // the snapshot will report.
-        refresh_effect_params();
+        refresh_effect_params(li);
 
-        drive_param_test();
+        drive_param_test(li);
 
         // Flush 1. Everything scripts asked for before the step lands here, so
         // physics never observes an entity moving underneath it mid-resolution.
-        flush_lua_commands();
+        flush_lua_commands(L);
 
-        world.step();
-        report_crushes();
-        dispatch_events();
+        L.world.step();
+        report_crushes(L);
+        dispatch_events(L);
 
-        if (script_vm.is_open()) {
+        if (L.vm.is_open()) {
             // Post-step callbacks see the world the tick produced.
-            script_vm.call_hook("on_post_tick", world.tick());
+            L.vm.call_hook("on_post_tick", L.world.tick());
         }
         // Flush 2, before snapshots: a consequence and the state it acted on
         // ride the same snapshot rather than arriving a frame apart.
-        flush_lua_commands();
+        flush_lua_commands(L);
 
         // And anything a script started this tick reaches the clients before
         // the snapshot that was produced with it does.
-        replicate_motion_changes();
+        replicate_motion_changes(li);
 
-        if (script_vm.is_open()) {
-            script_vm.end_tick(world.tick());
+        if (L.vm.is_open()) {
+            L.vm.end_tick(L.world.tick());
             // A fixed step per tick, so a collection cannot choose its own
             // moment, land on an arbitrary frame, push the loop past the 250 ms
             // threshold and present as a burst of client corrections.
-            script_vm.gc_step();
+            L.vm.gc_step();
         }
     }
 
+    // Map changes a script asked for this tick: (level, agent) -> target level.
+    //
+    // Requested by agent rather than by session, because that is what a script
+    // has: an entity handle. Resolved to a session here, where the mapping
+    // lives.
+    struct MapChange { u32 from_level; u32 agent; u32 to_level; };
+    std::vector<MapChange> pending_changes;
+
+    // Called from the Lua binding. Queued, never applied here -- see tick().
+    void request_map_change(u32 from_level, u32 agent, i32 to_level) override {
+        if (from_level >= level_count() || agent >= sim::MAX_AGENTS) return;
+        // A negative target means "the next one". The end of the last map is
+        // not an error: a script asking to advance past the final level is a
+        // player finishing the game, and the honest answer is to say so and
+        // leave them where they are rather than to disconnect them.
+        u32 target;
+        if (to_level < 0) {
+            target = from_level + 1;
+            if (target >= level_count()) {
+                std::fprintf(stderr, "[srv] agent %u finished the last level (%s)\n",
+                             agent, level(from_level).path.c_str());
+                return;
+            }
+        } else {
+            target = static_cast<u32>(to_level);
+            if (target >= level_count()) {
+                std::fprintf(stderr, "[srv] agent %u asked for level %d; only %u exist\n",
+                             agent, to_level, level_count());
+                return;
+            }
+        }
+        if (target == from_level) return;
+        // One per agent per tick. A script that fires an exit twice -- two
+        // switches on the same wall, a trigger crossed and used -- must move
+        // the player once.
+        for (const MapChange& c : pending_changes) {
+            if (c.from_level == from_level && c.agent == agent) return;
+        }
+        pending_changes.push_back(MapChange{from_level, agent, target});
+    }
+
+    void apply_map_changes() {
+        if (pending_changes.empty()) return;
+        for (const MapChange& c : pending_changes) {
+            for (auto& [id, s] : sessions) {
+                if (!s.has_agent || s.level != c.from_level || s.agent != c.agent) continue;
+                const std::string from = level(c.from_level).path;
+                if (!place_in_level(s, id, c.to_level)) {
+                    std::fprintf(stderr, "[srv] session %u cannot enter level %u (full)\n",
+                                 id, c.to_level);
+                    break;
+                }
+                std::fprintf(stderr, "[srv] session %u: %s -> %s (agent %u)\n",
+                             id, from.c_str(), level(c.to_level).path.c_str(), s.agent);
+                break;
+            }
+        }
+        pending_changes.clear();
+    }
+
+    void tick() {
+        for (u32 li = 0; li < level_count(); ++li) tick_level(li);
+        // AFTER every level has stepped, never during one.
+        //
+        // A map change despawns from one world and spawns in another, and doing
+        // that while a world is mid-step would mutate the entity set a tick is
+        // iterating. It also keeps the rule the command queue already follows:
+        // scripts ask, and the ask lands at a defined point.
+        apply_map_changes();
+    }
+
     void send_snapshots() {
-        // Once per snapshot, not once per session: the offsets are a property
-        // of the world, and every observer of a moving sector sees the same one.
-        collect_discrete_offsets();
+        // Once per level, not once per session: the offsets are a property of
+        // the world, and every observer of a moving sector sees the same one.
+        for (u32 li = 0; li < level_count(); ++li) collect_discrete_offsets(level(li));
 
         for (auto& [id, s] : sessions) {
             if (!s.has_agent) continue;
+            // Everything below is read from the sender's OWN level. A snapshot
+            // is a description of one world, and the entity indices, sector
+            // indices and tick in it mean nothing anywhere else.
+            Level& L = level(s.level);
+            const sim::World& world = L.world;
 
             const sim::AgentState& self = world.agent(s.agent);
 
@@ -796,8 +991,8 @@ struct Server {
             // Only on the ticks a motion actually CHANGED, never on every tick
             // a script ran: a flag set unconditionally would excuse every
             // client's mismatch forever and destroy the signal it exists for.
-            if (lua_touched_tick[s.agent] > s.last_snapshot_sent ||
-                motion_changed_tick > s.last_snapshot_sent) {
+            if (L.lua_touched_tick[s.agent] > s.last_snapshot_sent ||
+                L.motion_changed_tick > s.last_snapshot_sent) {
                 h.flags |= proto::SNAP_LUA_APPLIED;
             }
 
@@ -825,12 +1020,12 @@ struct Server {
             // move -- see docs/protocol.md §5.1.
             sb.anchor          = proto::Handle{self.mv.anchor >= 0
                                      ? static_cast<u32>(self.mv.anchor) + 1u : 0u};
-            sb.param_epoch     = param_epoch[s.agent];
+            sb.param_epoch     = L.param_epoch[s.agent];
             sb.state_hash      = world.agent_hash(s.agent);
 
             u8 buf[proto::MAX_DATAGRAM_BYTES];
             proto::SnapshotWriter w(buf, sizeof(buf));
-            w.begin(h, sb, 100, discrete_offsets, discrete_count);
+            w.begin(h, sb, 100, L.discrete_offsets, L.discrete_count);
 
             SnapshotRecord& record = s.history.begin(world.tick());
 
@@ -916,7 +1111,11 @@ struct Server {
 
 int main(int argc, char** argv) {
     u16 port = 34500;
-    const char* map_path = nullptr;
+    // Repeatable, and the order IS the progression: `--map a --map b` means an
+    // exit in a takes you to b.
+    constexpr u32 MAX_LEVELS = 64;
+    const char* map_paths[MAX_LEVELS]{};
+    u32 map_count = 0;
     const char* spawn_tag_arg = nullptr;
     bool want_param_test = false;
     constexpr u32 MAX_SCRIPTS = 8;
@@ -927,7 +1126,8 @@ int main(int argc, char** argv) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
-            map_path = argv[++i];
+            if (map_count < MAX_LEVELS) map_paths[map_count++] = argv[++i];
+            else { std::fprintf(stderr, "[srv] too many --map arguments\n"); return 2; }
         } else if (std::strcmp(argv[i], "--spawn") == 0 && i + 1 < argc) {
             spawn_tag_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--param-test") == 0) {
@@ -950,21 +1150,21 @@ int main(int argc, char** argv) {
         srv.spawn_tag = spawn_tag_arg;
         srv.spawn_tag_len = static_cast<u32>(std::strlen(spawn_tag_arg));
     }
-    if (map_path && !srv.load_map_file(map_path)) {
-        std::fprintf(stderr, "[srv] refusing to start without the requested map\n");
+    if (map_count == 0) {
+        std::fprintf(stderr, "[srv] no --map given; nothing to host\n");
         return 1;
     }
-    if (!map_path) {
-        std::fprintf(stderr, "[srv] no --map given; using the built-in test map "
-                             "(clients cannot be sent geometry)\n");
-    }
-    if (script_count > 0) {
-        lua::VmConfig vc;
-        vc.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
-        if (!srv.script_vm.open(vc)) {
-            std::fprintf(stderr, "[srv] cannot start Lua: %s\n", srv.script_vm.last_error());
+    for (u32 k = 0; k < map_count; ++k) {
+        if (!srv.add_level(map_paths[k])) {
+            std::fprintf(stderr, "[srv] refusing to start without the requested map\n");
             return 1;
         }
+    }
+    std::fprintf(stderr, "[srv] %u level(s); an exit advances to the next\n", srv.level_count());
+
+    if (script_count > 0) {
+        srv.vm_config.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
+        srv.scripts_enabled = true;
         // Stated at startup, deliberately. Under the default profile a script
         // can reach the filesystem, databases and native libraries, and the
         // confinement that makes that safe lives outside this process. An
@@ -974,28 +1174,12 @@ int main(int argc, char** argv) {
                              "budget %u/call %u/tick, memory cap %zu MB\n",
                      strict_scripts ? "strict" : "full",
                      strict_scripts ? "DENIED" : "ALLOWED -- confine this process",
-                     vc.budget_per_call, vc.budget_per_tick,
-                     vc.memory_cap / (1024u * 1024u));
-        srv.lua_ctx.world = &srv.world;
-        srv.lua_ctx.commands = &srv.lua_commands;
-        srv.lua_ctx.effects = &srv.lua_effects;
-        srv.lua_ctx.map_store = srv.map_store.get();
-        // Seeded from the map, so a scripted-discrete schedule is unpredictable
-        // to a client but replayable by the server.
-        srv.lua_ctx.rng = Rng(srv.map_hash ^ 0x9E3779B97F4A7C15ull, 11);
-        // Installed BEFORE the chunk runs: a script's top level is allowed to
-        // look at the world, and `dnp` being nil at load time would be a
-        // baffling first experience.
-        lua::open_world(srv.script_vm.state(), &srv.lua_ctx);
+                     srv.vm_config.budget_per_call, srv.vm_config.budget_per_tick,
+                     srv.vm_config.memory_cap / (1024u * 1024u));
 
-        for (u32 k = 0; k < script_count; ++k) {
-            if (!srv.script_vm.run_file(script_args[k], script_args[k])) {
-                std::fprintf(stderr, "[srv] script failed: %s\n", srv.script_vm.last_error());
-                return 1;
-            }
-            std::fprintf(stderr, "[srv] loaded script %s\n", script_args[k]);
+        for (u32 li = 0; li < srv.level_count(); ++li) {
+            if (!srv.start_scripts(li, script_args, script_count)) return 1;
         }
-        srv.script_path = script_args[0];
     }
 
     if (!srv.link.listen(port)) {

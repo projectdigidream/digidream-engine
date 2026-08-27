@@ -687,6 +687,40 @@ int main(int argc, char** argv) {
     std::fwrite(out.data(), 1, w.size(), of);
     std::fclose(of);
 
+    // The map's script travels with it.
+    //
+    // A baked map and the Lua that gives it doors are one deliverable -- the
+    // Doom converter writes them as a pair, and the server looks for the script
+    // beside the .dnpm it loaded. Copying it here means compiling a map into a
+    // build directory does not silently leave its behaviour behind, which
+    // presents as a map that loads perfectly and whose switches do nothing.
+    {
+        std::string src = argv[1];
+        std::string dst = argv[2];
+        const size_t sd = src.rfind('.');
+        const size_t dd = dst.rfind('.');
+        if (sd != std::string::npos) src = src.substr(0, sd);
+        if (dd != std::string::npos) dst = dst.substr(0, dd);
+        src += ".lua";
+        dst += ".lua";
+        if (src != dst) {
+            if (std::FILE* sf = std::fopen(src.c_str(), "rb")) {
+                std::vector<char> buf(1 << 16);
+                if (std::FILE* df = std::fopen(dst.c_str(), "wb")) {
+                    size_t n;
+                    while ((n = std::fread(buf.data(), 1, buf.size(), sf)) > 0) {
+                        std::fwrite(buf.data(), 1, n, df);
+                    }
+                    std::fclose(df);
+                    std::printf("%s: script copied from %s\n", dst.c_str(), src.c_str());
+                } else {
+                    std::fprintf(stderr, "cannot write %s\n", dst.c_str());
+                }
+                std::fclose(sf);
+            }
+        }
+    }
+
     std::printf("%s: %u sectors, %u points, %u sides, %u triangles, %u spawns, "
                 "%u rails (%u waypoints, %u junctions) -> %zu bytes (hash %016llX)\n",
                 argv[2], m.sector_count, m.point_count, m.side_count,

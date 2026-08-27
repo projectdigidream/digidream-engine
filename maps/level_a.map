@@ -1,0 +1,19 @@
+# Level A of a two-map progression, for testing a per-client map change.
+#
+# One room and one switch, deliberately: what is under test is the SERVER
+# moving a session from one simulation to another, and a map you have to
+# navigate would make a failure ambiguous between "the exit did not fire" and
+# "the player never reached it".
+#
+# The exit is side 1, the east wall, four steps from the spawn.
+
+body radius 0.3333 height 1.1667
+
+sector floor 0 ceil 6 tag 1 light 220 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 0 0    wall tex STARTAN3
+  vertex 20 0   wall tex SW1STON1
+  vertex 20 20  wall tex STARTAN3
+  vertex 0 20   wall tex STARTAN3
+end
+
+spawn start 16 10 1

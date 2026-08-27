@@ -42,6 +42,8 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
 "./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
+"./build/$HOST_ARCH/mapc" maps/level_a.map "build/$HOST_ARCH/level_a.dnpm"
+"./build/$HOST_ARCH/mapc" maps/level_b.map "build/$HOST_ARCH/level_b.dnpm"
 # Floating platforms with open edges -- the only map here that is not a sealed
 # box, and the only one where walking off an edge is a fall rather than a wall.
 "./build/$HOST_ARCH/mapc" maps/void.map   "build/$HOST_ARCH/void.dnpm"
@@ -128,6 +130,7 @@ else
      && node test/params.test.js 2>/dev/null | tail -2 \
      && node test/lua.test.js 2>/dev/null | tail -2 \
      && node test/doors.test.js 2>/dev/null | tail -2 \
+     && node test/levels.test.js 2>/dev/null | tail -2 \
      && node test/live.test.js 2>/dev/null | tail -2)
 
   # The control case: a client that ignores the replicated motion parameters
@@ -155,6 +158,10 @@ else
   # would be carrying no information.
   (cd server/edge && DNP_IGNORE_LUA=1 DNP_WT_PORT=34495 DNP_LINK_PORT=34569 \
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
+  # A map change must be a move to the NEXT level, not any reset at all: with
+  # only one level loaded the exit has nowhere to go and must move nobody.
+  (cd server/edge && DNP_ONE_LEVEL=1 DNP_WT_PORT=34497 DNP_LINK_PORT=34571 \
+     node test/levels.test.js 2>/dev/null | grep -E "CONTROL|levels:")
   # And the other half of §3.1.2: a client that discards the STREAMED offsets
   # has nothing for anchor-relative prediction to be relative to.
   (cd server/edge && DNP_IGNORE_OFFSETS=1 DNP_WT_PORT=34486 DNP_LINK_PORT=34556 \
