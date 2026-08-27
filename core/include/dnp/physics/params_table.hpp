@@ -74,7 +74,11 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     DNP_PARAM(attack_half_arc,      ParamType::Fx),
     DNP_PARAM(attack_sweep_from,    ParamType::Fx),
     DNP_PARAM(attack_sweep_to,      ParamType::Fx),
-    DNP_PARAM(attack_ticks,         ParamType::U8),     // 28
+    DNP_PARAM(attack_ticks,         ParamType::U8),
+    // Appended, not inserted beside jump_impulse where the field lives: this
+    // table's ORDER is the wire format, and the struct's order is not. Putting
+    // it next to its neighbour shifted the id of every parameter after it.
+    DNP_PARAM(turn_speed,           ParamType::Fx),     // 28
 };
 
 #undef DNP_PARAM
@@ -91,7 +95,7 @@ inline constexpr u16 PARAM_COUNT = static_cast<u16>(sizeof(PARAM_TABLE) / sizeof
 //
 // If this fires: add the new field to PARAM_TABLE (at the END -- ids are a wire
 // contract) and update the number here.
-static_assert(sizeof(MoveParams) == 256,
+static_assert(sizeof(MoveParams) == 264,
               "MoveParams changed. Append the new field(s) to PARAM_TABLE in this "
               "file -- appending is safe, reordering breaks the wire format -- "
               "then update this size. See docs/protocol.md 8.4.");

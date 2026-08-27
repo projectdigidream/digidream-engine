@@ -107,7 +107,29 @@ void World::step_agent(u32 i) noexcept {
     AgentState& a = agents_[i];
     const MoveCommand cmd = to_command(inputs_[i]);
 
-    a.facing = cmd.aim;
+    // Turned toward the aim at a bounded rate, not snapped to it.
+    //
+    // brad arithmetic does this exactly: the difference between two angles as a
+    // SIGNED 32-bit value is the shortest way round by construction, because
+    // the type wraps. No branch on "which way is shorter", no comparison
+    // against pi, and no case at the 359-to-1 boundary -- the arithmetic that
+    // makes a turn wrap is the same arithmetic that makes it short.
+    {
+        const fx step_turns = params_[i].turn_speed * DT;
+        // A turn fraction and a brad are the same number: brad is a turn in
+        // 2^32 and fx is Q32.32, so the raw value carries straight across. A
+        // rate fast enough to cover a whole turn in one tick is a snap, which
+        // is what a script asks for by setting it high.
+        const u64 step = static_cast<u64>(step_turns.raw < 0 ? 0 : step_turns.raw);
+        if (step >= 0x100000000ull) {
+            a.facing = cmd.aim;
+        } else {
+            const i32 delta = static_cast<i32>(cmd.aim.raw - a.facing.raw);
+            const i32 limit = static_cast<i32>(static_cast<u32>(step));
+            const i32 move = delta > limit ? limit : (delta < -limit ? -limit : delta);
+            a.facing = brad(a.facing.raw + static_cast<u32>(move));
+        }
+    }
 
     // Interaction, on the PRESS edge and before the move.
     //

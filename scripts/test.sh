@@ -33,6 +33,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_crush"
 "./build/$HOST_ARCH/test_interact"
 "./build/$HOST_ARCH/test_props"
+"./build/$HOST_ARCH/test_turning"
 "./build/$HOST_ARCH/test_nav"
 "./build/$HOST_ARCH/test_rail"
 

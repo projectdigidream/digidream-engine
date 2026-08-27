@@ -42,6 +42,19 @@ struct MoveParams {
     fx friction      = fx::from_int(60);
     fx gravity_scale = fx::one();
     fx jump_impulse  = fx::from_int(9);
+
+    // How fast a body can turn, in TURNS PER SECOND.
+    //
+    // A parameter rather than a constant, and a rate rather than a snap: an
+    // entity that faces a new direction the instant its input changes has no
+    // weight, and cannot be outmanoeuvred. 4 turns per second is a quarter turn
+    // in about 60 ms -- responsive, and slow enough that a swing aimed while
+    // spinning lands where the body was actually pointing.
+    //
+    // Turns because that is the engine's own unit: brad is a turn in 2^32, so
+    // a turn fraction and a brad are the same number and the conversion cannot
+    // pick up a factor of pi.
+    fx turn_speed    = fx::from_int(4);
     u8 max_jumps     = 2;      // generalises to any count; "double jump" is a value
 
     // --- climbing (§7.1.1) ---

@@ -311,6 +311,11 @@ static void test_use_reaches_a_usable_prop() {
         const u32 a = w.spawn(fx3{F(19), F(20), F(0)});
         const u32 p = w.spawn_prop(1, fx3{F(20), F(20), F(0)});
         w.prop_mut(p).flags = prop_flag::USABLE;
+        // Pointed away BEFORE pressing. Turning is a rate now, so an agent told
+        // to aim west is still facing east on the tick it presses -- which
+        // would make this control pass for the wrong reason and then stop
+        // passing at all.
+        w.agent_mut(a).facing = brad(0x80000000u);
         proto::InputFrame f;
         f.buttons = proto::button::INTERACT;
         f.aim = brad(0x80000000u);       // west, away from it

@@ -80,6 +80,14 @@ static constexpr brad WEST = brad(0x80000000u);
 static constexpr brad NORTH = brad(0x40000000u);
 static constexpr brad SOUTH = brad(0xC0000000u);
 
+// Point the body at `aim` before pressing.
+//
+// Turning is a rate now (§7.1), so an agent that spawns facing east and is told
+// to aim west is still facing east on the tick it presses. These tests are
+// about what a reach FINDS, not about how long a body takes to turn -- which
+// test_turning.cpp covers -- so they start pointed where they mean to press.
+static void face(World& w, u32 a, brad aim) { w.agent_mut(a).facing = aim; }
+
 static proto::InputFrame frame(bool interact, brad aim, i16 mx = 0, i16 my = 0) {
     proto::InputFrame f;
     f.buttons = interact ? proto::button::INTERACT : 0;
@@ -119,6 +127,7 @@ static void test_reach_finds_the_side_in_front() {
     // 1.0 from the shared edge at x = 20, which is inside INTERACT_REACH (1.5).
     const u32 a = w.spawn(fx3{F(19), F(10), F(0)});
 
+    face(w, a, EAST);
     w.set_input(a, frame(true, EAST));
     w.step();
     CHECK(count_of(w, TouchKind::Use) == 1);
@@ -129,6 +138,7 @@ static void test_reach_finds_the_side_in_front() {
     w.reset();
     r.attach(w);
     const u32 b = w.spawn(fx3{F(19), F(10), F(0)});
+    face(w, b, WEST);
     w.set_input(b, frame(true, WEST));
     w.step();
     CHECK(count_of(w, TouchKind::Use) == 0);
@@ -138,6 +148,7 @@ static void test_reach_finds_the_side_in_front() {
     w.reset();
     r.attach(w);
     const u32 c = w.spawn(fx3{F(18), F(10), F(0)});
+    face(w, c, EAST);
     w.set_input(c, frame(true, EAST));
     w.step();
     CHECK(count_of(w, TouchKind::Use) == 0);
@@ -152,6 +163,7 @@ static void test_use_is_edge_triggered() {
     r.attach(w);
     const u32 a = w.spawn(fx3{F(19), F(10), F(0)});
 
+    face(w, a, EAST);
     int reports = 0;
     for (u32 t = 0; t < 30; ++t) {
         w.set_input(a, frame(true, EAST));      // held down the whole time
@@ -372,6 +384,7 @@ static void test_aiming_across_a_room_beats_standing_beside_a_wall() {
     w.params_mut(a).height = fx::from_frac(7, 6);
 
     const brad aim = SOUTH;
+    face(w, a, aim);
     w.set_input(a, frame(true, aim));
     w.step();
     CHECK(side_of(w, TouchKind::Use) == 1);
@@ -384,6 +397,7 @@ static void test_aiming_across_a_room_beats_standing_beside_a_wall() {
     const u32 b = w.spawn(fx3{stand.x, stand.y, fx::from_frac(5, 6)});
     w.params_mut(b).radius = fx::from_frac(1, 3);
     w.params_mut(b).height = fx::from_frac(7, 6);
+    face(w, b, NORTH);
     w.set_input(b, frame(true, NORTH));
     w.step();
     CHECK(side_of(w, TouchKind::Use) != 1);
@@ -406,6 +420,7 @@ static void test_a_shared_wall_is_pressed_from_the_side_you_stand_on() {
     w.reset();
     r.attach(w);
     const u32 west = w.spawn(fx3{F(19), F(10), F(0)});
+    face(w, west, EAST);
     w.set_input(west, frame(true, EAST));
     w.step();
     CHECK(side_of(w, TouchKind::Use) == 1);      // sector 0's side
@@ -414,6 +429,7 @@ static void test_a_shared_wall_is_pressed_from_the_side_you_stand_on() {
     w.reset();
     r.attach(w);
     const u32 east = w.spawn(fx3{F(21), F(10), F(0)});
+    face(w, east, WEST);
     w.set_input(east, frame(true, WEST));
     w.step();
     CHECK(side_of(w, TouchKind::Use) == 7);      // sector 1's side
@@ -443,6 +459,7 @@ static void test_reach_crosses_into_the_next_sector() {
     // 21 units away and correctly out of reach; sector 1's copy of the shared
     // boundary is 1.0 away and belongs to a sector this entity is not in.
     const u32 a = w.spawn(fx3{F(19), F(10), F(0)});
+    face(w, a, EAST);
     w.set_input(a, frame(true, EAST));
     w.step();
     // It reports side 1 rather than 7 by the rule above -- what matters here is
@@ -456,6 +473,7 @@ static void test_reach_crosses_into_the_next_sector() {
     w.reset();
     r.attach(w);
     const u32 b = w.spawn(fx3{F(30), F(10), F(0)});
+    face(w, b, EAST);
     w.set_input(b, frame(true, EAST));
     w.step();
     CHECK(count_of(w, TouchKind::Use) == 0);
@@ -512,6 +530,7 @@ static i32 press_east_from(Corridor& c, fx x, fx reach_body_height) {
     c.attach(w);
     const u32 a = w.spawn(fx3{x, F(5), F(0)});
     w.params_mut(a).height = reach_body_height;
+    face(w, a, EAST);
     w.set_input(a, frame(true, EAST));
     w.step();
     return side_of(w, TouchKind::Use);
