@@ -3,6 +3,10 @@
 # Bring the whole thing up: server, WebTransport edge, dev web server.
 #
 #   scripts/run_stack.sh [map] [--script <lua>]
+#   scripts/run_stack.sh --map a.dnpm --map b.dnpm --script <lua>
+#
+# Several --map arguments make a PROGRESSION: an exit in the first takes the
+# player who touched it -- and only that player -- to the next.
 #
 # Then open http://localhost:8080/?server=https://127.0.0.1:34433/dnp
 #
@@ -19,8 +23,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 ARCH="$(uname -m)"
-MAP="${1:-build/$ARCH/test.dnpm}"
-shift || true
+
+# A bare first argument is still the map, because that is how everyone has been
+# invoking this. Anything starting with `--` is passed straight through, which
+# is what a progression looks like: --map a --map b --map c.
+ARGS=()
+if [[ $# -gt 0 && "$1" != --* ]]; then
+  ARGS+=(--map "$1")
+  MAP="$1"
+  shift
+elif [[ "$*" != *--map* ]]; then
+  ARGS+=(--map "build/$ARCH/test.dnpm")
+  MAP="build/$ARCH/test.dnpm"
+else
+  MAP=""
+fi
 
 LINK_PORT="${DNP_LINK_PORT:-34500}"
 WT_PORT="${DNP_WT_PORT:-34433}"
@@ -30,17 +47,17 @@ HTTP_PORT="${DNP_HTTP_PORT:-8080}"
 # directory the determinism gate uses -- the server is not part of that gate.
 SERVER="build/server/dnp-server"
 [[ -x "$SERVER" ]] || { echo "no server binary; run scripts/build_server.sh"; exit 1; }
-[[ -f "$MAP" ]] || { echo "no map at $MAP; run mapc first"; exit 1; }
+[[ -z "$MAP" || -f "$MAP" ]] || { echo "no map at $MAP; run mapc first"; exit 1; }
 [[ -f server/edge/certs/cert-hash.json ]] || {
   echo "no dev certificate; run: (cd server/edge && npm run certs)"; exit 1; }
 [[ -f client/wasm/dist/dnp_core.mjs ]] || { echo "no wasm build; run scripts/build_wasm.sh"; exit 1; }
 
 pids=()
-cleanup () { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
+cleanup () { for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT INT TERM
 
-echo "[stack] server  : $MAP  (link 127.0.0.1:$LINK_PORT)"
-"$SERVER" --port "$LINK_PORT" --map "$MAP" "$@" &
+echo "[stack] server  : ${MAP:-see --map arguments}  (link 127.0.0.1:$LINK_PORT)"
+"$SERVER" --port "$LINK_PORT" ${ARGS[@]+"${ARGS[@]}"} "$@" &
 pids+=($!)
 
 sleep 0.6
