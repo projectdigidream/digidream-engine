@@ -167,6 +167,7 @@ struct Server {
             const sim::SectorMotion& m = ms.at(i);
             if (i < sent_motion_count && same_motion(sent_motions[i], m)) continue;
             sent_motions[i] = m;
+            motion_changed_tick = world.tick() + 1;
             for (auto& [id, s] : sessions) {
                 if (s.hello_done) send_motion(id, m);
             }
@@ -553,6 +554,9 @@ struct Server {
     // stable for the life of the map.
     sim::SectorMotion sent_motions[sim::MAX_MOVING_SECTORS]{};
     u32 sent_motion_count = 0;
+    // The tick a motion descriptor last changed, for the same +1 reason
+    // lua_touched_tick uses: "since the last snapshot" is a strict comparison.
+    u32 motion_changed_tick = 0;
 
     void report_crushes() {
         bool now[sim::MAX_AGENTS]{};
@@ -766,7 +770,19 @@ struct Server {
             h.flags           = 0;
             // Per observer: only if a script touched THIS agent since the last
             // snapshot this session received (docs/protocol.md §10.1.3).
-            if (lua_touched_tick[s.agent] > s.last_snapshot_sent) {
+            //
+            // A GEOMETRY change counts too, and is not per-agent: a script that
+            // opened a door changed the world every observer of that door
+            // predicts against, and none of them could have known. That is one
+            // tick of mismatch that self-heals the moment the motion message
+            // lands -- the same shape as a scripted teleport, and it deserves
+            // the same label rather than being reported as a defect.
+            //
+            // Only on the ticks a motion actually CHANGED, never on every tick
+            // a script ran: a flag set unconditionally would excuse every
+            // client's mismatch forever and destroy the signal it exists for.
+            if (lua_touched_tick[s.agent] > s.last_snapshot_sent ||
+                motion_changed_tick > s.last_snapshot_sent) {
                 h.flags |= proto::SNAP_LUA_APPLIED;
             }
 

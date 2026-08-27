@@ -155,12 +155,29 @@ if (LIVE && welcome && map.hash !== welcome.mapHash) {
 // --- what moves ------------------------------------------------------------
 
 const movers = []
+
+// A sector that is now known to move.
+//
+// Called for the motions that arrived with the map AND for the ones that arrive
+// later, when a switch opens a door mid-match. Adding it to `movers` is what
+// puts it in the renderer's dynamic set -- without that the door opens in
+// physics and stays shut on screen, which is the most confusing possible way
+// for this to be half-right.
+// Returns true if this is a sector that was not moving before, which is the
+// only case that needs the renderer's static/dynamic split redone. A door
+// re-triggered every few seconds re-declares a motion it already had, and
+// rebuilding the whole map each time would be a visible stutter for nothing.
+function takeMotion (m) {
+  if (!world.applyMotionSet(m)) return false
+  if (movers.includes(m.sector)) return false
+  movers.push(m.sector)
+  return true
+}
+
 if (LIVE) {
   // Replicated. Parametric movers cost nothing after this: the client computes
   // their position for any tick from the parameters it now holds (§3.1.2).
-  for (const m of motionSets) {
-    if (world.applyMotionSet(m)) movers.push(m.sector)
-  }
+  for (const m of motionSets) takeMotion(m)
 } else {
   // Solo mode has NO movers unless you name them.
   //
@@ -414,7 +431,13 @@ function frame (now) {
   if (acc > DT) acc = 0
   blend('sim', performance.now() - tSim)
 
-  if (LIVE) drainSnapshots()
+  if (LIVE) {
+    // Motions declared since the last frame -- a door someone just opened.
+    let fresh = false
+    while (motionSets.length) fresh = takeMotion(motionSets.shift()) || fresh
+    if (fresh) view.setDynamicSectors(movers)
+    drainSnapshots()
+  }
 
   // Moving sectors changed the geometry, so the mesh follows -- for the movers
   // and their neighbours only. See MapView.setDynamicSectors.

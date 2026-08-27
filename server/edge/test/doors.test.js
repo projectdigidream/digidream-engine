@@ -19,6 +19,9 @@
 //                    this, a door that opened on a timer would pass.
 //   DNP_NO_SCRIPT=1  no script at all. Nothing moves, which is what proves the
 //                    engine is reporting and not acting.
+//   DNP_IGNORE_LUA=1 a client that ignores LUA_APPLIED must report the door as
+//                    a DEFECT. Without this the flag could be carrying no
+//                    information at all and nothing here would notice.
 //
 // The trip-wire is tested by the same run: crossing x = 17 lowers the lift in
 // sector 4, and NOT pressing anything is the whole point of it.
@@ -45,6 +48,7 @@ const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34492)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34566)
 const NO_USE = process.env.DNP_NO_USE === '1'
 const NO_SCRIPT = process.env.DNP_NO_SCRIPT === '1'
+const IGNORE_LUA = process.env.DNP_IGNORE_LUA === '1'
 
 let checks = 0
 let fails = 0
@@ -159,6 +163,7 @@ check(ok && map.hash === welcome.mapHash, 'map loaded')
 const world = core.createWorld({ map })
 const agent = world.spawn(map.spawnForTag('start'))
 const predictor = new Predictor(world, agent)
+predictor.ignoreLuaFlag = IGNORE_LUA
 
 // The door as the client sees it, right now. Read through the same wasm module
 // the client predicts with, from the same MapStorage sector motion writes into
@@ -191,9 +196,20 @@ let history = []
 let maxDoorCeil = doorClosedCeil
 let minLiftFloor = liftParkedFloor
 let maxX = 0
+// After the door has been fully open, does it come back down? An opening door
+// is half a door. The wait is 90 ticks and the travel 32, so a door that is
+// still up 300 ticks later is one whose deferred close never ran -- which is
+// exactly what a wrong on_tick signature did, silently, while every other
+// assertion in this file passed.
+let ceilAfterOpen = null
+let liftAfterDown = null
 
+const verdicts = []
 const drain = () => {
-  while (pending.length) predictor.reconcile(pending.shift())
+  while (pending.length) {
+    const r = predictor.reconcile(pending.shift())
+    if (r?.verdict) verdicts.push(r.verdict)
+  }
 }
 
 // One tick of the client: predict, send, apply anything that arrived.
@@ -227,6 +243,8 @@ for (let i = 0; i < 4; i++) await tickWith(0, 0)
 // Give the door time to travel, still walking into it, so the moment it is high
 // enough the agent goes through.
 for (let i = 0; i < 260; i++) await tickWith(0, 1)
+ceilAfterOpen = ceilOf(DOOR)
+liftAfterDown = floorOf(LIFT)
 await sleep(200)
 drainMotions(); drain()
 
@@ -255,8 +273,32 @@ if (NO_SCRIPT) {
   // The whole reason the motion is parametric: one message, and the client
   // computes every tick of it. If prediction drifted while the door moved, the
   // closed form is not being evaluated the same way on both sides.
-  check(predictor.stats.mispredictions === 0,
-        `ZERO mispredictions across an opening door (got ${predictor.stats.mispredictions})`)
+  if (IGNORE_LUA) {
+    check(predictor.stats.mispredictions > 0,
+          `CONTROL: ignoring LUA_APPLIED reports the door as a DEFECT ` +
+          `(${predictor.stats.mispredictions})`)
+  } else {
+    check(predictor.stats.mispredictions === 0,
+          `ZERO mispredictions across an opening door (got ${predictor.stats.mispredictions})`)
+    // The shape, as in lua.test.js: a change the client could not have known
+    // about costs exactly one tick and then self-heals. A RUN of them would
+    // mean the client never caught up -- a real fault wearing the flag as an
+    // excuse.
+    let worst = 0
+    let run = 0
+    for (const v of verdicts) {
+      if (v === 'lua-applied') { run++; worst = Math.max(worst, run) } else run = 0
+    }
+    console.log(`  longest consecutive lua-applied run: ${worst}`)
+    check(worst <= 2, `each geometry change self-heals within a tick (longest run ${worst})`)
+  }
+  // And the other half of a door.
+  console.log(`  after the wait: door ceiling ${ceilAfterOpen.toFixed(3)}, ` +
+              `lift floor ${liftAfterDown.toFixed(3)}`)
+  check(ceilAfterOpen < maxDoorCeil,
+        `the door shut itself again (ceiling back to ${ceilAfterOpen.toFixed(3)})`)
+  check(liftAfterDown > minLiftFloor,
+        `the lift rose again (floor back to ${liftAfterDown.toFixed(3)})`)
 }
 
 try { wt.close() } catch {}
