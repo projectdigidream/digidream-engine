@@ -35,7 +35,7 @@ SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1
 
-for t in test_math test_proto test_physics test_abilities test_triangulate test_mapfile test_sectormotion test_crush test_interact test_props test_turning test_nav test_rail; do
+for t in test_math test_proto test_physics test_abilities test_triangulate test_mapfile test_sectormotion test_crush test_interact test_props test_bodies test_turning test_nav test_rail; do
   echo "[san] $t"
   clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/$t.cpp" -o "$OUT/$t"
   "$OUT/$t" | tail -1

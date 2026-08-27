@@ -65,13 +65,13 @@ const waitFor = async (fn, ms, l) => {
 
 function mapPath () {
   for (const arch of [process.arch === 'x64' ? 'x86_64' : 'arm64', 'arm64', 'x86_64', 'native']) {
-    const p = join(ROOT, 'build', arch, 'doors.dnpm')
+    const p = join(ROOT, 'build', arch, 'monsters.dnpm')
     if (existsSync(p)) return p
   }
   return null
 }
 const MAP_PATH = mapPath()
-if (!MAP_PATH) { console.error('no baked doors map'); process.exit(2) }
+if (!MAP_PATH) { console.error('no baked monsters map'); process.exit(2) }
 
 const vfxCatalogue = parseVfx(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
 const certHash = Buffer.from(
@@ -167,6 +167,10 @@ const drain = () => {
         const p = { x: fxToNumber(e.pos.x), y: fxToNumber(e.pos.y) }
         rec.first ??= p
         rec.last = p
+        // Stamped, so a speed can be computed from them. Snapshots arrive every
+        // other tick and a dropped one widens the gap, so the interval has to
+        // come from the wire rather than be assumed.
+        ;(rec.samples ??= []).push({ t: s.serverTick, x: p.x, y: p.y })
       }
     }
     for (const v of s.vfx ?? []) vfxSeen.push(v)
@@ -220,6 +224,35 @@ if (IDLE_ONLY) {
   check(seen.size === 0, 'CONTROL: and a client that never said HELLO gets no entities')
 } else {
   check(moved.length > 0, `${moved.length} of them closed on the player`)
+
+  // HOW FAST it walks is the catalogue's `speed`, not the engine's default.
+  //
+  // The number is in assets/props.txt and reaches the entity as its move_speed,
+  // which is a replicated parameter -- so this is a claim about a text file
+  // changing physics without a recompile, and the way it fails is by silently
+  // doing nothing and leaving the default in place. That is what the second
+  // assertion is for: 5.83 and 8 are far enough apart that "the catalogue was
+  // read" and "the catalogue was ignored" cannot both pass.
+  const CATALOGUE_SPEED = 5.83     // assets/props.txt, prop 20
+  const ENGINE_DEFAULT = 8         // MoveParams::move_speed
+  const topSpeed = (r) => {
+    let best = 0
+    for (let i = 1; i < (r.samples?.length ?? 0); i++) {
+      const a = r.samples[i - 1]
+      const b = r.samples[i]
+      const dt = (b.t - a.t) / 60
+      if (dt <= 0) continue
+      best = Math.max(best, Math.hypot(b.x - a.x, b.y - a.y) / dt)
+    }
+    return best
+  }
+  const fastest = Math.max(...enemies.map(([, r]) => topSpeed(r)))
+  console.log(`  fastest observed ${fastest.toFixed(2)} u/s ` +
+              `(catalogue ${CATALOGUE_SPEED}, engine default ${ENGINE_DEFAULT})`)
+  check(Math.abs(fastest - CATALOGUE_SPEED) < 0.6,
+        `it walks at the speed its catalogue line names (${fastest.toFixed(2)})`)
+  check(fastest < (CATALOGUE_SPEED + ENGINE_DEFAULT) / 2,
+        'CONTROL: and not at the engine default, which is what ignoring the catalogue looks like')
 
   // NOT YET PASSING, and left visible rather than removed or weakened.
   //

@@ -1,0 +1,42 @@
+# Monsters, with room to walk (§7.1's scripted agents).
+#
+# A fixture, deliberately separate from doors.map. Both maps want monsters in
+# them and they want OPPOSITE things from them: doors.map needs them present but
+# inert, because a monster that chases eventually arrives wherever the door test
+# is standing and shoulders it off the door it is opening; this map needs them
+# awake, because what it tests is that they chase, that they shoot, and that the
+# shots are stopped by walls.
+#
+# Two rooms and a doorway between them, so line of sight is a real question:
+#
+#   room A (the player)  --[opening]--  room B (the monsters)
+#
+# The opening is a gap in a shared wall rather than a door sector. Nothing here
+# opens, so there is nothing for a script to move, and a shot that reaches the
+# player has genuinely travelled through the gap rather than through the wall.
+
+sector floor 0 ceil 4 tag 1 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 0 0    wall tex STARTAN3
+  vertex 20 0   wall tex STARTAN3
+  vertex 20 8   neighbor 1
+  vertex 20 12  wall tex STARTAN3
+  vertex 20 20  wall tex STARTAN3
+  vertex 0 20   wall tex STARTAN3
+end
+
+sector floor 0 ceil 4 tag 2 light 180 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 20 0   wall tex STARTAN3
+  vertex 40 0   wall tex STARTAN3
+  vertex 40 20  wall tex STARTAN3
+  vertex 20 20  wall tex STARTAN3
+  vertex 20 12  neighbor 0
+  vertex 20 8   wall tex STARTAN3
+end
+
+# Doom's player at 1/48, matching every other converted map here.
+body radius 0.3333 height 1.1667
+
+script scripts/enemies.lua
+script monsters_lines.lua
+
+spawn start 5 10 1

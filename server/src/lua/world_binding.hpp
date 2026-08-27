@@ -62,6 +62,8 @@ struct PropCatalogueView {
     // is merely absent and deserves a different message.
     virtual bool empty() const = 0;
     virtual u8   flags_of(u16 kind) const = 0;
+    // World units per second, or zero for "the engine's default".
+    virtual fx   speed_of(u16 kind) const = 0;
     // What a script calls it. Behaviour is written per NAME, because a number
     // in a script is a number somebody has to look up in a file the script does
     // not mention.

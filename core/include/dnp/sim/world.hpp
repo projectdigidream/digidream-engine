@@ -33,6 +33,21 @@ inline constexpr u32 MAX_AGENTS = 64;
 // bit on every handle and a branch at every use of one, to distinguish things
 // the protocol never needed to distinguish.
 inline constexpr u32 MAX_PROPS    = 192;
+
+// The top of the prop range, which spawn_prop never allocates from.
+//
+// A client mirrors the OTHER BODIES into its own world as solid cylinders, so
+// that its prediction stops where the server will stop it. Those bodies are
+// agents on the wire, with indices in [0, MAX_AGENTS) -- which is a range this
+// world already uses for something else, and the mirrors have to go somewhere
+// that cannot collide with a real prop.
+//
+// Reserving the band here rather than agreeing a convention in the client is
+// the difference between a guarantee and a hope: the server's allocator is what
+// would collide, so the server's allocator is what has to know. It costs 64
+// prop slots no map has come close to using.
+inline constexpr u32 MIRROR_SLOTS   = MAX_AGENTS;
+inline constexpr u32 SPAWNABLE_PROPS = MAX_PROPS - MIRROR_SLOTS;
 inline constexpr u32 MAX_ENTITIES = MAX_AGENTS + MAX_PROPS;
 
 // What a prop IS, as far as the simulation is concerned: a number the map and
@@ -371,6 +386,9 @@ private:
     void step_agent(u32 i) noexcept;
     void detect_prop_events() noexcept;
     void resolve_prop_collisions(u32 agent) noexcept;
+    // `was` is every agent's position at the start of the tick -- see the
+    // definition for why the resolution reads that rather than live positions.
+    void resolve_agent_collisions(const fx3* was) noexcept;
     i32  find_usable_prop(u32 agent) const noexcept;
     void resolve_attack(u32 agent) noexcept;
     void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;

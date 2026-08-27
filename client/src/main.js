@@ -231,6 +231,12 @@ if (LIVE) {
 let spawn = map.spawnForTag(SPAWN)
 let agent = world.spawn(spawn)
 
+// The index the SERVER gave us, which is not this world's slot number: it has
+// one agent and the server's has many. Needed so the body mirroring below does
+// not mirror us into our own path.
+if (LIVE && welcome) myAgentIndex = (welcome.selfHandle & 0x00ffffff) - 1
+MIRROR_BASE = core.M._dnp_mirror_base()
+
 // Body proportions, for maps built at a scale other than this engine's.
 //
 // A converted Doom map is at 1/48, chosen so Doom's 24-unit step lands on our
@@ -372,6 +378,17 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // and says so once.
 let props = null
 let vfx = null
+// Where mirrored bodies live in this client's own world: the band of prop slots
+// the engine reserves for exactly this. spawn_prop never allocates there, so a
+// mirror can never land on a real prop.
+//
+// Asked of the engine rather than written down here. The last constant this
+// client kept its own copy of was the agent buffer length, and the copy going
+// stale cost a day and looked like a determinism bug.
+let MIRROR_BASE = 0
+// Our own entity index, from WELCOME's handle. The collision rule is decided by
+// index, so predicting it needs to know ours.
+let myAgentIndex = null
 try {
   const text = await (await fetch('/props.txt')).text()
   const catalogue = parseProps(text)
@@ -443,6 +460,28 @@ const others = new EntityView({
     if (!def) return
     world.placeProp(index, kind, pos, def)
   },
+  // Other BODIES -- players and monsters -- mirrored as colliders.
+  //
+  // ALL of them, not a filtered subset. The engine's rule is that every body is
+  // pushed out of every other and none of them is pushed BY one
+  // (World::resolve_agent_collisions), so what this client has to reproduce is
+  // its own displacement out of everyone -- and the positions it needs for that
+  // are the start-of-tick ones a snapshot already carries. That is the whole
+  // reason the rule reads a start-of-tick snapshot rather than live positions.
+  //
+  // Placed in prop slots rather than agent slots: what this world needs from
+  // them is a cylinder to stop at, and it must NOT simulate them -- remote
+  // bodies are interpolated, never predicted.
+  onBody: (index, kind, pos) => {
+    if (myAgentIndex !== null && index === myAgentIndex) return
+    // A monster's size is its catalogue entry; a player's is the map's declared
+    // body. Kind 0 is a player.
+    const def = kind ? props?.kinds.get(kind) : { radius: bodyRadius, height: bodyHeight }
+    if (!def) return
+    world.placeProp(MIRROR_BASE + index, 0, pos,
+                    { radius: def.radius, height: def.height, flags: 1 /* solid */ })
+  },
+  onBodyGone: (index) => world.removeProp(MIRROR_BASE + index),
   onPropGone: (index) => world.removeProp(index)
 })
 
@@ -471,6 +510,10 @@ function adoptMap (bytes, w) {
   world = core.createWorld({ map })
   spawn = map.spawnForTag(SPAWN)
   agent = world.spawn(spawn)
+  // A new map is a new entity index -- change_map re-seats the client, and
+  // keeping the old one would mirror a body on top of us and mirror us onto
+  // somebody else.
+  myAgentIndex = (w.selfHandle & 0x00ffffff) - 1
   world.tick = w.serverTick
   predictor = new Predictor(world, agent)
 

@@ -9,14 +9,20 @@
 --   sides 11,21  the trip-wire at x = 17, crossed either way
 --   side 18      the exit switch
 
--- Two monsters, north of the spawn where the door test does not walk. Placed
--- from here rather than by the converter because this is a hand-authored map:
--- what a map contains is the map's business.
+-- Two monsters, north of the spawn. DORMANT: they are here to prove a scripted
+-- agent replicates -- its kind, its animation state, its handle -- and not to
+-- be an obstacle. A live monster chases, so it eventually arrives wherever the
+-- test walks, and "placed where the door test does not go" stops being true the
+-- moment either of them takes a step. That is not hypothetical: it is what
+-- turned an agent-collision change into six failing door assertions.
+--
+-- Placed from here rather than by the converter because this is a
+-- hand-authored map: what a map contains is the map's business.
 -- Inside the room, not on its wall. Sector 0 spans y 0..10 and these were at
 -- y = 480/48 = 10 exactly -- standing in the north wall, which is why they
 -- appeared to "move" 17 units without ever seeing anybody.
-enemies.spawn("zombieman", 288, 384, 48)
-enemies.spawn("imp",       144, 384, 48)
+enemies.spawn("zombieman", 288, 384, 48, { dormant = true })
+enemies.spawn("imp",       144, 384, 48, { dormant = true })
 
 doom.load{
   name = "doors",

@@ -34,7 +34,8 @@ export class EntityView {
    * invisible one -- an entity you cannot see is indistinguishable from one the
    * server never sent.
    */
-  constructor ({ makeMesh, scene, onProp = null, onPropGone = null }) {
+  constructor ({ makeMesh, scene, onProp = null, onPropGone = null,
+                 onBody = null, onBodyGone = null }) {
     this.makeMesh = makeMesh
     this.scene = scene
     // Told about props so the caller can mirror them into a simulation. A
@@ -42,6 +43,11 @@ export class EntityView {
     // has to be, or the client walks through it.
     this.onProp = onProp
     this.onPropGone = onPropGone
+    // Bodies -- players and monsters -- so the caller can mirror them as
+    // colliders. A remote body is interpolated and never simulated, but it is
+    // still something to walk into.
+    this.onBody = onBody
+    this.onBodyGone = onBodyGone
     // handle -> { mesh, samples: [{tick, x, y, z, facing}], generation, kind }
     this.entities = new Map()
   }
@@ -59,7 +65,9 @@ export class EntityView {
       const generation = handleGeneration(e.handle)
 
       if (e.mask & ENT_FIELD.DESTROYED) {
-        if (this.entities.get(index)?.kind && this.onPropGone) this.onPropGone(index)
+        const gone = this.entities.get(index)
+        if (gone?.kind && this.onPropGone) this.onPropGone(index)
+        if (gone && this.onBodyGone) this.onBodyGone(index)
         this.#remove(index)
         continue
       }
@@ -98,6 +106,10 @@ export class EntityView {
       // position rather than the converted one: the simulation works in engine
       // space, and converting for the renderer and back would round.
       if (ent.kind && this.onProp) this.onProp(index, ent.kind, e.pos)
+      // The KIND, not a size: how big a thing is comes from the catalogue for
+      // a monster and from the map for a player, and neither is this view's
+      // business to know.
+      if (this.onBody) this.onBody(index, ent.kind, e.pos)
 
       const last = ent.samples.at(-1)
       const p = toThree(fxToFloat(e.pos.x), fxToFloat(e.pos.y), fxToFloat(e.pos.z))

@@ -43,6 +43,8 @@ import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
+import { parseProps } from '../../../client/src/render/props.js'
+import { mirrorEntities } from './helpers.js'
 import { Core } from '../../../client/src/core.js'
 import { Predictor } from '../../../client/src/predictor.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
@@ -226,6 +228,13 @@ let keyIndex = null
 let keyGone = false
 const PROP_KEY_BLUE = 1        // assets/props.txt
 
+// What the client needs to stop where the server stops it: the catalogue (for
+// how big a monster is), the reserved band bodies get mirrored into, and its own
+// entity index so it does not mirror a collider on top of itself.
+const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+const mirrorBase = core.M._dnp_mirror_base()
+const selfIndex = (welcome.selfHandle & 0x00ffffff) - 1
+
 const applied = new Set()
 const drainMotions = () => {
   while (motionSets.length) {
@@ -273,6 +282,14 @@ const drain = () => {
       // was measuring the fixture rather than the replication.
       if (e.displayId === PROP_KEY_BLUE) keyIndex = index
     }
+    // Colliders, before reconciling. This map has monsters in it, and they
+    // chase -- so the agent walking to the door ends up walking into one, and
+    // a client that has not mirrored the bodies predicts straight through it
+    // and is corrected every tick it is touching one.
+    mirrorEntities(world, s, {
+      catalogue, kinds: propsSeen, mirrorBase, selfIndex,
+      bodyRadius: clientRadius, bodyHeight: clientHeight, ENT_FIELD, handleIndex
+    })
     const r = predictor.reconcile(s)
     if (r?.verdict) verdicts.push({ v: r.verdict, tick: s.serverTick })
   }

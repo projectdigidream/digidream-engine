@@ -915,6 +915,15 @@ int l_dnp_spawn_enemy(lua_State* L) {
     // proportions do not silently apply to it.
     ctx.world->params_mut(a).radius = ctx.prop_radius(kind);
     ctx.world->params_mut(a).height = ctx.prop_height(kind);
+    // How fast it walks, from the catalogue. A parameter rather than something
+    // the AI multiplies its input by: move_speed is already replicated and
+    // already predicted, so a slow monster is slow on every client without a
+    // word of it crossing the wire. Zero leaves the engine's default, so a prop
+    // that never walks does not have to name a speed.
+    if (ctx.props != nullptr) {
+        const fx sp = ctx.props->speed_of(kind);
+        if (sp > fx::zero()) ctx.world->params_mut(a).move_speed = sp;
+    }
     ctx.effects->set_base(a, ctx.world->params(a));
     push_entity(L, ctx, a);
     return 1;

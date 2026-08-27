@@ -39,7 +39,11 @@ local IDLE, WALK, ATTACK, PAIN, DIE = 0, 1, 2, 3, 4
 -- What each kind does. Everything about a monster's behaviour is one entry.
 local KINDS = {
   zombieman = {
-    speed = fx.frac(1, 1),      -- world units per second
+    -- How FAST it walks is not here: it is `speed` on the catalogue's prop
+    -- line, applied as the entity's move_speed at spawn. That keeps one
+    -- question in one file -- how big a thing is and how fast it moves are both
+    -- facts about the thing -- and it makes the speed a replicated parameter
+    -- rather than something this script multiplies an input by.
     sight = du(1024),
     attack = "hitscan",
     range = du(2048),
@@ -48,7 +52,6 @@ local KINDS = {
     tracer = 1,
   },
   imp = {
-    speed = fx.frac(1, 1),
     sight = du(1024),
     attack = "projectile",
     melee = du(64),
@@ -136,7 +139,15 @@ function M.place(list)
     placed, dropped > 0 and (", " .. dropped .. " did not fit (MAX_AGENTS)") or ""))
 end
 
-function M.spawn(name, x, y, z)
+-- `opts.dormant` places a monster that never chases and never fires.
+--
+-- Not a gameplay feature -- a TEST one. A map that wants a monster present as a
+-- replicated entity, without it also being a moving obstacle, has no other way
+-- to say so: monsters chase, so "put it somewhere the test does not walk" stops
+-- being true the moment the test starts walking anywhere. doors.map wanted
+-- exactly that and its comment claiming the monsters were out of the way was
+-- quietly false.
+function M.spawn(name, x, y, z, opts)
   local def = KINDS[name]
   if def == nil then
     print("[enemies] no behaviour for '" .. tostring(name) .. "'")
@@ -144,7 +155,8 @@ function M.spawn(name, x, y, z)
   end
   local e = dnp.spawn_enemy(name, vec3.new(du(x), du(y), du(z)))
   if e == nil then return nil end
-  live[e:index()] = { e = e, def = def, cooldown = 0, windup = 0 }
+  live[e:index()] = { e = e, def = def, cooldown = 0, windup = 0,
+                      dormant = opts ~= nil and opts.dormant or false }
   e:set_animation(IDLE)
   return e
 end
@@ -159,10 +171,21 @@ local function fire_hitscan(m, from, aim)
   --
   -- Length in 1/256 units, which is a hundredth of a Doom unit at this scale
   -- and comfortably inside the u32 the event carries.
-  local muzzle = vec3.new(from.x, from.y, from.z + du(32))
+  --
+  -- The muzzle height is `at.z` -- the height the ENGINE cast the ray at --
+  -- rather than a guess like "shoulders, about 32 units up". They were two
+  -- different numbers, so the line on screen was near the shot without being
+  -- the shot, and a tracer that is nearly right is worse than none: it is the
+  -- thing you check the hit against when the hit looks wrong.
+  --
+  -- And the DIRECTION is the body's facing, not `aim`. dnp.hitscan casts along
+  -- facing, and since turning became a rate rather than a snap those are two
+  -- different angles for as long as the monster is still coming round. Drawing
+  -- the intent instead of the shot puts the line beside the thing it hit.
+  local muzzle = vec3.new(from.x, from.y, at.z)
   local dx, dy = at.x - muzzle.x, at.y - muzzle.y
   local len = dnp.length(vec3.new(dx, dy, ZERO))
-  dnp.vfx(m.def.tracer, muzzle, aim, (len * fx.int(256)).int)
+  dnp.vfx(m.def.tracer, muzzle, m.e:facing(), (len * fx.int(256)).int)
   return target
 end
 
@@ -193,6 +216,8 @@ function on_tick()
   for idx, m in pairs(live) do
     if not m.e:valid() then
       live[idx] = nil
+    elseif m.dormant then
+      -- Present, replicated, animated, and going nowhere.
     elseif m.windup > 0 then
       -- Mid-attack: every tick, because the shot lands at the END of the windup
       -- and a monster that fired four ticks late would fire at where you were.

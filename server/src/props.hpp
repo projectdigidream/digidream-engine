@@ -32,6 +32,9 @@ struct PropDef {
     // `solid`, `usable` -- see sim::prop_flag. Bare words on the prop line,
     // because a flag is a fact about the thing and not a value it carries.
     u8            flags = 0;
+    // World units per second. Zero means "leave the engine's default", so a
+    // prop that never moves does not have to name a speed.
+    fx            speed{};
 };
 
 // The binding layer's view of it. An interface rather than a direct dependency
@@ -51,6 +54,10 @@ public:
     fx height_of(u16 kind) const override {
         const PropDef* d = find(static_cast<sim::PropKind>(kind));
         return d ? d->height : fx::from_int(1);
+    }
+    fx speed_of(u16 kind) const override {
+        const PropDef* d = find(static_cast<sim::PropKind>(kind));
+        return d ? d->speed : fx::zero();
     }
     u8 flags_of(u16 kind) const override {
         const PropDef* d = find(static_cast<sim::PropKind>(kind));
@@ -115,6 +122,7 @@ public:
                 }
                 if (tok[i] == "radius")      d.radius = parse_fx(tok[i + 1], ok);
                 else if (tok[i] == "height") d.height = parse_fx(tok[i + 1], ok);
+                else if (tok[i] == "speed")  d.speed = parse_fx(tok[i + 1], ok);
                 else {
                     std::fprintf(stderr, "[props] %s:%d: unknown attribute '%s'\n",
                                  path, lineno, tok[i].c_str());

@@ -87,6 +87,17 @@ int dnp_buf32_len() { return BUF32_LEN; }
 EMSCRIPTEN_KEEPALIVE
 void dnp_interact_reach(long long* out64) { out64[0] = sim::INTERACT_REACH.raw; }
 
+// The first prop slot reserved for body mirrors (sim::MIRROR_SLOTS).
+//
+// Exported for the same reason as the buffer lengths: the client mirrors remote
+// bodies into this band, spawn_prop is what guarantees the band is empty, and a
+// client that had its own copy of the number would silently overwrite real
+// props the day either constant moved. It has happened once already, with the
+// agent buffer length, and it presented as 212 mispredictions rather than as
+// anything resembling an off-by-one.
+EMSCRIPTEN_KEEPALIVE
+int dnp_mirror_base() { return static_cast<int>(sim::MAX_AGENTS + sim::SPAWNABLE_PROPS); }
+
 // Point the world at the built-in test map.
 //
 // Retained as a fallback and for tests. The real path is dnp_map_load() below,

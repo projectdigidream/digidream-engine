@@ -28,8 +28,10 @@ const { Connection } = await import('../../../client/src/net.js')
 const { Predictor } = await import('../../../client/src/predictor.js')
 const { MapAccumulator } = await import('../../../client/src/maploader.js')
 const { EntityView } = await import('../../../client/src/render/entities.js')
-const { MSG, axisFromNumber, fxToNumber } = await import('../../../client/src/proto.js')
-const { bakedMapPath } = await import('./helpers.js')
+const { MSG, axisFromNumber, fxToNumber, ENT_FIELD, handleIndex } =
+  await import('../../../client/src/proto.js')
+const { parseProps } = await import('../../../client/src/render/props.js')
+const { bakedMapPath, mirrorEntities } = await import('./helpers.js')
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -99,6 +101,11 @@ async function connectClient (name) {
 
   const { ok, map } = core.loadMap(c.acc.bytes())
   if (!ok) throw new Error(`${name}: map rejected`)
+  // Its own entity index, so it does not mirror a collider on top of itself,
+  // and a place to remember each entity's kind -- display_id is delta-encoded
+  // and arrives once, on the tick the entity appears.
+  c.selfIndex = (c.welcome.selfHandle & 0x00ffffff) - 1
+  c.kinds = new Map()
   c.map = map
   c.world = core.createWorld({ map })
   for (const m of c.motionSets) c.world.applyMotionSet(m)
@@ -134,6 +141,15 @@ const others = new EntityView({
 })
 const CONV = { fxToFloat: (v) => Number(v) / 4294967296, toThree: (x, y, z) => ({ x, y: z, z: -y }) }
 
+// Colliders for the OTHER bodies, so a predicting client stops where the server
+// will stop it. Both clients spawn on the same tag, so they start concentric and
+// the engine separates them on the first tick -- a client that has not mirrored
+// the other one predicts straight through it and is corrected for as long as
+// they overlap. Exactly what main.js does; a harness that skipped it would be
+// measuring a client simpler than the real one.
+const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+const mirrorBase = core.M._dnp_mirror_base()
+
 function drive (c, moveX, feedEntities = false) {
   const f = { buttons: 0, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 }
   c.predictor.step(f)
@@ -143,6 +159,9 @@ function drive (c, moveX, feedEntities = false) {
     const s = c.snapshots.shift()
     for (const so of s.sectorOffsets ?? []) c.world.setDiscreteOffset(so.sector, so.offset)
     if (feedEntities) others.ingest(s, CONV)
+    mirrorEntities(c.world, s, {
+      catalogue, kinds: c.kinds, mirrorBase, selfIndex: c.selfIndex, ENT_FIELD, handleIndex
+    })
     c.predictor.reconcile(s)
   }
 }
@@ -153,9 +172,20 @@ a.predictor.stats.exactMatches = 0
 a.predictor.stats.mispredictions = 0
 a.predictor.stats.starvedDivergences = 0
 
+// A walks WEST and B east -- apart, not into each other.
+//
+// Both clients spawn on the same tag, so they start concentric and the engine's
+// tie-break separates them on the first tick: A, the lower index, goes west.
+// Driving A east from there means driving it back through B, and two bodies
+// grinding against each other is a deliberately different claim from this one.
+// It is also the one case prediction cannot be exact about -- the remote body
+// is interpolated, so a client's copy of where it is trails the server's by the
+// interpolation delay, and the two disagree about where the stop is for as long
+// as the contact lasts. What this test measures is the netcode path; body
+// contact is core/tests/test_bodies.cpp's subject.
 for (let i = 0; i < 240; i++) {
-  drive(a, 1, true)
-  drive(b, -1)
+  drive(a, -1, true)
+  drive(b, 1)
   await sleep(15)
 }
 await sleep(200)

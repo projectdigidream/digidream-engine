@@ -8,11 +8,15 @@
 # TWO RECORD TYPES, because two different programs need two different halves and
 # neither should have to understand the other's:
 #
-#   prop   <id> <name> radius <r> height <h> [solid] [usable]
+#   prop   <id> <name> radius <r> height <h> [speed <s>] [solid] [usable]
 #           The SIMULATION's half. The server reads it. `radius` and `height`
 #           are the cylinder an agent has to be inside to touch the thing;
 #           `solid` means a body cannot walk through it, and `usable` means
-#           pressing use while facing it is reported to the script.
+#           pressing use while facing it is reported to the script. `speed` is
+#           world units per second for anything that walks, and becomes the
+#           entity's move_speed -- a replicated parameter, so a slow monster is
+#           slow on every client without a word of it crossing the wire. Absent
+#           means the engine's default.
 #
 #           A prop with neither flag is a trigger volume you walk into -- a key,
 #           a checkpoint. With `solid` it is an obstacle. With `usable` it is
@@ -100,14 +104,17 @@ sprite 11 state 1 fps 0 frames SW2BRNGN
 # does not have yet -- so an imp seen from behind looks like an imp seen from
 # the front. Stated rather than left to be discovered.
 
-prop 20 zombieman radius 0.417 height 1.167 solid
+# Doom's own speeds, converted: a monster moves N map units per tic at 35 Hz,
+# which at 1/48 scale is N * 35 / 48 world units per second. A zombieman and an
+# imp both move 8 -- 5.83 -- and a demon moves 10.
+prop 20 zombieman radius 0.417 height 1.167 speed 5.83 solid
 sprite 20 size 1.167 billboard state 0 fps 0  frames POSSA1
 sprite 20 state 1 fps 6  frames POSSA1,POSSB1,POSSC1,POSSD1
 sprite 20 state 2 fps 5  frames POSSE1,POSSF1
 sprite 20 state 3 fps 0  frames POSSG1
 sprite 20 state 4 fps 8  frames POSSH0,POSSI0,POSSJ0,POSSK0,POSSL0,POSSM0
 
-prop 21 imp radius 0.417 height 1.167 solid
+prop 21 imp radius 0.417 height 1.167 speed 5.83 solid
 sprite 21 size 1.167 billboard state 0 fps 0  frames TROOA1
 sprite 21 state 1 fps 6  frames TROOA1,TROOB1,TROOC1,TROOD1
 sprite 21 state 2 fps 5  frames TROOE1,TROOF1,TROOG1

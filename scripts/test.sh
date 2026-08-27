@@ -33,6 +33,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_crush"
 "./build/$HOST_ARCH/test_interact"
 "./build/$HOST_ARCH/test_props"
+"./build/$HOST_ARCH/test_bodies"
 "./build/$HOST_ARCH/test_turning"
 "./build/$HOST_ARCH/test_nav"
 "./build/$HOST_ARCH/test_rail"
@@ -44,6 +45,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
 "./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
+"./build/$HOST_ARCH/mapc" maps/monsters.map "build/$HOST_ARCH/monsters.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_a.map "build/$HOST_ARCH/level_a.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_b.map "build/$HOST_ARCH/level_b.dnpm"
 # Floating platforms with open edges -- the only map here that is not a sealed
@@ -124,7 +126,7 @@ else
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2 \
-     && node test/delta.test.js 2>/dev/null | tail -2 \
+     && node test/delta.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/mapdata.test.js 2>/dev/null | tail -2 \
      && DNP_MAP="$ROOT/build/$HOST_ARCH/big.dnpm" DNP_WT_PORT=34471 DNP_LINK_PORT=34541 \
         node test/mapdata.test.js 2>/dev/null | tail -2 \

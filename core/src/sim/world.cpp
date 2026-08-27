@@ -421,6 +421,13 @@ void World::step() noexcept {
     carry_anchored();
     sweep_moving_sectors();
 
+    // Where every body was before anything moved. Bodies are resolved against
+    // THIS rather than against each other's final positions, which is what
+    // makes the result independent of the order the loop below runs in -- see
+    // resolve_agent_collisions.
+    fx3 was[MAX_AGENTS];
+    for (u32 i = 0; i < MAX_AGENTS; ++i) was[i] = agents_[i].pos;
+
     // Ascending index order, always. Any order would be deterministic on its
     // own, but it must be the SAME order on client and server, and index order
     // is the one that cannot drift as the agent set changes.
@@ -428,9 +435,12 @@ void World::step() noexcept {
         if (agents_[i].active) step_agent(i);
     }
 
+    resolve_agent_collisions(was);
+
     // Last, on settled positions. Running it before the agents moved would
     // report a crush on an agent that was about to walk out from under the
     // ceiling in the same tick, and miss one that walked in.
+
     detect_vertical_crush();
     detect_prop_events();
 
@@ -570,7 +580,10 @@ void PropEventLog::hash_into(StateHasher& h) const noexcept {
 }
 
 u32 World::spawn_prop(PropKind kind, fx3 pos) noexcept {
-    for (u32 i = 0; i < MAX_PROPS; ++i) {
+    // SPAWNABLE_PROPS, not MAX_PROPS: the top of the range is reserved for the
+    // body mirrors a client places, and a prop allocated there would land on
+    // one of them.
+    for (u32 i = 0; i < SPAWNABLE_PROPS; ++i) {
         if (props_[i].active) continue;
         props_[i] = PropState{};
         props_[i].kind = kind;
@@ -665,6 +678,82 @@ void World::resolve_prop_collisions(u32 agent) noexcept {
         if (into < fx::zero()) {
             a.vel.x -= n.x * into;
             a.vel.y -= n.y * into;
+        }
+    }
+}
+
+// Bodies do not stand inside one another.
+//
+// Modelled on resolve_prop_collisions above, and deliberately: a body and a
+// solid crate are the same problem, and a second answer to it would be a second
+// thing to keep in step with the client.
+//
+// TWO DECISIONS, both of which the obvious implementation gets wrong.
+//
+// It BLOCKS, it does not shove. Each agent is pushed out of the others; nobody
+// is pushed by them. A monster that walks into a standing player moves itself
+// out and leaves the player exactly where they were. The first version of this
+// displaced the lower-priority body instead, and monsters -- which chase --
+// walked players off the doors they were opening. A body you cannot walk
+// through is what "solid" means; a body that pushes you around is a mechanic,
+// and not one anybody asked for.
+//
+// And each agent is resolved against where the others were at the START of the
+// tick, not where they ended it. That is what makes the answer independent of
+// which agent the loop reached first: "first" is an iteration detail, and a
+// simulation whose outcome depends on it has a hidden input. It is also the
+// only version a client can reproduce -- the snapshot it holds is exactly a
+// set of start-of-tick positions.
+//
+// The cost is one tick of latency: two bodies that walk into each other head-on
+// each stop at where the other WAS, which can leave them fractionally
+// overlapped for a tick before the next pass separates them. That is a frame of
+// softness, which is what §7.1 asked for anyway.
+void World::resolve_agent_collisions(const fx3* was) noexcept {
+    for (u32 j = 0; j < MAX_AGENTS; ++j) {
+        if (!agents_[j].active) continue;
+        AgentState& b = agents_[j];
+        const fx r_b = params_[j].radius;
+        const fx h_b = params_[j].height;
+
+        for (u32 i = 0; i < MAX_AGENTS; ++i) {
+            if (i == j || !agents_[i].active) continue;
+            const fx3 a = was[i];
+
+            // Vertically clear: over the top or under the bottom. First,
+            // because it rejects most pairs in two compares -- and because a
+            // monster on a balcony is not standing in your way.
+            if (b.pos.z >= a.z + params_[i].height) continue;
+            if (b.pos.z + h_b <= a.z) continue;
+
+            const fx dx = b.pos.x - a.x;
+            const fx dy = b.pos.y - a.y;
+            const fx want = r_b + params_[i].radius;
+            const u128 d_sq = len_sq_raw(fx2{dx, dy});
+            const u128 want_sq = static_cast<u128>(static_cast<i128>(want.raw) * want.raw);
+            if (d_sq >= want_sq) continue;
+
+            // Exactly concentric: no separation direction exists, so pick one
+            // rather than normalize a zero vector. Two bodies spawned at one
+            // point is not a hypothetical -- it is what a spawn tag with two
+            // takers looks like.
+            //
+            // OPPOSITE directions for the two halves of the pair, chosen by
+            // index. A single fixed fallback -- +x for everybody -- sends both
+            // bodies the same way by the same distance, and they come out of
+            // the pass exactly as concentric as they went in.
+            const fx2 n = (d_sq == 0)
+                              ? fx2{j > i ? fx::one() : -fx::one(), fx::zero()}
+                              : normalize(fx2{dx, dy});
+
+            b.pos.x = a.x + n.x * want;
+            b.pos.y = a.y + n.y * want;
+
+            const fx into = dot(n, fx2{b.vel.x, b.vel.y});
+            if (into < fx::zero()) {
+                b.vel.x -= n.x * into;
+                b.vel.y -= n.y * into;
+            }
         }
     }
 }
