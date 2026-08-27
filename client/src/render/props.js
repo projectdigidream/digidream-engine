@@ -40,10 +40,33 @@ export function parseProps (text) {
     if (!line) return
     const tok = line.split(/\s+/)
 
-    // `prop` lines are the simulation's half. Skipped in silence: they are none
-    // of the renderer's business, and warning about them would train everyone
-    // to ignore this array.
-    if (tok[0] === 'prop') return
+    // `prop` lines are the SIMULATION's half. The renderer does not draw from
+    // them -- but the client has to mirror a solid prop into its own world or
+    // it walks through what the server stops it against, so the physical facts
+    // are parsed here and handed to the simulation rather than being read from
+    // a second copy of this file.
+    if (tok[0] === 'prop') {
+      const pid = Number(tok[1])
+      if (!Number.isInteger(pid) || pid <= 0) return
+      const d = def(pid)
+      d.name = tok[2]
+      d.radius = 0.5
+      d.height = 1
+      d.flags = 0
+      for (let k = 3; k < tok.length; k++) {
+        // Bare flags, matching sim::prop_flag. Numbers rather than names on the
+        // wasm side, so they are written out once, here, next to the words the
+        // file uses.
+        if (tok[k] === 'solid') { d.flags |= 1; continue }
+        if (tok[k] === 'usable') { d.flags |= 2; continue }
+        const v = tok[k + 1]
+        if (v === undefined) break
+        k++
+        if (tok[k - 1] === 'radius') d.radius = Number(v)
+        else if (tok[k - 1] === 'height') d.height = Number(v)
+      }
+      return
+    }
 
     if (tok[0] !== 'sprite' && tok[0] !== 'mesh') return
 

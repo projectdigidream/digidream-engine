@@ -422,7 +422,20 @@ const others = new EntityView({
   // the server never sent.
   makeMesh: (kind) => (kind ? props?.make(kind) : null) ??
                       makeAgentMesh(0xffa066, bodyRadius, bodyHeight),
-  scene
+  scene,
+  // A prop is not only something to draw. A solid one is PHYSICS -- the mover
+  // pushes bodies out of it -- so the client mirrors it into its own world at
+  // the entity index the wire used, or it walks through what the server stops
+  // it against and mispredicts every tick it is touching.
+  //
+  // The size and the flags come from the catalogue both sides read. Nothing
+  // about a prop's collision travels on the wire beyond its position.
+  onProp: (index, kind, pos) => {
+    const def = props?.kinds.get(kind)
+    if (!def) return
+    world.placeProp(index, kind, pos, def)
+  },
+  onPropGone: (index) => world.removeProp(index)
 })
 
 /**

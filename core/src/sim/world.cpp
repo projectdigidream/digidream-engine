@@ -482,8 +482,14 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.interact_held);
     h.boolv(m.attack_held);
     h.u32v(m.attack_left);
-    h.u64v(m.attack_hit_agents);
-    for (u32 k = 0; k < 3; ++k) h.u64v(m.attack_hit_props[k]);
+    // The hit masks are deliberately ABSENT.
+    //
+    // agent_hash is the prediction comparison, so what belongs in it is what
+    // the client can reproduce. Which targets a swing has already connected
+    // with is engine bookkeeping for deduplicating events the client never
+    // receives -- it cannot know it, so including it would make every swing a
+    // guaranteed mismatch. They stay in World::hash, where the determinism gate
+    // still covers them.
     h.fxv(m.dash_timer);
     h.fxv(m.dash_cooldown_timer);
     h.vec2(m.dash_dir);
@@ -543,15 +549,31 @@ u32 World::spawn_prop(PropKind kind, fx3 pos) noexcept {
         props_[i].kind = kind;
         props_[i].pos = pos;
         props_[i].active = true;
+        ++prop_epoch_;
         return MAX_AGENTS + i;
     }
     return MAX_ENTITIES;
+}
+
+bool World::place_prop(u32 entity, PropKind kind, fx3 pos,
+                       fx radius, fx height, u8 flags) noexcept {
+    if (!is_prop(entity)) return false;
+    PropState& p = props_[entity - MAX_AGENTS];
+    p.kind = kind;
+    p.pos = pos;
+    p.radius = radius;
+    p.height = height;
+    p.flags = flags;
+    p.active = true;
+    ++prop_epoch_;
+    return true;
 }
 
 void World::despawn_prop(u32 entity) noexcept {
     if (!is_prop(entity)) return;
     if (!props_[entity - MAX_AGENTS].active) return;
     props_[entity - MAX_AGENTS] = PropState{};
+    ++prop_epoch_;
     // Bump the generation so every handle to what used to be here goes stale.
     // Without it a script holding the key it just consumed would keep finding a
     // live entity in the slot the next pickup lands in.

@@ -130,6 +130,7 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
     w.u16v(s.state_flags);
     w.u32v(s.anchor.raw);
     w.u8v(s.jumps_used);
+    w.u8v(s.attack_left);
     w.u8v(s.dashes_used);
     w.i32v(s.sector);
     w.fxraw(s.dash_timer);
@@ -156,6 +157,7 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     s.state_flags     = r.u16v();
     s.anchor.raw      = r.u32v();
     s.jumps_used      = r.u8v();
+    s.attack_left     = r.u8v();
     s.dashes_used     = r.u8v();
     s.sector          = r.i32v();
     s.dash_timer      = r.fxraw();

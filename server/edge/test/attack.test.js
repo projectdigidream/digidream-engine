@@ -21,7 +21,9 @@ import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
 import { Core } from '../../../client/src/core.js'
+import { Predictor } from '../../../client/src/predictor.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
+import { parseProps } from '../../../client/src/render/props.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
@@ -63,6 +65,11 @@ function mapPath () {
 }
 const MAP_PATH = mapPath()
 if (!MAP_PATH) { console.error('no baked doors map'); process.exit(2) }
+
+// The same catalogue the server reads, read for its simulation half: a solid
+// prop has to exist in the client's world too, or the client walks through what
+// the server stops it against.
+const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
 
 const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
@@ -135,18 +142,55 @@ await waitFor(() => acc.complete, 8000, 'map')
 const { ok, map } = core.loadMap(acc.bytes())
 check(ok, 'map loaded')
 
+// A predicting client, so the swing goes through reconciliation the way a real
+// one does. That is the whole point of this half: the countdown lives in the
+// controller state that a snapshot OVERWRITES, so a field the server does not
+// send is silently reset every time one arrives.
+const world = core.createWorld({ map })
+const agent = world.spawn(map.spawnForTag('start'))
+world.tick = welcome.serverTick
+const predictor = new Predictor(world, agent)
+let phase = 'approach'
+const verdicts = []
+let maxSeenLeft = 0
+let sweepSamples = new Set()
+
 // Track the barrel by the kind it declares, not by an index this test guessed.
 let barrelIndex = null
 let barrelGone = false
+const propKind = new Map()
 let selfY = 0
 const drain = () => {
   while (snapshots.length) {
     const s = snapshots.shift()
     selfY = fxToNumber(s.self.pos.y)
+
+    // Entities FIRST, reconciliation second.
+    //
+    // Reconciliation adopts the server's state and replays this client's inputs
+    // through its own world -- so that world has to already know the barrel is
+    // gone. Replaying against a prop the server destroyed pushes the body out
+    // of something that is not there, diverges again, and does it on every
+    // snapshot until the agent walks clear: eleven mispredictions in a row that
+    // look like a determinism fault and are an ordering bug. main.js has always
+    // ingested before reconciling; this harness had not.
     for (const e of s.entities ?? []) {
       const i = handleIndex(e.handle)
-      if (e.mask & ENT_FIELD.DESTROYED) { if (i === barrelIndex) barrelGone = true; continue }
+      if (e.mask & ENT_FIELD.DESTROYED) {
+        if (i === barrelIndex) barrelGone = true
+        world.removeProp(i)
+        continue
+      }
+      if (e.displayId) propKind.set(i, e.displayId)
       if (e.displayId === PROP_BARREL) barrelIndex = i
+      const kind = propKind.get(i)
+      const def = kind ? catalogue.kinds.get(kind) : null
+      if (def && (e.mask & ENT_FIELD.POS)) world.placeProp(i, kind, e.pos, def)
+    }
+
+    const r = predictor.reconcile(s)
+    if (r?.verdict) {
+      verdicts.push({ v: r.verdict, tick: s.serverTick, phase })
     }
   }
 }
@@ -163,10 +207,15 @@ async function step (buttons, moveY) {
     aim: Math.round((0.25) * 4294967296) >>> 0
   }
   history = [f, ...history].slice(0, 12)
+  predictor.step(f)
   await dw.write(encodeInputBundle({
-    clientTick: tick, ackSnapshotTick: snapshots.at(-1)?.serverTick ?? 0, frames: history
+    clientTick: predictor.tick, ackSnapshotTick: snapshots.at(-1)?.serverTick ?? 0, frames: history
   }))
   drain()
+  // What the client would DRAW: the countdown it holds after reconciling.
+  const left = world.readAgent(agent).attackLeft
+  maxSeenLeft = Math.max(maxSeenLeft, left)
+  if (left > 0) sweepSamples.add(left)
   await sleep(8)
 }
 
@@ -176,11 +225,13 @@ const stoppedAt = selfY
 check(barrelIndex !== null, `the barrel replicated (entity ${barrelIndex})`)
 check(stoppedAt > 6 && stoppedAt < 8, `a solid prop stopped the agent at y=${stoppedAt.toFixed(2)}`)
 
+phase = 'swing'
 // Swing at it.
 const ATTACK = NO_ATTACK ? 0 : BUTTON.ATTACK_PRIMARY
 for (let i = 0; i < 6; i++) await step(ATTACK, 0)
 for (let i = 0; i < 8; i++) await step(0, 0)
 
+phase = 'after'
 // Then keep walking north. Past it, if it went.
 for (let i = 0; i < 220; i++) await step(0, 1)
 await sleep(300)
@@ -189,6 +240,38 @@ drain()
 const endedAt = selfY
 console.log(`  stopped at y=${stoppedAt.toFixed(2)}, ended at y=${endedAt.toFixed(2)}, ` +
             `barrel ${barrelGone ? 'destroyed' : 'still there'}`)
+console.log(`  client's own predicted y=${fxToNumber(world.readAgent(agent).pos.y).toFixed(2)}` +
+            `  (mispredicted ${predictor.stats.mispredictions})`)
+
+// The swing the client can actually see, across reconciliation.
+if (!NO_ATTACK) {
+  const ticks = Number(world.getParamRaw(agent, world.paramId('attack_ticks')))
+  console.log(`  client observed the swing at ${sweepSamples.size} distinct countdown values ` +
+              `(peak ${maxSeenLeft} of ${ticks}); exact ${predictor.stats.exactMatches}, ` +
+              `mispredicted ${predictor.stats.mispredictions}`)
+  check(sweepSamples.size > ticks / 2,
+        `the client sees the swing travel (${sweepSamples.size} of ${ticks - 1} steps)`)
+  check(maxSeenLeft >= ticks - 2, `starting near the top of its travel (${maxSeenLeft})`)
+
+  // Destroying an obstacle a body is leaning on invalidates every tick the
+  // client had ALREADY predicted against it -- a burst as long as the client's
+  // lead, arriving at once as those snapshots come back. Not a per-tick fault
+  // and not avoidable: a client cannot know a script is about to remove what it
+  // is standing against.
+  //
+  // So the assertion is the SHAPE, which is what distinguishes this from a
+  // determinism problem: one burst, then agreement. A real divergence never
+  // stops, and asserting zero here would be asserting that the client can
+  // predict server-side gameplay.
+  const bad = verdicts.filter((v) => v.v === 'mispredicted')
+  const tail = verdicts.slice(-20).filter((v) => v.v === 'mispredicted').length
+  console.log(`  ${bad.length} mispredictions, ${tail} of them in the last 20 snapshots`)
+  check(bad.every((v) => v.phase === 'after'),
+        'the only divergence is around the destruction')
+  check(tail === 0, 'and it heals: client and server agree by the end')
+  check(fxToNumber(world.readAgent(agent).pos.y) > 9,
+        "and the client's own prediction walked past where the barrel stood")
+}
 
 if (NO_ATTACK) {
   check(!barrelGone, 'CONTROL: unattacked, the barrel is still there')

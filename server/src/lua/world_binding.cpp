@@ -739,7 +739,21 @@ int l_dnp_spawn_prop(lua_State* L) {
     if (kind == 0) {
         return luaL_error(L, "no prop named '%s' in the prop catalogue", name);
     }
-    const u32 e = ctx.world->spawn_prop(kind, pos);
+    // Stored at the position the WIRE can carry, exactly.
+    //
+    // A solid prop is simulated on both sides, and entity positions are
+    // quantised on the wire (proto::fx_to_fxq). A prop kept at full precision
+    // on the server and reconstructed from the quantised value on the client
+    // sits a fraction apart on the two, so a body pressed against it is pushed
+    // out to two different places and mispredicts every tick it is touching.
+    //
+    // Props do not move, so this costs one rounding at spawn and makes the two
+    // copies identical for the rest of the map's life. A prop that ever does
+    // move will need the same treatment wherever it is moved from.
+    const fx3 at{proto::fxq_to_fx(proto::fx_to_fxq(pos.x)),
+                 proto::fxq_to_fx(proto::fx_to_fxq(pos.y)),
+                 proto::fxq_to_fx(proto::fx_to_fxq(pos.z))};
+    const u32 e = ctx.world->spawn_prop(kind, at);
     if (e >= sim::MAX_ENTITIES) {
         // Full is not an error a map can do anything about, so it is a nil and
         // a counter rather than a raise -- but it is never silent.

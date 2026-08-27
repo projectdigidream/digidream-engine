@@ -34,9 +34,14 @@ export class EntityView {
    * invisible one -- an entity you cannot see is indistinguishable from one the
    * server never sent.
    */
-  constructor ({ makeMesh, scene }) {
+  constructor ({ makeMesh, scene, onProp = null, onPropGone = null }) {
     this.makeMesh = makeMesh
     this.scene = scene
+    // Told about props so the caller can mirror them into a simulation. A
+    // remote PLAYER is interpolated and never simulated locally; a solid prop
+    // has to be, or the client walks through it.
+    this.onProp = onProp
+    this.onPropGone = onPropGone
     // handle -> { mesh, samples: [{tick, x, y, z, facing}], generation, kind }
     this.entities = new Map()
   }
@@ -53,7 +58,11 @@ export class EntityView {
       const index = handleIndex(e.handle)
       const generation = handleGeneration(e.handle)
 
-      if (e.mask & ENT_FIELD.DESTROYED) { this.#remove(index); continue }
+      if (e.mask & ENT_FIELD.DESTROYED) {
+        if (this.entities.get(index)?.kind && this.onPropGone) this.onPropGone(index)
+        this.#remove(index)
+        continue
+      }
 
       let ent = this.entities.get(index)
       if (ent && ent.generation !== generation) {
@@ -84,6 +93,11 @@ export class EntityView {
       // there is nothing to record -- and holding at the last sample is
       // exactly what a stationary entity should do.
       if (!(e.mask & ENT_FIELD.POS)) continue
+
+      // Props go into the simulation as well as onto the screen, at the raw fx
+      // position rather than the converted one: the simulation works in engine
+      // space, and converting for the renderer and back would round.
+      if (ent.kind && this.onProp) this.onProp(index, ent.kind, e.pos)
 
       const last = ent.samples.at(-1)
       const p = toThree(fxToFloat(e.pos.x), fxToFloat(e.pos.y), fxToFloat(e.pos.z))

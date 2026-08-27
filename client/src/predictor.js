@@ -151,10 +151,24 @@ export class Predictor {
 
       // Held-button flags are NOT replicated: they are edge-detection state,
       // and the client already holds the input it sent for the acknowledged
-      // tick. Deriving them keeps three bytes off every snapshot.
+      // tick. Deriving them keeps bytes off every snapshot.
+      //
+      // Every edge-triggered button has to appear here. One that does not is
+      // silently cleared on each reconcile, and then re-fires on the tick after
+      // -- a door worked once a snapshot, a swing started thirty times a
+      // second. interact and attack were both missing.
       jumpHeld: (held & 0x0001) !== 0,
       dashHeld: (held & 0x0002) !== 0,
       grappleHeld: (held & 0x0020) !== 0,
+      interactHeld: (held & 0x0040) !== 0,
+      attackHeld: (held & 0x0080) !== 0,
+
+      // The swing countdown IS replicated, because it cannot be derived: the
+      // server decides when a swing ends, and the client holds only the button
+      // that started it. Without it every reconcile reset the countdown to
+      // zero, so the collider was drawn for the two frames between snapshots
+      // and never seen to travel -- which reads as a swing that does not move.
+      attackLeft: sb.attackLeft ?? 0,
       active: true
     }
 

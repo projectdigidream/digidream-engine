@@ -108,6 +108,12 @@ struct Level {
     u32 sent_motion_count = 0;
     u32 motion_changed_tick = 0;
 
+    // The same, for the set of props. A barrel exploding under someone is a
+    // scripted change they could not have predicted, and without the label it
+    // reads as a determinism fault every time one goes off.
+    u32 prop_epoch_seen = 0;
+    u32 props_changed_tick = 0;
+
     // Sectors whose motion is scripted-discrete, collected once per tick so the
     // snapshot encoder does not rescan.
     proto::SectorOffset discrete_offsets[proto::MAX_SECTOR_OFFSETS];
@@ -926,6 +932,11 @@ struct Server : lua::MapChangeSink {
         // the snapshot that was produced with it does.
         replicate_motion_changes(li);
 
+        if (L.world.prop_epoch() != L.prop_epoch_seen) {
+            L.prop_epoch_seen = L.world.prop_epoch();
+            L.props_changed_tick = L.world.tick() + 1;
+        }
+
         if (L.vm.is_open()) {
             L.vm.end_tick(L.world.tick());
             // A fixed step per tick, so a collection cannot choose its own
@@ -1061,6 +1072,7 @@ struct Server : lua::MapChangeSink {
             sb.state_flags     = world.state_flags(s.agent);
             sb.jumps_used      = self.mv.jumps_used;
             sb.dashes_used     = self.mv.dashes_used;
+            sb.attack_left     = self.mv.attack_left;
             sb.sector          = self.mv.sector;
             sb.dash_timer      = self.mv.dash_timer;
             sb.dash_cooldown   = self.mv.dash_cooldown_timer;

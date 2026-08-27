@@ -168,6 +168,10 @@ struct SelfBlock {
     Handle anchor{};
     u8     jumps_used      = 0;
     u8     dashes_used     = 0;
+    // Ticks of swing remaining. Authoritative: the server decides when a swing
+    // ends, and a client that lost this on every snapshot would draw its own
+    // collider for two frames at a time and never see it travel.
+    u8     attack_left     = 0;
     i32    sector          = -1;
 
     // Ability state the controller carries between ticks. Present because

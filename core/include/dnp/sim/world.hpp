@@ -182,6 +182,20 @@ public:
     // when the world is full.
     u32  spawn_prop(PropKind kind, fx3 pos) noexcept;
     void despawn_prop(u32 entity) noexcept;
+
+    // Put a prop in a SPECIFIC entity slot, with its physical facts supplied.
+    //
+    // For a client mirroring what the server replicated. A solid prop is
+    // physics -- the mover pushes bodies out of it -- so a client that did not
+    // have one would walk through what the server stops it against and
+    // mispredict every tick it was touching. Which slot matters: the entity
+    // index is the identity on the wire, and a client that put the same barrel
+    // somewhere else would be simulating a different world.
+    //
+    // The radius, height and flags come from the catalogue, which both sides
+    // read; the engine does not know them and does not look them up.
+    bool place_prop(u32 entity, PropKind kind, fx3 pos,
+                    fx radius, fx height, u8 flags) noexcept;
     static bool is_prop(u32 entity) noexcept {
         return entity >= MAX_AGENTS && entity < MAX_ENTITIES;
     }
@@ -190,6 +204,15 @@ public:
 
     // What happened between agents and props this tick.
     const PropEventLog& prop_events() const noexcept { return prop_events_; }
+
+    // Bumped whenever the set of props changes: one appears, one goes, or one
+    // is moved by something other than its own simulation.
+    //
+    // The server uses it to label the snapshot, because a prop appearing or
+    // vanishing is a scripted change the client could not have predicted -- the
+    // same category as a door opening, and it needs the same flag or it reads
+    // as a determinism fault every time a barrel explodes under someone.
+    u32 prop_epoch() const noexcept { return prop_epoch_; }
 
     // Everything an agent's swing connected with this tick.
     const AttackLog& attacks() const noexcept { return attacks_; }
@@ -307,6 +330,7 @@ private:
     AgentState           agents_[MAX_AGENTS]{};
     PropState            props_[MAX_PROPS]{};
     PropEventLog         prop_events_{};
+    u32                  prop_epoch_ = 0;
     AttackLog            attacks_{};
     // One generation table over the whole index space, so a handle to slot 70
     // is validated exactly the way a handle to slot 3 is.

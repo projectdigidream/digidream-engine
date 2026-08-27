@@ -293,6 +293,26 @@ export class WasmWorld {
     return this.core.views.i64[this.core.buf64 / 8]
   }
 
+  /**
+   * Mirror a replicated prop into this world, at the entity index the wire used.
+   *
+   * A solid prop is physics, and physics has to be predictable: without this
+   * the client walks through a barrel the server stops it against and
+   * mispredicts every tick it is touching. The size and flags come from the
+   * prop catalogue, which the client already has -- the engine does not know
+   * them.
+   */
+  placeProp (entity, kind, pos, { radius, height, flags }) {
+    const { i64 } = this.core.views
+    const b = this.core.buf64 / 8
+    i64[b] = pos.x; i64[b + 1] = pos.y; i64[b + 2] = pos.z
+    i64[b + 3] = BigInt(Math.round(radius * 4294967296))
+    i64[b + 4] = BigInt(Math.round(height * 4294967296))
+    return this.core.M._dnp_world_place_prop(this.ptr, entity, kind, this.core.buf64, flags) !== 0
+  }
+
+  removeProp (entity) { this.core.M._dnp_world_remove_prop(this.ptr, entity) }
+
   /** Apply a scripted-discrete offset the server streamed. */
   setDiscreteOffset (sector, offset, target = 0) {
     const { i64 } = this.core.views

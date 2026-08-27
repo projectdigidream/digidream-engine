@@ -397,6 +397,27 @@ int dnp_param_id_by_name(const char* name) { return physics::param_id_by_name(na
 EMSCRIPTEN_KEEPALIVE
 int dnp_param_count() { return physics::PARAM_COUNT; }
 
+// Mirror a replicated prop into the client's own simulation.
+//
+// A solid prop is PHYSICS: the mover pushes bodies out of it, so a client
+// without one walks through what the server stops it against and mispredicts
+// every tick it is touching. Placed at the entity index the wire used, because
+// that index is the thing's identity.
+//
+// in64: x, y, z, radius, height. The catalogue supplies the last two and the
+// flags; the engine neither knows nor looks them up.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_place_prop(sim::World* w, unsigned entity, unsigned kind,
+                         const long long* in64, unsigned flags) {
+    return w->place_prop(entity, static_cast<sim::PropKind>(kind),
+                         fx3{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])},
+                         fx::from_raw(in64[3]), fx::from_raw(in64[4]),
+                         static_cast<u8>(flags)) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_remove_prop(sim::World* w, unsigned entity) { w->despawn_prop(entity); }
+
 // Crush and pin events from the last step (design §3.1).
 //
 // Exposed even though the client cannot act on them: the consequence is server
