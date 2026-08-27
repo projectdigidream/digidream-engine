@@ -311,6 +311,9 @@ void Vm::begin_tick() {
     used_this_tick_ = 0;
     used_this_call_ = 0;
     killed_ = false;
+    worst_call_us_ = 0;
+    worst_call_what_[0] = '\0';
+    script_us_this_tick_ = 0;
     tick_start_us_ = now_us();
     if (L_) lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
 }
@@ -319,15 +322,35 @@ void Vm::end_tick(u32 tick) {
     if (!L_) return;
     const u64 spent = now_us() - tick_start_us_;
     if (spent > stats_.worst_tick_us) stats_.worst_tick_us = spent;
-    if (spent >= cfg_.stall_warn_us) {
+
+    // Warn on TIME SPENT IN SCRIPTS, not on wall time across the tick.
+    //
+    // `spent` spans begin_tick to end_tick, which is the whole server tick:
+    // world.step(), event collection, snapshot encoding, the network, and any
+    // moment the OS chose to run something else. Reporting that as "us in
+    // script X" made every slow frame look like a Lua problem -- and it was
+    // believed, twice, and a monster script was optimised twice for a cost it
+    // was not incurring. Measured properly, the callbacks on three loaded maps
+    // come to single-digit microseconds while the tick they sit inside takes
+    // sixteen milliseconds.
+    //
+    // The wall time is still printed, because a late tick is worth knowing
+    // about. It is just no longer attributed to a script.
+    if (script_us_this_tick_ >= cfg_.stall_warn_us) {
         ++stats_.stalls;
         // Named, because the alternative is an operator staring at "fell 300 ms
         // behind" with no idea which script did it. Blocking I/O is allowed
         // here; being anonymous about it is not.
+        // The tick total, and the single worst CALLBACK inside it. The total
+        // alone says a frame was late; it does not say what to look at, and
+        // naming the last script to run actively misleads.
         std::fprintf(stderr,
-                     "[lua] tick %u: %llu us in script '%s' (budget warn %u us)\n",
-                     tick, static_cast<unsigned long long>(spent), current_,
-                     cfg_.stall_warn_us);
+                     "[lua] tick %u: %llu us in callbacks (worst %llu us in %s); "
+                     "tick wall time %llu us (budget warn %u us)\n",
+                     tick, static_cast<unsigned long long>(script_us_this_tick_),
+                     static_cast<unsigned long long>(worst_call_us_),
+                     worst_call_what_[0] ? worst_call_what_ : "(no callback)",
+                     static_cast<unsigned long long>(spent), cfg_.stall_warn_us);
     }
 }
 
@@ -440,6 +463,15 @@ void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
     lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
 
     ++stats_.callbacks_run;
+    // Timed per CALL, not per tick.
+    //
+    // end_tick measures the whole tick and blames `current_`, which is whatever
+    // handler happened to run last -- so a slow doors script was reported as a
+    // slow monster script, repeatedly and with total confidence, and two rounds
+    // of optimising the monster script did not move the number. A diagnostic
+    // that names the wrong thing is worse than none: it is a wrong answer that
+    // reads like a measurement.
+    const u64 call_start = now_us();
     if (lua_pcall(L_, nargs, 0, 0) != 0) {
         ++stats_.errors;
         const char* msg = lua_tostring(L_, -1);
@@ -451,6 +483,13 @@ void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
                          msg ? msg : "unknown");
         }
         lua_pop(L_, 1);
+    }
+    const u64 call_us = now_us() - call_start;
+    script_us_this_tick_ += call_us;
+    if (call_us > worst_call_us_) {
+        worst_call_us_ = call_us;
+        std::snprintf(worst_call_what_, sizeof(worst_call_what_), "%s in %s",
+                      fn_name, current_);
     }
 }
 

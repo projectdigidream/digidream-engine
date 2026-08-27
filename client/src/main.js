@@ -394,6 +394,9 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // and says so once.
 let props = null
 let vfx = null
+// Tracer accounting, for the HUD. See the counting site in drainSnapshots.
+let vfxSeen = 0
+let vfxNoView = 0
 try {
   const text = await (await fetch('/props.txt')).text()
   const catalogue = parseProps(text)
@@ -667,7 +670,14 @@ function drainSnapshots () {
     // where the shot ended rather than running to infinity through whatever it
     // hit.
     for (const v of s.vfx ?? []) {
-      if (!vfx) continue
+      // Counted BEFORE anything can reject it, so the HUD can tell three
+      // different failures apart. "Still invisible" is not a diagnosis, and it
+      // has now been reported four times: seen==0 means nothing arrived and the
+      // problem is the server or the wire; seen>0 with live==0 means the
+      // renderer threw them away (an unknown kind, a zero length); both non-zero
+      // means they are on screen and something else is wrong.
+      vfxSeen++
+      if (!vfx) { vfxNoView++; continue }
       const { from, to } = tracerEnds(v, fxToFloat)
       vfx.spawn(v.kind,
                 { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
@@ -847,7 +857,10 @@ function frame (now) {
     `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
     `meshes ${view.meshes.length}\n` +
     `sim ${cost.sim.toFixed(2)}ms   mesh ${cost.mesh.toFixed(2)}ms   ` +
-    `draw ${cost.draw.toFixed(2)}ms` +
+    `draw ${cost.draw.toFixed(2)}ms\n` +
+    `vfx  seen ${vfxSeen}   live ${vfx ? vfx.live.length : 0}   ` +
+    `pool ${vfx ? vfx.pool.length : 'NO VIEW'}` +
+    (vfxNoView ? `   dropped-no-view ${vfxNoView}` : '') +
     (falls ? `   falls ${falls}` : '') +
     (LIVE
       ? `\nothers ${others.count}   exact ${st.exactMatches}   misp ${st.mispredictions}` +

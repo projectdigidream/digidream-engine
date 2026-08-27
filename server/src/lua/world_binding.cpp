@@ -766,6 +766,49 @@ int l_dnp_entities(lua_State* L) {
     return 1;
 }
 
+// dnp.players() -> { entity, ... }
+//
+// Only the PLAYERS, which is the question every monster script actually asks.
+//
+// dnp.entities() was standing in for this, and it builds a handle userdata for
+// every active agent -- thirty-eight monsters on MAP02 -- to find the one or
+// two that are people. Once a tick, per level, whether or not anybody is
+// connected: a server hosting three maps allocated a hundred and twenty
+// userdata a second with nobody playing, and the collector chasing that is what
+// produced 39 ms in a tick on levels that were empty.
+//
+// A player is an agent with no catalogue kind: nobody placed it, so it walked
+// in. That is the same test the script was making, moved to where it costs an
+// integer compare instead of an allocation.
+int l_dnp_players(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    lua_newtable(L);
+    int n = 0;
+    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+        const sim::AgentState& a = ctx.world->agent(i);
+        if (!a.active || a.kind != 0) continue;
+        push_entity(L, ctx, i);
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
+// dnp.player_count() -> integer
+//
+// The same question with no allocation at all, for the overwhelmingly common
+// answer: nobody is here, so there is nothing for a monster to do. An empty
+// level costs one C call a tick now rather than a table and forty handles.
+int l_dnp_player_count(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    int n = 0;
+    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+        const sim::AgentState& a = ctx.world->agent(i);
+        if (a.active && a.kind == 0) ++n;
+    }
+    lua_pushinteger(L, n);
+    return 1;
+}
+
 int l_dnp_sectors(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     lua_newtable(L);
@@ -1178,6 +1221,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"tick", l_dnp_tick},
     {"entity", l_dnp_entity},
     {"entities", l_dnp_entities},
+    {"players", l_dnp_players},
+    {"player_count", l_dnp_player_count},
     {"sectors", l_dnp_sectors},
     {"sector", l_dnp_sector},
     {"spawn_prop", l_dnp_spawn_prop},

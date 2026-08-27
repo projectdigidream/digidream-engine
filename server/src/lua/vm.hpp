@@ -195,6 +195,14 @@ private:
     void set_current(const char* name) noexcept;
 
     u64 tick_start_us_ = 0;
+
+    // The most expensive single callback this tick, and what it was. Reset each
+    // tick; read only by the stall warning.
+    u64  worst_call_us_ = 0;
+    char worst_call_what_[192] = "";
+    // Time actually spent inside Lua this tick -- the sum of the callbacks,
+    // which is the only part of a tick this class is entitled to blame.
+    u64  script_us_this_tick_ = 0;
 };
 
 }  // namespace dnp::server::lua

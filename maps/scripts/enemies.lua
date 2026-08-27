@@ -90,12 +90,20 @@ local function refresh_players(tick)
   if players_tick == tick then return end
   players_tick = tick
   for i = #players, 1, -1 do players[i] = nil end
-  for _, e in ipairs(dnp.entities()) do
-    -- No catalogue kind means nobody put it there: a player.
-    -- Kind 0 is a player. Asked directly rather than via the catalogue name,
-    -- which was a longer way round to the same fact and depended on the
-    -- catalogue having no entry for 0.
-    if e:kind() == 0 then players[#players + 1] = { e = e, pos = e:pos() } end
+
+  -- The cheap question first. dnp.player_count() allocates nothing, and the
+  -- answer on a server hosting several maps is almost always zero: a level
+  -- keeps ticking after the last player leaves it, and there is no reason for
+  -- an empty room to be building a table of handles sixty times a second. That
+  -- is not a micro-optimisation -- it was 39 ms in a single tick, on levels
+  -- nobody was in.
+  if dnp.player_count() == 0 then return end
+
+  -- And when somebody IS here, ask for the players rather than for everything.
+  -- dnp.entities() built a handle for all thirty-eight monsters on MAP02 to
+  -- find the one person among them.
+  for _, e in ipairs(dnp.players()) do
+    players[#players + 1] = { e = e, pos = e:pos() }
   end
 end
 

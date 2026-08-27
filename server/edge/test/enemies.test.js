@@ -192,7 +192,15 @@ async function step (moveY) {
 
 // Stand still and let them come. The monsters are north of the spawn; walking
 // into them would make "did it approach" a statement about the player.
-for (let i = 0; i < 420; i++) await step(0)
+//
+// Unless a map was named, in which case MOVE -- pace back and forth. Standing
+// at the spawn on a big map leaves most of its monsters outside sight range and
+// on the cheap idle path forever, so the first version of this measured a level
+// that was almost entirely asleep and reported no stalls while a browser
+// session on the same map was warning every few seconds. Walking is what wakes
+// them, a few at a time, which is what a player actually does.
+const ROAM = process.env.DNP_MAP_NAME !== undefined
+for (let i = 0; i < 420; i++) await step(ROAM ? (Math.floor(i / 60) % 2 ? -1 : 1) : 0)
 await sleep(300)
 drain()
 

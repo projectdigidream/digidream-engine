@@ -145,5 +145,5 @@ sprite 22 state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
 # nothing depends on its size, so the only question it has to answer is whether
 # a person can tell a shot was fired. These are the numbers to turn down if they
 # turn out to be gaudy, and turning them down needs no recompile.
-vfx 1 tracer colour ffee88 width 0.09 life 0.35
-vfx 2 tracer colour ff8844 width 0.12 life 0.45
+vfx 1 tracer colour ffee88 width 1.0 life 0.35
+vfx 2 tracer colour ff8844 width 1.0 life 0.45
