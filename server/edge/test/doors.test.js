@@ -81,6 +81,13 @@ if (!MAP_PATH) { console.error('no baked doors map'); process.exit(2) }
 const DOOR = 1
 const LIFT = 4
 
+// The body maps/doors.map declares: Doom's 16x56 player at 1/48. The east wing
+// is 1.5 tall, so the door opens to 1.5 - 4/48 = 1.4167 and this body clears it
+// by a quarter of a unit while the engine's default 2.0 does not fit at all.
+const WANT_RADIUS = 0.3333
+const WANT_HEIGHT = 1.1667
+const DOOR_OPEN_H = 1.5 - 4 / 48
+
 const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 const core = await Core.load()
@@ -178,9 +185,21 @@ const ceilOf = (s) => liveSector(s).ceilZ
 const floorOf = (s) => liveSector(s).floorZ
 const agentX = () => fxToNumber(world.readAgent(agent).pos.x)
 
+// The map's declared body, as the CLIENT received it. Replicated through
+// PARAM_UPDATE like any other rule of physics -- a client predicting with a
+// different body from the server's would disagree at every wall it slid along,
+// and at this scale it would not fit through the map's own doors.
+const RADIUS_ID = 0
+const HEIGHT_ID = 1
+const clientRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
+const clientHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
+
 const doorClosedCeil = ceilOf(DOOR)
 const liftParkedFloor = floorOf(LIFT)
 check(doorClosedCeil === 0, `the door starts shut (ceiling at ${doorClosedCeil})`)
+check(Math.abs(clientRadius - WANT_RADIUS) < 0.001 && Math.abs(clientHeight - WANT_HEIGHT) < 0.001,
+      `the client got the map's body (radius ${clientRadius.toFixed(4)}, ` +
+      `height ${clientHeight.toFixed(4)})`)
 check(liftParkedFloor === 3, `the lift starts parked (floor at ${liftParkedFloor})`)
 
 const applied = new Set()
@@ -264,7 +283,9 @@ if (NO_SCRIPT) {
   check(maxX < 10, 'CONTROL: and the agent is still stopped by it')
   check(minLiftFloor === 3, 'CONTROL: and the trip-wire beyond it is never reached')
 } else {
-  check(maxDoorCeil > 7, `the door opened (ceiling reached ${maxDoorCeil.toFixed(3)})`)
+  check(Math.abs(maxDoorCeil - DOOR_OPEN_H) < 0.01,
+        `the door opened to its lowest neighbouring ceiling less four Doom units ` +
+        `(${maxDoorCeil.toFixed(3)}, wanted ${DOOR_OPEN_H.toFixed(3)})`)
   check(applied.size >= 1, `${applied.size} motions replicated as SECTOR_MOTION_SET`)
   check(maxX > 12, `the agent walked through it to x=${maxX.toFixed(2)}`)
   // Crossing x = 17 is a trip-wire, and nothing was pressed to do it.

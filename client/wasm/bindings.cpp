@@ -115,6 +115,20 @@ void dnp_map_hash(const geom::MapStorage* m, long long* out64) {
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_map_sector_count(const geom::MapStorage* m) { return m->view().sector_count; }
 
+// The body proportions the map declares, into out64[0..1] as raw fx.
+//
+// Read from the MAP by both sides rather than replicated to the client, because
+// both sides already have the map and it is the map's own statement about
+// itself. PARAM_UPDATE still carries radius and height like any other rule, so
+// this makes replication a CONFIRMATION rather than the mechanism -- and closes
+// the window at the start of a session where the client is predicting with a
+// body the server has not corrected yet.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_body(const geom::MapStorage* m, long long* out64) {
+    out64[0] = m->body_radius().raw;
+    out64[1] = m->body_height().raw;
+}
+
 // --- reading the map out, for the renderer ---------------------------------
 //
 // Per-element accessors filling the caller's scratch buffers, rather than

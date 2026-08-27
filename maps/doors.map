@@ -8,6 +8,11 @@
 #   room A  --[door]--  room B1  |  room B2  --[lift]
 #            side 2               trip-wire
 #
+# The east wing's ceiling is 1.5 -- a Doom 72-unit doorway -- so the door opens
+# to 1.4167 (its lowest neighbouring ceiling less Doom's four units) and the
+# body has to FIT through it. The engine's default 2.0 body does not, which is
+# the whole reason a map states the proportions it was built for.
+#
 # The door is shut in the geometry (ceil == floor), exactly as Doom stores one,
 # so "the door opened" is a claim about the ceiling having moved and not about
 # a flag somewhere.
@@ -29,7 +34,7 @@ sector floor 0 ceil 0 tag 2 light 160 floortex FLOOR4_8 ceiltex CEIL3_5
   vertex 10 7  neighbor 0
 end
 
-sector floor 0 ceil 8 tag 3 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+sector floor 0 ceil 1.5 tag 3 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
   vertex 12 0   wall tex STARTAN3
   vertex 17 0   neighbor 3 trigger
   vertex 17 10  wall tex STARTAN3
@@ -38,7 +43,7 @@ sector floor 0 ceil 8 tag 3 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
   vertex 12 3   wall tex STARTAN3
 end
 
-sector floor 0 ceil 8 tag 4 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+sector floor 0 ceil 1.5 tag 4 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
   vertex 17 0   wall tex STARTAN3
   vertex 22 0   wall tex STARTAN3
   vertex 22 3   neighbor 4
@@ -54,6 +59,11 @@ sector floor 3 ceil 8 tag 5 light 180 floortex FLOOR4_8 ceiltex CEIL3_5
   vertex 26 7  wall tex STARTAN3
   vertex 22 7  neighbor 3
 end
+
+# Doom's player at 1/48: a 16-unit radius and a 56-unit height. Stated here
+# because the door's opening is 1.5 tall -- a Doom 72-unit doorway -- and the
+# engine's default 2.0 body does not fit through it.
+body radius 0.3333 height 1.1667
 
 spawn start 5 5 1
 spawn behind_door 14 5 1

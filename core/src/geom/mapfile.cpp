@@ -31,6 +31,13 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.u32v(store.texture_count());
     w.u32v(store.light_count());
 
+    // The body this map is built for. Two more fields in a fixed header rather
+    // than an optional trailing block: a map that means the engine's defaults
+    // says so explicitly, which is the difference between "this map wants a
+    // 2.0 body" and "this map is old".
+    w.fxraw(store.body_radius());
+    w.fxraw(store.body_height());
+
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
         w.fxraw(m.point(i).y);
@@ -166,7 +173,19 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 rail_link_count = r.u32v();
     const u32 texture_count = r.u32v();
     const u32 light_count = r.u32v();
+    const fx body_radius = r.fxraw();
+    const fx body_height = r.fxraw();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+
+    // Structural, like the counts below: a body with no size is not a body, and
+    // an entity with a zero height stands in every ceiling at once. Bounded
+    // above too -- these are attacker-chosen numbers, and a body larger than
+    // the map is a way to make collision do arbitrary work.
+    if (body_radius <= fx::zero() || body_height <= fx::zero() ||
+        body_radius > fx::from_int(64) || body_height > fx::from_int(64)) {
+        store.clear();
+        return MapLoadStatus::BadIndex;
+    }
 
     // Bound every count BEFORE reading anything sized by it. These are
     // attacker-chosen numbers.
@@ -546,6 +565,12 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
 
     const u64 want_hash = r.u64v();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+
+    // BEFORE the hash, because the body is part of the hashed content: applying
+    // it afterwards hashes a map with the engine's defaults against a file
+    // written with the map's own, and every converted map is rejected as
+    // corrupt.
+    store.set_body(body_radius, body_height);
 
     // Finally, the rebuilt map is hashed and compared against the file's own.
     if (store.hash() != want_hash) { store.clear(); return MapLoadStatus::HashMismatch; }

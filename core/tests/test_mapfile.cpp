@@ -411,11 +411,57 @@ static void test_fuzz() {
     }
 }
 
+// The body proportions a map declares survive the file, and the hash notices
+// when they do not.
+//
+// Round-tripping is the easy half. The half worth asserting is that the body is
+// part of the CONTENT: a map built for a 1.167-tall player and one built for
+// the default 2.0 are different maps, and a client that parsed the second while
+// the server parsed the first would mispredict every doorway. That is exactly
+// what WELCOME.map_hash exists to catch.
+static void test_body_round_trips_and_is_hashed() {
+    std::printf("mapfile: a map's body proportions survive the file and enter its hash\n");
+
+    MapStorage src;
+    build_reference(src);
+    const u64 default_hash = src.hash();
+
+    // Doom's player at 1/48: 16 and 56 units.
+    src.set_body(fx::from_frac(1, 3), fx::from_frac(7, 6));
+    CHECK(src.hash() != default_hash);
+
+    u8 buf[8192];
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+
+    MapStorage dst;
+    ByteReader r(buf, w.size());
+    CHECK(load_map(r, dst) == MapLoadStatus::Ok);
+    CHECK(dst.body_radius() == fx::from_frac(1, 3));
+    CHECK(dst.body_height() == fx::from_frac(7, 6));
+    CHECK(dst.hash() == src.hash());
+
+    // CONTROL: a map that says nothing keeps the engine's defaults, so every
+    // map authored before this field existed means what it always meant.
+    MapStorage plain;
+    build_reference(plain);
+    u8 buf2[8192];
+    ByteWriter w2(buf2, sizeof(buf2));
+    CHECK(save_map(plain, w2));
+    MapStorage dst2;
+    ByteReader r2(buf2, w2.size());
+    CHECK(load_map(r2, dst2) == MapLoadStatus::Ok);
+    CHECK(dst2.body_radius() == fx::from_frac(1, 2));
+    CHECK(dst2.body_height() == fx::from_int(2));
+    CHECK(dst2.hash() == default_hash);
+}
+
 int main() {
     std::printf("== core/geom map file suite ==\n");
     test_roundtrip();
     test_matches_hardcoded_map();
     test_holes_round_trip();
+    test_body_round_trips_and_is_hashed();
     test_rejects_bad_input();
     test_render_does_not_affect_physics();
     test_fuzz();

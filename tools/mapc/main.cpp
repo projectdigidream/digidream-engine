@@ -20,6 +20,8 @@
 //     vertex 40 40  wall           tex BRICK1 xoff 8
 //     vertex 0  40  wall climbable tex VINE1
 //     vertex 0  40  neighbor 3 trigger        -- crossing it is reported to Lua
+//
+//     body radius 0.333 height 1.167          -- the body this map is built for
 //   end
 //
 // `open` in place of `wall` or `neighbor` makes an edge the sector ENDS at: an
@@ -392,6 +394,39 @@ int main(int argc, char** argv) {
                 }
                 local = static_cast<u16>(local + hv.size());
             }
+        } else if (tok[0] == "body") {
+            // body radius <r> height <h>
+            //
+            // The proportions this map is built for, as a fact about the
+            // GEOMETRY. A Doom map converted at 1/48 has 56-unit doorways,
+            // which is 1.167 here against the engine's default 2.0 body -- so
+            // without this the player simply does not fit through the map's
+            // own doors, and the only cure was two flags nobody remembers.
+            if (in_sector || in_rail) { err(lineno, "body inside a sector or rail"); continue; }
+            // Seeded with what the map already has, so `body height 1.167`
+            // alone changes the height and leaves the radius alone -- the
+            // store's setter assigns both and has no opinion about defaults.
+            fx radius = store.body_radius();
+            fx height = store.body_height();
+            bool said = false;
+            for (size_t i = 1; i < tok.size(); ++i) {
+                if (tok[i] == "radius" && i + 1 < tok.size()) {
+                    if (!parse_fx(tok[++i], radius)) err(lineno, "bad body radius");
+                    said = true;
+                } else if (tok[i] == "height" && i + 1 < tok.size()) {
+                    if (!parse_fx(tok[++i], height)) err(lineno, "bad body height");
+                    said = true;
+                } else {
+                    err(lineno, "unknown body attribute '%s'", tok[i].c_str());
+                    break;
+                }
+            }
+            if (!said) { err(lineno, "body needs radius and/or height"); continue; }
+            if (radius <= fx::zero() || height <= fx::zero()) {
+                err(lineno, "body radius and height must both be positive");
+                continue;
+            }
+            store.set_body(radius, height);
         } else if (tok[0] == "light") {
             // light <x> <y> <z> [color R G B] [radius N] [intensity N]
             if (in_sector || in_rail) { err(lineno, "light inside a sector or rail"); continue; }

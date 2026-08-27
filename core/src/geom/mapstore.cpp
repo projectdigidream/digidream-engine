@@ -505,6 +505,13 @@ u64 MapStorage::hash() const noexcept {
     // a map hash that changed every tick would make WELCOME.map_hash useless
     // for the one thing it exists for: telling a client its geometry differs
     // from the server's.
+    // The body the map is built for. Hashed for the same reason the textures
+    // below are: WELCOME.map_hash answers "did we parse the same file", and a
+    // client whose player is a different size from the server's has a different
+    // file -- one that would mispredict every wall it slid along.
+    h.fxv(body_radius_);
+    h.fxv(body_height_);
+
     h.u32v(rail_count_);
     h.u32v(waypoint_count_);
     h.u32v(rail_link_count_);

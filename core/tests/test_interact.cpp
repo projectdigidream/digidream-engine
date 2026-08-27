@@ -248,8 +248,57 @@ static void test_kinds_do_not_collapse() {
     CHECK(uses == 0);
 }
 
+// A body only fits through an opening taller than itself.
+//
+// Obvious, and the reason it is asserted anyway: it is the entire justification
+// for the map carrying its own body proportions. A Doom map converted at 1/48
+// has 56-to-72-unit doorways -- 1.167 to 1.5 of our units -- and the engine's
+// default 2.0 body is 96 Doom units. Without the map saying so, every converted
+// map is a set of rooms the player cannot walk between, and the symptom ("I get
+// stuck in doorways") points nowhere near the cause.
+static void test_a_body_fits_only_where_it_fits() {
+    std::printf("interact: a Doom-proportioned body clears a Doom doorway and the default body does not\n");
+
+    // Sector 1's ceiling is a 72-unit Doom doorway at 1/48 scale, less Doom's
+    // four units of headroom: 1.5 - 4/48 = 1.4167.
+    const fx opening = fx::from_frac(3, 2) - fx::from_frac(4, 48);
+
+    auto walks_through = [&](fx body_height) {
+        static Rooms r;
+        static World w;
+        w.reset();
+        r.store.sector_mut(1).ceil_z = opening;
+        r.attach(w);
+
+        const u32 a = w.spawn(fx3{F(17), F(10), F(0)});
+        w.params_mut(a).height = body_height;
+        w.params_mut(a).radius = fx::from_frac(1, 3);
+        for (u32 t = 0; t < 240; ++t) {
+            proto::InputFrame f = frame(false, EAST);
+            f.move_x = 32767;
+            w.set_input(a, f);
+            w.step();
+        }
+        return w.agent(a).pos.x;
+    };
+
+    // Doom's 56-unit player: 1.1667, a quarter of a unit under the opening.
+    const fx small = walks_through(fx::from_frac(7, 6));
+    // The engine's default: 2.0, which is 96 Doom units.
+    const fx big = walks_through(fx::from_int(2));
+
+    std::printf("   1.167 body reached x=%.2f, 2.0 body reached x=%.2f\n",
+                static_cast<double>(small.raw) / 4294967296.0,
+                static_cast<double>(big.raw) / 4294967296.0);
+
+    // The boundary is at x = 20, so "through" means past it.
+    CHECK(small > F(20));
+    CHECK(big < F(20));
+}
+
 int main() {
     test_reach_finds_the_side_in_front();
+    test_a_body_fits_only_where_it_fits();
     test_use_is_edge_triggered();
     test_crossing_a_trigger_reports_once();
     test_moving_parallel_never_crosses();

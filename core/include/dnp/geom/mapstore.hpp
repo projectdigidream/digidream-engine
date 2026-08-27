@@ -157,6 +157,31 @@ public:
     u32 light_count() const noexcept { return light_count_; }
     const MapLight& light(u32 i) const noexcept { return lights_[i]; }
 
+    // The body proportions this map is built for.
+    //
+    // A property of the MAP, not of the command line, because it is a fact
+    // about the geometry: a Doom map converted at 1/48 has 56-unit-tall
+    // doorways, and the engine's default 2.0 body is 96 of those units and
+    // simply does not fit. Carrying it here means a converted map works when
+    // you load it, rather than when you remember two flags -- and a wrong
+    // value is visible in the map source instead of absent from a shell
+    // history.
+    //
+    // Defaults to the engine's own defaults, so every map authored before this
+    // existed means exactly what it meant before.
+    fx body_radius() const noexcept { return body_radius_; }
+    fx body_height() const noexcept { return body_height_; }
+    // Assigns BOTH, unconditionally. An earlier version skipped non-positive
+    // values as a convenience for the map compiler, which meant a flipped bit
+    // in the file's body field read back as "the default" and matched the hash
+    // of any map that used the defaults -- the one kind of corruption the fuzz
+    // test could not see. A caller that wants to change one field passes the
+    // other's current value; the loader applies what the file says.
+    void set_body(fx radius, fx height) noexcept {
+        body_radius_ = radius;
+        body_height_ = height;
+    }
+
     SectorRender& sector_render_mut(u32 i) noexcept { return sector_render_[i]; }
     SideRender&   side_render_mut(u32 i) noexcept { return side_render_[i]; }
 
@@ -228,6 +253,12 @@ private:
 
     MapLight     lights_[MAX_MAP_LIGHTS]{};
     u32          light_count_ = 0;
+
+    // physics::MoveParams' own defaults, restated rather than included: core's
+    // geometry layer does not depend on its physics layer, and a map file must
+    // decode to the same numbers whatever the controller happens to default to.
+    fx body_radius_ = fx::from_frac(1, 2);
+    fx body_height_ = fx::from_int(2);
 
     u32  grid_start_[GRID_CELLS + 1]{};
     u16  grid_items_[MAX_GRID_ITEMS]{};

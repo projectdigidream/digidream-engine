@@ -460,6 +460,21 @@ struct Server {
                 ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
                 : map_store->spawn_for_tag(spawn_tag, spawn_tag_len);
             const u32 agent = world.spawn(spawn_pos);
+            if (agent < sim::MAX_AGENTS && map_store) {
+                // The body the MAP is built for, before anything captures this
+                // agent's parameters as its base.
+                //
+                // A converted Doom map is at 1/48, where Doom's 56-unit-tall
+                // player is 1.167 of our units and the engine's default 2.0
+                // body is 96 Doom units -- taller than most of the doorways it
+                // is expected to walk through. Both fields are replicated
+                // parameters (ids 0 and 1), so the full PARAM_UPDATE below
+                // carries them to the client and prediction agrees from the
+                // first tick.
+                physics::MoveParams& p = world.params_mut(agent);
+                p.radius = map_store->body_radius();
+                p.height = map_store->body_height();
+            }
             if (agent >= sim::MAX_AGENTS) {
                 u8 buf[64];
                 ByteWriter w(buf, sizeof(buf));

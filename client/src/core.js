@@ -112,6 +112,21 @@ export class WasmMap {
   destroy () { this.core.M._dnp_map_destroy(this.ptr); this.ptr = 0 }
   get sectorCount () { return this.core.M._dnp_map_sector_count(this.ptr) }
 
+  /**
+   * The body proportions this map declares, as raw fx.
+   *
+   * A property of the map, not of the session: a Doom map converted at 1/48 has
+   * 56-unit doorways, and the engine's default 2.0 body is 96 of those units.
+   * Reading it here means solo mode is walkable with no server at all, and a
+   * live client is never predicting with the wrong body while it waits for the
+   * first PARAM_UPDATE.
+   */
+  get body () {
+    this.core.M._dnp_map_body(this.ptr, this.core.buf64)
+    const b = this.core.buf64 / 8
+    return { radius: this.core.views.i64[b], height: this.core.views.i64[b + 1] }
+  }
+
   /** Content hash, as BigInt. Must equal WELCOME.map_hash. */
   get hash () {
     this.core.M._dnp_map_hash(this.ptr, this.core.buf64)
@@ -161,7 +176,21 @@ export class WasmWorld {
     const { i64 } = this.core.views
     const base = this.core.buf64 / 8
     i64[base] = x; i64[base + 1] = y; i64[base + 2] = z
-    return this.core.M._dnp_world_spawn(this.ptr, this.core.buf64)
+    const idx = this.core.M._dnp_world_spawn(this.ptr, this.core.buf64)
+    // The map's body, applied at spawn rather than waited for. The server does
+    // exactly this for the agent it spawns, so the two agree from tick zero
+    // instead of after the first PARAM_UPDATE lands.
+    if (idx >= 0 && this.map) {
+      const b = this.map.body
+      this.setParamRaw(idx, 0, b.radius)
+      this.setParamRaw(idx, 1, b.height)
+    }
+    return idx
+  }
+
+  setParamRaw (idx, fieldId, raw) {
+    this.core.views.i64[this.core.buf64 / 8] = raw
+    return this.core.M._dnp_world_set_param_raw(this.ptr, idx, fieldId, this.core.buf64) !== 0
   }
 
   /** Register a sector as movable and start a parametric motion on it. */
