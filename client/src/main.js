@@ -30,7 +30,7 @@ import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
-import { sweepOffset, makeSwingMesh } from './render/swing.js'
+import { sweepOffset, makeSwingMesh, swingYaw } from './render/swing.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
@@ -327,9 +327,18 @@ const swingShape = {
   ticks: Number(world.getParamRaw(agent, world.paramId('attack_ticks')))
 }
 const SHOW_SWING = params.get('swing') !== '0'
+// The whole region the swing travels through: from the start of the sweep less
+// its half-arc, to the end plus it. Fixed to the body, so the moving collider
+// can be seen crossing it.
+const swingSpan = Math.abs(swingShape.to - swingShape.from) / 2 + swingShape.halfArc
+const swingMid = (swingShape.from + swingShape.to) / 2
+const swingWhole = SHOW_SWING
+  ? makeSwingMesh(THREE, { reachUnits: swingShape.reach, halfArcTurns: swingSpan, segments: 24, faint: true })
+  : null
 const swing = SHOW_SWING
   ? makeSwingMesh(THREE, { reachUnits: swingShape.reach, halfArcTurns: swingShape.halfArc })
   : null
+if (swingWhole) scene.add(swingWhole)
 if (swing) scene.add(swing)
 
 // Which way the agent is looking, and how far it can reach to work a door.
@@ -681,14 +690,17 @@ function frame (now) {
     // The engine's own numbers, run through the engine's own formula. See
     // render/swing.js: the offset is a turn fraction from the aim.
     const off = sweepOffset({ ...swingShape, left: a.attackLeft })
+    const facingTurns = (a.facing >>> 0) / 4294967296
+    // Drawn at the middle of the body rather than at its feet: a collider
+    // hugging the floor reads as unrelated to the thing it is about to hit.
+    const at = subject.y + bodyHeight / 2
     swing.visible = off !== null
+    swingWhole.visible = off !== null
     if (off !== null) {
-      swing.position.set(subject.x, subject.y + 0.15, subject.z)
-      // facing is a brad; the wedge opens along +X and three's Y rotation runs
-      // the opposite way from the engine's yaw, which is the same reflection
-      // billboardYaw and facingDirection each had to get right.
-      const turns = (a.facing >>> 0) / 4294967296 + off
-      swing.rotation.y = -turns * Math.PI * 2
+      swing.position.set(subject.x, at, subject.z)
+      swing.rotation.y = swingYaw(facingTurns, off)
+      swingWhole.position.set(subject.x, at - 0.02, subject.z)
+      swingWhole.rotation.y = swingYaw(facingTurns, swingMid)
     }
   }
   if (arrow) {
@@ -708,6 +720,13 @@ function frame (now) {
       // The animation's own clock, in seconds, shared by every prop of a kind.
       // Independent phases would make a row of keys shimmer in a way nobody
       // could name.
+      // Hand the server's declared animation state to the renderer. The entity
+      // view records it and the registry plays it, and until this line existed
+      // the two were never introduced -- a barrel switched to its explosion
+      // state and went on showing idle frames until it vanished.
+      for (const ent of others.entities.values()) {
+        if (ent.kind) props.setState(ent.mesh, ent.animationState ?? 0)
+      }
       props.update(now / 1000)
       // Billboarding: yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.

@@ -127,7 +127,10 @@ export class PropRegistry {
     this.textures = textures          // name -> THREE.Texture
     this.kinds = catalogue?.kinds ?? new Map()
     this.warned = new Set()
-    this.animated = []                // { mesh, def, state }
+    // mesh -> { def, stateId }. A Map rather than an array searched linearly,
+    // because the animation state is synced from the entity view every frame
+    // and a scan per prop per frame is a scan that grows with the map.
+    this.animated = new Map()
   }
 
   /** A THREE object for this kind, or null to fall back to the default body. */
@@ -170,14 +173,28 @@ export class PropRegistry {
     // and a plane's origin is its middle.
     mesh.userData.yOffset = size / 2
 
-    this.animated.push({ mesh, def, stateId: 0 })
+    this.animated.set(mesh, { def, stateId: 0 })
     return mesh
   }
 
-  /** Called when the server declares a new animation state for an entity. */
+  /**
+   * Called when the server declares a new animation state for an entity.
+   *
+   * Nothing called this at all when it was written, so a barrel switched to its
+   * explosion state on the server and went on showing its idle frames until it
+   * vanished. The state arrived, was recorded on the entity, and stopped there
+   * -- the two halves of the renderer each did their job and were not
+   * introduced.
+   */
   setState (mesh, stateId) {
-    const a = this.animated.find((x) => x.mesh === mesh)
-    if (a) a.stateId = stateId
+    const a = this.animated.get(mesh)
+    if (!a || a.stateId === stateId) return
+    a.stateId = stateId
+    // Restart the animation from its first frame rather than continuing the
+    // shared clock's phase. An explosion that begins a third of the way through
+    // is not an explosion, and unlike an idle loop it is meant to be seen once
+    // from the beginning.
+    a.startedAt = null
   }
 
   /**
@@ -188,21 +205,27 @@ export class PropRegistry {
    * name.
    */
   update (seconds) {
-    for (const a of this.animated) {
-      if (!a.mesh.parent) continue                 // removed from the scene
+    for (const [mesh, a] of this.animated) {
+      if (!mesh.parent) continue                   // removed from the scene
       const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
       if (!state?.frames) continue
-      const tex = this.textures.get(state.frames[frameAt(state, seconds)])
-      if (tex && a.mesh.material.map !== tex) {
-        a.mesh.material.map = tex
-        a.mesh.material.color.setHex(0xffffff)
-        a.mesh.material.needsUpdate = true
+      // Idle states share one clock so props of a kind bob in lockstep; a state
+      // the server switched INTO runs from its own start, because it is an
+      // event rather than a loop.
+      if (a.startedAt == null) a.startedAt = a.stateId === 0 ? 0 : seconds
+      const tex = this.textures.get(state.frames[frameAt(state, seconds - a.startedAt)])
+      if (tex && mesh.material.map !== tex) {
+        mesh.material.map = tex
+        mesh.material.color.setHex(0xffffff)
+        mesh.material.needsUpdate = true
       }
     }
   }
 
   /** Forget meshes that have left the scene, so a long session does not grow. */
   prune () {
-    this.animated = this.animated.filter((a) => a.mesh.parent)
+    for (const mesh of [...this.animated.keys()]) {
+      if (!mesh.parent) this.animated.delete(mesh)
+    }
   }
 }

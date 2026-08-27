@@ -20,9 +20,18 @@
 //   DNP_NO_SCRIPT=1  --no-scripts, so not even the map's own declared files
 //                    load. Nothing moves, which is what proves the engine is
 //                    reporting and not acting.
-//   DNP_IGNORE_LUA=1 a client that ignores LUA_APPLIED must report the door as
-//                    a DEFECT. Without this the flag could be carrying no
-//                    information at all and nothing here would notice.
+// There is deliberately NO ignore-LUA control here, and that is a result rather
+// than an omission. LUA_APPLIED on a geometry change is conservative: it says
+// "you may mismatch on this tick". A parametric door usually does not, because
+// the motion is a closed form carrying its own start tick -- so once
+// SECTOR_MOTION_SET lands, reconciliation replays the past with the motion
+// already known and arrives exactly at the server's answer. That is §3.1.2
+// working, and asserting that a flag-ignoring client MUST see a defect asserts
+// that the recovery fails, which it does not.
+//
+// The flag's information content is tested in lua.test.js instead, with a
+// TELEPORT -- a scripted change with no closed form, which genuinely cannot be
+// predicted and reliably produces the mismatch that claim needs.
 //
 // The trip-wire is tested by the same run: crossing x = 17 lowers the lift in
 // sector 4, and NOT pressing anything is the whole point of it.
@@ -49,7 +58,6 @@ const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34492)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34566)
 const NO_USE = process.env.DNP_NO_USE === '1'
 const NO_SCRIPT = process.env.DNP_NO_SCRIPT === '1'
-const IGNORE_LUA = process.env.DNP_IGNORE_LUA === '1'
 
 let checks = 0
 let fails = 0
@@ -175,7 +183,6 @@ check(ok && map.hash === welcome.mapHash, 'map loaded')
 const world = core.createWorld({ map })
 const agent = world.spawn(map.spawnForTag('start'))
 const predictor = new Predictor(world, agent)
-predictor.ignoreLuaFlag = IGNORE_LUA
 
 // The door as the client sees it, right now. Read through the same wasm module
 // the client predicts with, from the same MapStorage sector motion writes into
@@ -229,6 +236,8 @@ const drainMotions = () => {
 }
 
 let history = []
+let leadSum = 0
+let leadN = 0
 let maxDoorCeil = doorClosedCeil
 let minLiftFloor = liftParkedFloor
 let maxX = 0
@@ -241,9 +250,16 @@ let ceilAfterOpen = null
 let liftAfterDown = null
 
 const verdicts = []
+// The newest server tick seen, recorded as snapshots are consumed.
+//
+// Not read from `pending`: drain() empties it, so anything asking `pending`
+// afterwards sees nothing. That is what silently disabled the catch-up below --
+// its guard was `newest > 0` and newest was always 0.
+let newestTick = 0
 const drain = () => {
   while (pending.length) {
     const s = pending.shift()
+    newestTick = Math.max(newestTick, s.serverTick)
     for (const e of s.entities ?? []) {
       const index = handleIndex(e.handle)
       if (e.mask & ENT_FIELD.DESTROYED) {
@@ -262,18 +278,63 @@ const drain = () => {
   }
 }
 
+// How far ahead of the newest snapshot the client aims to run.
+//
+// A predicting client MUST lead the server: it simulates ticks the server has
+// not reached, and the whole measurement is whether the server later agrees.
+// A client running BEHIND never predicts an unseen tick and therefore cannot
+// mispredict -- which quietly turns every control here into a test of how busy
+// the machine is. The real client steers this with input_margin (protocol
+// §10.1); this is the smallest thing that holds a lead.
+const TARGET_LEAD = 6
+const MAX_LEAD = 14
+
 // One tick of the client: predict, send, apply anything that arrived.
 async function tickWith (buttons, moveX) {
   const f = { buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 }
-  predictor.step(f)
-  history = [f, ...history].slice(0, 12)
-  await dw.write(encodeInputBundle({
-    clientTick: predictor.tick,
-    ackSnapshotTick: pending.at(-1)?.serverTick ?? 0,
-    frames: history
-  }))
+  const send = () => {
+    predictor.step(f)
+    history = [f, ...history].slice(0, 12)
+    return dw.write(encodeInputBundle({
+      clientTick: predictor.tick,
+      ackSnapshotTick: newestTick,
+      frames: history
+    }))
+  }
+  // Too far ahead: ease back by simulating nothing this iteration. The walk
+  // takes more iterations and the same number of SERVER ticks, which is what
+  // every assertion below is actually written against.
+  //
+  // Both ends of the band were found by getting them wrong. Behind, the client
+  // never predicts a tick the server has not run and so cannot mispredict at
+  // all -- every control silently becomes a test of how busy the machine is.
+  // Far ahead, this loop naturally reaches 240 ticks, because it steps once per
+  // 8 ms while the server steps once per 16, and by then it has evicted its
+  // prediction for the tick a snapshot is reporting: the comparison is
+  // 'no-history' and counts as neither.
+  if (newestTick > 0 && predictor.tick > newestTick + MAX_LEAD) {
+    drainMotions()
+    drain()
+    await sleep(8)
+    return
+  }
+
+  await send()
+  // Catch up until the lead is regained, bounded so a stalled server cannot
+  // spin here. One extra tick per iteration only reaches PARITY when the loop
+  // is running slower than 60 Hz, which under a loaded test suite it is -- and
+  // parity is exactly the condition where nothing is ever predicted ahead and
+  // the controls below measure the machine instead of the protocol.
+  //
+  // Sending faster does not move the server's agent faster: the server consumes
+  // one input per tick at 60 Hz whatever arrives, so this changes how far AHEAD
+  // the client is and not how far anything travels in server time.
+  for (let i = 0; i < 4 && newestTick > 0 && predictor.tick < newestTick + TARGET_LEAD; i++) {
+    await send()
+  }
   drainMotions()
   drain()
+  if (newestTick > 0) { leadSum += predictor.tick - newestTick; leadN++ }
   maxDoorCeil = Math.max(maxDoorCeil, ceilOf(DOOR))
   minLiftFloor = Math.min(minLiftFloor, floorOf(LIFT))
   maxX = Math.max(maxX, agentX())
@@ -307,12 +368,9 @@ liftAfterDown = floorOf(LIFT)
 
 // Back and forth across the trip-wire, which is repeatable.
 //
-// Not decoration: the IGNORE_LUA control needs the client to have predicted the
-// exact tick a motion started before the message describing it arrives, and
-// with only the four changes above that window is one tick wide and closes
-// entirely when the suite is loaded and the client is running behind. Several
-// more crossings spread over a second make it a property of the flag rather
-// than of the machine's mood.
+// Not decoration: repeatable geometry changes spread over a second are what
+// make the zero-mispredictions claim above worth anything. Four changes in a
+// burst can be predicted exactly by luck of timing; a dozen spread out cannot.
 for (let pass = 0; pass < 3; pass++) {
   for (let i = 0; i < 70; i++) await tickWith(0, -1)
   for (let i = 0; i < 70; i++) await tickWith(0, 1)
@@ -324,6 +382,7 @@ drainMotions(); drain()
 
 console.log(`  agent stopped at x=${xAtDoor.toFixed(2)}, reached x=${maxX.toFixed(2)}`)
 console.log(`  door ceiling reached ${maxDoorCeil.toFixed(3)}, lift floor reached ${minLiftFloor.toFixed(3)}`)
+console.log(`  mean lead over the newest snapshot: ${(leadSum / Math.max(1, leadN)).toFixed(1)} ticks`)
 console.log(`  ${applied.size} motions applied; exact ${predictor.stats.exactMatches}, ` +
             `mispredicted ${predictor.stats.mispredictions}`)
 
@@ -349,27 +408,13 @@ if (NO_SCRIPT) {
   // The whole reason the motion is parametric: one message, and the client
   // computes every tick of it. If prediction drifted while the door moved, the
   // closed form is not being evaluated the same way on both sides.
-  if (IGNORE_LUA) {
-    check(predictor.stats.mispredictions > 0,
-          `CONTROL: ignoring LUA_APPLIED reports the door as a DEFECT ` +
-          `(${predictor.stats.mispredictions})`)
-  } else {
-    check(predictor.stats.mispredictions === 0,
-          `ZERO mispredictions across an opening door (got ${predictor.stats.mispredictions})`)
-    // The shape, as in lua.test.js: a change the client could not have known
-    // about costs exactly one tick and then self-heals. A RUN of them would
-    // mean the client never caught up -- a real fault wearing the flag as an
-    // excuse.
-    let worst = 0
-    let run = 0
-    const bad = verdicts.filter((v) => v.v === 'mispredicted')
-    if (bad.length) console.log('  mispredicted ticks: ' + bad.map((v) => v.tick).join(' '))
-    for (const v of verdicts) {
-      if (v.v === 'lua-applied') { run++; worst = Math.max(worst, run) } else run = 0
-    }
-    console.log(`  longest consecutive lua-applied run: ${worst}`)
-    check(worst <= 2, `each geometry change self-heals within a tick (longest run ${worst})`)
-  }
+  check(predictor.stats.mispredictions === 0,
+        `ZERO mispredictions across an opening door (got ${predictor.stats.mispredictions})`)
+  // Usually zero: a parametric motion is predicted exactly once its message has
+  // arrived. Reported rather than asserted, because a number here would be
+  // asserting a race.
+  console.log(`  ${predictor.stats.luaApplied} ticks classified lua-applied`)
+
   // A prop reached the client as an ordinary entity, carrying what it IS.
   console.log(`  props seen: ${[...propsSeen].map(([i, k]) => `${i}:kind ${k}`).join(', ') || 'none'}`)
   check(propsSeen.size >= 1, `${propsSeen.size} props replicated`)

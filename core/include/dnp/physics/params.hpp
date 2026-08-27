@@ -101,7 +101,10 @@ struct MoveParams {
     // pressed is the thing this replaces: with a duration, a target that steps
     // out of the way mid-swing is missed, which is the entire point of a
     // collider that moves.
-    u8 attack_ticks      = 10;
+    // 16 ticks is about 270 ms, which is a swing you can watch land. Ten was
+    // technically a sweep and read as an instant -- the collider was on screen
+    // for a sixth of a second, which is not long enough to see anything travel.
+    u8 attack_ticks      = 16;
 };
 
 // Runtime state the abilities carry between ticks.

@@ -6,7 +6,7 @@
 // are about the parser being tolerant in the right places and strict in the
 // right places, and about the animation clock being the client's own.
 //
-import { parseProps, frameAt } from '../src/render/props.js'
+import { parseProps, frameAt, PropRegistry } from '../src/render/props.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -97,6 +97,70 @@ console.log('\n--- animation is the client\'s own clock ---')
   // Without this, every assertion above is satisfied by a function returning 0.
   const moved = new Set([0, 0.05, 0.1, 0.15, 0.2].map((t) => frameAt(three, t)))
   check(moved.size > 1, `a real animation changes frame (${moved.size} distinct)`)
+}
+
+console.log('\n--- a declared state actually plays ---')
+{
+  // The bug this replaces: the entity view recorded the server's animation
+  // state and the registry played animations, and nothing connected them. A
+  // barrel switched to its explosion state and went on showing idle frames
+  // until it vanished, with both halves working correctly in isolation.
+  //
+  // A stub THREE, because none of this needs a GPU: the registry only ever
+  // touches geometry, a basic material and a mesh.
+  const made = []
+  const THREE = {
+    PlaneGeometry: class { constructor (w, h) { this.w = w; this.h = h } },
+    MeshBasicMaterial: class {
+      constructor (o) { Object.assign(this, o); this.color = { setHex () {} } }
+    },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry
+        this.material = material
+        this.userData = {}
+        this.parent = {}          // pretend it is in the scene
+        made.push(this)
+      }
+    },
+    DoubleSide: 2
+  }
+
+  const catalogue = parseProps(`
+prop 10 barrel radius 0.2 height 0.9 solid
+sprite 10 size 0.9 billboard state 0 fps 0 frames IDLE
+sprite 10 state 1 fps 10 frames BOOM1,BOOM2,BOOM3
+`)
+  const textures = new Map([['IDLE', 'tex:idle'], ['BOOM1', 'tex:b1'],
+                            ['BOOM2', 'tex:b2'], ['BOOM3', 'tex:b3']])
+  const reg = new PropRegistry({ THREE, textures, catalogue })
+
+  const mesh = reg.make(10)
+  check(mesh !== null, 'the registry built a sprite for the kind')
+
+  reg.update(0)
+  check(mesh.material.map === 'tex:idle', 'and shows its idle frame')
+
+  // What the server declaring state 1 has to do.
+  reg.setState(mesh, 1)
+  reg.update(10)
+  check(mesh.material.map === 'tex:b1', 'switching state starts the new one from its FIRST frame')
+  reg.update(10.15)
+  check(mesh.material.map === 'tex:b2', 'and it advances')
+
+  // CONTROL: without the call, the state never changes. This is the whole bug
+  // -- the registry was correct and nothing told it anything.
+  const other = reg.make(10)
+  reg.update(20)
+  check(other.material.map === 'tex:idle', 'CONTROL: an untold sprite stays on its idle state')
+
+  // Restarting matters: an explosion that begins a third of the way through is
+  // not an explosion. A shared clock would have put it wherever it happened to
+  // be.
+  const third = reg.make(10)
+  reg.setState(third, 1)
+  reg.update(99.7)
+  check(third.material.map === 'tex:b1', 'a state entered late still starts at its first frame')
 }
 
 console.log(`\nprops: ${checks} checks, ${fails} failures`)

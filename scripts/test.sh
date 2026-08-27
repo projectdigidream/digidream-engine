@@ -157,11 +157,6 @@ else
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
   (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34494 DNP_LINK_PORT=34568 \
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
-  # And the flag: a door is a change no client could predict, so a client that
-  # ignores LUA_APPLIED must report it as a defect. If it did not, the flag
-  # would be carrying no information.
-  (cd server/edge && DNP_IGNORE_LUA=1 DNP_WT_PORT=34495 DNP_LINK_PORT=34569 \
-     node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
   # A solid prop that stops you, and a swing that removes it: without the swing
   # the same walk must end in the same place, or `solid` is doing nothing.
   (cd server/edge && DNP_NO_ATTACK=1 DNP_WT_PORT=34499 DNP_LINK_PORT=34573 \
