@@ -28,12 +28,19 @@ struct EntitySample {
     fx3  pos{};
     brad facing{};
     u16  animation_state = 0;
+    // What the entity IS, for anything that is not a player. Sent once, with
+    // the first snapshot that carries the entity, because a key does not become
+    // a different key -- and a client that missed it would have a position with
+    // nothing to draw at it.
+    u32  display_id      = 0;
 };
 
 struct SnapshotRecord {
     u32  tick  = 0;
     bool valid = false;
-    EntitySample entities[sim::MAX_AGENTS]{};
+    // Over the whole entity space, not just the agents: props live in the
+    // slots above MAX_AGENTS and are delta-encoded by exactly the same rules.
+    EntitySample entities[sim::MAX_ENTITIES]{};
 };
 
 class SnapshotHistory {
@@ -90,13 +97,19 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     // (protocol R8), so nothing about the old one is a valid baseline. Send
     // everything and let the client destroy-and-respawn.
     if (!was.present || was.generation != now.generation) {
-        return proto::ent_field::POS | proto::ent_field::FACING |
-               proto::ent_field::ANIMATION_STATE;
+        u32 full = proto::ent_field::POS | proto::ent_field::FACING |
+                   proto::ent_field::ANIMATION_STATE;
+        // Only when there is something to say. Every agent would otherwise
+        // carry a display_id of zero on every respawn, which costs four bytes
+        // to tell the client what it already assumes.
+        if (now.display_id != 0) full |= proto::ent_field::DISPLAY_ID;
+        return full;
     }
     u32 mask = 0;
     if (now.pos != was.pos) mask |= proto::ent_field::POS;
     if (now.facing != was.facing) mask |= proto::ent_field::FACING;
     if (now.animation_state != was.animation_state) mask |= proto::ent_field::ANIMATION_STATE;
+    if (now.display_id != was.display_id) mask |= proto::ent_field::DISPLAY_ID;
     return mask;
 }
 

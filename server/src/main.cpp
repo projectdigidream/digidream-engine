@@ -25,6 +25,7 @@
 #include "lua/commands.hpp"
 #include "lua/effects.hpp"
 #include "lua/vm.hpp"
+#include "props.hpp"
 #include "lua/world_binding.hpp"
 
 // For the event dispatch below, which pushes plain Lua values (a side index, a
@@ -133,6 +134,11 @@ struct Server : lua::MapChangeSink {
 
     lua::VmConfig vm_config{};
     bool          scripts_enabled = false;
+
+    // What kinds of prop exist. Server-wide, not per level: a key is a key in
+    // every map, and a catalogue per level would mean the same name meaning
+    // different things depending on where you were standing.
+    PropCatalogue props;
 
     Level& level(u32 i) { return *levels[i]; }
     u32 level_count() const { return static_cast<u32>(levels.size()); }
@@ -552,6 +558,7 @@ struct Server : lua::MapChangeSink {
         L.ctx.map_store   = &L.map_store;
         L.ctx.level       = li;
         L.ctx.map_changes = this;
+        L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
         // to a client but replayable by the server. Per level, or two maps
         // would draw the same "random" sequence.
@@ -768,6 +775,24 @@ struct Server : lua::MapChangeSink {
             lua::push_sector(L.vm.state(), static_cast<u32>(e.sector));
             L.vm.end_hook(hook, t, 3);
         }
+        // Agents standing inside props. Reported every tick the overlap holds,
+        // because "picked up once" is a decision the script makes by removing
+        // the prop -- an engine-side edge trigger would only duplicate that, and
+        // would get it wrong for anything that is meant to keep working while
+        // you stand in it.
+        const sim::OverlapLog& touches = L.world.overlaps();
+        for (u32 i = 0; i < touches.count(); ++i) {
+            const sim::OverlapEvent& e = touches.at(i);
+            if (!L.vm.begin_hook("on_touch")) break;
+            lua::push_entity(L.vm.state(), L.ctx, e.agent);
+            lua::push_prop(L.vm.state(), L.ctx, e.prop);
+            L.vm.end_hook("on_touch", t, 2);
+        }
+        if (touches.dropped() > 0) {
+            std::fprintf(stderr, "[srv] tick %u: %u overlap events dropped (log full)\n",
+                         t, touches.dropped());
+        }
+
         if (uses.dropped() > 0) {
             std::fprintf(stderr, "[srv] tick %u: %u interact events dropped (log full)\n",
                          t, uses.dropped());
@@ -1039,21 +1064,41 @@ struct Server : lua::MapChangeSink {
 
             u32 omitted = 0;
             u32 unchanged = 0;
-            for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+            // ONE loop over the whole entity space. Agents occupy the low
+            // slots and props the rest, which is why they need no separate
+            // message, no handle domain bit, and no second delta path -- from
+            // the wire's point of view a key and a player differ by what they
+            // are called and how often they move.
+            for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) {
                 // The observer's own agent is in SelfBlock at full precision.
                 // Sending it again here would let the client reconcile against
                 // the quantised copy of itself.
                 if (i == s.agent) continue;
 
-                const sim::AgentState& a = world.agent(i);
                 const EntitySample was = baseline ? baseline->entities[i] : EntitySample{};
 
                 EntitySample now;
-                now.present          = a.active;
-                now.generation       = world.generation(i);
-                now.pos              = a.pos;
-                now.facing           = a.facing;
-                now.animation_state  = 0;
+                now.generation = world.generation(i);
+                if (sim::World::is_prop(i)) {
+                    const sim::PropState& p = world.prop(i);
+                    now.present         = p.active;
+                    now.pos             = p.pos;
+                    now.facing          = p.facing;
+                    now.animation_state = p.animation_state;
+                    // The kind travels in display_id, which the protocol
+                    // reserved for exactly this: a number naming what a thing
+                    // IS, that the client turns into something to draw. It is
+                    // sent once, on the tick the entity appears, because a key
+                    // does not become a different key.
+                    now.display_id      = p.kind;
+                } else {
+                    const sim::AgentState& a = world.agent(i);
+                    now.present         = a.active;
+                    now.pos             = a.pos;
+                    now.facing          = a.facing;
+                    now.animation_state = 0;
+                    now.display_id      = 0;
+                }
 
                 if (!now.present) {
                     // Only tell the client about a destruction it has not
@@ -1087,6 +1132,7 @@ struct Server : lua::MapChangeSink {
                 e.pos              = now.pos;
                 e.facing           = now.facing;
                 e.animation_state  = now.animation_state;
+                e.display_id       = now.display_id;
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;
@@ -1131,6 +1177,7 @@ int main(int argc, char** argv) {
     u32 script_count = 0;
     bool strict_scripts = false;
     bool no_scripts = false;
+    const char* props_path = "assets/props.txt";
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
@@ -1148,6 +1195,8 @@ int main(int argc, char** argv) {
             // trust) or a copy of the library inlined into all 32 of them.
             if (script_count < MAX_SCRIPTS) script_args[script_count++] = argv[++i];
             else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
+        } else if (std::strcmp(argv[i], "--props") == 0 && i + 1 < argc) {
+            props_path = argv[++i];
         } else if (std::strcmp(argv[i], "--no-scripts") == 0) {
             // Refuse to run any Lua at all, including what the maps ask for.
             // The operator's veto, and the control every "the map is driving
@@ -1175,6 +1224,14 @@ int main(int argc, char** argv) {
         }
     }
     std::fprintf(stderr, "[srv] %u level(s); an exit advances to the next\n", srv.level_count());
+
+    // The prop catalogue. Missing is not fatal -- a map that spawns nothing does
+    // not need one -- but a map that DOES will fail loudly at the spawn rather
+    // than quietly produce a key nobody can see.
+    if (!srv.props.load(props_path)) {
+        std::fprintf(stderr, "[srv] no prop catalogue at %s; scripts cannot spawn props\n",
+                     props_path);
+    }
 
     // A level gets a VM if the operator supplied scripts OR the map declared
     // any of its own. That is the point of the map declaring them: a converted

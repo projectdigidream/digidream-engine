@@ -28,6 +28,7 @@ import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
+import { parseProps, PropRegistry } from './render/props.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
@@ -326,13 +327,66 @@ function groundUnder (x, z) {
 }
 const onGround = (x, z) => map.findSector(x, -z) >= 0
 
+// The prop catalogue, and the sprite frames it names.
+//
+// Fetched rather than compiled in: adding a prop is editing assets/props.txt
+// and naming it from a map's Lua, and neither this file nor the server has a
+// table of kinds in it. A missing catalogue is not fatal -- a map that spawns
+// nothing does not need one -- so a failure here leaves props drawn as bodies
+// and says so once.
+let props = null
+try {
+  const text = await (await fetch('/props.txt')).text()
+  const catalogue = parseProps(text)
+  for (const w of catalogue.warnings) console.warn(`[props] ${w}`)
+
+  // Every frame every kind names, loaded once. A sprite frame is a texture with
+  // holes in it, so it is indexed and loaded exactly like a wall texture.
+  const wanted = new Set()
+  for (const def of catalogue.kinds.values()) {
+    for (const st of def.states.values()) for (const f of st.frames ?? []) wanted.add(f)
+  }
+  const textures = new Map()
+  if (wanted.size) {
+    const loader = new THREE.TextureLoader()
+    const load = (name) => new Promise((resolve) => {
+      loader.load(
+        `/sprites/${name}.png`,
+        (tex) => {
+          // Nearest, and no mipmaps. A Doom sprite is 20-odd pixels tall and
+          // filtering one is how it turns into a smudge -- the same reason the
+          // wall textures are not filtered either.
+          tex.magFilter = THREE.NearestFilter
+          tex.minFilter = THREE.NearestFilter
+          tex.generateMipmaps = false
+          tex.colorSpace = THREE.SRGBColorSpace
+          textures.set(name, tex)
+          resolve()
+        },
+        undefined,
+        () => { console.warn(`[props] missing sprite ${name}`); resolve() }
+      )
+    })
+    await Promise.all([...wanted].map(load))
+  }
+  props = new PropRegistry({ THREE, textures, catalogue })
+  console.log(`[props] ${catalogue.kinds.size} kinds, ${textures.size} sprite frames`)
+} catch (e) {
+  console.warn(`[props] no catalogue (${e.message}); props will draw as bodies`)
+}
+
 // Other players. Interpolated, never predicted -- predicting one means guessing
 // what another person will press (see render/entities.js).
 const others = new EntityView({
   // Other players are the same size we are: the body is the MAP's, not this
   // session's, so drawing them at the engine default would put every remote
   // player a head taller than the doorways they walk through.
-  makeMesh: () => makeAgentMesh(0xffa066, bodyRadius, bodyHeight),
+  // Kind 0 is a player; anything else is a prop the catalogue describes. A
+  // kind the catalogue does not cover falls back to the body mesh rather than
+  // to nothing, because an entity you cannot see is indistinguishable from one
+  // the server never sent.
+  makeMesh: (kind) => (kind ? props?.make(kind) : null) ??
+                      makeAgentMesh(0xffa066, bodyRadius, bodyHeight),
   scene
 })
 
@@ -605,7 +659,21 @@ function frame (now) {
   // feet leaves the head behind the wall.
   view.setOcclusionTarget({ x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z })
   shadows.update(subject, groundUnder(subject.x, subject.z), view.lights, onGround)
-  if (LIVE) others.update(newestServerTick, acc / DT)
+  if (LIVE) {
+    others.update(newestServerTick, acc / DT)
+    if (props) {
+      // The animation's own clock, in seconds, shared by every prop of a kind.
+      // Independent phases would make a row of keys shimmer in a way nobody
+      // could name.
+      props.update(now / 1000)
+      // Billboarding: yaw only. Facing the camera in all three axes is what
+      // THREE.Sprite does, and under this camera's tilt it lays a key flat as
+      // you rotate. A Doom sprite stays upright in the world and turns.
+      for (const ent of others.entities.values()) {
+        if (ent.kind) ent.mesh.rotation.y = yaw + Math.PI / 2
+      }
+    }
+  }
 
   // The camera follows the PREDICTED position -- here, whichever of the two
   // modes produced it. Never a snapshot: see camera.js.

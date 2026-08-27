@@ -280,6 +280,124 @@ const luaL_Reg ENTITY_METHODS[] = {
     {nullptr, nullptr},
 };
 
+// ----------------------------------------------------------------------- props
+//
+// A separate handle type from an entity, deliberately. A prop has no velocity,
+// no controller and no parameters, and folding it into the agent methods would
+// mean every one of them growing a "unless it is actually a key" branch -- which
+// is the shape a type is for.
+//
+// Generational all the same: a script that picked up a key and kept the handle
+// is holding something that no longer exists, and that has to be a defined
+// no-op rather than a slot that quietly refers to the next key spawned there.
+
+const char* const PROP_MT = "dnp.prop";
+
+proto::Handle* to_prop(lua_State* L, int idx) {
+    return static_cast<proto::Handle*>(luaL_testudata(L, idx, PROP_MT));
+}
+
+proto::Handle check_prop_handle(lua_State* L, int idx) {
+    if (proto::Handle* h = to_prop(L, idx)) return *h;
+    luaL_error(L, "expected a prop, got %s", luaL_typename(L, idx));
+    return proto::Handle{};
+}
+
+// Entity index for a live prop, or -1.
+i32 resolve_prop(lua_State* L, WorldContext& ctx, proto::Handle h) {
+    (void)L;
+    if (!h.valid()) return -1;
+    const u32 idx = h.index();
+    if (idx == 0) return -1;
+    const u32 entity = idx - 1;
+    if (!sim::World::is_prop(entity)) return -1;
+    if (!ctx.world->prop(entity).active) { ++ctx.stats.stale_handle_ops; return -1; }
+    if (ctx.world->generation(entity) != h.generation()) {
+        ++ctx.stats.stale_handle_ops;
+        return -1;
+    }
+    return static_cast<i32>(entity);
+}
+
+int l_prop_valid(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    lua_pushboolean(L, resolve_prop(L, ctx, check_prop_handle(L, 1)) >= 0);
+    return 1;
+}
+
+int l_prop_index(lua_State* L) {
+    lua_pushnumber(L, static_cast<lua_Number>(check_prop_handle(L, 1).index()) - 1);
+    return 1;
+}
+
+int l_prop_kind(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->prop(static_cast<u32>(e)).kind);
+    return 1;
+}
+
+int l_prop_pos(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) { lua_pushnil(L); return 1; }
+    push_vec3(L, ctx.world->prop(static_cast<u32>(e)).pos);
+    return 1;
+}
+
+// prop:set_animation(n)
+//
+// The STATE, never the timing. Which frame is on screen and how a mesh blends
+// between clips is the client's decision (design §4) -- a server that shipped
+// frame numbers would be deciding the frame rate of a machine it has never
+// seen, and would have to be right about it sixty times a second.
+int l_prop_set_animation(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) return 0;
+    const int n = static_cast<int>(luaL_checknumber(L, 2));
+    if (n < 0 || n > 65535) return luaL_error(L, "animation state %d is out of range", n);
+    ctx.world->prop_mut(static_cast<u32>(e)).animation_state = static_cast<u16>(n);
+    return 0;
+}
+
+// prop:despawn()
+//
+// Immediate, unlike every entity mutation beside it. A prop is not part of the
+// physics resolution -- nothing collides with one -- so removing it mid-callback
+// cannot pull geometry out from under a tick. What it CAN do is make a second
+// script touching the same key in the same tick find nothing, which is exactly
+// the behaviour a contested pickup wants.
+int l_prop_despawn(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) { lua_pushboolean(L, 0); return 1; }
+    ctx.world->despawn_prop(static_cast<u32>(e));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int l_prop_eq(lua_State* L) {
+    lua_pushboolean(L, check_prop_handle(L, 1).raw == check_prop_handle(L, 2).raw);
+    return 1;
+}
+
+int l_prop_tostring(lua_State* L) {
+    lua_pushfstring(L, "prop(%d)", static_cast<int>(check_prop_handle(L, 1).index()) - 1);
+    return 1;
+}
+
+const luaL_Reg PROP_METHODS[] = {
+    {"valid", l_prop_valid},
+    {"index", l_prop_index},
+    {"kind", l_prop_kind},
+    {"pos", l_prop_pos},
+    {"set_animation", l_prop_set_animation},
+    {"despawn", l_prop_despawn},
+    {nullptr, nullptr},
+};
+
 // --------------------------------------------------------------------- sectors
 //
 // A sector handle carries only an index, with no generation -- unlike an
@@ -556,6 +674,44 @@ int l_dnp_side(lua_State* L) {
     return 1;
 }
 
+// dnp.spawn_prop(name, position) -> prop, or nil
+//
+// By NAME, resolved through the catalogue the operator ships. A script naming a
+// prop that is not installed gets nil and a line in the log, rather than a
+// silent slot-zero entity -- "the key did not appear" should say which key.
+int l_dnp_spawn_prop(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    size_t len = 0;
+    const char* name = luaL_checklstring(L, 1, &len);
+    const fx3 pos = check_vec3(L, 2);
+
+    if (ctx.props == nullptr || ctx.props->empty()) {
+        // Named in terms of the FILE, because that is what is wrong. A map
+        // asking for a prop the operator has not installed used to surface as
+        // "the map's script failed", which points at the script.
+        return luaL_error(L,
+            "cannot spawn '%s': the prop catalogue is empty or missing "
+            "(see --props, default assets/props.txt)", name);
+    }
+    const u16 kind = ctx.props->kind_by_name(name, len);
+    if (kind == 0) {
+        return luaL_error(L, "no prop named '%s' in the prop catalogue", name);
+    }
+    const u32 e = ctx.world->spawn_prop(kind, pos);
+    if (e >= sim::MAX_ENTITIES) {
+        // Full is not an error a map can do anything about, so it is a nil and
+        // a counter rather than a raise -- but it is never silent.
+        lua_pushnil(L);
+        return 1;
+    }
+    // The catalogue's size, applied at spawn. It is the simulation's half of
+    // the file and the only half the server reads.
+    ctx.world->prop_mut(e).radius = ctx.prop_radius(kind);
+    ctx.world->prop_mut(e).height = ctx.prop_height(kind);
+    push_prop(L, ctx, e);
+    return 1;
+}
+
 int l_dnp_stale_ops(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(ctx_of(L).stats.stale_handle_ops));
     return 1;
@@ -567,6 +723,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"entities", l_dnp_entities},
     {"sectors", l_dnp_sectors},
     {"sector", l_dnp_sector},
+    {"spawn_prop", l_dnp_spawn_prop},
     {"side", l_dnp_side},
     {"random", l_dnp_random},
     {"stale_handle_ops", l_dnp_stale_ops},
@@ -574,6 +731,21 @@ const luaL_Reg DNP_FUNCS[] = {
 };
 
 }  // namespace
+
+void push_prop(lua_State* L, WorldContext& ctx, u32 entity) {
+    if (!sim::World::is_prop(entity) || !ctx.world->prop(entity).active) {
+        lua_pushnil(L);
+        return;
+    }
+    void* p = lua_newuserdata(L, sizeof(proto::Handle));
+    // index+1, the same convention agents use and the same one on the wire:
+    // raw 0 means "no entity", and there is one index space, so a prop handle
+    // and an agent handle are comparable numbers by construction.
+    *static_cast<proto::Handle*>(p) =
+        proto::Handle::make(entity + 1, ctx.world->generation(entity));
+    luaL_getmetatable(L, PROP_MT);
+    lua_setmetatable(L, -2);
+}
 
 void push_sector(lua_State* L, u32 index) {
     *static_cast<u32*>(lua_newuserdata(L, sizeof(u32))) = index;
@@ -609,6 +781,18 @@ void open_world(lua_State* L, WorldContext* ctx) {
     lua_pushcfunction(L, l_entity_eq);       lua_setfield(L, -2, "__eq");
     lua_pushcfunction(L, l_entity_tostring); lua_setfield(L, -2, "__tostring");
     lua_pushliteral(L, "locked");            lua_setfield(L, -2, "__metatable");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, PROP_MT);
+    lua_newtable(L);
+    for (const luaL_Reg* r = PROP_METHODS; r->name; ++r) {
+        lua_pushcfunction(L, r->func);
+        lua_setfield(L, -2, r->name);
+    }
+    lua_setfield(L, -2, "__index");
+    lua_pushcfunction(L, l_prop_eq);       lua_setfield(L, -2, "__eq");
+    lua_pushcfunction(L, l_prop_tostring); lua_setfield(L, -2, "__tostring");
+    lua_pushliteral(L, "locked");          lua_setfield(L, -2, "__metatable");
     lua_pop(L, 1);
 
     luaL_newmetatable(L, SECTOR_MT);

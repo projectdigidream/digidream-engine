@@ -1,0 +1,53 @@
+# The prop catalogue.
+#
+# Everything the engine needs to know about a kind of entity that is not a
+# player, in a file both the server and the client read. Adding a prop is
+# editing this file and naming it from a map's Lua -- no C++, no JavaScript, and
+# nothing to recompile on either side.
+#
+# TWO RECORD TYPES, because two different programs need two different halves and
+# neither should have to understand the other's:
+#
+#   prop   <id> <name> radius <r> height <h>
+#           The SIMULATION's half. The server reads it; it decides how close an
+#           agent has to be to touch this thing.
+#
+#   sprite <id> size <world-height> [billboard] [state <n>] [fps <f>] frames A,B,C
+#   mesh   <id> model <name> [state <n>] [clip <name>]
+#           The RENDERER's half. The client reads it; the server never looks.
+#           A kind may have several state lines, one per animation state, and
+#           the server declares the STATE while the client owns the timing
+#           (design §4) -- a sprite swaps frames on its own clock and a mesh
+#           cross-fades on its own.
+#
+# Both parsers ignore records they do not understand, so a visual-only addition
+# does not need the server restarted and a physics-only one does not need the
+# assets rebuilt.
+#
+# `id` is explicit and never positional: two files that happened to list props
+# in a different order would otherwise silently swap them.
+
+# --- Doom keycards and skull keys -------------------------------------------
+#
+# Doom's keys are 8-unit-radius sprites that bob in place; at 1/48 scale that is
+# 0.167, widened here to 0.35 because a pickup you have to stand exactly on is a
+# pickup nobody picks up. The sprite names are the WAD's own lumps, extracted by
+# tools/wad/extract_sprites.js.
+
+prop 1 key_blue   radius 0.35 height 0.6
+sprite 1 size 0.35 billboard state 0 fps 6 frames BKEYA0,BKEYB0
+
+prop 2 key_yellow radius 0.35 height 0.6
+sprite 2 size 0.35 billboard state 0 fps 6 frames YKEYA0,YKEYB0
+
+prop 3 key_red    radius 0.35 height 0.6
+sprite 3 size 0.35 billboard state 0 fps 6 frames RKEYA0,RKEYB0
+
+prop 4 skull_blue   radius 0.35 height 0.6
+sprite 4 size 0.35 billboard state 0 fps 6 frames BSKUA0,BSKUB0
+
+prop 5 skull_yellow radius 0.35 height 0.6
+sprite 5 size 0.35 billboard state 0 fps 6 frames YSKUA0,YSKUB0
+
+prop 6 skull_red    radius 0.35 height 0.6
+sprite 6 size 0.35 billboard state 0 fps 6 frames RSKUA0,RSKUB0

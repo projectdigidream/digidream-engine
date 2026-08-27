@@ -27,4 +27,12 @@ doom.load{
     [18] = {a="exit", trig="use", once=true, secret=false, targets={}, check_neighbor=4},
   },
   teleports = {},
+
+  -- A key on the path east, three units from the spawn. The point is not the
+  -- key: it is that a prop declared in a text file, spawned by a script and
+  -- replicated as an ordinary entity arrives at a client that has never been
+  -- compiled with any knowledge of what a key is.
+  props = {
+    {name="key_blue", x=384, y=240, z=48},
+  },
 }

@@ -26,10 +26,18 @@ export const INTERP_DELAY_TICKS = 4
 import { ENT_FIELD, handleIndex, handleGeneration } from '../proto.js'
 
 export class EntityView {
+  /**
+   * `makeMesh(kind)` builds the visual for an entity. `kind` is the wire's
+   * display_id: 0 for a player, and for anything else the number the prop
+   * catalogue keys on. A builder that does not recognise a kind returns null
+   * and gets the default body, which is a visible wrong rather than an
+   * invisible one -- an entity you cannot see is indistinguishable from one the
+   * server never sent.
+   */
   constructor ({ makeMesh, scene }) {
     this.makeMesh = makeMesh
     this.scene = scene
-    // handle -> { mesh, samples: [{tick, x, y, z, facing}], generation }
+    // handle -> { mesh, samples: [{tick, x, y, z, facing}], generation, kind }
     this.entities = new Map()
   }
 
@@ -57,10 +65,19 @@ export class EntityView {
         ent = null
       }
       if (!ent) {
-        ent = { mesh: this.makeMesh(), samples: [], generation }
+        // DISPLAY_ID arrives with the first block that carries a new entity
+        // (docs/protocol.md §5.4), so the visual is chosen once, here, from
+        // what the entity IS -- not guessed from how it moves.
+        const kind = e.displayId ?? 0
+        ent = { mesh: this.makeMesh(kind), samples: [], generation, kind }
         this.scene.add(ent.mesh)
         this.entities.set(index, ent)
       }
+
+      // A new animation state is a declaration, never a frame number: the
+      // client owns the timing (design §4). Recorded on the entity so a
+      // renderer can pick it up without re-reading the snapshot.
+      if (e.mask & ENT_FIELD.ANIMATION_STATE) ent.animationState = e.animationState ?? 0
 
       // No POS in the mask means the position did not change. Absence is
       // information in a delta-encoded snapshot (docs/protocol.md §5.3), so

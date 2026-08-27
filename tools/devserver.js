@@ -26,7 +26,8 @@ const TYPES = {
   '.json': 'application/json',
   '.dnpm': 'application/octet-stream',
   '.map': 'application/json',
-  '.png': 'image/png'
+  '.png': 'image/png',
+  '.txt': 'text/plain; charset=utf-8'
 }
 
 // Prefixes served, and what they resolve to. An explicit list rather than
@@ -41,6 +42,9 @@ const MOUNTS = [
   // different asset sets, and keeps megabytes of images off the control channel
   // that every join waits on.
   ['/textures/', join(ROOT, 'assets', 'textures')],
+  // Sprite frames, indexed the same way textures are: from the renderer's side
+  // a sprite frame is a texture that happens to have holes in it.
+  ['/sprites/', join(ROOT, 'assets', 'sprites')],
   // client/wasm, not client/wasm/dist: core.js imports '../wasm/dist/...',
   // which is the layout on disk, and a mount that skipped the dist level would
   // make the source's own relative import wrong only when served.
@@ -109,6 +113,22 @@ createServer(async (req, res) => {
       log(body ? 200 : 404, req.url)
       if (!body) { res.writeHead(404).end('no dev certificate; run npm run certs in server/edge'); return }
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body)
+      return
+    }
+
+    // The prop catalogue, whole. A named route rather than a mount, because a
+    // mount is a directory prefix and MOUNTS entries are matched with
+    // startsWith -- '/props.txt' would have resolved to 'props.txt/index.html'.
+    //
+    // The client reads the renderer's half of the same file the server reads
+    // the simulation's half of. One file, so the two cannot end up describing
+    // different worlds.
+    if (req.url.split('?')[0] === '/props.txt') {
+      const body = await readFile(join(ROOT, 'assets', 'props.txt')).catch(() => null)
+      log(body ? 200 : 404, req.url)
+      if (!body) { res.writeHead(404).end('no assets/props.txt'); return }
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+         .end(body)
       return
     }
 

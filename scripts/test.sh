@@ -32,6 +32,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_sectormotion"
 "./build/$HOST_ARCH/test_crush"
 "./build/$HOST_ARCH/test_interact"
+"./build/$HOST_ARCH/test_props"
 "./build/$HOST_ARCH/test_nav"
 "./build/$HOST_ARCH/test_rail"
 
@@ -114,6 +115,7 @@ else
   node client/test/entities.test.js | tail -2
   node client/test/lighting.test.js | tail -2
   node client/test/shadows.test.js | tail -2
+  node client/test/props.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2

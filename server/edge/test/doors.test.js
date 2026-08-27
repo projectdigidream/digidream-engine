@@ -39,7 +39,7 @@ import { Predictor } from '../../../client/src/predictor.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
-  axisFromNumber, fxToNumber, MSG, BUTTON
+  axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
 } from '../../../client/src/proto.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -96,7 +96,11 @@ const core = await Core.load()
 // No --script arguments: maps/doors.map declares what it needs and mapc put
 // both files next to the baked map. --no-scripts is the operator's veto, and
 // the control that proves the doors are the map's doing.
-const args = ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start']
+// --props with an absolute path, because the default is relative to the working
+// directory and this test does not run from the repository root -- which is
+// also true of any real deployment.
+const args = ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start',
+              '--props', join(ROOT, 'assets', 'props.txt')]
 if (NO_SCRIPT) args.push('--no-scripts')
 
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
@@ -203,6 +207,17 @@ check(Math.abs(clientRadius - WANT_RADIUS) < 0.001 && Math.abs(clientHeight - WA
       `height ${clientHeight.toFixed(4)})`)
 check(liftParkedFloor === 3, `the lift starts parked (floor at ${liftParkedFloor})`)
 
+// Props the server told us about, by entity index, with the kind it declared.
+//
+// A prop is an ordinary entity on the wire -- the same block, the same delta
+// rules, the same generational handle -- and what makes it a key rather than a
+// player is display_id. This client has no table of kinds and does not need
+// one; it is checking that the number arrives and that the entity behaves like
+// an entity.
+const propsSeen = new Map()
+let propGone = false
+const PROP_KEY_BLUE = 1        // assets/props.txt
+
 const applied = new Set()
 const drainMotions = () => {
   while (motionSets.length) {
@@ -227,7 +242,16 @@ let liftAfterDown = null
 const verdicts = []
 const drain = () => {
   while (pending.length) {
-    const r = predictor.reconcile(pending.shift())
+    const s = pending.shift()
+    for (const e of s.entities ?? []) {
+      const index = handleIndex(e.handle)
+      if (e.mask & ENT_FIELD.DESTROYED) {
+        if (propsSeen.has(index)) propGone = true
+        continue
+      }
+      if (e.displayId) propsSeen.set(index, e.displayId)
+    }
+    const r = predictor.reconcile(s)
     if (r?.verdict) verdicts.push(r.verdict)
   }
 }
@@ -338,6 +362,20 @@ if (NO_SCRIPT) {
     console.log(`  longest consecutive lua-applied run: ${worst}`)
     check(worst <= 2, `each geometry change self-heals within a tick (longest run ${worst})`)
   }
+  // A prop reached the client as an ordinary entity, carrying what it IS.
+  console.log(`  props seen: ${[...propsSeen].map(([i, k]) => `${i}:kind ${k}`).join(', ') || 'none'}`)
+  check(propsSeen.size === 1, `one prop replicated (${propsSeen.size})`)
+  check([...propsSeen.values()][0] === PROP_KEY_BLUE,
+        `and it declared its kind (${[...propsSeen.values()][0]})`)
+  // Its index is above the agents, which is what lets it share the entity
+  // space with players and need no message of its own.
+  check([...propsSeen.keys()][0] > 64, `in an entity slot above the agents (${[...propsSeen.keys()][0]})`)
+  // Walking into it picked it up, and the pickup reached the client as a
+  // destruction rather than as an entity that quietly stopped being mentioned
+  // -- absence means "unchanged" in a delta-encoded snapshot.
+  check(propGone, 'and walking into it destroyed it')
+  check(serverLog.includes('picked up the blue key'), 'the script granted the key')
+
   // And the other half of a door.
   console.log(`  after the wait: door ceiling ${ceilAfterOpen.toFixed(3)}, ` +
               `lift floor ${liftAfterDown.toFixed(3)}`)

@@ -24,6 +24,73 @@ using namespace dnp;
 
 inline constexpr u32 MAX_AGENTS = 64;
 
+// Everything in the world that is not a player.
+//
+// Keys, pickups, decorations, and eventually enemies. They share ONE index
+// space with agents -- slots [0, MAX_AGENTS) are agents, the rest are props --
+// because the wire already identifies an entity by `index + 1` and the client
+// already keys its entity views by index. A separate handle domain would mean a
+// bit on every handle and a branch at every use of one, to distinguish things
+// the protocol never needed to distinguish.
+inline constexpr u32 MAX_PROPS    = 192;
+inline constexpr u32 MAX_ENTITIES = MAX_AGENTS + MAX_PROPS;
+
+// What a prop IS, as far as the simulation is concerned: a number the map and
+// the scripts agree on. The engine attaches no meaning to it at all -- the
+// CLIENT maps it to a sprite sheet or a mesh, and the SCRIPT maps it to
+// behaviour. That is what lets the same infrastructure carry a Doom key and a
+// monster without the engine learning what either one is.
+using PropKind = u16;
+
+struct PropState {
+    fx3  pos{};
+    brad facing{};
+    PropKind kind = 0;
+
+    // Which animation the client should be playing. The server declares the
+    // STATE and never the timing (design §4): a sprite renderer swaps frames on
+    // its own clock and a mesh renderer cross-fades on its own, and neither
+    // decision is something the simulation should be able to get wrong.
+    u16  animation_state = 0;
+
+    // The cylinder an agent has to be inside to touch it. Not a collision
+    // volume -- nothing is pushed out of a prop -- it is the pickup radius, and
+    // a key you have to stand exactly on is not a key anyone picks up.
+    fx   radius = fx::from_frac(1, 2);
+    fx   height = fx::from_int(1);
+
+    bool active = false;
+};
+
+// An agent standing inside a prop's cylinder this tick.
+//
+// Reported, not acted on -- the same division crushing and interaction draw.
+// What a key DOES when touched is gameplay, and gameplay is script.
+struct OverlapEvent {
+    u32 agent = 0;
+    u32 prop  = 0;      // an ENTITY index, so >= MAX_AGENTS
+};
+
+inline constexpr u32 MAX_OVERLAP_EVENTS = 64;
+
+class OverlapLog {
+public:
+    void clear() noexcept { count_ = 0; dropped_ = 0; }
+    void push(const OverlapEvent& e) noexcept {
+        if (count_ >= MAX_OVERLAP_EVENTS) { ++dropped_; return; }
+        events_[count_++] = e;
+    }
+    u32 count() const noexcept { return count_; }
+    const OverlapEvent& at(u32 i) const noexcept { return events_[i]; }
+    u32 dropped() const noexcept { return dropped_; }
+    void hash_into(StateHasher& h) const noexcept;
+
+private:
+    OverlapEvent events_[MAX_OVERLAP_EVENTS]{};
+    u32 count_ = 0;
+    u32 dropped_ = 0;
+};
+
 struct AgentState {
     fx3  pos{};
     fx3  vel{};
@@ -55,6 +122,19 @@ public:
 
     u32  spawn(fx3 pos) noexcept;
     void despawn(u32 index) noexcept;
+
+    // Props, addressed by ENTITY index (>= MAX_AGENTS). Returns MAX_ENTITIES
+    // when the world is full.
+    u32  spawn_prop(PropKind kind, fx3 pos) noexcept;
+    void despawn_prop(u32 entity) noexcept;
+    static bool is_prop(u32 entity) noexcept {
+        return entity >= MAX_AGENTS && entity < MAX_ENTITIES;
+    }
+    const PropState& prop(u32 entity) const noexcept { return props_[entity - MAX_AGENTS]; }
+    PropState&       prop_mut(u32 entity) noexcept { return props_[entity - MAX_AGENTS]; }
+
+    // Agents that stood inside a prop this tick.
+    const OverlapLog& overlaps() const noexcept { return overlaps_; }
 
     // Input for the tick about to be stepped. An agent with no input this tick
     // keeps its previous frame -- the server must simulate SOMETHING, and
@@ -140,6 +220,7 @@ public:
 
 private:
     void step_agent(u32 i) noexcept;
+    void detect_overlaps() noexcept;
     void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;
 
     // The frame positions are hashed in: the offset of an unpredictable anchor,
@@ -163,7 +244,11 @@ private:
     InteractLog          interacts_{};
 
     AgentState           agents_[MAX_AGENTS]{};
-    u8                   generation_[MAX_AGENTS]{};
+    PropState            props_[MAX_PROPS]{};
+    OverlapLog           overlaps_{};
+    // One generation table over the whole index space, so a handle to slot 70
+    // is validated exactly the way a handle to slot 3 is.
+    u8                   generation_[MAX_ENTITIES]{};
     physics::MoveParams  params_[MAX_AGENTS]{};
     proto::InputFrame    inputs_[MAX_AGENTS]{};
     u32                  tick_ = 0;

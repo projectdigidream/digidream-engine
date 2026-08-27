@@ -61,6 +61,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_mapfile.cpp"     -o "$
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sectormotion.cpp" -o "$OUT/test_sectormotion"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_crush.cpp"        -o "$OUT/test_crush"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_interact.cpp"     -o "$OUT/test_interact"
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_props.cpp"        -o "$OUT/test_props"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_nav.cpp"          -o "$OUT/test_nav"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_rail.cpp"         -o "$OUT/test_rail"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/tools/mapc/main.cpp"             -o "$OUT/mapc"

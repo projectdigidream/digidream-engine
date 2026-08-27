@@ -16,6 +16,11 @@ void World::reset() noexcept {
         // slot-0 agent at generation 0 would encode to exactly that.
         generation_[i] = 1;
     }
+    for (u32 i = 0; i < MAX_PROPS; ++i) {
+        props_[i] = PropState{};
+        generation_[MAX_AGENTS + i] = 1;
+    }
+    overlaps_.clear();
     tick_ = 0;
 }
 
@@ -360,6 +365,7 @@ void World::step() noexcept {
     // report a crush on an agent that was about to walk out from under the
     // ceiling in the same tick, and miss one that walked in.
     detect_vertical_crush();
+    detect_overlaps();
 
     ++tick_;
 }
@@ -455,12 +461,98 @@ u64 World::agent_hash(u32 i) const noexcept {
     return h.value();
 }
 
+void OverlapLog::hash_into(StateHasher& h) const noexcept {
+    // Hashed like the crush and interact logs, and for the same reason: the
+    // events are a pure function of state the gate already covers, so this adds
+    // no information about the world -- what it adds is coverage of the
+    // DETECTION. A pickup that fired on one target and not another would
+    // otherwise be found by a player walking over a key that does nothing.
+    h.u32v(count_);
+    h.u32v(dropped_);
+    for (u32 i = 0; i < count_; ++i) {
+        h.u32v(events_[i].agent);
+        h.u32v(events_[i].prop);
+    }
+}
+
+u32 World::spawn_prop(PropKind kind, fx3 pos) noexcept {
+    for (u32 i = 0; i < MAX_PROPS; ++i) {
+        if (props_[i].active) continue;
+        props_[i] = PropState{};
+        props_[i].kind = kind;
+        props_[i].pos = pos;
+        props_[i].active = true;
+        return MAX_AGENTS + i;
+    }
+    return MAX_ENTITIES;
+}
+
+void World::despawn_prop(u32 entity) noexcept {
+    if (!is_prop(entity)) return;
+    if (!props_[entity - MAX_AGENTS].active) return;
+    props_[entity - MAX_AGENTS] = PropState{};
+    // Bump the generation so every handle to what used to be here goes stale.
+    // Without it a script holding the key it just consumed would keep finding a
+    // live entity in the slot the next pickup lands in.
+    generation_[entity] = static_cast<u8>(generation_[entity] + 1);
+}
+
+// Which agents are standing inside which props.
+//
+// A cylinder test, not the collision system: nothing is pushed out of a prop and
+// a prop does not block. Reported EVERY tick the overlap holds rather than only
+// on entry, because "picked up once" is a decision a script makes by removing
+// the prop -- and a key that vanishes is self-limiting in a way an engine-side
+// edge trigger would only duplicate.
+void World::detect_overlaps() noexcept {
+    overlaps_.clear();
+    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+        const PropState& p = props_[pi];
+        if (!p.active) continue;
+        for (u32 a = 0; a < MAX_AGENTS; ++a) {
+            if (!agents_[a].active) continue;
+            const fx3& ap = agents_[a].pos;
+
+            // Vertical first: it rejects most pairs with two compares, and a
+            // key on a balcony is not picked up from the floor below it.
+            const fx a_top = ap.z + params_[a].height;
+            if (a_top < p.pos.z) continue;
+            if (ap.z > p.pos.z + p.height) continue;
+
+            const fx dx = ap.x - p.pos.x;
+            const fx dy = ap.y - p.pos.y;
+            const fx r = params_[a].radius + p.radius;
+            // Squared, in 128-bit: comparing distances would need a square root
+            // and the sum of two radii is small enough that the product never
+            // approaches the limit.
+            const i128 d_sq = static_cast<i128>(dx.raw) * dx.raw + static_cast<i128>(dy.raw) * dy.raw;
+            const i128 r_sq = static_cast<i128>(r.raw) * r.raw;
+            if (d_sq > r_sq) continue;
+
+            overlaps_.push(OverlapEvent{a, MAX_AGENTS + pi});
+        }
+    }
+}
+
 u64 World::hash() const noexcept {
     StateHasher h;
     h.u32v(tick_);
     motions_.hash_into(h);
     crushes_.hash_into(h);
     interacts_.hash_into(h);
+    overlaps_.hash_into(h);
+    for (u32 i = 0; i < MAX_PROPS; ++i) {
+        h.boolv(props_[i].active);
+        if (!props_[i].active) continue;
+        h.u32v(i);
+        h.byte(generation_[MAX_AGENTS + i]);
+        h.vec3(props_[i].pos);
+        h.u32v(props_[i].facing.raw);
+        h.u32v(props_[i].kind);
+        h.u32v(props_[i].animation_state);
+        h.fxv(props_[i].radius);
+        h.fxv(props_[i].height);
+    }
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         h.boolv(agents_[i].active);
         if (!agents_[i].active) continue;

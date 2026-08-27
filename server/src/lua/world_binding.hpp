@@ -44,6 +44,25 @@ struct WorldBindingStats {
 // world and spawns it in another, and doing that from inside a callback would
 // mutate the entity set a tick is iterating. The host queues it and applies it
 // at a defined point.
+// Where a script's request for a prop KIND by name is answered.
+//
+// The catalogue is a text file the operator ships (assets/props.txt), so the
+// binding layer cannot know the names at compile time and must not try -- the
+// whole point is that adding a prop is editing a file, not rebuilding anything.
+struct PropCatalogueView {
+    virtual ~PropCatalogueView() = default;
+    // Returns 0 when there is no such prop, which is a script naming something
+    // the operator did not install.
+    virtual u16 kind_by_name(const char* name, size_t len) const = 0;
+    // The simulation's half of a prop's definition. A kind with no entry gets
+    // the engine's defaults rather than a zero-sized pickup nothing can touch.
+    virtual fx  radius_of(u16 kind) const = 0;
+    virtual fx  height_of(u16 kind) const = 0;
+    // Nothing installed at all, which is a different failure from a name that
+    // is merely absent and deserves a different message.
+    virtual bool empty() const = 0;
+};
+
 struct MapChangeSink {
     virtual ~MapChangeSink() = default;
     // `to` is a level index, or negative for "the next one".
@@ -59,6 +78,7 @@ struct WorldContext {
     // says "next".
     u32               level = 0;
     MapChangeSink*    map_changes = nullptr;
+    const PropCatalogueView* props = nullptr;
 
     // Deterministic, seeded from the map hash and the script name -- never from
     // a clock or /dev/urandom. A script that behaved differently on replay
@@ -74,6 +94,13 @@ struct WorldContext {
     bool              effects_dirty = false;
 
     WorldBindingStats stats{};
+
+    fx prop_radius(u16 kind) const {
+        return props ? props->radius_of(kind) : fx::from_frac(1, 2);
+    }
+    fx prop_height(u16 kind) const {
+        return props ? props->height_of(kind) : fx::from_int(1);
+    }
 };
 
 // Install `dnp` and the entity type. `ctx` must outlive the VM.
@@ -81,6 +108,10 @@ void open_world(lua_State* L, WorldContext* ctx);
 
 // Push an entity handle for an agent index, or nil if the slot is empty.
 void push_entity(lua_State* L, WorldContext& ctx, u32 index);
+
+// Push a prop handle -- the same entity userdata an agent uses, because from a
+// script's point of view a key and a player are both things with a handle.
+void push_prop(lua_State* L, WorldContext& ctx, u32 entity);
 
 // Push a sector handle. Unchecked: sector userdata carries no generation and
 // every method range-checks, so an out-of-range index is a nil-returning
