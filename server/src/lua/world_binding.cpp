@@ -1012,7 +1012,7 @@ int l_dnp_hitscan(lua_State* L) {
     const physics::RayHit wall =
         physics::raycast(*m, sh.mv.sector, from, dir, range, 0);
     fx2 end = to;
-    if (wall.hit) {
+    if (wall.blocked) {
         const fx wall_t = wall.distance / range;
         if (best < 0 || wall_t < best_t) { best = -1; best_t = wall_t; }
         end = wall.point;
@@ -1043,6 +1043,103 @@ int l_dnp_vfx(lua_State* L) {
     v.param = lua_isnoneornil(L, 4) ? 0u : static_cast<u32>(luaL_checknumber(L, 4));
     lua_pushboolean(L, ctx.world->push_vfx(v) ? 1 : 0);
     return 1;
+}
+
+// dnp.can_see(a, b) -> bool
+//
+// Is there an unobstructed line between two entities' eye height?
+//
+// The engine's own raycast, which is the same swept test the mover and the
+// grapple use -- so "the monster can see you" and "the monster could walk to
+// you" cannot disagree about what a wall is. Without it a monster shoots
+// through the floor at somebody two rooms away, which is what happens when
+// "is it close" is mistaken for "is it visible".
+int l_dnp_can_see(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    if (m == nullptr) { lua_pushboolean(L, 0); return 1; }
+
+    const auto eye_of = [&](int idx, fx3& out, i32& sector) {
+        if (proto::Handle* h = to_handle(L, idx)) {
+            const i32 a = resolve(L, ctx, *h);
+            if (a < 0) return false;
+            const sim::AgentState& e = ctx.world->agent(static_cast<u32>(a));
+            out = fx3{e.pos.x, e.pos.y,
+                      e.pos.z + ctx.world->params(static_cast<u32>(a)).height / 2};
+            sector = e.mv.sector;
+            return true;
+        }
+        if (to_prop(L, idx)) {
+            const i32 e = resolve_prop(L, ctx, check_prop_handle(L, idx));
+            if (e < 0) return false;
+            const sim::PropState& p = ctx.world->prop(static_cast<u32>(e));
+            out = fx3{p.pos.x, p.pos.y, p.pos.z + p.height / 2};
+            sector = geom::find_sector(*m, fx2{p.pos.x, p.pos.y});
+            return true;
+        }
+        return false;
+    };
+
+    fx3 from{}, to{};
+    i32 from_sector = -1, to_sector = -1;
+    if (!eye_of(1, from, from_sector) || !eye_of(2, to, to_sector)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    const fx2 d{to.x - from.x, to.y - from.y};
+    const fx dist = length(d);
+    if (dist <= fx::zero()) { lua_pushboolean(L, 1); return 1; }
+
+    const physics::RayHit hit =
+        physics::raycast(*m, from_sector, fx2{from.x, from.y}, normalize(d), dist, 0);
+    // BLOCKED before reaching the target is a wall in the way. Blocked at or
+    // past it is the wall behind it.
+    lua_pushboolean(L, (!hit.blocked || hit.distance >= dist) ? 1 : 0);
+    return 1;
+}
+
+// dnp.length(v) -> fx
+int l_dnp_length(lua_State* L) {
+    const fx3 v = check_vec3(L, 1);
+    push_fx(L, length(fx2{v.x, v.y}));
+    return 1;
+}
+
+// dnp.sweep(from, dir, distance) -> blocked, impact
+//
+// Does a straight line of `distance` from `from` along `dir` reach, or does the
+// map stop it?
+//
+// The engine's own raycast, which is the same swept test the mover uses -- so a
+// projectile is stopped by exactly what a body would be stopped by. A fireball
+// that ignored geometry sailed through every wall in the map.
+int l_dnp_sweep(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    const fx3 from = check_vec3(L, 1);
+    const fx3 dir3 = check_vec3(L, 2);
+    const fx dist = check_fx(L, 3);
+    if (m == nullptr || dist <= fx::zero()) {
+        lua_pushboolean(L, 0);
+        push_vec3(L, from);
+        return 2;
+    }
+    const fx2 dir = normalize(fx2{dir3.x, dir3.y});
+    const i32 sector = geom::find_sector(*m, fx2{from.x, from.y});
+    const physics::RayHit hit = physics::raycast(*m, sector, fx2{from.x, from.y}, dir, dist, 0);
+    if (!hit.blocked) {
+        lua_pushboolean(L, 0);
+        push_vec3(L, from);
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    // Stopped a hair short of the surface, so the thing that explodes is
+    // visible against the wall rather than inside it.
+    const fx back = fx::from_frac(1, 10);
+    const fx d = hit.distance > back ? hit.distance - back : fx::zero();
+    push_vec3(L, fx3{from.x + dir.x * d, from.y + dir.y * d, from.z});
+    return 2;
 }
 
 // dnp.atan2(y, x) -> a brad
@@ -1077,6 +1174,9 @@ const luaL_Reg DNP_FUNCS[] = {
     {"spawn_prop", l_dnp_spawn_prop},
     {"spawn_enemy", l_dnp_spawn_enemy},
     {"hitscan", l_dnp_hitscan},
+    {"can_see", l_dnp_can_see},
+    {"length", l_dnp_length},
+    {"sweep", l_dnp_sweep},
     {"atan2", l_dnp_atan2},
     {"dir", l_dnp_dir},
     {"vfx", l_dnp_vfx},

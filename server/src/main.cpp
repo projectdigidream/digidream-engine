@@ -901,10 +901,6 @@ struct Server : lua::MapChangeSink {
     // conditional.
     void tick_level(u32 li) {
         Level& L = level(li);
-        // Empty the transient queue before anything can fill it. Scripts run
-        // before the step and queue effects there, so the queue is cleared at
-        // the top of the tick rather than inside step().
-        L.world.clear_vfx();
         for (auto& [id, s] : sessions) {
             if (s.has_agent && s.level == li) L.world.set_input(s.agent, s.take());
         }
@@ -1029,6 +1025,15 @@ struct Server : lua::MapChangeSink {
         apply_map_changes();
     }
 
+    // Transients are cleared AFTER sending, not once a tick.
+    //
+    // Snapshots go out on a divisor -- 60 Hz simulation, 30 Hz snapshots -- so a
+    // queue emptied every tick threw away everything queued on the ticks in
+    // between. Half the tracers vanished, and the ones that survived did so by
+    // landing on an even tick.
+    //
+    // Cleared at the end of this function instead: the queue holds whatever
+    // accumulated since the last send, and is emptied once it has gone out.
     void send_snapshots() {
         // Once per level, not once per session: the offsets are a property of
         // the world, and every observer of a moving sector sees the same one.
@@ -1222,7 +1227,10 @@ struct Server : lua::MapChangeSink {
             s.entities_omitted += unchanged;
             if (n > 0) link.send_datagram(id, buf, n);
         }
-    }
+    
+        // Sent; the queue may go.
+        for (u32 li = 0; li < level_count(); ++li) level(li).world.clear_vfx();
+}
 };
 
 }  // namespace

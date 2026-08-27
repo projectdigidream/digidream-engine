@@ -31,6 +31,7 @@ import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { sweepOffset, makeSwingMesh, swingYaw } from './render/swing.js'
+import { parseVfx, VfxView } from './render/vfx.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
@@ -370,6 +371,7 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // nothing does not need one -- so a failure here leaves props drawn as bodies
 // and says so once.
 let props = null
+let vfx = null
 try {
   const text = await (await fetch('/props.txt')).text()
   const catalogue = parseProps(text)
@@ -405,7 +407,13 @@ try {
     await Promise.all([...wanted].map(load))
   }
   props = new PropRegistry({ THREE, textures, catalogue })
-  console.log(`[props] ${catalogue.kinds.size} kinds, ${textures.size} sprite frames`)
+  // Transients read the same file. A tracer's colour, width and lifetime are
+  // catalogue lines, so a shot can be retuned without touching either binary.
+  const vfxCat = parseVfx(text)
+  for (const w of vfxCat.warnings) console.warn(`[vfx] ${w}`)
+  vfx = new VfxView({ THREE, scene, catalogue: vfxCat })
+  console.log(`[props] ${catalogue.kinds.size} kinds, ${textures.size} sprite frames, ` +
+              `${vfxCat.kinds.size} effect kinds`)
 } catch (e) {
   console.warn(`[props] no catalogue (${e.message}); props will draw as bodies`)
 }
@@ -605,6 +613,25 @@ function drainSnapshots () {
   while (pendingSnapshots.length) {
     const s = pendingSnapshots.shift()
     newestServerTick = Math.max(newestServerTick, s.serverTick)
+
+    // Transient effects, drawn once and forgotten. The event carries where the
+    // shot STARTED, which way it went and how long it was -- so the tracer ends
+    // where the shot ended rather than running to infinity through whatever it
+    // hit.
+    for (const v of s.vfx ?? []) {
+      if (!vfx) continue
+      const len = v.param / 256
+      const turns = (v.dir >>> 0) / 4294967296
+      const dx = Math.cos(turns * Math.PI * 2) * len
+      const dy = Math.sin(turns * Math.PI * 2) * len
+      const x = fxToFloat(v.pos.x)
+      const y = fxToFloat(v.pos.y)
+      const z = fxToFloat(v.pos.z)
+      vfx.spawn(v.kind,
+                { x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) },
+                { x: toThreeX(x + dx), y: toThreeY(z), z: toThreeZ(y + dy) },
+                performance.now() / 1000)
+    }
     for (const so of s.sectorOffsets ?? []) world.setDiscreteOffset(so.sector, so.offset)
     others.ingest(s, { fxToFloat, toThree: (x, y, z) => ({ x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) }) })
     predictor.reconcile(s)
@@ -741,6 +768,7 @@ function frame (now) {
         if (ent.kind) props.setState(ent.mesh, ent.animationState ?? 0)
       }
       props.update(now / 1000)
+      if (vfx) vfx.update(now / 1000)
       // Billboarding: yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.
       const bb = billboardYaw(yaw)

@@ -749,7 +749,18 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
         }
         // A solid side without the flag occludes: you cannot grapple through a
         // wall just because the anchor beyond it is in range.
-        if (solid) return hit;
+        //
+        // Reported, not merely acted on. Returning a bare "no" here made every
+        // caller that wanted to know WHY unable to find out, and each of them
+        // -- sight, bullets, projectiles -- read it as a clear line.
+        if (solid) {
+            hit.blocked = true;
+            hit.side = best_side;
+            hit.point = from + (to - from) * best_t;
+            hit.normal = side_normal(map, static_cast<u32>(best_side), static_cast<u32>(cur));
+            hit.distance = max_dist * best_t;
+            return hit;
+        }
 
         cur = sd.neighbor;
     }

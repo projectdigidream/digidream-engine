@@ -186,6 +186,19 @@ struct RayHit {
     fx2  normal{};
     fx   distance{};
     i32  side = -1;
+
+    // Stopped by geometry before reaching `max_dist`.
+    //
+    // Distinct from `hit`, which means "found a side carrying the flag you
+    // asked for". A ray that runs into a wall satisfies neither -- and for the
+    // grapple, which asks "is there something attachable within reach", that is
+    // the right answer. But "did a wall stop this" is a different question, and
+    // every caller that asks it -- line of sight, a bullet, a projectile --
+    // could not tell being blocked from running out of range. They all reported
+    // a clear shot through solid rock.
+    //
+    // When this is set, `point`, `distance` and `side` describe the OBSTRUCTION.
+    bool blocked = false;
 };
 
 // Cast a ray across the sectors it passes through, stopping at the first side
