@@ -704,8 +704,12 @@ i32 find_interact_side(const MapData& map, i32 sector, fx2 p, brad facing,
     return -1;
 }
 
+// How far past a boundary to sample the sector beyond it. Small enough to stay
+// inside any sector a ray could cross, large enough to be off the edge itself.
+static constexpr fx SIGHT_NUDGE = fx::from_frac(1, 256);
+
 RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
-               u8 flag) noexcept {
+               u8 flag, fx z) noexcept {
     RayHit hit;
     if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return hit;
 
@@ -737,7 +741,37 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
 
         const Side& sd = map.side(static_cast<u32>(best_side));
         const bool wanted = (sd.flags & flag) != 0;
-        const bool solid = (sd.neighbor == NO_SECTOR) || (sd.flags & side_flag::BLOCKING) != 0;
+        bool solid = (sd.neighbor == NO_SECTOR) || (sd.flags & side_flag::BLOCKING) != 0;
+
+        // And, when the caller said what height the ray is at: is the sector
+        // beyond this boundary actually OPEN there?
+        //
+        // A two-sided line is not a hole. Behind one there may be a step taller
+        // than the shooter, a balcony floor above its eyeline, or a door stored
+        // the way Doom stores a shut door -- a sector whose ceiling rests on its
+        // floor, which is a two-sided line with nothing passable behind it at
+        // any height at all. Treating every neighbour as transparent is what let
+        // a monster see and shoot a player on the far side of several walls.
+        if (!solid && z.raw != RAY_NO_HEIGHT.raw) {
+            // A hair PAST the boundary, not on it. The crossing point lies
+            // exactly on the shared edge, which belongs to both sectors, and a
+            // point query there is free to answer with the one already left --
+            // so the test read the near room's own floor and ceiling and
+            // concluded every wall was open.
+            const fx2 cross = from + (to - from) * best_t;
+            const fx2 past{cross.x + dir.x * SIGHT_NUDGE, cross.y + dir.y * SIGHT_NUDGE};
+            const SurfaceQuery beyond =
+                query_surface(map, past, sd.neighbor, z, fx::zero());
+
+            // No gap at all is opaque at every height, which is how Doom stores
+            // a shut door: a sector whose ceiling rests on its floor. Tested
+            // separately because `floor <= z <= ceil` is satisfied by a zero
+            // gap at exactly that height.
+            const bool no_gap = beyond.ceil_z <= beyond.floor_z;
+            if (!beyond.in_map || no_gap || z < beyond.floor_z || z > beyond.ceil_z) {
+                solid = true;
+            }
+        }
 
         if (wanted) {
             hit.hit = true;

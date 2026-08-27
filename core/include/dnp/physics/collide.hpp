@@ -207,7 +207,23 @@ struct RayHit {
 // Reuses the same swept segment test CCD is built on (design §7.1.1: the ranged
 // grapple "reuses the same swept/ray-based approach as CCD"), so aiming and
 // collision cannot disagree about what is in the way.
+// `z`, when given, is the HEIGHT the ray travels at, and a boundary occludes
+// unless the sector beyond it is open at that height.
+//
+// Without it the cast is purely two-dimensional, and a two-sided line is
+// transparent no matter what is behind it: a monster shot across a room, over a
+// ledge whose floor is above its head, through a sector whose ceiling is below
+// its feet, and out the far side of the map. In a converted Doom level almost
+// every wall that is not a plain one-sided linedef is exactly that -- a step, a
+// balcony, a shut door stored as a sector with its ceiling on its floor -- so
+// "does it have a neighbour" was answering a much weaker question than sight,
+// bullets and projectiles were asking of it.
+//
+// NO_HEIGHT keeps the flat behaviour for callers that genuinely want it and for
+// the golden traces that predate this.
+inline constexpr fx RAY_NO_HEIGHT = fx::from_raw(INT64_MIN);
+
 RayHit raycast(const geom::MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
-               u8 flag) noexcept;
+               u8 flag, fx z = RAY_NO_HEIGHT) noexcept;
 
 }  // namespace dnp::physics

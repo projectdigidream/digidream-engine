@@ -1062,7 +1062,7 @@ int l_dnp_hitscan(lua_State* L) {
     // And the geometry, which OCCLUDES: a wall between the shooter and a target
     // stops the shot, so the wall is consulted even when a body was found.
     const physics::RayHit wall =
-        physics::raycast(*m, sh.mv.sector, from, dir, range, 0);
+        physics::raycast(*m, sh.mv.sector, from, dir, range, 0, eye);
     fx2 end = to;
     if (wall.blocked) {
         const fx wall_t = wall.distance / range;
@@ -1143,8 +1143,11 @@ int l_dnp_can_see(lua_State* L) {
     const fx dist = length(d);
     if (dist <= fx::zero()) { lua_pushboolean(L, 1); return 1; }
 
+    // At EYE HEIGHT. Sight is not a floorplan question: a two-sided line with a
+    // balcony behind it, or a shut door, is a wall to look through even though
+    // it names a neighbouring sector.
     const physics::RayHit hit =
-        physics::raycast(*m, from_sector, fx2{from.x, from.y}, normalize(d), dist, 0);
+        physics::raycast(*m, from_sector, fx2{from.x, from.y}, normalize(d), dist, 0, from.z);
     // BLOCKED before reaching the target is a wall in the way. Blocked at or
     // past it is the wall behind it.
     lua_pushboolean(L, (!hit.blocked || hit.distance >= dist) ? 1 : 0);
@@ -1179,7 +1182,10 @@ int l_dnp_sweep(lua_State* L) {
     }
     const fx2 dir = normalize(fx2{dir3.x, dir3.y});
     const i32 sector = geom::find_sector(*m, fx2{from.x, from.y});
-    const physics::RayHit hit = physics::raycast(*m, sector, fx2{from.x, from.y}, dir, dist, 0);
+    // At the projectile's own height, so a fireball is stopped by the step it
+    // would actually hit rather than by the map's floorplan.
+    const physics::RayHit hit =
+        physics::raycast(*m, sector, fx2{from.x, from.y}, dir, dist, 0, from.z);
     if (!hit.blocked) {
         lua_pushboolean(L, 0);
         push_vec3(L, from);
