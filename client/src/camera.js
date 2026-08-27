@@ -233,6 +233,26 @@ export function cameraOffsetEngine (yaw, distance = DEFAULT_DISTANCE) {
  * north -- which is just "facing west, north is on your right".
  */
 /**
+ * The aim to send this tick, given where the stick is and where it last was.
+ *
+ * `aim` in an input frame is an ABSOLUTE direction, and the engine assigns it
+ * to facing every tick -- brad 0 is a real direction (due east), not "no
+ * direction". So a client that sends 0 when the stick is centred is not saying
+ * "unchanged", it is saying "face east", and the agent snaps east the instant
+ * you let go of the keys.
+ *
+ * Holding the last aim is therefore the CLIENT's job, and it has to be done in
+ * the input frame rather than in the engine: the frame is what the server
+ * replays and what reconciliation replays, so an engine-side "ignore zero"
+ * would make brad 0 unreachable and still leave the two sides agreeing about
+ * the wrong thing.
+ */
+export function aimFor (wx, wy, lastAim) {
+  if (wx === 0 && wy === 0) return lastAim >>> 0
+  return Math.round((Math.atan2(wy, wx) / (Math.PI * 2)) * 4294967296) >>> 0
+}
+
+/**
  * An agent's facing, as a unit direction in THREE space.
  *
  * `raw` is a brad: a full turn in 2^32, which is how the engine stores an angle

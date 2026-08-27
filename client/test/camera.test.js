@@ -2,7 +2,7 @@
 // Camera tests (design §4.1).
 //
 import {
-  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection,
+  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor,
   ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming
 } from '../src/camera.js'
 
@@ -278,6 +278,46 @@ console.log('\n--- facing ---')
   }
   check(disagreements === 6,
         `CONTROL: a reflected conversion differs at all 6 off-axis angles (${disagreements})`)
+}
+
+console.log('\n--- aim is held across a stop ---')
+{
+  // A centred stick means "keep facing where I was", not "face east".
+  //
+  // Asserted as a sequence rather than a single call, because the property is
+  // about STATE: walking north, stopping, and stopping again must all report
+  // north. The version this replaces returned 0 when centred, so releasing the
+  // keys snapped the agent due east -- and brad 0 being a legitimate direction
+  // is exactly why the engine cannot fix this by ignoring zero.
+  const NORTH = aimFor(0, 1, 0)
+  check(NORTH !== 0, `walking north aims somewhere other than east (${NORTH})`)
+
+  let aim = 0
+  aim = aimFor(0, 1, aim)      // walk north
+  check(aim === NORTH, 'walking north aims north')
+  aim = aimFor(0, 0, aim)      // let go
+  check(aim === NORTH, 'letting go holds north')
+  aim = aimFor(0, 0, aim)      // and stays let go
+  check(aim === NORTH, 'and keeps holding it')
+  aim = aimFor(-1, 0, aim)     // walk west
+  check(aim !== NORTH, `walking west turns (${aim})`)
+  const WEST = aim
+  aim = aimFor(0, 0, aim)
+  check(aim === WEST, 'and holds west after stopping')
+
+  // Due east is a real direction, not a sentinel: walking east must report it,
+  // and holding it must keep reporting it. An "ignore zero" implementation
+  // would make this direction unreachable.
+  let e = aimFor(0, 1, 0)
+  e = aimFor(1, 0, e)
+  check(e === 0, `walking east aims at brad 0 (${e})`)
+  check(aimFor(0, 0, e) === 0, 'and stopping holds due east rather than reverting')
+
+  // The held aim round-trips through the direction conversion, so the arrow
+  // points where the agent last walked and not merely somewhere stable.
+  const d = facingDirection(aimFor(0, 0, NORTH))
+  check(near(d.x, 0, 1e-6) && near(d.z, -1, 1e-6),
+        `a held north aim still points north (${d.x.toFixed(3)}, ${d.z.toFixed(3)})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

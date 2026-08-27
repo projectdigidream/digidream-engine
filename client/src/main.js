@@ -21,7 +21,9 @@ import {
   MapView, makeCamera, resizeCamera, distanceFor, makeAgentMesh, PROJECTIONS,
   makeFacingArrow, aimFacingArrow
 } from './render/scene.js'
-import { Camera, cameraOffset, screenRelativeMove, facingDirection, DEFAULT_DISTANCE } from './camera.js'
+import {
+  Camera, cameraOffset, screenRelativeMove, facingDirection, aimFor, DEFAULT_DISTANCE
+} from './camera.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
@@ -351,6 +353,10 @@ addEventListener('blur', () => held.clear())
 
 let yaw = START_YAW
 
+// The last direction the agent was actually pointed. Brad 0 is due east, not
+// "unset", so this starts there and every idle tick repeats whatever came last.
+let lastAim = 0
+
 // Quantised with the SAME function the server decodes with (protocol R1).
 // Reimplementing it in JS would be one more place for the two sides to
 // disagree, and the disagreement would be one ulp wide and present every tick.
@@ -382,8 +388,10 @@ function currentInput () {
   if (held.has('KeyE')) buttons |= BUTTON.INTERACT
   if (held.has('KeyC')) buttons |= BUTTON.CROUCH
 
-  const aim = wx === 0 && wy === 0 ? 0 : Math.round((Math.atan2(wy, wx) / (Math.PI * 2)) * 4294967296) >>> 0
-  return { buttons, moveX: axis(wx), moveY: axis(wy), aim }
+  // Held across a stop, so letting go of the keys leaves the agent facing where
+  // it was walking rather than snapping east. See aimFor.
+  lastAim = aimFor(wx, wy, lastAim)
+  return { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim }
 }
 
 // --- loop ------------------------------------------------------------------
