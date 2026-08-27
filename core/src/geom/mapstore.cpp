@@ -18,6 +18,9 @@ void MapStorage::clear() noexcept {
     texture_count_ = 0;
     light_count_ = 0;
     hole_count_ = 0;
+    script_count_ = 0;
+    body_radius_ = fx::from_frac(1, 2);
+    body_height_ = fx::from_int(2);
     grid_built_ = false;
     grid_dirty_ = true;
     grid_cols_ = 0;
@@ -72,6 +75,25 @@ bool MapStorage::add_hole(u32 sector, const fx2* pts, u32 n) noexcept {
 bool MapStorage::add_light(const MapLight& l) noexcept {
     if (light_count_ >= MAX_MAP_LIGHTS) return false;
     lights_[light_count_++] = l;
+    return true;
+}
+
+bool MapStorage::add_script(const char* name, u32 len) noexcept {
+    if (!script_name_is_safe(name, len)) return false;
+
+    for (u32 i = 0; i < script_count_; ++i) {
+        if (scripts_[i].len != len) continue;
+        bool same = true;
+        for (u32 k = 0; k < len; ++k) {
+            if (scripts_[i].name[k] != name[k]) { same = false; break; }
+        }
+        if (same) return true;   // already declared; not an error
+    }
+    if (script_count_ >= MAX_MAP_SCRIPTS) return false;
+
+    ScriptName& s = scripts_[script_count_++];
+    for (u32 k = 0; k < len; ++k) s.name[k] = name[k];
+    s.len = static_cast<u8>(len);
     return true;
 }
 
@@ -505,6 +527,15 @@ u64 MapStorage::hash() const noexcept {
     // a map hash that changed every tick would make WELCOME.map_hash useless
     // for the one thing it exists for: telling a client its geometry differs
     // from the server's.
+    // The scripts the map asks for. Hashed because they are part of what the
+    // file SAYS -- a map that names a different action library is a different
+    // map, and WELCOME.map_hash exists to notice exactly that.
+    h.u32v(script_count_);
+    for (u32 i = 0; i < script_count_; ++i) {
+        h.u32v(scripts_[i].len);
+        for (u8 k = 0; k < scripts_[i].len; ++k) h.byte(static_cast<unsigned char>(scripts_[i].name[k]));
+    }
+
     // The body the map is built for. Hashed for the same reason the textures
     // below are: WELCOME.map_hash answers "did we parse the same file", and a
     // client whose player is a different size from the server's has a different

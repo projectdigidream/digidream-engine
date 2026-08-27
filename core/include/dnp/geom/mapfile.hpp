@@ -19,8 +19,9 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 8;   // 8 added the map's body proportions
-                                        // (7 added sector holes, relaxing "no holes")
+inline constexpr u16 MAP_VERSION = 9;   // 9 added the scripts a map asks for
+                                        // (8 added its body proportions;
+                                        //  7 added sector holes)
 
 enum class MapLoadStatus : u8 {
     Ok = 0,

@@ -568,21 +568,29 @@ struct Server : lua::MapChangeSink {
             }
         }
 
-        // The map's own script, beside its .dnpm. Silently absent is fine --
-        // most maps have none -- but a map whose script FAILS is not, because
-        // the map will load and quietly have no doors.
-        std::string own = L.path;
-        const size_t dot = own.rfind('.');
-        if (dot != std::string::npos) own = own.substr(0, dot);
-        own += ".lua";
-        if (std::FILE* f = std::fopen(own.c_str(), "rb")) {
-            std::fclose(f);
-            if (!L.vm.run_file(own.c_str(), own.c_str())) {
-                std::fprintf(stderr, "[srv] script failed: %s\n", L.vm.last_error());
+        // Then whatever the MAP asked for, in the order it asked, resolved
+        // beside its own .dnpm.
+        //
+        // The map decides what it needs to run properly; the operator's
+        // --script arguments are the house rules that apply to every map, and
+        // they load first so a map's own file can build on them. A declared
+        // script that is missing or fails is fatal for that level: a map whose
+        // actions did not load is a building with no doors, and starting it
+        // anyway would hide that behind "the switches don't work".
+        const size_t slash = L.path.find_last_of("/\\");
+        const std::string dir = slash == std::string::npos ? std::string(".")
+                                                           : L.path.substr(0, slash);
+        for (u32 i = 0; i < L.map_store.script_count(); ++i) {
+            const geom::ScriptName& sn = L.map_store.script(i);
+            const std::string path = dir + "/" + std::string(sn.name, sn.len);
+            if (!L.vm.run_file(path.c_str(), path.c_str())) {
+                std::fprintf(stderr, "[srv] %s asked for %s and it failed: %s\n",
+                             L.path.c_str(), path.c_str(), L.vm.last_error());
                 return false;
             }
-            std::fprintf(stderr, "[srv] level %u: %s\n", li, own.c_str());
+            std::fprintf(stderr, "[srv] level %u: %s (declared by the map)\n", li, path.c_str());
         }
+
         L.scripted = true;
         return true;
     }
@@ -1122,6 +1130,7 @@ int main(int argc, char** argv) {
     const char* script_args[MAX_SCRIPTS]{};
     u32 script_count = 0;
     bool strict_scripts = false;
+    bool no_scripts = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
@@ -1139,6 +1148,11 @@ int main(int argc, char** argv) {
             // trust) or a copy of the library inlined into all 32 of them.
             if (script_count < MAX_SCRIPTS) script_args[script_count++] = argv[++i];
             else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
+        } else if (std::strcmp(argv[i], "--no-scripts") == 0) {
+            // Refuse to run any Lua at all, including what the maps ask for.
+            // The operator's veto, and the control every "the map is driving
+            // this" test needs.
+            no_scripts = true;
         } else if (std::strcmp(argv[i], "--script-trust") == 0 && i + 1 < argc) {
             strict_scripts = std::strcmp(argv[++i], "strict") == 0;
         }
@@ -1162,7 +1176,15 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "[srv] %u level(s); an exit advances to the next\n", srv.level_count());
 
-    if (script_count > 0) {
+    // A level gets a VM if the operator supplied scripts OR the map declared
+    // any of its own. That is the point of the map declaring them: a converted
+    // Doom level works when you load it, not when you remember which files to
+    // pass. --no-scripts is the operator's veto over both.
+    bool any_map_scripts = false;
+    for (u32 li = 0; li < srv.level_count(); ++li) {
+        if (srv.level(li).map_store.script_count() > 0) any_map_scripts = true;
+    }
+    if (!no_scripts && (script_count > 0 || any_map_scripts)) {
         srv.vm_config.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
         srv.scripts_enabled = true;
         // Stated at startup, deliberately. Under the default profile a script

@@ -220,6 +220,43 @@ struct SectorRender {
     u8 light_level = 255;
 };
 
+// The scripts a map needs to behave correctly, named by the map itself.
+//
+// A converted Doom level is not just geometry: without its line actions it is a
+// building with no doors. Naming them here makes a baked map a complete
+// deliverable rather than one that works only when whoever runs the server
+// remembers which files to pass -- and "the map loaded fine and nothing works"
+// is a failure with no signal attached to it.
+//
+// Plain FILE NAMES, never paths: the server resolves each one next to the .dnpm
+// it loaded, so a map can ask for a script that ships with it and cannot reach
+// anywhere else on the host. mapc copies each declared file next to its output,
+// which is what makes that resolution find anything.
+inline constexpr u32 MAX_MAP_SCRIPTS = 8;
+inline constexpr u32 MAX_SCRIPT_NAME = 48;
+
+struct ScriptName {
+    char name[MAX_SCRIPT_NAME]{};   // NUL-padded, not NUL-terminated at capacity
+    u8   len = 0;
+};
+
+// Is this a name a map may declare?
+//
+// Rejects anything with a directory separator, anything beginning with a dot,
+// and the empty name. The server appends it to the map's own directory, so a
+// name that could climb out of there would let a map choose what the host runs.
+// Checked at BAKE time and again at LOAD time: the file on disk is not
+// necessarily the one mapc wrote.
+inline constexpr bool script_name_is_safe(const char* n, u32 len) noexcept {
+    if (len == 0 || len > MAX_SCRIPT_NAME) return false;
+    if (n[0] == '.') return false;
+    for (u32 i = 0; i < len; ++i) {
+        const char c = n[i];
+        if (c == '/' || c == '\\' || c == '\0' || c == ':') return false;
+    }
+    return true;
+}
+
 inline constexpr u32 MAX_TEXTURE_NAME = 24;
 
 // Texture NAMES, not texture data. The map says `BRICK1`; what BRICK1 looks

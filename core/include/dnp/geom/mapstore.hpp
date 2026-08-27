@@ -157,6 +157,16 @@ public:
     u32 light_count() const noexcept { return light_count_; }
     const MapLight& light(u32 i) const noexcept { return lights_[i]; }
 
+    // The scripts this map needs. Order is preserved and meaningful: a map's
+    // own data file is written against the library it declares first.
+    //
+    // Duplicates collapse, so a map that names the same library twice loads it
+    // once -- the alternative is a script whose top level runs twice, which for
+    // anything that registers handlers is a silent double-registration.
+    bool add_script(const char* name, u32 len) noexcept;
+    u32 script_count() const noexcept { return script_count_; }
+    const ScriptName& script(u32 i) const noexcept { return scripts_[i]; }
+
     // The body proportions this map is built for.
     //
     // A property of the MAP, not of the command line, because it is a fact
@@ -257,6 +267,9 @@ private:
     // physics::MoveParams' own defaults, restated rather than included: core's
     // geometry layer does not depend on its physics layer, and a map file must
     // decode to the same numbers whatever the controller happens to default to.
+    ScriptName   scripts_[MAX_MAP_SCRIPTS]{};
+    u32          script_count_ = 0;
+
     fx body_radius_ = fx::from_frac(1, 2);
     fx body_height_ = fx::from_int(2);
 

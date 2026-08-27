@@ -17,8 +17,9 @@
 //   DNP_NO_USE=1     the same walk with the button never pressed. The door must
 //                    stay shut and the agent must be stopped by it. Without
 //                    this, a door that opened on a timer would pass.
-//   DNP_NO_SCRIPT=1  no script at all. Nothing moves, which is what proves the
-//                    engine is reporting and not acting.
+//   DNP_NO_SCRIPT=1  --no-scripts, so not even the map's own declared files
+//                    load. Nothing moves, which is what proves the engine is
+//                    reporting and not acting.
 //   DNP_IGNORE_LUA=1 a client that ignores LUA_APPLIED must report the door as
 //                    a DEFECT. Without this the flag could be carrying no
 //                    information at all and nothing here would notice.
@@ -92,11 +93,11 @@ const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 const core = await Core.load()
 
+// No --script arguments: maps/doors.map declares what it needs and mapc put
+// both files next to the baked map. --no-scripts is the operator's veto, and
+// the control that proves the doors are the map's doing.
 const args = ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start']
-if (!NO_SCRIPT) {
-  args.push('--script', join(ROOT, 'maps', 'scripts', 'doom.lua'),
-            '--script', join(ROOT, 'maps', 'doors_lines.lua'))
-}
+if (NO_SCRIPT) args.push('--no-scripts')
 
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })

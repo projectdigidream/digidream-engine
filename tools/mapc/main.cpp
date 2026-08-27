@@ -23,6 +23,7 @@
 //     vertex 0  40  wall usable                -- reaching for it is reported to Lua
 //
 //     body radius 0.333 height 1.167          -- the body this map is built for
+//     script ../scripts/doom.lua              -- a script this map needs to work
 //   end
 //
 // `open` in place of `wall` or `neighbor` makes an edge the sector ENDS at: an
@@ -179,6 +180,12 @@ int main(int argc, char** argv) {
 
     MapStorage store;
     store.clear();
+
+    // Scripts the map declared, resolved and copied after the map itself is
+    // known to be good -- there is no point writing a script beside an output
+    // that is never going to exist.
+    struct PendingScript { std::string path; int line; };
+    std::vector<PendingScript> declared_scripts;
 
     std::vector<PendingVertex> verts;
     // Holes are collected while the sector is open and applied at `end`,
@@ -396,6 +403,18 @@ int main(int argc, char** argv) {
                 }
                 local = static_cast<u16>(local + hv.size());
             }
+        } else if (tok[0] == "script") {
+            // script <path>
+            //
+            // The path is relative to THIS FILE, so a map can name a shared
+            // library that lives beside it or a directory up; what gets baked
+            // is the bare file name, and mapc copies the file next to its
+            // output. That split is deliberate: an author writes the path that
+            // makes sense from where they are standing, and the server only
+            // ever resolves a name inside the map's own directory.
+            if (in_sector || in_rail) { err(lineno, "script inside a sector or rail"); continue; }
+            if (tok.size() != 2) { err(lineno, "script needs exactly one path"); continue; }
+            declared_scripts.push_back({tok[1], lineno});
         } else if (tok[0] == "body") {
             // body radius <r> height <h>
             //
@@ -677,6 +696,22 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Bake the declared script NAMES before serialising. Only the bare file
+    // name goes in: the path in the source says where to find it now, and the
+    // baked name says what the server should look for beside the map.
+    for (const PendingScript& ps : declared_scripts) {
+        const size_t ns = ps.path.find_last_of("/\\");
+        const std::string base = ns == std::string::npos ? ps.path : ps.path.substr(ns + 1);
+        if (!store.add_script(base.c_str(), static_cast<u32>(base.size()))) {
+            err(ps.line, "cannot declare script '%s' (bad name, or more than %u)",
+                base.c_str(), MAX_MAP_SCRIPTS);
+        }
+    }
+    if (g_errors > 0) {
+        std::fprintf(stderr, "%d error(s); not writing output\n", g_errors);
+        return 1;
+    }
+
     std::vector<u8> out(1 << 20);
     ByteWriter w(out.data(), out.size());
     if (!save_map(store, w)) {
@@ -689,37 +724,59 @@ int main(int argc, char** argv) {
     std::fwrite(out.data(), 1, w.size(), of);
     std::fclose(of);
 
-    // The map's script travels with it.
+    // The map's declared scripts travel with it.
     //
-    // A baked map and the Lua that gives it doors are one deliverable -- the
-    // Doom converter writes them as a pair, and the server looks for the script
-    // beside the .dnpm it loaded. Copying it here means compiling a map into a
-    // build directory does not silently leave its behaviour behind, which
-    // presents as a map that loads perfectly and whose switches do nothing.
+    // A baked map and the Lua that gives it doors are one deliverable, and the
+    // server resolves each declared name inside the map's own directory -- so
+    // compiling a map somewhere else has to bring them along, or the map loads
+    // perfectly and its switches do nothing.
+    //
+    // This replaces a blanket "copy any .lua sitting next to the source", which
+    // guessed. The map says what it needs now.
     {
-        std::string src = argv[1];
-        std::string dst = argv[2];
-        const size_t sd = src.rfind('.');
-        const size_t dd = dst.rfind('.');
-        if (sd != std::string::npos) src = src.substr(0, sd);
-        if (dd != std::string::npos) dst = dst.substr(0, dd);
-        src += ".lua";
-        dst += ".lua";
-        if (src != dst) {
-            if (std::FILE* sf = std::fopen(src.c_str(), "rb")) {
+        const std::string dst_path = argv[2];
+        const size_t slash = dst_path.find_last_of("/\\");
+        const std::string dst_dir = slash == std::string::npos ? std::string(".")
+                                                              : dst_path.substr(0, slash);
+        const std::string src_path = argv[1];
+        const size_t sslash = src_path.find_last_of("/\\");
+        const std::string src_dir = sslash == std::string::npos ? std::string(".")
+                                                                : src_path.substr(0, sslash);
+
+        for (const PendingScript& ps : declared_scripts) {
+            const size_t ns = ps.path.find_last_of("/\\");
+            const std::string base = ns == std::string::npos ? ps.path : ps.path.substr(ns + 1);
+            if (!geom::script_name_is_safe(base.c_str(), static_cast<u32>(base.size()))) {
+                err(ps.line, "'%s' is not a usable script file name", base.c_str());
+                continue;
+            }
+
+            const std::string from = ps.path.empty() || ps.path[0] == '/'
+                                         ? ps.path : src_dir + "/" + ps.path;
+            std::FILE* sf = std::fopen(from.c_str(), "rb");
+            if (!sf) {
+                // An error, not a warning. A map that declares a script it does
+                // not ship is a map that will load and not work, and finding
+                // that out at bake time is the whole point of declaring it.
+                err(ps.line, "cannot open script %s", from.c_str());
+                continue;
+            }
+
+            const std::string to = dst_dir + "/" + base;
+            if (to != from) {
                 std::vector<char> buf(1 << 16);
-                if (std::FILE* df = std::fopen(dst.c_str(), "wb")) {
+                if (std::FILE* df = std::fopen(to.c_str(), "wb")) {
                     size_t n;
                     while ((n = std::fread(buf.data(), 1, buf.size(), sf)) > 0) {
                         std::fwrite(buf.data(), 1, n, df);
                     }
                     std::fclose(df);
-                    std::printf("%s: script copied from %s\n", dst.c_str(), src.c_str());
                 } else {
-                    std::fprintf(stderr, "cannot write %s\n", dst.c_str());
+                    err(ps.line, "cannot write %s", to.c_str());
                 }
-                std::fclose(sf);
             }
+            std::fclose(sf);
+            std::printf("%s: script %s\n", argv[2], base.c_str());
         }
     }
 

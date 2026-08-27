@@ -71,9 +71,9 @@ const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 const core = await Core.load()
 
+// No --script: maps/level_a.map declares doom.lua and its own line table.
 const args = ['--port', String(LINK_PORT), '--map', A]
 if (!ONE_LEVEL) args.push('--map', B)
-args.push('--script', join(ROOT, 'maps', 'scripts', 'doom.lua'))
 
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })

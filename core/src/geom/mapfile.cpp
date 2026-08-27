@@ -30,6 +30,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.u32v(store.rail_link_count());
     w.u32v(store.texture_count());
     w.u32v(store.light_count());
+    w.u32v(store.script_count());
 
     // The body this map is built for. Two more fields in a fixed header rather
     // than an optional trailing block: a map that means the engine's defaults
@@ -124,6 +125,11 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u8v(t.len);
         for (u32 k = 0; k < t.len; ++k) w.u8v(static_cast<u8>(t.name[k]));
     }
+    for (u32 i = 0; i < store.script_count(); ++i) {
+        const ScriptName& sc = store.script(i);
+        w.u8v(sc.len);
+        for (u32 k = 0; k < sc.len; ++k) w.u8v(static_cast<u8>(sc.name[k]));
+    }
     for (u32 i = 0; i < m.sector_count; ++i) {
         const SectorRender& r = rd.sector(i);
         w.u16v(r.floor_tex);
@@ -173,6 +179,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 rail_link_count = r.u32v();
     const u32 texture_count = r.u32v();
     const u32 light_count = r.u32v();
+    const u32 script_count = r.u32v();
     const fx body_radius = r.fxraw();
     const fx body_height = r.fxraw();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
@@ -193,7 +200,8 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         side_count > MAX_MAP_SIDES || tri_index_count > MAX_MAP_TRI_IDX ||
         spawn_count > MAX_MAP_SPAWNS || rail_count > MAX_MAP_RAILS ||
         waypoint_count > MAX_MAP_WAYPOINTS || rail_link_count > MAX_MAP_RAIL_LINKS ||
-        texture_count > MAX_MAP_TEXTURES || light_count > MAX_MAP_LIGHTS) {
+        texture_count > MAX_MAP_TEXTURES || light_count > MAX_MAP_LIGHTS ||
+        script_count > MAX_MAP_SCRIPTS) {
         store.clear();
         return MapLoadStatus::TooLarge;
     }
@@ -523,6 +531,23 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         if (store.intern_texture(name, len) != i) {
             store.clear(); return MapLoadStatus::BadIndex;
         }
+    }
+
+    for (u32 i = 0; i < script_count; ++i) {
+        const u8 len = r.u8v();
+        if (!r.ok() || len == 0 || len > MAX_SCRIPT_NAME) {
+            store.clear(); return MapLoadStatus::Truncated;
+        }
+        char name[MAX_SCRIPT_NAME];
+        for (u32 k = 0; k < len; ++k) name[k] = static_cast<char>(r.u8v());
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        // Re-validated here and not merely trusted from the bake. The server
+        // appends these to the map's own directory, so a name that could climb
+        // out of it would let a FILE choose what the host runs -- and the file
+        // on disk is not necessarily the one mapc wrote. add_script refuses an
+        // unsafe name; refusing the whole map is the only honest response,
+        // because a map missing its actions is a building with no doors.
+        if (!store.add_script(name, len)) { store.clear(); return MapLoadStatus::BadIndex; }
     }
 
     const auto texture_ok = [&](u16 t) {

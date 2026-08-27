@@ -456,12 +456,99 @@ static void test_body_round_trips_and_is_hashed() {
     CHECK(dst2.hash() == default_hash);
 }
 
+// The scripts a map declares survive the file, and cannot name a path.
+//
+// The server appends each of these to the map's own directory, so a name that
+// could climb out of it would let a FILE choose what the host runs. Checked at
+// bake time by add_script and again by the loader, because the file on disk is
+// not necessarily the one mapc wrote -- and the loader is the side an attacker
+// gets to choose the bytes for.
+static void test_declared_scripts_round_trip_and_stay_inside_the_map() {
+    std::printf("mapfile: a map's declared scripts survive the file, and cannot be paths\n");
+
+    // static, like every other fixture here: a MapStorage is ~460 KB of fixed
+    // arrays and this test wants five of them, which is more stack than a test
+    // binary has -- ASan found it as a stack overflow rather than as a crash in
+    // whichever field happened to land past the guard page.
+    static MapStorage src;
+    build_reference(src);
+    const u64 bare_hash = src.hash();
+
+    CHECK(src.add_script("doom.lua", 8));
+    CHECK(src.add_script("map01.lua", 9));
+    CHECK(src.script_count() == 2);
+    // Order is preserved: a map's own file is written against the library it
+    // names first, so loading them the other way round would run doom.load
+    // before doom exists.
+    CHECK(src.script(0).len == 8 && src.script(0).name[0] == 'd');
+    CHECK(src.script(1).len == 9 && src.script(1).name[0] == 'm');
+    // Declaring the same library twice loads it once. Running a script's top
+    // level a second time re-registers everything it registered.
+    CHECK(src.add_script("doom.lua", 8));
+    CHECK(src.script_count() == 2);
+    // And they are part of what the file says.
+    CHECK(src.hash() != bare_hash);
+
+    u8 buf[8192];
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+    static MapStorage dst;
+    ByteReader r(buf, w.size());
+    CHECK(load_map(r, dst) == MapLoadStatus::Ok);
+    CHECK(dst.script_count() == 2);
+    CHECK(dst.hash() == src.hash());
+
+    // Every shape of "somewhere else" is refused.
+    static MapStorage bad;
+    build_reference(bad);
+    CHECK(!bad.add_script("../secrets.lua", 14));
+    CHECK(!bad.add_script("/etc/passwd", 11));
+    CHECK(!bad.add_script("sub/dir.lua", 11));
+    CHECK(!bad.add_script("C:\\evil.lua", 11));
+    CHECK(!bad.add_script(".hidden", 7));
+    CHECK(!bad.add_script("", 0));
+    CHECK(bad.script_count() == 0);
+
+    // CONTROL: the same call with a plain name succeeds. Without it, "add_script
+    // returned false" would be satisfied by a function that always did.
+    CHECK(bad.add_script("plain.lua", 9));
+    CHECK(bad.script_count() == 1);
+
+    // And a FILE carrying a path is refused by the loader, not merely by the
+    // compiler that was supposed to have prevented it. Written by hand into a
+    // valid map's bytes, because the only way to produce one is to not use
+    // add_script.
+    {
+        static MapStorage one;
+        build_reference(one);
+        CHECK(one.add_script("aaaaaaaa", 8));
+        u8 b2[8192];
+        ByteWriter w2(b2, sizeof(b2));
+        CHECK(save_map(one, w2));
+        // Find the name in the serialised bytes and turn it into a path.
+        bool patched = false;
+        for (size_t i = 0; i + 8 <= w2.size() && !patched; ++i) {
+            bool all_a = true;
+            for (u32 k = 0; k < 8; ++k) all_a = all_a && b2[i + k] == 'a';
+            if (!all_a) continue;
+            b2[i] = '.'; b2[i + 1] = '.'; b2[i + 2] = '/';
+            patched = true;
+        }
+        CHECK(patched);
+        static MapStorage out;
+        ByteReader r2(b2, w2.size());
+        const MapLoadStatus st = load_map(r2, out);
+        CHECK(st != MapLoadStatus::Ok);
+    }
+}
+
 int main() {
     std::printf("== core/geom map file suite ==\n");
     test_roundtrip();
     test_matches_hardcoded_map();
     test_holes_round_trip();
     test_body_round_trips_and_is_hashed();
+    test_declared_scripts_round_trip_and_stay_inside_the_map();
     test_rejects_bad_input();
     test_render_does_not_affect_physics();
     test_fuzz();
