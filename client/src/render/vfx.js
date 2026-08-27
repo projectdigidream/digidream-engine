@@ -89,7 +89,21 @@ export function tracerEnds (v, fxToFloat) {
  */
 export function fade (age, life) {
   if (!(life > 0)) return 0
-  if (age < 0) return 0
+  // NOT YET BORN IS FULLY VISIBLE, not gone.
+  //
+  // This returned 0 here, and 0 is what update() retires on -- so a tracer with
+  // a negative age was destroyed on the spot. Which sounds impossible until you
+  // notice the two clocks: frame(now) receives the timestamp of when the frame
+  // STARTED, spawns happen later inside that frame from performance.now(), and
+  // update() then ran with the earlier stamp. Every tracer was created and
+  // retired within one frame, forever -- seen 25, live 0, pool 48, and nothing
+  // ever on screen.
+  //
+  // The clocks are one clock now (see the caller), so this should not arise.
+  // It stays because conflating "before it existed" with "after it died" is
+  // wrong on its own terms, and because that conflation cost four rounds of
+  // looking in the wrong place.
+  if (age < 0) return 1
   const f = 1 - age / life
   return f > 0 ? f : 0
 }

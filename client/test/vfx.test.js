@@ -99,6 +99,11 @@ const BRAD = (turns) => Math.round(turns * 4294967296) >>> 0
 // --- the lifetime ----------------------------------------------------------
 
 check(fade(0, 0.1) === 1, 'a new tracer is fully visible')
+// The one that mattered. A tracer spawned LATER in the frame than the timestamp
+// update() is given has a negative age, and treating that as expired destroyed
+// every tracer on the frame it was created -- which presents as nothing ever
+// appearing, with the pool permanently full and no error anywhere.
+check(fade(-0.01, 0.1) === 1, 'and one not yet born is visible, not expired')
 check(fade(0.05, 0.1) > 0 && fade(0.05, 0.1) < 1, 'half way through it is half faded')
 check(fade(0.1, 0.1) === 0, 'and at its life it is gone')
 check(fade(0.2, 0.1) === 0, 'and stays gone')
@@ -130,6 +135,19 @@ check(fade(0.2, 0.1) === 0, 'and stays gone')
   view.update(100 + one.life + 0.001)
   check(view.live.length === 0, 'past its life it is retired')
   check(live[0].visible === false, 'and hidden')
+
+  // Spawned at 100, faded against 99.99 -- the frame-clock skew, exactly as it
+  // reaches the renderer. It must survive: this is the whole bug, and the
+  // original test passed because it only ever faded against a LATER time.
+  {
+    const scene2 = { added: [], add (o) { this.added.push(o) } }
+    const v2 = new VfxView({ THREE, scene: scene2, catalogue: CAT, poolSize: 4 })
+    v2.spawn(1, from, to, 100)
+    v2.update(99.99)
+    check(v2.live.length === 1,
+          `a tracer faded against an earlier stamp survives (${v2.live.length} live)`)
+    check(v2.pool.length === 3, `and is not returned to the pool (${v2.pool.length})`)
+  }
 
   // The control: an event naming a kind the catalogue does not describe must
   // draw NOTHING rather than a default-sized line at the origin. Without it, a

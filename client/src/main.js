@@ -820,7 +820,12 @@ function frame (now) {
         if (ent.kind) props.setState(ent.mesh, ent.animationState ?? 0)
       }
       props.update(now / 1000)
-      if (vfx) vfx.update(now / 1000)
+      // performance.now(), NOT the frame's `now`. They are the same clock but
+      // not the same instant: `now` is when the frame began, and the tracers
+      // being faded here were spawned later in this same frame, from
+      // drainSnapshots. Fading them against the earlier stamp gave them a
+      // negative age, which used to mean "retire immediately".
+      if (vfx) vfx.update(performance.now() / 1000)
       // Billboarding: yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.
       const bb = billboardYaw(yaw)
