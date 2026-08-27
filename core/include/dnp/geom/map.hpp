@@ -49,6 +49,20 @@ inline constexpr u8 LEDGE     = 1u << 3;
 // engine reports the crossings, and what a crossing MEANS -- open that door,
 // once, or every time -- is script.
 inline constexpr u8 TRIGGER   = 1u << 4;
+
+// A switch: reaching for this edge is meant to do something.
+//
+// Declared by the map for the same reason TRIGGER is, and it does the same job
+// for a different question. Doom's use key walks a short ray and stops at the
+// first line carrying a SPECIAL, passing straight through open doorways on the
+// way -- and which lines carry specials is gameplay, which the engine does not
+// know. The map marking them lets the ray reproduce that rule without the
+// engine learning what a switch does.
+//
+// Optional: a map that marks nothing still works, because the ray also stops at
+// the first thing a body could not walk through, which is the wall or closed
+// door in front of you.
+inline constexpr u8 USABLE    = 1u << 5;
 }  // namespace side_flag
 
 struct Side {

@@ -43,7 +43,14 @@ struct Rooms {
     MapStorage store;
     MapData    view{};
 
-    explicit Rooms(u8 shared_flags = 0) {
+    // The shared boundary carries a switch by default.
+    //
+    // It has to say so now: the reach ray walks THROUGH an opening a body could
+    // fit through, exactly as Doom does, and an unmarked two-sided boundary
+    // between two open rooms is an opening. Every test below that presses this
+    // wall means "there is something here to press", and the map is where that
+    // is declared.
+    explicit Rooms(u8 shared_flags = side_flag::USABLE) {
         const fx2 a[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)}, {F(0), F(20)}};
         const fx2 b[] = {{F(20), F(0)}, {F(40), F(0)}, {F(40), F(20)}, {F(20), F(20)}};
         store.add_sector(a, 4, F(0), F(40), 1);
@@ -454,8 +461,86 @@ static void test_reach_crosses_into_the_next_sector() {
     CHECK(count_of(w, TouchKind::Use) == 0);
 }
 
+// A switch across an open doorway is reachable; one behind a wall is not.
+//
+// This is the shape MAP02 is built out of, and the reason "the first side the
+// ray crosses" was not enough: the player stands in one sector, the switch is
+// on a wall of the next, and between them is a two-sided boundary that is
+// simply an opening. Stopping there made the switch unpressable and reported
+// the doorway instead -- which is the "used side 198, no action on this line"
+// that got this looked at.
+//
+// Three rooms in a row, west to east, each 10 wide:
+//   0: where the player stands
+//   1: the middle, entered through an opening or a shut door depending on the
+//      case
+//   2: unused, so sector 1's east wall is the switch
+struct Corridor {
+    MapStorage store;
+    MapData    view{};
+
+    // `middle_ceil` decides whether the way through is open. A Doom door sector
+    // has its ceiling on its floor; anything a body fits through is an opening.
+    explicit Corridor(fx middle_ceil) {
+        const fx2 a[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
+        const fx2 b[] = {{F(10), F(0)}, {F(20), F(0)}, {F(20), F(10)}, {F(10), F(10)}};
+        store.add_sector(a, 4, F(0), F(10), 1);
+        store.add_sector(b, 4, F(0), middle_ceil, 2);
+
+        store.add_side(0, 0, 1, NO_SECTOR, 0);
+        store.add_side(0, 1, 2, 1, 0);            // side 1: the boundary at x = 10
+        store.add_side(0, 2, 3, NO_SECTOR, 0);
+        store.add_side(0, 3, 0, NO_SECTOR, 0);
+
+        store.add_side(1, 0, 1, NO_SECTOR, 0);
+        // side 5: sector 1's east wall at x = 20 -- the switch, 10 units away.
+        store.add_side(1, 1, 2, NO_SECTOR, side_flag::USABLE);
+        store.add_side(1, 2, 3, NO_SECTOR, 0);
+        store.add_side(1, 3, 0, 0, 0);
+    }
+
+    void attach(World& w) {
+        view = store.view();
+        w.set_map(&view);
+        w.set_map_storage(&store);
+    }
+};
+
+static i32 press_east_from(Corridor& c, fx x, fx reach_body_height) {
+    static World w;
+    w.reset();
+    c.attach(w);
+    const u32 a = w.spawn(fx3{x, F(5), F(0)});
+    w.params_mut(a).height = reach_body_height;
+    w.set_input(a, frame(true, EAST));
+    w.step();
+    return side_of(w, TouchKind::Use);
+}
+
+static void test_a_switch_across_an_opening_is_reachable() {
+    std::printf("interact: the reach passes through an opening and stops at a wall\n");
+
+    // Standing at x = 19, one unit from the switch on the far wall, with the
+    // boundary at x = 10 far behind. Nothing subtle -- the baseline.
+    static Corridor open_way(F(10));
+    CHECK(press_east_from(open_way, F(19), F(2)) == 5);
+
+    // Now from x = 9.2: the boundary at x = 10 is 0.8 ahead and the switch is
+    // 10.8 ahead, out of reach. The boundary is an OPENING, so nothing is
+    // reported -- you cannot press a doorway.
+    CHECK(press_east_from(open_way, fx::from_frac(92, 10), F(2)) == -1);
+
+    // CONTROL: the same geometry with the middle sector's ceiling on its floor,
+    // which is how Doom stores a shut door. Now the boundary is not something a
+    // body fits through, so the reach stops there and reports IT -- which is
+    // what makes a closed door pressable without the map marking it.
+    static Corridor shut(F(0));
+    CHECK(press_east_from(shut, fx::from_frac(92, 10), F(2)) == 1);
+}
+
 int main() {
     test_reach_finds_the_side_in_front();
+    test_a_switch_across_an_opening_is_reachable();
     test_aiming_across_a_room_beats_standing_beside_a_wall();
     test_a_shared_wall_is_pressed_from_the_side_you_stand_on();
     test_reach_crosses_into_the_next_sector();

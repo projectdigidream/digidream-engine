@@ -582,70 +582,126 @@ i32 find_side_with_flag(const MapData& map, i32 sector, fx2 p, fx radius,
     return best;
 }
 
+namespace {
+
+// One side the reach ray crossed, and how far along.
+struct Crossing {
+    fx  t{};
+    u32 side = 0;
+    u32 owner = 0;
+};
+
+}  // namespace
+
 i32 find_interact_side(const MapData& map, i32 sector, fx2 p, brad facing,
                        fx reach, fx feet_z, fx body_height) noexcept {
+    // Kept in the signature but unused: whether a reach gets through is a
+    // question about the GEOMETRY's opening, not about whether this particular
+    // body could walk it. Removing the parameters would be the wrong lesson --
+    // an eye-height rule may well want them -- but pretending they are consulted
+    // would be worse.
     (void)feet_z;
     (void)body_height;
-
-    // A short RAY along the aim, and the FIRST side it crosses wins.
+    // A short RAY along the aim, stopping at the first thing that means
+    // something or the first thing you could not walk through.
     //
     // This started out as "the nearest side of your own sector that lies in
-    // front of you", on the reasoning that a ray through a doorframe misses the
-    // frame. Real maps settled it: on converted DOOM2 levels that rule reached
-    // only 8 of MAP01's 11 switches, 11 of MAP02's 30, and 5 of MAP07's 9,
-    // because a switch's line very often belongs to a sector you are not
-    // standing in -- a Doom sector splits into several of ours, and a doorway's
-    // line belongs to the door rather than to the room you press it from.
+    // front of you", which on converted DOOM2 levels reached 2 of MAP01's 5
+    // walk-up-able switches: a switch's line very often belongs to a sector you
+    // are NOT standing in, and in a room with diagonal walls the nearest side
+    // in front is the diagonal beside you rather than the door you are looking
+    // at.
     //
-    // The ray is also what Doom itself does (P_UseLines, USERANGE 64), and it
-    // buys occlusion for free: a wall between you and a switch is crossed
-    // first, so you cannot work a switch through it. When the first side
-    // crossed has no meaning, nothing happens -- which is Doom's "that doesn't
-    // work" and not a bug.
+    // It then became "the first side the ray crosses", which is better and
+    // still wrong in one specific way that MAP02 demonstrates: a switch across
+    // an open doorway is unreachable, because the doorway's own two-sided
+    // boundary is crossed first. Doom passes straight through an opening a body
+    // could fit through (P_LineOpening) and stops at the first line carrying a
+    // SPECIAL. So:
     //
-    // Candidates come from the broadphase over the reach disc rather than from
-    // one sector, which is what fixes the miss. A superset is fine: the
-    // intersection test decides.
+    //   USABLE side   -> that is a switch; report it
+    //   blocked side  -> a wall, a shut door, a gap too small; report it, since
+    //                    it is what you are pressing against
+    //   otherwise     -> an opening; keep going
+    //
+    // Which sides are switches is gameplay, so the MAP declares it. A map that
+    // declares nothing still works: the ray stops at the wall in front of you,
+    // which is the only candidate a hand-authored map ever has.
     const fx2 dir = fx_dir(facing);
     const fx2 to = p + dir * reach;
 
     u16 near[64];
     const u32 n = geom::sectors_near(map, p, reach, near, 64);
 
-    i32 best = -1;
-    i32 best_owner = -1;
-    fx  best_t = fx::one() + fx::one();   // beyond any valid t in [0, 1]
+    constexpr u32 MAX_CROSSINGS = 32;
+    Crossing hits[MAX_CROSSINGS];
+    u32 count = 0;
+
     for (u32 c = 0; c < n; ++c) {
         const Sector& sec = map.sector(near[c]);
-        for (u16 k = 0; k < sec.side_count; ++k) {
+        for (u16 k = 0; k < sec.side_count && count < MAX_CROSSINGS; ++k) {
             const u32 si = sec.first_side + k;
             const Side& sd = map.side(si);
             fx t{};
             if (!geom::segment_intersect(p, to, map.point(sd.a), map.point(sd.b), t)) continue;
-            if (t > best_t) continue;
-
-            if (t == best_t && best >= 0) {
-                // A TIE is the shared boundary between two sectors seen from
-                // both owners: one physical wall, two side records, the same
-                // crossing point. Which of them the player is pressing is not
-                // arbitrary -- it is the face on their side of it, so the one
-                // whose sector they are standing in wins.
-                //
-                // Falling back to the lower index here instead reached the
-                // wrong half of every two-sided door line in DOOM2, and since
-                // an action is registered on one half only, the door did
-                // nothing. That is what "the door does not open" was.
-                const bool cand_is_mine = static_cast<i32>(near[c]) == sector;
-                const bool best_is_mine = best_owner == sector;
-                if (best_is_mine && !cand_is_mine) continue;
-                if (cand_is_mine == best_is_mine && static_cast<i32>(si) >= best) continue;
-            }
-            best_t = t;
-            best = static_cast<i32>(si);
-            best_owner = static_cast<i32>(near[c]);
+            hits[count++] = Crossing{t, si, near[c]};
         }
     }
-    return best;
+
+    // Insertion sort by distance along the ray. At most a couple of dozen
+    // entries and usually two or three, so the simplest ordering that is
+    // obviously stable beats anything cleverer.
+    //
+    // Ties are the shared boundary between two sectors, seen from both owners:
+    // one physical wall, two side records, the same crossing point. A USABLE
+    // face wins, then the face whose sector the presser is standing in, then
+    // the lower index. Getting that order wrong reached the wrong half of every
+    // two-sided door line, and since an action is registered on one half only,
+    // the door did nothing.
+    for (u32 i = 1; i < count; ++i) {
+        const Crossing key = hits[i];
+        const bool key_use = (map.side(key.side).flags & side_flag::USABLE) != 0;
+        const bool key_mine = static_cast<i32>(key.owner) == sector;
+        u32 j = i;
+        while (j > 0) {
+            const Crossing& q = hits[j - 1];
+            if (q.t < key.t) break;
+            if (q.t == key.t) {
+                const bool q_use = (map.side(q.side).flags & side_flag::USABLE) != 0;
+                if (q_use && !key_use) break;
+                if (q_use == key_use) {
+                    const bool q_mine = static_cast<i32>(q.owner) == sector;
+                    if (q_mine && !key_mine) break;
+                    if (q_mine == key_mine && q.side < key.side) break;
+                }
+            }
+            hits[j] = hits[j - 1];
+            --j;
+        }
+        hits[j] = key;
+    }
+
+    for (u32 i = 0; i < count; ++i) {
+        const u32 si = hits[i].side;
+        const Side& sd = map.side(si);
+        if ((sd.flags & side_flag::USABLE) != 0) return static_cast<i32>(si);
+
+        // What stops a reach is the absence of an OPENING, not the absence of a
+        // walkable one -- Doom's P_LineOpening, and the distinction is the whole
+        // bug. MAP02 puts a switch behind a window 0.83 tall against a 1.17
+        // body: you cannot walk through it, and you can obviously see and reach
+        // through it. Asking `sector_admits` (which is the movement question,
+        // step height and headroom included) made that window a wall and
+        // reported the window frame instead of the switch.
+        if (sd.neighbor < 0) return static_cast<i32>(si);
+        if ((sd.flags & side_flag::BLOCKING) != 0) return static_cast<i32>(si);
+        const Sector& here = map.sector(hits[i].owner);
+        const Sector& there = map.sector(static_cast<u32>(sd.neighbor));
+        const fx top = here.ceil_z < there.ceil_z ? here.ceil_z : there.ceil_z;
+        const fx bottom = here.floor_z > there.floor_z ? here.floor_z : there.floor_z;
+        if (top <= bottom) return static_cast<i32>(si);   // shut: a door, or a solid step
+    }
+    return -1;
 }
 
 RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
