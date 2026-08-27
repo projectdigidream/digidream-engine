@@ -232,6 +232,26 @@ export function cameraOffsetEngine (yaw, distance = DEFAULT_DISTANCE) {
  * is due east of the subject, so away-from-camera is west and camera-right is
  * north -- which is just "facing west, north is on your right".
  */
+/**
+ * An agent's facing, as a unit direction in THREE space.
+ *
+ * `raw` is a brad: a full turn in 2^32, which is how the engine stores an angle
+ * so that it wraps exactly and identically on every target. The engine's own
+ * convention is `(cos, sin)` in its x/y plane -- the same one main.js encodes
+ * with when it builds an input frame -- and engine (x, y) becomes three
+ * (x, -z), so `sin` comes back NEGATED.
+ *
+ * A pure function with a test rather than three lines inlined into the render
+ * loop, because the last time a direction was converted by hand between these
+ * two spaces the sign was wrong and the symptom was controls that rotated the
+ * opposite way from the camera. A reflection looks entirely plausible until
+ * something turns.
+ */
+export function facingDirection (raw) {
+  const theta = (Number(raw >>> 0) / 4294967296) * Math.PI * 2
+  return { x: Math.cos(theta), z: -Math.sin(theta) }
+}
+
 export function screenRelativeMove (mx, my, yaw) {
   const c = Math.cos(yaw)
   const s = Math.sin(yaw)

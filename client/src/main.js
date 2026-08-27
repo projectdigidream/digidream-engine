@@ -17,8 +17,11 @@ import * as THREE from 'three'
 import { Core } from './core.js'
 import { readMap, fxToFloat } from './mapdata.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
-import { MapView, makeCamera, resizeCamera, distanceFor, makeAgentMesh, PROJECTIONS } from './render/scene.js'
-import { Camera, cameraOffset, screenRelativeMove, DEFAULT_DISTANCE } from './camera.js'
+import {
+  MapView, makeCamera, resizeCamera, distanceFor, makeAgentMesh, PROJECTIONS,
+  makeFacingArrow, aimFacingArrow
+} from './render/scene.js'
+import { Camera, cameraOffset, screenRelativeMove, facingDirection, DEFAULT_DISTANCE } from './camera.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
@@ -277,12 +280,28 @@ view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32) })
     if (loaded) console.log(`[render] ${loaded}/${total} textures loaded from /textures`)
   })
 
-const body = makeAgentMesh()
+// Drawn at the size the agent ACTUALLY is, read back from the world rather
+// than assumed. The map declares its own body (a converted Doom map is a third
+// of the engine's default width and a bit over half its height), so a hardcoded
+// capsule would be a body you can see standing in walls its real one clears --
+// which is the exact opposite of what a debug view is for.
+const RADIUS_ID = 0
+const HEIGHT_ID = 1
+const bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
+const bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
+
+const body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
 scene.add(body)
+
+// Which way the agent is looking, and how far it can reach to work a door.
+// On by default because it is the only way to see either; ?arrow=0 hides it.
+const SHOW_ARROW = params.get('arrow') !== '0'
+const arrow = SHOW_ARROW ? makeFacingArrow(core.interactReach) : null
+if (arrow) scene.add(arrow)
 
 // bodyHeight matches the agent mesh, so the trapezium is the projection of
 // the body actually drawn rather than of an assumed one.
-const shadows = new ShadowCaster({ THREE, scene, radius: 0.5, bodyHeight: 2 })
+const shadows = new ShadowCaster({ THREE, scene, radius: bodyRadius, bodyHeight })
 
 // The surface a shadow lands on. The sector's floor, taken LIVE so a shadow on
 // a lift rides with it, and null out over the void -- where there is nothing
@@ -298,7 +317,10 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // Other players. Interpolated, never predicted -- predicting one means guessing
 // what another person will press (see render/entities.js).
 const others = new EntityView({
-  makeMesh: () => makeAgentMesh(0xffa066),
+  // Other players are the same size we are: the body is the MAP's, not this
+  // session's, so drawing them at the engine default would put every remote
+  // player a head taller than the doorways they walk through.
+  makeMesh: () => makeAgentMesh(0xffa066, bodyRadius, bodyHeight),
   scene
 })
 
@@ -465,6 +487,13 @@ function frame (now) {
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
+  if (arrow) {
+    // From the body's middle, which is roughly where a reach comes from and is
+    // where you look when you are judging whether a door is in range.
+    aimFacingArrow(arrow,
+                   { x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z },
+                   facingDirection(a.facing))
+  }
   // Aimed at the body's middle rather than its feet: a window centred on the
   // feet leaves the head behind the wall.
   view.setOcclusionTarget({ x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z })

@@ -2,7 +2,7 @@
 // Camera tests (design §4.1).
 //
 import {
-  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove,
+  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection,
   ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming
 } from '../src/camera.js'
 
@@ -234,6 +234,50 @@ console.log('\n--- projection ---')
   const wide = distanceForFraming(80, 40)
   const narrow = distanceForFraming(20, 40)
   check(narrow > wide, `a narrower lens stands further back (${wide.toFixed(1)} -> ${narrow.toFixed(1)})`)
+}
+
+console.log('\n--- facing ---')
+{
+  // Asserted against the input encoding, not against a restated formula.
+  //
+  // main.js turns a world-space move direction into an aim brad with
+  // atan2(wy, wx); facingDirection has to invert exactly that, through the same
+  // engine->three mapping the geometry uses. Comparing the two round-trips is
+  // what makes a sign error impossible to pass -- restating `-sin` here would
+  // agree with a reflected implementation, which is precisely the bug that
+  // shipped once already.
+  const toBrad = (wx, wy) =>
+    Math.round((Math.atan2(wy, wx) / (Math.PI * 2)) * 4294967296) >>> 0
+
+  for (const deg of [0, 30, 45, 90, 137, 180, 250, 315]) {
+    const th = deg * Math.PI / 180
+    // An engine-space direction, and its three-space form by the mapping in
+    // mapgeom.js: (x, y, z) -> (x, z, -y), so a horizontal (x, y) -> (x, -y).
+    const ex = Math.cos(th)
+    const ey = Math.sin(th)
+    const d = facingDirection(toBrad(ex, ey))
+    check(near(d.x, ex, 1e-6) && near(d.z, -ey, 1e-6),
+          `facing ${deg}deg -> three (${d.x.toFixed(3)}, ${d.z.toFixed(3)}), ` +
+          `wanted (${ex.toFixed(3)}, ${(-ey).toFixed(3)})`)
+  }
+
+  // Unit length at every angle, or the arrow would change size as it turns.
+  for (const raw of [0, 0x20000000, 0x55555555, 0x9e3779b9, 0xffffffff]) {
+    const d = facingDirection(raw)
+    check(near(Math.hypot(d.x, d.z), 1, 1e-9), `raw ${raw >>> 0} is a unit direction`)
+  }
+
+  // CONTROL: the reflected version -- +sin instead of -sin -- must DISAGREE
+  // with the round-trip above everywhere except where sin is zero. Without
+  // this, the check above passes for both handednesses at 0 and 180 degrees.
+  let disagreements = 0
+  for (const deg of [30, 45, 90, 137, 250, 315]) {
+    const th = deg * Math.PI / 180
+    const d = facingDirection(toBrad(Math.cos(th), Math.sin(th)))
+    if (!near(d.z, Math.sin(th), 1e-6)) disagreements++
+  }
+  check(disagreements === 6,
+        `CONTROL: a reflected conversion differs at all 6 off-axis angles (${disagreements})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

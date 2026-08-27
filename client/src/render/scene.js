@@ -243,6 +243,56 @@ export function distanceFor (cam, viewHeight, fallback) {
   return distanceForFraming(cam.fov, viewHeight)
 }
 
+/**
+ * A debug arrow showing which way an entity faces, and how far it can reach.
+ *
+ * Its LENGTH is the engine's interact reach, read from the engine rather than
+ * chosen here, so the arrow answers the question you actually have when you are
+ * standing at a door: is this thing in range. An arrow that merely pointed
+ * would show you aiming at a switch the engine considers out of reach and give
+ * you no way to tell the difference.
+ *
+ * Drawn with depthTest off so it stays visible through the body and through
+ * whatever wall the occlusion window has faded -- it is an instrument, not part
+ * of the scene, and an instrument you cannot see when you need it is worse than
+ * none.
+ */
+export function makeFacingArrow (reach, color = 0xffe066) {
+  const g = new THREE.Group()
+  const mat = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 })
+
+  const headLen = Math.min(0.3, reach * 0.3)
+  const shaftLen = Math.max(0.01, reach - headLen)
+  const thickness = Math.max(0.015, reach * 0.03)
+
+  // Built pointing along +X, so aiming it is one rotation about Y and the
+  // conversion from a facing angle stays in one place (camera.js).
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(thickness, thickness, shaftLen, 8), mat)
+  shaft.rotation.z = -Math.PI / 2
+  shaft.position.x = shaftLen / 2
+  g.add(shaft)
+
+  const head = new THREE.Mesh(new THREE.ConeGeometry(thickness * 3, headLen, 10), mat)
+  head.rotation.z = -Math.PI / 2
+  head.position.x = shaftLen + headLen / 2
+  g.add(head)
+
+  g.renderOrder = 999
+  return g
+}
+
+/**
+ * Aim an arrow built by makeFacingArrow.
+ *
+ * `dir` is a three-space unit direction from camera.js's facingDirection. The
+ * rotation is derived from it rather than from the angle again, so there is
+ * exactly one place that decides which way a facing points.
+ */
+export function aimFacingArrow (arrow, at, dir) {
+  arrow.position.set(at.x, at.y, at.z)
+  arrow.rotation.y = Math.atan2(-dir.z, dir.x)
+}
+
 /** A stand-in body. Real entity rendering (sprites, meshes) is slice 2c. */
 export function makeAgentMesh (color = 0x66ccff, radius = 0.5, height = 2) {
   const geo = new THREE.CapsuleGeometry(radius, Math.max(0.01, height - radius * 2), 4, 12)

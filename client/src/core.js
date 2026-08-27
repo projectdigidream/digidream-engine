@@ -27,6 +27,18 @@ export const IDX = {
 }
 
 export class Core {
+  /**
+   * The engine's interact reach, in world units.
+   *
+   * From the engine, not a copy: the debug arrow is drawn this long, and an
+   * arrow that disagreed with the reach would show you standing in range of a
+   * door that will not open.
+   */
+  get interactReach () {
+    this.M._dnp_interact_reach(this.buf64)
+    return Number(this.views.i64[this.buf64 / 8]) / 4294967296
+  }
+
   static async load () {
     const M = await createModule()
     return new Core(M)

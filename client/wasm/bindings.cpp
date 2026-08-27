@@ -76,6 +76,15 @@ int dnp_buf64_len() { return BUF64_LEN; }
 EMSCRIPTEN_KEEPALIVE
 int dnp_buf32_len() { return BUF32_LEN; }
 
+// Engine constants the client needs to DRAW correctly.
+//
+// Exported rather than copied into JS: the interact reach decides how far the
+// debug arrow reaches, and an arrow that disagrees with the engine is worse
+// than no arrow -- it would show you standing in range of a door that will not
+// open. Same reason the buffer lengths are checked rather than trusted.
+EMSCRIPTEN_KEEPALIVE
+void dnp_interact_reach(long long* out64) { out64[0] = sim::INTERACT_REACH.raw; }
+
 // Point the world at the built-in test map.
 //
 // Retained as a fallback and for tests. The real path is dnp_map_load() below,
