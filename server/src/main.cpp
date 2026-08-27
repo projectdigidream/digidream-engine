@@ -759,12 +759,14 @@ struct Server : lua::MapChangeSink {
             // ceiling sat on someone would be a different design decision, and
             // one a script can make for itself from on_tick.
             if (L.crush_reported_tick[e.entity] != t || !L.crush_seen[e.entity]) continue;
-            if (!L.vm.begin_hook("on_crush")) break;
-            lua::push_entity(L.vm.state(), L.ctx, e.entity);
-            lua::push_sector(L.vm.state(), e.sector);
-            lua_pushstring(L.vm.state(),
-                           e.kind == sim::CrushKind::Vertical ? "vertical" : "pinned");
-            L.vm.end_hook("on_crush", t, 3);
+            for (u32 h = 0; h < L.vm.hook_count("on_crush"); ++h) {
+                if (!L.vm.begin_hook_at("on_crush", h)) continue;
+                lua::push_entity(L.vm.state(), L.ctx, e.entity);
+                lua::push_sector(L.vm.state(), e.sector);
+                lua_pushstring(L.vm.state(),
+                               e.kind == sim::CrushKind::Vertical ? "vertical" : "pinned");
+                L.vm.end_hook("on_crush", t, 3);
+            }
         }
 
         const sim::InteractLog& uses = L.world.interactions();
@@ -772,14 +774,16 @@ struct Server : lua::MapChangeSink {
             const sim::InteractEvent& e = uses.at(i);
             if (e.entity >= sim::MAX_AGENTS || e.sector < 0) continue;
             const char* hook = e.kind == sim::TouchKind::Use ? "on_interact" : "on_cross";
-            if (!L.vm.begin_hook(hook)) continue;
-            lua::push_entity(L.vm.state(), L.ctx, e.entity);
-            // The SIDE INDEX, as a plain number, because that is the key a
-            // generated script indexes its table of doors by. dnp.side(i)
-            // turns it into neighbour and flags when the script wants them.
-            lua_pushnumber(L.vm.state(), e.side);
-            lua::push_sector(L.vm.state(), static_cast<u32>(e.sector));
-            L.vm.end_hook(hook, t, 3);
+            for (u32 h = 0; h < L.vm.hook_count(hook); ++h) {
+                if (!L.vm.begin_hook_at(hook, h)) continue;
+                lua::push_entity(L.vm.state(), L.ctx, e.entity);
+                // The SIDE INDEX, as a plain number, because that is the key a
+                // generated script indexes its table of doors by. dnp.side(i)
+                // turns it into neighbour and flags when the script wants them.
+                lua_pushnumber(L.vm.state(), e.side);
+                lua::push_sector(L.vm.state(), static_cast<u32>(e.sector));
+                L.vm.end_hook(hook, t, 3);
+            }
         }
         // Agents standing inside props. Reported every tick the overlap holds,
         // because "picked up once" is a decision the script makes by removing
@@ -790,10 +794,12 @@ struct Server : lua::MapChangeSink {
         for (u32 i = 0; i < pe.count(); ++i) {
             const sim::PropEvent& e = pe.at(i);
             const char* hook = e.kind == sim::PropEventKind::Use ? "on_prop_use" : "on_touch";
-            if (!L.vm.begin_hook(hook)) continue;
-            lua::push_entity(L.vm.state(), L.ctx, e.agent);
-            lua::push_prop(L.vm.state(), L.ctx, e.prop);
-            L.vm.end_hook(hook, t, 2);
+            for (u32 h = 0; h < L.vm.hook_count(hook); ++h) {
+                if (!L.vm.begin_hook_at(hook, h)) continue;
+                lua::push_entity(L.vm.state(), L.ctx, e.agent);
+                lua::push_prop(L.vm.state(), L.ctx, e.prop);
+                L.vm.end_hook(hook, t, 2);
+            }
         }
         // Swings that connected. One hook per target, in the order the engine
         // reported them, so a script that damages several things in one swing
@@ -801,14 +807,16 @@ struct Server : lua::MapChangeSink {
         const sim::AttackLog& hits = L.world.attacks();
         for (u32 i = 0; i < hits.count(); ++i) {
             const sim::AttackEvent& e = hits.at(i);
-            if (!L.vm.begin_hook("on_attack")) break;
-            lua::push_entity(L.vm.state(), L.ctx, e.attacker);
-            // The target is an entity index, which is a prop or an agent. Both
-            // are pushed as the handle type they are, so a script tells them
-            // apart by asking rather than by comparing a number to MAX_AGENTS.
-            if (sim::World::is_prop(e.target)) lua::push_prop(L.vm.state(), L.ctx, e.target);
-            else                               lua::push_entity(L.vm.state(), L.ctx, e.target);
-            L.vm.end_hook("on_attack", t, 2);
+            for (u32 h = 0; h < L.vm.hook_count("on_attack"); ++h) {
+                if (!L.vm.begin_hook_at("on_attack", h)) continue;
+                lua::push_entity(L.vm.state(), L.ctx, e.attacker);
+                // The target is an entity index, a prop or an agent. Each is
+                // pushed as the handle type it is, so a script tells them apart
+                // by asking rather than by comparing a number to MAX_AGENTS.
+                if (sim::World::is_prop(e.target)) lua::push_prop(L.vm.state(), L.ctx, e.target);
+                else                               lua::push_entity(L.vm.state(), L.ctx, e.target);
+                L.vm.end_hook("on_attack", t, 2);
+            }
         }
         if (hits.dropped() > 0) {
             std::fprintf(stderr, "[srv] tick %u: %u attack events dropped (log full)\n",
@@ -893,6 +901,10 @@ struct Server : lua::MapChangeSink {
     // conditional.
     void tick_level(u32 li) {
         Level& L = level(li);
+        // Empty the transient queue before anything can fill it. Scripts run
+        // before the step and queue effects there, so the queue is cleared at
+        // the top of the tick rather than inside step().
+        L.world.clear_vfx();
         for (auto& [id, s] : sessions) {
             if (s.has_agent && s.level == li) L.world.set_input(s.agent, s.take());
         }

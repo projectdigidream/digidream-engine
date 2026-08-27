@@ -410,9 +410,6 @@ void World::step() noexcept {
     interacts_.clear();
     prop_events_.clear();
     attacks_.clear();
-    // Transients last exactly one tick. One held over would be drawn again on a
-    // snapshot that had nothing to do with it.
-    vfx_count_ = 0;
 
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from

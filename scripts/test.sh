@@ -135,6 +135,7 @@ else
      && node test/lua.test.js 2>/dev/null | tail -2 \
      && node test/doors.test.js 2>/dev/null | tail -2 \
      && node test/attack.test.js 2>/dev/null | tail -2 \
+     && node test/enemies.test.js 2>/dev/null | tail -2 \
      && node test/levels.test.js 2>/dev/null | tail -2 \
      && node test/live.test.js 2>/dev/null | tail -2)
 
@@ -158,6 +159,11 @@ else
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
   (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34494 DNP_LINK_PORT=34568 \
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
+  # Monsters chase a player. With nobody connected there is nothing to chase, so
+  # nothing may advance and nothing may shoot -- otherwise "the monster moved"
+  # is satisfied by anything that drifts.
+  (cd server/edge && DNP_ENEMY_IDLE=1 DNP_WT_PORT=34487 DNP_LINK_PORT=34587 \
+     node test/enemies.test.js 2>/dev/null | grep -E "CONTROL|enemies:")
   # A solid prop that stops you, and a swing that removes it: without the swing
   # the same walk must end in the same place, or `solid` is doing nothing.
   (cd server/edge && DNP_NO_ATTACK=1 DNP_WT_PORT=34499 DNP_LINK_PORT=34573 \

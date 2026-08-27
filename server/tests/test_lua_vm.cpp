@@ -285,6 +285,56 @@ static void test_the_jit_is_off_because_the_budget_requires_it() {
     std::printf("       jit.status() == false\n");
 }
 
+// Two scripts, one hook, and both must run.
+//
+// Hooks used to be plain globals, so the second script to write
+// `function on_tick()` silently replaced the first -- a map loading a door
+// library and a monster library lost every door the moment it gained a monster,
+// with nothing anywhere reporting it. Scripts could chain by capturing the
+// previous value, but a convention every author has to remember and no test can
+// check is not a mechanism.
+static void test_two_scripts_can_share_a_hook() {
+    std::printf("lua: two scripts registering the same hook both run, in load order\n");
+
+    const char* a_path = "/tmp/dnp_hook_a.lua";
+    const char* b_path = "/tmp/dnp_hook_b.lua";
+    const char* a_src = "ORDER = {}\nfunction on_tick() ORDER[#ORDER + 1] = 'a' end\n";
+    const char* b_src = "function on_tick() ORDER[#ORDER + 1] = 'b' end\n";
+    const char* paths[] = {a_path, b_path};
+    const char* srcs[] = {a_src, b_src};
+    for (int i = 0; i < 2; ++i) {
+        std::FILE* f = std::fopen(paths[i], "wb");
+        if (f) { std::fwrite(srcs[i], 1, std::strlen(srcs[i]), f); std::fclose(f); }
+    }
+
+    Vm vm;
+    VmConfig cfg;
+    CHECK(vm.open(cfg));
+    CHECK(vm.run_file(a_path, "a"));
+    CHECK(vm.run_file(b_path, "b"));
+
+    CHECK(vm.hook_count("on_tick") == 2);
+    // A hook nobody registered has no handlers, rather than one that happens to
+    // be nil.
+    CHECK(vm.hook_count("on_crush") == 0);
+
+    vm.begin_tick();
+    vm.call_hook("on_tick", 1);
+    vm.end_tick(1);
+
+    // Both ran, and in LOAD ORDER -- which is the order a map declared its
+    // scripts, and the only order an author can reason about.
+    CHECK(run(vm, "assert(#ORDER == 2 and ORDER[1] == 'a' and ORDER[2] == 'b')"));
+
+    // CONTROL: the global is cleared once harvested, so the old
+    // capture-the-previous-value idiom finds nothing and cannot double-call.
+    // Without this the mechanism and the convention would both be live.
+    CHECK(run(vm, "assert(on_tick == nil)"));
+
+    std::remove(a_path);
+    std::remove(b_path);
+}
+
 int main() {
     std::printf("== server/lua vm suite ==\n");
     test_full_trust_reaches_the_machine();
@@ -297,6 +347,7 @@ int main() {
     test_string_metatable_is_locked();
     test_collectgarbage_is_the_hosts_job();
     test_the_jit_is_off_because_the_budget_requires_it();
+    test_two_scripts_can_share_a_hook();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

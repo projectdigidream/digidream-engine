@@ -298,6 +298,8 @@ bool Vm::run_file(const char* path, const char* name) {
         ++stats_.errors;
         return false;
     }
+    // Collect whatever hooks this chunk defined before the next one runs.
+    harvest_hooks();
     return true;
 }
 
@@ -325,12 +327,74 @@ void Vm::end_tick(u32 tick) {
     }
 }
 
-bool Vm::begin_hook(const char* fn_name) {
+// The registry table holding every hook's handler list.
+static const char* const HOOKS_KEY = "dnp.hooks";
+
+// Every hook the engine dispatches. Named in one place so harvesting and
+// calling cannot disagree about what a hook is.
+static const char* const HOOK_NAMES[] = {
+    "on_tick", "on_post_tick", "on_interact", "on_cross",
+    "on_touch", "on_prop_use", "on_attack", "on_crush",
+};
+
+// Push the handler list for `fn_name`, creating it if absent. Leaves the table
+// on the stack.
+static void push_hook_list(lua_State* L, const char* fn_name) {
+    lua_getfield(L, LUA_REGISTRYINDEX, HOOKS_KEY);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, HOOKS_KEY);
+    }
+    lua_getfield(L, -1, fn_name);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, fn_name);
+    }
+    lua_remove(L, -2);   // drop the outer hooks table
+}
+
+void Vm::harvest_hooks() {
+    if (!L_) return;
+    for (const char* name : HOOK_NAMES) {
+        lua_getglobal(L_, name);
+        if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); continue; }
+
+        push_hook_list(L_, name);
+        const int n = static_cast<int>(lua_objlen(L_, -1));
+        lua_pushvalue(L_, -2);          // the function
+        lua_rawseti(L_, -2, n + 1);
+        lua_pop(L_, 2);                 // list, function
+
+        // Cleared, so the NEXT script starts from nothing. Without this a
+        // script would see the previous one's handler as a global and the old
+        // "capture and chain" idiom would call it twice.
+        lua_pushnil(L_);
+        lua_setglobal(L_, name);
+    }
+}
+
+u32 Vm::hook_count(const char* fn_name) const {
+    if (!L_) return 0;
+    push_hook_list(L_, fn_name);
+    const u32 n = static_cast<u32>(lua_objlen(L_, -1));
+    lua_pop(L_, 1);
+    return n;
+}
+
+bool Vm::begin_hook_at(const char* fn_name, u32 i) {
     if (!L_) return false;
-    lua_getglobal(L_, fn_name);
+    push_hook_list(L_, fn_name);
+    lua_rawgeti(L_, -1, static_cast<int>(i) + 1);
+    lua_remove(L_, -2);
     if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); return false; }
     return true;
 }
+
+bool Vm::begin_hook(const char* fn_name) { return begin_hook_at(fn_name, 0); }
 
 void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
     if (!L_) return;
@@ -358,8 +422,14 @@ void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
 }
 
 void Vm::call_hook(const char* fn_name, u32 tick) {
-    if (!begin_hook(fn_name)) return;
-    end_hook(fn_name, tick, 0);
+    // Every registered handler, in load order. Each gets its own per-call
+    // budget; the per-tick total keeps accumulating across them, so ten cheap
+    // scripts still cannot blow the frame between them.
+    const u32 n = hook_count(fn_name);
+    for (u32 i = 0; i < n; ++i) {
+        if (!begin_hook_at(fn_name, i)) continue;
+        end_hook(fn_name, tick, 0);
+    }
 }
 
 void Vm::gc_step() {

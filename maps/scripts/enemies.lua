@@ -120,17 +120,14 @@ local function fire_projectile(m, from, aim)
   shots[p:index()] = { p = p, dir = dir, speed = m.def.speed_shot, born = dnp.tick() }
 end
 
--- CHAINED, not replaced.
+-- No chaining needed, and none possible.
 --
--- Hooks are globals, so a second script defining on_tick silently takes over
--- from the first -- and a map that loads both this and doom.lua would lose
--- every door the moment it gained a monster. Capturing the previous one and
--- calling it is the only thing that composes.
-local prev_tick = on_tick
-local prev_touch = on_touch
-
+-- The engine collects each script's hooks after it loads and calls every one of
+-- them in load order, so two scripts defining on_tick both run. This used to be
+-- a plain global, where the second definition silently replaced the first --
+-- and a map loading both this and doom.lua lost every door the moment it gained
+-- a monster.
 function on_tick()
-  if prev_tick then prev_tick() end
   local tick = dnp.tick()
 
 
@@ -213,7 +210,6 @@ end
 -- A fireball that touches something goes off. Reported by the engine's overlap
 -- test, which is the same one a key uses -- a projectile is a pickup that hurts.
 function on_touch(entity, prop)
-  if prev_touch then prev_touch(entity, prop) end
   local s = shots[prop:index()]
   if s == nil then return end
   shots[prop:index()] = nil

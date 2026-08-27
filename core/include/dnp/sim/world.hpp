@@ -269,6 +269,14 @@ public:
     // a client that draws one has not diverged from a client that dropped it.
     // Cleared every tick, so a dropped datagram loses the effect rather than
     // replaying it late.
+    // Emptied by the HOST at the start of its tick, not by step().
+    //
+    // Everything else step() clears is something step() FILLS -- crushes,
+    // interactions, attacks. The transient queue is filled by SCRIPT, which
+    // runs before the step, so clearing it in step() threw away every effect
+    // queued that tick before anything could send it. A queue is cleared by
+    // whoever writes to it.
+    void clear_vfx() noexcept { vfx_count_ = 0; }
     u32 vfx_count() const noexcept { return vfx_count_; }
     const PendingVfx& vfx(u32 i) const noexcept { return vfx_[i]; }
     bool push_vfx(const PendingVfx& v) noexcept {

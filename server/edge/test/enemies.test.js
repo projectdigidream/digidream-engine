@@ -36,9 +36,12 @@ const ROOT = join(HERE, '..', '..', '..')
 const CERTS = join(HERE, '..', 'certs')
 const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34486)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34586)
-// CONTROL: connect, then never send an input and never appear as a target...
-// which is impossible, so instead: stand still far away. A monster that
-// advances on a player it cannot see is not chasing anything.
+// CONTROL: no player at all.
+//
+// The monsters spawn when the map loads, so a run that never connects a client
+// exercises exactly the branch where there is nothing to chase. "The monster
+// moved" and "the monster shot" are otherwise satisfied by anything that
+// drifts or fires on a timer.
 const IDLE_ONLY = process.env.DNP_ENEMY_IDLE === '1'
 
 const KIND_ZOMBIEMAN = 20
@@ -136,10 +139,14 @@ const snapshots = []
   } catch {}
 })()
 
-await cw.write(encodeHello())
-await waitFor(() => welcome, 8000, 'welcome')
-await waitFor(() => acc.complete, 8000, 'map')
-check(acc.complete, 'map loaded')
+// In the control, the client connects and asks for nothing: no HELLO means no
+// agent, so the server has a level with monsters in it and nobody to chase.
+if (!IDLE_ONLY) {
+  await cw.write(encodeHello())
+  await waitFor(() => welcome, 8000, 'welcome')
+  await waitFor(() => acc.complete, 8000, 'map')
+  check(acc.complete, 'map loaded')
+}
 
 // Enemies, by the kind they declare. This client has no table of monsters.
 const seen = new Map()       // entity index -> { kind, first: {x,y}, last: {x,y} }
@@ -189,12 +196,14 @@ const enemies = [...seen.entries()].filter(([, r]) => r.kind === KIND_ZOMBIEMAN 
 console.log(`  ${enemies.length} enemies replicated: ` +
             enemies.map(([i, r]) => `${i}:kind ${r.kind} anim ${r.anim}`).join(', '))
 
-check(enemies.length === 2, `both monsters replicated (${enemies.length})`)
-check(enemies.some(([, r]) => r.kind === KIND_ZOMBIEMAN), 'a zombieman, by the kind it declared')
-check(enemies.some(([, r]) => r.kind === KIND_IMP), 'and an imp')
-// Below MAX_AGENTS: an enemy is an agent, which is what gives it the player's
-// mover rather than a second one.
-check(enemies.every(([i]) => i <= 64), 'in agent slots, not prop slots')
+if (!IDLE_ONLY) {
+  check(enemies.length === 2, `both monsters replicated (${enemies.length})`)
+  check(enemies.some(([, r]) => r.kind === KIND_ZOMBIEMAN), 'a zombieman, by the kind it declared')
+  check(enemies.some(([, r]) => r.kind === KIND_IMP), 'and an imp')
+  // Below MAX_AGENTS: an enemy is an agent, which is what gives it the
+  // player's mover rather than a second one.
+  check(enemies.every(([i]) => i <= 64), 'in agent slots, not prop slots')
+}
 
 const moved = enemies.filter(([, r]) => r.first && r.last &&
   Math.hypot(r.last.x - r.first.x, r.last.y - r.first.y) > 0.5)
@@ -203,8 +212,12 @@ console.log('  movement: ' + enemies.map(([i, r]) =>
                      (r.last?.y ?? 0) - (r.first?.y ?? 0)).toFixed(2)}`).join(', '))
 
 if (IDLE_ONLY) {
-  check(moved.length === 0, 'CONTROL: with nothing in sight, nothing advances')
+  // Nothing arrives at all without a HELLO, which is the point: the assertion
+  // is about the SERVER's log, not about what was replicated.
+  const shot = serverLog.includes('[trace]')
+  check(!shot, 'CONTROL: with nobody connected, nothing is chased')
   check(vfxSeen.length === 0, 'CONTROL: and nothing shoots')
+  check(seen.size === 0, 'CONTROL: and a client that never said HELLO gets no entities')
 } else {
   check(moved.length > 0, `${moved.length} of them closed on the player`)
 

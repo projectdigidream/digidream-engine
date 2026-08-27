@@ -12,8 +12,11 @@
 -- Two monsters, north of the spawn where the door test does not walk. Placed
 -- from here rather than by the converter because this is a hand-authored map:
 -- what a map contains is the map's business.
-enemies.spawn("zombieman", 240, 480, 48)
-enemies.spawn("imp",       144, 480, 48)
+-- Inside the room, not on its wall. Sector 0 spans y 0..10 and these were at
+-- y = 480/48 = 10 exactly -- standing in the north wall, which is why they
+-- appeared to "move" 17 units without ever seeing anybody.
+enemies.spawn("zombieman", 288, 384, 48)
+enemies.spawn("imp",       144, 384, 48)
 
 doom.load{
   name = "doors",

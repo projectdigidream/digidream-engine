@@ -140,6 +140,21 @@ public:
     bool begin_hook(const char* fn_name);
     void end_hook(const char* fn_name, u32 tick, int nargs);
 
+    // How many scripts registered a handler for this hook, and pushing the i-th
+    // of them.
+    //
+    // A LIST, not a global. Hooks used to be plain globals, so the second
+    // script to write `function on_tick()` silently replaced the first -- a map
+    // that loaded a door library and a monster library lost every door the
+    // moment it gained a monster, with nothing anywhere reporting it. Scripts
+    // could chain by capturing the previous value, but a convention every
+    // author must remember and no test can check is not a mechanism.
+    //
+    // Handlers are collected after each chunk runs and called in LOAD ORDER,
+    // which is the order the map declared its scripts in.
+    u32  hook_count(const char* fn_name) const;
+    bool begin_hook_at(const char* fn_name, u32 i);
+
     const char* last_error() const noexcept { return err_; }
 
     // Which script is running, for log attribution.
@@ -150,6 +165,8 @@ private:
     static void count_hook(lua_State* L, lua_Debug* ar);
 
     void install_environment();
+    // Move any hook functions a chunk defined into their handler lists.
+    void harvest_hooks();
 
     lua_State* L_ = nullptr;
     VmConfig   cfg_{};
