@@ -19,4 +19,20 @@ void CrushLog::hash_into(StateHasher& h) const noexcept {
     }
 }
 
+void InteractLog::hash_into(StateHasher& h) const noexcept {
+    // Hashed for the same reason the crush log is: the events are a pure
+    // function of state the gate already covers, so this adds no information
+    // about the world -- what it adds is coverage of the DETECTION. A reach
+    // that found a different side under wasm would otherwise be found by a
+    // player standing at a door that does not open.
+    h.u32v(count_);
+    h.u32v(dropped_);
+    for (u32 i = 0; i < count_; ++i) {
+        h.u32v(events_[i].entity);
+        h.u32v(events_[i].side);
+        h.i32v(events_[i].sector);
+        h.byte(static_cast<unsigned char>(events_[i].kind));
+    }
+}
+
 }  // namespace dnp::sim

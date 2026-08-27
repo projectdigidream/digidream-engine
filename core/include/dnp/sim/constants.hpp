@@ -37,4 +37,12 @@ inline constexpr fx GRAVITY = fx::from_frac(-1600, 100);
 // discrete one (design 7.1, CCD). Below it, the cheaper check is used.
 inline constexpr fx CCD_DISPLACEMENT_THRESHOLD = fx::from_frac(1, 4);
 
+// How far an entity can reach to work a switch, a door or a lift.
+//
+// A CONSTANT, not a parameter, for the same reason STEP_HEIGHT is: a client
+// predicts against these rules, and a server that let entities reach further
+// would make every client's idea of what it can touch wrong. 1.5 units is
+// about 72 at a converted Doom map's scale, against Doom's own 64.
+inline constexpr fx INTERACT_REACH = fx::from_frac(3, 2);
+
 }  // namespace dnp::sim

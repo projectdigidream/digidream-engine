@@ -25,6 +25,7 @@
 //                 ticks and inside it at neither.
 //
 #include "dnp/geom/map.hpp"
+#include "dnp/math/trig.hpp"
 #include "dnp/sim/constants.hpp"
 
 namespace dnp::physics {
@@ -165,6 +166,19 @@ SweepContact resolve_slabs(const geom::MapData& map, fx2& p, fx radius,
 // into the wall rather than away from it.
 i32 find_side_with_flag(const geom::MapData& map, i32 sector, fx2 p, fx radius,
                         u8 flag, fx2& out_normal) noexcept;
+
+// The side an entity is reaching for, or -1.
+//
+// The nearest side of its own sector within INTERACT_REACH that lies in front
+// of it. Deliberately not a ray cast: a ray through a doorway's exact centre is
+// a harsher test than a player expects, and "the nearest thing you are facing"
+// is both kinder and exactly as deterministic.
+//
+// Native and fixed, like every other query a client predicts against. What
+// HAPPENS when a side is worked is Lua's -- the engine reports that an entity
+// reached for one and stops there, the same division §3.1 draws for crushing.
+i32 find_interact_side(const geom::MapData& map, i32 sector, fx2 p, brad facing,
+                       fx reach, fx feet_z, fx body_height) noexcept;
 
 struct RayHit {
     bool hit = false;

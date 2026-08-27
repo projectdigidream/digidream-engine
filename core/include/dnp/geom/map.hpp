@@ -40,6 +40,15 @@ inline constexpr u8 BLOCKING  = 1u << 2;   // solid regardless of the neighbour
 // catching, and inferring openness would silently turn a mis-authored map into
 // a hole.
 inline constexpr u8 LEDGE     = 1u << 3;
+
+// A trip-wire: crossing this edge is reported to the game logic.
+//
+// A FLAG rather than a scan, because the alternative is testing every side an
+// entity moved near against its path every tick, on a map where about one side
+// in five hundred is a trigger. The map says which edges are trip-wires, the
+// engine reports the crossings, and what a crossing MEANS -- open that door,
+// once, or every time -- is script.
+inline constexpr u8 TRIGGER   = 1u << 4;
 }  // namespace side_flag
 
 struct Side {

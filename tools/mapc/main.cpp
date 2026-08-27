@@ -19,6 +19,7 @@
 //     vertex 40 0   neighbor 1     upper STEP2 lower STEP1 unpeg-lower
 //     vertex 40 40  wall           tex BRICK1 xoff 8
 //     vertex 0  40  wall climbable tex VINE1
+//     vertex 0  40  neighbor 3 trigger        -- crossing it is reported to Lua
 //   end
 //
 // `open` in place of `wall` or `neighbor` makes an edge the sector ENDS at: an
@@ -266,6 +267,7 @@ int main(int argc, char** argv) {
                 } else if (tok[i] == "climbable") v.flags |= side_flag::CLIMBABLE;
                 else if (tok[i] == "grapple") v.flags |= side_flag::GRAPPLE;
                 else if (tok[i] == "blocking") v.flags |= side_flag::BLOCKING;
+                else if (tok[i] == "trigger") v.flags |= side_flag::TRIGGER;
                 // Doom's three texture fields. `tex` is the middle one, which is
                 // the only one a solid wall has, so the common case stays one
                 // word rather than making every author write `middle`.

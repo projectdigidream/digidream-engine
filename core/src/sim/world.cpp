@@ -89,6 +89,7 @@ MoveCommand to_command(const proto::InputFrame& f) noexcept {
     if (f.buttons & proto::button::FLIGHT)  b |= act::FLIGHT;
     if (f.buttons & proto::button::GRAPPLE) b |= act::GRAPPLE;
     if (f.buttons & proto::button::CROUCH)  b |= act::PULL;   // grapple modifier
+    if (f.buttons & proto::button::INTERACT) b |= act::INTERACT;
     c.buttons = b;
     return c;
 }
@@ -101,8 +102,28 @@ void World::step_agent(u32 i) noexcept {
 
     a.facing = cmd.aim;
 
+    // Interaction, on the PRESS edge and before the move.
+    //
+    // Before, so that what an entity reaches for is what was in front of it
+    // when the button went down, not wherever the tick's movement carried it.
+    // Edge-triggered, or a held button works a door sixty times a second.
+    {
+        const bool want = (cmd.buttons & act::INTERACT) != 0;
+        if (want && !a.mv.interact_held && map_) {
+            const i32 side = physics::find_interact_side(
+                *map_, a.mv.sector, fx2{a.pos.x, a.pos.y}, a.facing,
+                INTERACT_REACH, a.pos.z, params_[i].height);
+            if (side >= 0) {
+                interacts_.push(InteractEvent{i, static_cast<u32>(side), a.mv.sector});
+            }
+        }
+        a.mv.interact_held = want;
+    }
+
     const bool was_anchored = a.mv.anchored;
     const i32  prev_anchor = a.mv.anchor;
+    const fx2  from2 = fx2{a.pos.x, a.pos.y};
+    const i32  from_sector = a.mv.sector;
 
     if (map_) {
         step_controller(*map_, params_[i], a.mv, cmd, a.pos, a.vel, DT);
@@ -124,6 +145,8 @@ void World::step_agent(u32 i) noexcept {
             if (mi >= 0) a.vel += motions_.at(static_cast<u32>(mi)).velocity();
             a.mv.anchored = false;
         }
+
+        report_crossings(i, from2, fx2{a.pos.x, a.pos.y}, from_sector);
     } else {
         // No map: integrate under gravity only. Not a hidden flat floor -- a
         // silently substituted floor turns a map-loading failure into a physics
@@ -131,6 +154,49 @@ void World::step_agent(u32 i) noexcept {
         a.vel.z += GRAVITY * params_[i].gravity_scale * DT;
         a.pos += a.vel * DT;
         a.mv.grounded = false;
+    }
+}
+
+// Trip-wires crossed by this tick's movement.
+//
+// Tested against the sides of the sector the entity STARTED in and the one it
+// ended in, not against the whole map. A two-sided edge belongs to both sectors
+// that meet at it, so any crossing that actually changed sectors is a side of
+// one of those two -- and an entity that crossed three sectors in one tick was
+// moving fast enough that Doom's own blockmap walk would have been the only
+// thing to catch it either.
+//
+// Only sides the map marked TRIGGER are tested at all, so the ordinary case is
+// a flag read per side and nothing else.
+void World::report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept {
+    if (!map_) return;
+    if (from.x == to.x && from.y == to.y) return;
+
+    const i32 to_sector = agents_[i].mv.sector;
+    const i32 sectors[2] = {from_sector, to_sector};
+    for (u32 k = 0; k < 2; ++k) {
+        const i32 sec = sectors[k];
+        if (sec < 0 || static_cast<u32>(sec) >= map_->sector_count) continue;
+        if (k == 1 && to_sector == from_sector) continue;
+
+        const geom::Sector& s = map_->sector(static_cast<u32>(sec));
+        for (u16 e = 0; e < s.side_count; ++e) {
+            const u32 si = s.first_side + e;
+            const geom::Side& sd = map_->side(si);
+            if ((sd.flags & geom::side_flag::TRIGGER) == 0) continue;
+            // The shared boundary is a side of BOTH sectors, so the second pass
+            // would find the same physical edge again and report the crossing
+            // twice -- once as the sector left, once as the one entered. A
+            // one-shot Lua trigger would then consume itself before the script
+            // ever ran, and a repeatable one would fire double. The edge that
+            // leads back where we came from is exactly that duplicate.
+            if (k == 1 && sd.neighbor == from_sector) continue;
+            fx t{};
+            if (!geom::segment_intersect(from, to, map_->point(sd.a), map_->point(sd.b), t)) {
+                continue;
+            }
+            interacts_.push(InteractEvent{i, si, sec, TouchKind::Cross});
+        }
     }
 }
 
@@ -271,6 +337,7 @@ void World::step() noexcept {
     // here rather than at the end -- a caller reading them after step() sees
     // exactly what this tick raised.
     crushes_.clear();
+    interacts_.clear();
 
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from
@@ -364,6 +431,7 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.jump_held);
     h.boolv(m.dash_held);
     h.boolv(m.grapple_held);
+    h.boolv(m.interact_held);
     h.fxv(m.dash_timer);
     h.fxv(m.dash_cooldown_timer);
     h.vec2(m.dash_dir);
@@ -392,6 +460,7 @@ u64 World::hash() const noexcept {
     h.u32v(tick_);
     motions_.hash_into(h);
     crushes_.hash_into(h);
+    interacts_.hash_into(h);
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         h.boolv(agents_[i].active);
         if (!agents_[i].active) continue;

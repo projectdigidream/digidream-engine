@@ -23,6 +23,9 @@ import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
+// The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
+// which is proto's INTERACT bit, so pressing C sent "use".
+import { BUTTON } from './proto.js'
 import { MapAccumulator } from './maploader.js'
 import { MSG } from './proto.js'
 
@@ -302,7 +305,6 @@ addEventListener('wheel', (e) => {
 
 // --- input -----------------------------------------------------------------
 
-const BUTTON = { JUMP: 1 << 0, DASH: 1 << 1, CLIMB: 1 << 2, HOVER: 1 << 3, FLIGHT: 1 << 4, GRAPPLE: 1 << 5, CROUCH: 1 << 6 }
 const held = new Set()
 addEventListener('keydown', (e) => { held.add(e.code); if (e.code === 'Space') e.preventDefault() })
 addEventListener('keyup', (e) => held.delete(e.code))
@@ -335,7 +337,10 @@ function currentInput () {
   let buttons = 0
   if (held.has('Space')) buttons |= BUTTON.JUMP
   if (held.has('ShiftLeft') || held.has('ShiftRight')) buttons |= BUTTON.DASH
-  if (held.has('KeyE')) buttons |= BUTTON.CLIMB
+  // E is USE: work a door, throw a switch. Climb is deliberately UNBOUND --
+  // it is about to change shape, and leaving a key wired to the old behaviour
+  // would make the change look like a regression in whatever it lands on.
+  if (held.has('KeyE')) buttons |= BUTTON.INTERACT
   if (held.has('KeyC')) buttons |= BUTTON.CROUCH
 
   const aim = wx === 0 && wy === 0 ? 0 : Math.round((Math.atan2(wy, wx) / (Math.PI * 2)) * 4294967296) >>> 0

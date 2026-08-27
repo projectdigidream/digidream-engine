@@ -101,9 +101,13 @@ struct MoveState {
 
     // Edge detection. Held input must not re-trigger, so the previous frame's
     // button state is part of the simulation, not of the input pipeline.
-    bool jump_held    = false;
-    bool dash_held    = false;
-    bool grapple_held = false;
+    bool jump_held     = false;
+    bool dash_held     = false;
+    bool grapple_held  = false;
+    // Interaction is edge-triggered like the rest: held INTERACT must not fire
+    // a door every tick. The flag is simulation state and is hashed, so a
+    // reconciliation replay resumes from the right edge rather than re-pressing.
+    bool interact_held = false;
 
     fx  dash_timer{};
     fx  dash_cooldown_timer{};
@@ -132,7 +136,8 @@ inline constexpr u16 CLIMB   = 1u << 2;
 inline constexpr u16 HOVER   = 1u << 3;
 inline constexpr u16 FLIGHT  = 1u << 4;
 inline constexpr u16 GRAPPLE = 1u << 5;
-inline constexpr u16 PULL    = 1u << 6;   // modifier: reel in instead of swing
+inline constexpr u16 PULL     = 1u << 6;   // modifier: reel in instead of swing
+inline constexpr u16 INTERACT = 1u << 7;   // work a switch, door or lift
 }  // namespace act
 
 struct MoveCommand {

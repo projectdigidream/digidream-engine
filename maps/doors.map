@@ -1,0 +1,59 @@
+# Doors, switches and trip-wires (§3.2.2).
+#
+# Shaped like a converted Doom map rather than like a hand-authored one,
+# because the thing under test is the path a converted map takes: a door is a
+# SECTOR whose ceiling rests on its floor, opened by working the side in front
+# of it; a trip-wire is a side marked `trigger`, crossed rather than pushed.
+#
+#   room A  --[door]--  room B1  |  room B2  --[lift]
+#            side 2               trip-wire
+#
+# The door is shut in the geometry (ceil == floor), exactly as Doom stores one,
+# so "the door opened" is a claim about the ceiling having moved and not about
+# a flag somewhere.
+
+sector floor 0 ceil 8 tag 1 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 0 0    wall tex STARTAN3
+  vertex 10 0   wall tex STARTAN3
+  vertex 10 3   neighbor 1
+  vertex 10 7   wall tex STARTAN3
+  vertex 10 10  wall tex STARTAN3
+  vertex 0 10   wall tex STARTAN3
+end
+
+# The door. Closed: its ceiling sits on its floor.
+sector floor 0 ceil 0 tag 2 light 160 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 10 3  wall tex DOORSTOP
+  vertex 12 3  neighbor 2
+  vertex 12 7  wall tex DOORSTOP
+  vertex 10 7  neighbor 0
+end
+
+sector floor 0 ceil 8 tag 3 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 12 0   wall tex STARTAN3
+  vertex 17 0   neighbor 3 trigger
+  vertex 17 10  wall tex STARTAN3
+  vertex 12 10  wall tex STARTAN3
+  vertex 12 7   neighbor 1
+  vertex 12 3   wall tex STARTAN3
+end
+
+sector floor 0 ceil 8 tag 4 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 17 0   wall tex STARTAN3
+  vertex 22 0   wall tex STARTAN3
+  vertex 22 3   neighbor 4
+  vertex 22 7   wall tex STARTAN3
+  vertex 22 10  wall tex STARTAN3
+  vertex 17 10  neighbor 2 trigger
+end
+
+# The lift, parked up at 3 so lowering it to its lowest neighbour is visible.
+sector floor 3 ceil 8 tag 5 light 180 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 22 3  wall tex STARTAN3
+  vertex 26 3  wall tex STARTAN3
+  vertex 26 7  wall tex STARTAN3
+  vertex 22 7  neighbor 3
+end
+
+spawn start 5 5 1
+spawn behind_door 14 5 1

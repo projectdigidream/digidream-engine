@@ -129,6 +129,17 @@ public:
     // with it, and must not be silently ignored either.
     void call_hook(const char* fn_name, u32 tick);
 
+    // The same call, in two halves, for hooks that take arguments.
+    //
+    // Split rather than variadic because the arguments are Lua VALUES -- an
+    // entity userdata, a sector userdata -- that only the world binding knows
+    // how to build. begin_hook() leaves the function on the stack if it exists
+    // (and returns false, having pushed nothing, if it does not); the caller
+    // pushes exactly `nargs` values; end_hook() runs it under the same budget,
+    // error handling and accounting as call_hook.
+    bool begin_hook(const char* fn_name);
+    void end_hook(const char* fn_name, u32 tick, int nargs);
+
     const char* last_error() const noexcept { return err_; }
 
     // Which script is running, for log attribution.

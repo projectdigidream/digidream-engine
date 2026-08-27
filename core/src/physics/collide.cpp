@@ -582,6 +582,36 @@ i32 find_side_with_flag(const MapData& map, i32 sector, fx2 p, fx radius,
     return best;
 }
 
+i32 find_interact_side(const MapData& map, i32 sector, fx2 p, brad facing,
+                      fx reach, fx feet_z, fx body_height) noexcept {
+    (void)feet_z;
+    (void)body_height;
+    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return -1;
+
+    const fx2 dir = fx_dir(facing);
+    const Sector& sec = map.sector(static_cast<u32>(sector));
+    const u128 reach_sq = static_cast<u128>(static_cast<i128>(reach.raw) * reach.raw);
+
+    i32  best = -1;
+    u128 best_d = reach_sq;
+    for (u16 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        const Side& sd = map.side(si);
+        const fx2 closest = closest_point_on_segment(map.point(sd.a), map.point(sd.b), p);
+        const fx2 toward = closest - p;
+        const u128 d_sq = len_sq_raw(toward);
+        // Strictly nearer, so ties resolve to the lower side index rather than
+        // to whichever the loop reached last.
+        if (d_sq >= best_d) continue;
+        // In FRONT. Without this an entity standing between two doors works the
+        // one behind it whenever that one happens to be marginally closer.
+        if (dot(dir, toward) <= fx::zero()) continue;
+        best_d = d_sq;
+        best = static_cast<i32>(si);
+    }
+    return best;
+}
+
 RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
                u8 flag) noexcept {
     RayHit hit;

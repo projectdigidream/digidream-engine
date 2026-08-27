@@ -59,7 +59,12 @@ constexpr int BUF32_GRAP_PULL = 12;
 constexpr int BUF32_GROUNDED  = 13;
 constexpr int BUF32_ANCHOR    = 14;   // sector + 1, 0 == none
 constexpr int BUF32_ANCHORED  = 15;
-constexpr int BUF32_LEN       = 16;
+// Appended, and the reason is worth stating once for the next field: this
+// layout is mirrored by hand in client/src/core.js, so a field INSERTED here
+// silently renumbers every one after it on the C++ side only, and the two
+// halves disagree about which slot means "grounded".
+constexpr int BUF32_INTR_HELD = 16;
+constexpr int BUF32_LEN       = 17;
 
 }  // namespace
 
@@ -426,6 +431,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_GROUNDED]  = m.grounded ? 1u : 0u;
     out32[BUF32_ANCHOR]    = m.anchor >= 0 ? static_cast<unsigned>(m.anchor) + 1u : 0u;
     out32[BUF32_ANCHORED]  = m.anchored ? 1u : 0u;
+    out32[BUF32_INTR_HELD] = m.interact_held ? 1u : 0u;
 }
 
 // Adopt authoritative state. This is step 2 of reconciliation
@@ -476,6 +482,7 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.anchor = in32[BUF32_ANCHOR] == 0
                    ? -1 : static_cast<i32>(in32[BUF32_ANCHOR]) - 1;
     m.anchored = in32[BUF32_ANCHORED] != 0;
+    m.interact_held = in32[BUF32_INTR_HELD] != 0;
 }
 
 // Input quantisation, exposed so the client uses the SAME function the server

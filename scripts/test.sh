@@ -31,6 +31,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_mapfile"
 "./build/$HOST_ARCH/test_sectormotion"
 "./build/$HOST_ARCH/test_crush"
+"./build/$HOST_ARCH/test_interact"
 "./build/$HOST_ARCH/test_nav"
 "./build/$HOST_ARCH/test_rail"
 
@@ -40,6 +41,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/test.map  "build/$HOST_ARCH/test.dnpm"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
+"./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
 # Floating platforms with open edges -- the only map here that is not a sealed
 # box, and the only one where walking off an edge is a fall rather than a wall.
 "./build/$HOST_ARCH/mapc" maps/void.map   "build/$HOST_ARCH/void.dnpm"
@@ -125,6 +127,7 @@ else
      && node test/phase3.test.js 2>/dev/null | tail -2 \
      && node test/params.test.js 2>/dev/null | tail -2 \
      && node test/lua.test.js 2>/dev/null | tail -2 \
+     && node test/doors.test.js 2>/dev/null | tail -2 \
      && node test/live.test.js 2>/dev/null | tail -2)
 
   # The control case: a client that ignores the replicated motion parameters
@@ -140,6 +143,13 @@ else
   # moves, which is what proves the engine is not still driving it quietly.
   (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34498 DNP_LINK_PORT=34582 \
      node test/phase3.test.js 2>/dev/null | grep -E "CONTROL|phase3:")
+  # Doors: the same walk with the button never pressed must leave the door
+  # shut, and with no script at all nothing may move. The first proves the door
+  # is not on a timer; the second proves the engine reports rather than acts.
+  (cd server/edge && DNP_NO_USE=1 DNP_WT_PORT=34493 DNP_LINK_PORT=34567 \
+     node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
+  (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34494 DNP_LINK_PORT=34568 \
+     node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
   # And the other half of §3.1.2: a client that discards the STREAMED offsets
   # has nothing for anchor-relative prediction to be relative to.
   (cd server/edge && DNP_IGNORE_OFFSETS=1 DNP_WT_PORT=34486 DNP_LINK_PORT=34556 \

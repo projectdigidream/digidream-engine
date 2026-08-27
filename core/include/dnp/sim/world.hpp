@@ -97,6 +97,10 @@ public:
     // consequence is Lua's and Lua is not predicted.
     const CrushLog& crushes() const noexcept { return crushes_; }
 
+    // Entities that reached for a side this tick (Doom's use key). Rebuilt every
+    // step like the crush log; the server drains it and hands it to Lua.
+    const InteractLog& interactions() const noexcept { return interacts_; }
+
     u32 tick() const noexcept { return tick_; }
 
     // Align the simulation clock to the server's.
@@ -136,6 +140,7 @@ public:
 
 private:
     void step_agent(u32 i) noexcept;
+    void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;
 
     // The frame positions are hashed in: the offset of an unpredictable anchor,
     // or zero. See the definition -- this is design §3.2.5's fallback.
@@ -155,6 +160,7 @@ private:
     geom::MapStorage*    store_ = nullptr;
     SectorMotionSet      motions_{};
     CrushLog             crushes_{};
+    InteractLog          interacts_{};
 
     AgentState           agents_[MAX_AGENTS]{};
     u8                   generation_[MAX_AGENTS]{};

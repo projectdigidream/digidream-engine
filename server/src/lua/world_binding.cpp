@@ -269,12 +269,6 @@ u32 check_sector(lua_State* L, int idx) {
     return 0;
 }
 
-void push_sector(lua_State* L, u32 index) {
-    *static_cast<u32*>(lua_newuserdata(L, sizeof(u32))) = index;
-    luaL_getmetatable(L, SECTOR_MT);
-    lua_setmetatable(L, -2);
-}
-
 bool sector_in_range(WorldContext& ctx, u32 s) {
     return ctx.world->map() && s < ctx.world->map()->sector_count;
 }
@@ -379,6 +373,39 @@ int l_sector_offset(lua_State* L) {
     return 1;
 }
 
+// sector:neighbors() -> { sector, ... }
+//
+// Computed live rather than baked into the map, because Doom's floor actions
+// are defined against the CURRENT heights of the neighbours: "raise to the next
+// higher floor" means the next higher floor at the moment the switch is thrown,
+// and a staircase built by an earlier trigger changes the answer.
+//
+// Ascending sector index, deduplicated: two sectors that share several edges
+// are one neighbour, and a script summing over the list would otherwise weight
+// them twice.
+int l_sector_neighbors(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s)) { lua_pushnil(L); return 1; }
+    const geom::MapData* m = ctx.world->map();
+    const geom::Sector& sec = m->sector(s);
+
+    lua_newtable(L);
+    int n = 0;
+    for (u16 e = 0; e < sec.side_count; ++e) {
+        const i32 nb = m->side(sec.first_side + e).neighbor;
+        if (nb < 0) continue;
+        bool seen = false;
+        for (u16 k = 0; k < e && !seen; ++k) {
+            seen = m->side(sec.first_side + k).neighbor == nb;
+        }
+        if (seen) continue;
+        push_sector(L, static_cast<u32>(nb));
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 int l_sector_eq(lua_State* L) {
     lua_pushboolean(L, check_sector(L, 1) == check_sector(L, 2));
     return 1;
@@ -395,6 +422,7 @@ const luaL_Reg SECTOR_METHODS[] = {
     {"floor", l_sector_floor},
     {"ceil", l_sector_ceil},
     {"offset", l_sector_offset},
+    {"neighbors", l_sector_neighbors},
     {"move_parametric", l_sector_move_parametric},
     {"set_offset", l_sector_set_offset},
     {nullptr, nullptr},
@@ -456,6 +484,48 @@ int l_dnp_random(lua_State* L) {
     return 1;
 }
 
+// dnp.sector(i) -> sector, or nil.
+//
+// Alongside dnp.sectors() rather than replacing it: a script that wants one
+// sector by index should not build a table of eight hundred to get it, which
+// on a converted Doom map is what dnp.sectors() costs every call.
+int l_dnp_sector(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const int i = static_cast<int>(luaL_checknumber(L, 1));
+    const u32 n = ctx.world->map() ? ctx.world->map()->sector_count : 0;
+    if (i < 0 || static_cast<u32>(i) >= n) { lua_pushnil(L); return 1; }
+    push_sector(L, static_cast<u32>(i));
+    return 1;
+}
+
+// dnp.side(i) -> { neighbor = sector | nil, climbable, grapple, blocking, ledge }
+//
+// A plain table, not a userdata: a side has no identity worth carrying and no
+// mutator, so there is nothing for a handle type to protect. `neighbor` is a
+// SECTOR handle rather than an index, so `dnp.side(n).neighbor:move_parametric`
+// reads as one thought -- which is exactly what a door script does with it.
+int l_dnp_side(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const int i = static_cast<int>(luaL_checknumber(L, 1));
+    const geom::MapData* m = ctx.world->map();
+    if (!m || i < 0 || static_cast<u32>(i) >= m->side_count) { lua_pushnil(L); return 1; }
+    const geom::Side& sd = m->side(static_cast<u32>(i));
+
+    lua_newtable(L);
+    if (sd.neighbor >= 0) push_sector(L, static_cast<u32>(sd.neighbor));
+    else                  lua_pushnil(L);
+    lua_setfield(L, -2, "neighbor");
+    lua_pushboolean(L, (sd.flags & geom::side_flag::CLIMBABLE) != 0);
+    lua_setfield(L, -2, "climbable");
+    lua_pushboolean(L, (sd.flags & geom::side_flag::GRAPPLE) != 0);
+    lua_setfield(L, -2, "grapple");
+    lua_pushboolean(L, (sd.flags & geom::side_flag::BLOCKING) != 0);
+    lua_setfield(L, -2, "blocking");
+    lua_pushboolean(L, (sd.flags & geom::side_flag::LEDGE) != 0);
+    lua_setfield(L, -2, "ledge");
+    return 1;
+}
+
 int l_dnp_stale_ops(lua_State* L) {
     lua_pushnumber(L, static_cast<lua_Number>(ctx_of(L).stats.stale_handle_ops));
     return 1;
@@ -466,12 +536,20 @@ const luaL_Reg DNP_FUNCS[] = {
     {"entity", l_dnp_entity},
     {"entities", l_dnp_entities},
     {"sectors", l_dnp_sectors},
+    {"sector", l_dnp_sector},
+    {"side", l_dnp_side},
     {"random", l_dnp_random},
     {"stale_handle_ops", l_dnp_stale_ops},
     {nullptr, nullptr},
 };
 
 }  // namespace
+
+void push_sector(lua_State* L, u32 index) {
+    *static_cast<u32*>(lua_newuserdata(L, sizeof(u32))) = index;
+    luaL_getmetatable(L, SECTOR_MT);
+    lua_setmetatable(L, -2);
+}
 
 void push_entity(lua_State* L, WorldContext& ctx, u32 index) {
     if (index >= sim::MAX_AGENTS || !ctx.world->agent(index).active) {

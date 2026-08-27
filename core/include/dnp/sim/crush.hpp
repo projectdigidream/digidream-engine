@@ -82,4 +82,45 @@ private:
     u32        dropped_ = 0;
 };
 
+// An entity reached for a side (design §3.2.2's interaction, and Doom's use key).
+//
+// Reported, not acted on. What a side DOES when worked -- open, lower, switch,
+// nothing -- is a gameplay decision, and gameplay is server Lua. The engine
+// answers "who reached for what", which is the same division crushing draws.
+enum class TouchKind : u8 {
+    // Reached for it deliberately: Doom's use key, a switch, a manual door.
+    Use = 0,
+    // Walked across it. Doom's W1/WR line specials, and by a wide margin the
+    // most common trigger class in its maps -- teleports, remote doors and
+    // lifts are nearly all trip-wires rather than switches.
+    Cross = 1,
+};
+
+struct InteractEvent {
+    u32 entity = 0;
+    u32 side = 0;
+    i32 sector = -1;
+    TouchKind kind = TouchKind::Use;
+};
+
+inline constexpr u32 MAX_INTERACT_EVENTS = 32;
+
+class InteractLog {
+public:
+    void clear() noexcept { count_ = 0; dropped_ = 0; }
+    void push(const InteractEvent& e) noexcept {
+        if (count_ >= MAX_INTERACT_EVENTS) { ++dropped_; return; }
+        events_[count_++] = e;
+    }
+    u32 count() const noexcept { return count_; }
+    const InteractEvent& at(u32 i) const noexcept { return events_[i]; }
+    u32 dropped() const noexcept { return dropped_; }
+    void hash_into(StateHasher& h) const noexcept;
+
+private:
+    InteractEvent events_[MAX_INTERACT_EVENTS]{};
+    u32 count_ = 0;
+    u32 dropped_ = 0;
+};
+
 }  // namespace dnp::sim

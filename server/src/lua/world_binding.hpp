@@ -63,4 +63,9 @@ void open_world(lua_State* L, WorldContext* ctx);
 // Push an entity handle for an agent index, or nil if the slot is empty.
 void push_entity(lua_State* L, WorldContext& ctx, u32 index);
 
+// Push a sector handle. Unchecked: sector userdata carries no generation and
+// every method range-checks, so an out-of-range index is a nil-returning
+// handle rather than a fault.
+void push_sector(lua_State* L, u32 index);
+
 }  // namespace dnp::server::lua

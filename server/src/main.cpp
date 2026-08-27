@@ -26,6 +26,12 @@
 #include "lua/effects.hpp"
 #include "lua/vm.hpp"
 #include "lua/world_binding.hpp"
+
+// For the event dispatch below, which pushes plain Lua values (a side index, a
+// crush kind) alongside the userdata the binding layer builds.
+extern "C" {
+#include "lua.h"
+}
 #include "net/link.hpp"
 #include "session.hpp"
 #include "snapshot_history.hpp"
@@ -109,31 +115,63 @@ struct Server {
         }
     }
 
+    void send_motion(u32 id, const sim::SectorMotion& m) {
+        u8 buf[128];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_SECTOR_MOTION_SET);
+        w.u32v(m.sector);
+        w.u8v(static_cast<u8>(m.type));
+        w.u8v(static_cast<u8>(m.target));
+        w.u32v(m.start_tick);
+        w.u32v(m.duration_ticks);
+        w.u8v(static_cast<u8>(m.loop));
+        w.vec3_raw(m.from);
+        w.vec3_raw(m.to);
+        const size_t end = w.size();
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(id, buf, end);
+    }
+
     void send_motion_sets(u32 id) {
+        const auto& ms = world.motions();
+        for (u32 i = 0; i < ms.count(); ++i) send_motion(id, ms.at(i));
+    }
+
+    // Two parametric motions are the same motion iff a client computing either
+    // one would land on the same offset for every tick. That is exactly the
+    // descriptor -- endpoints, start, duration, loop, target -- and NOT the
+    // current offset, which is derived from it.
+    static bool same_motion(const sim::SectorMotion& a, const sim::SectorMotion& b) {
+        return a.sector == b.sector && a.type == b.type && a.target == b.target &&
+               a.start_tick == b.start_tick && a.duration_ticks == b.duration_ticks &&
+               a.loop == b.loop && a.from == b.from && a.to == b.to;
+    }
+
+    // A door opened mid-match has to reach the clients, or they predict against
+    // a sector that never moved.
+    //
+    // Sent on CHANGE rather than every tick, and on the reliable channel: a
+    // parametric motion is a closed form, so one message buys every tick of it
+    // forever (§3.1.2) -- but only if the message arrives. Losing it would leave
+    // a client walking into a door that is open on the server, which no later
+    // snapshot repairs, because snapshots carry entities and not geometry.
+    void replicate_motion_changes() {
         const auto& ms = world.motions();
         for (u32 i = 0; i < ms.count(); ++i) {
             const sim::SectorMotion& m = ms.at(i);
-            u8 buf[128];
-            ByteWriter w(buf, sizeof(buf));
-            const size_t len_pos = w.mark();
-            w.u32v(0);
-            w.u8v(proto::MSG_SECTOR_MOTION_SET);
-            w.u32v(m.sector);
-            w.u8v(static_cast<u8>(m.type));
-            w.u8v(static_cast<u8>(m.target));
-            w.u32v(m.start_tick);
-            w.u32v(m.duration_ticks);
-            w.u8v(static_cast<u8>(m.loop));
-            w.vec3_raw(m.from);
-            w.vec3_raw(m.to);
-            const size_t end = w.size();
-            const u32 body = static_cast<u32>(end - len_pos - 4);
-            buf[len_pos]     = static_cast<u8>(body & 0xFF);
-            buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
-            buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
-            buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
-            link.send_control(id, buf, end);
+            if (i < sent_motion_count && same_motion(sent_motions[i], m)) continue;
+            sent_motions[i] = m;
+            for (auto& [id, s] : sessions) {
+                if (s.hello_done) send_motion(id, m);
+            }
         }
+        if (ms.count() > sent_motion_count) sent_motion_count = ms.count();
     }
 
     // --- movement parameters (docs/protocol.md 8.4) --------------------------
@@ -509,6 +547,13 @@ struct Server {
     u32 crush_reported_tick[sim::MAX_AGENTS]{};
     bool crush_seen[sim::MAX_AGENTS]{};
 
+    // The motion descriptors every client has been told about, so a change can
+    // be recognised as a change. Indexed the same way SectorMotionSet indexes
+    // its own -- motions are never removed, only redefined, so the index is
+    // stable for the life of the map.
+    sim::SectorMotion sent_motions[sim::MAX_MOVING_SECTORS]{};
+    u32 sent_motion_count = 0;
+
     void report_crushes() {
         bool now[sim::MAX_AGENTS]{};
         const sim::CrushLog& log = world.crushes();
@@ -537,6 +582,57 @@ struct Server {
             // Never silently cap -- the same rule R10 applies to snapshots.
             std::fprintf(stderr, "[srv] tick %u: %u crush events dropped (log full)\n",
                          world.tick(), log.dropped());
+        }
+    }
+
+    // Hand this tick's engine-detected events to Lua.
+    //
+    // The engine detects, Lua decides -- the same division §3.1 draws for
+    // crushing and §3.2.2 for interaction. `find_interact_side` answers "which
+    // side did this agent reach for"; whether that side is a door, a switch or
+    // a blank wall is a gameplay question, and gameplay is script.
+    //
+    // Dispatched in a fixed order (crushes, then interactions, each in the
+    // order the log recorded, which is ascending agent index) so that two
+    // scripts racing for the same door resolve the same way on a replay.
+    void dispatch_events() {
+        if (!script_vm.is_open()) return;
+        const u32 t = world.tick();
+
+        const sim::CrushLog& crushes = world.crushes();
+        for (u32 i = 0; i < crushes.count(); ++i) {
+            const sim::CrushEvent& e = crushes.at(i);
+            if (e.entity >= sim::MAX_AGENTS) continue;
+            // Only the first tick of an episode, matching what report_crushes
+            // logs: a script that took damage sixty times a second while a
+            // ceiling sat on someone would be a different design decision, and
+            // one a script can make for itself from on_tick.
+            if (crush_reported_tick[e.entity] != t || !crush_seen[e.entity]) continue;
+            if (!script_vm.begin_hook("on_crush")) break;
+            lua::push_entity(script_vm.state(), lua_ctx, e.entity);
+            lua::push_sector(script_vm.state(), e.sector);
+            lua_pushstring(script_vm.state(),
+                           e.kind == sim::CrushKind::Vertical ? "vertical" : "pinned");
+            script_vm.end_hook("on_crush", t, 3);
+        }
+
+        const sim::InteractLog& uses = world.interactions();
+        for (u32 i = 0; i < uses.count(); ++i) {
+            const sim::InteractEvent& e = uses.at(i);
+            if (e.entity >= sim::MAX_AGENTS || e.sector < 0) continue;
+            const char* hook = e.kind == sim::TouchKind::Use ? "on_interact" : "on_cross";
+            if (!script_vm.begin_hook(hook)) continue;
+            lua::push_entity(script_vm.state(), lua_ctx, e.entity);
+            // The SIDE INDEX, as a plain number, because that is the key a
+            // generated script indexes its table of doors by. dnp.side(i)
+            // turns it into neighbour and flags when the script wants them.
+            lua_pushnumber(script_vm.state(), e.side);
+            lua::push_sector(script_vm.state(), static_cast<u32>(e.sector));
+            script_vm.end_hook(hook, t, 3);
+        }
+        if (uses.dropped() > 0) {
+            std::fprintf(stderr, "[srv] tick %u: %u interact events dropped (log full)\n",
+                         t, uses.dropped());
         }
     }
 
@@ -624,6 +720,7 @@ struct Server {
 
         world.step();
         report_crushes();
+        dispatch_events();
 
         if (script_vm.is_open()) {
             // Post-step callbacks see the world the tick produced.
@@ -632,6 +729,10 @@ struct Server {
         // Flush 2, before snapshots: a consequence and the state it acted on
         // ride the same snapshot rather than arriving a frame apart.
         flush_lua_commands();
+
+        // And anything a script started this tick reaches the clients before
+        // the snapshot that was produced with it does.
+        replicate_motion_changes();
 
         if (script_vm.is_open()) {
             script_vm.end_tick(world.tick());
@@ -787,7 +888,9 @@ int main(int argc, char** argv) {
     const char* map_path = nullptr;
     const char* spawn_tag_arg = nullptr;
     bool want_param_test = false;
-    const char* script_arg = nullptr;
+    constexpr u32 MAX_SCRIPTS = 8;
+    const char* script_args[MAX_SCRIPTS]{};
+    u32 script_count = 0;
     bool strict_scripts = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
@@ -799,7 +902,12 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argv[i], "--param-test") == 0) {
             want_param_test = true;
         } else if (std::strcmp(argv[i], "--script") == 0 && i + 1 < argc) {
-            script_arg = argv[++i];
+            // Repeatable, and loaded in the order given. A converted Doom map
+            // is two files -- the shared action library and the map's own data
+            // -- and the alternative is either `require` (absent under strict
+            // trust) or a copy of the library inlined into all 32 of them.
+            if (script_count < MAX_SCRIPTS) script_args[script_count++] = argv[++i];
+            else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
         } else if (std::strcmp(argv[i], "--script-trust") == 0 && i + 1 < argc) {
             strict_scripts = std::strcmp(argv[++i], "strict") == 0;
         }
@@ -819,7 +927,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "[srv] no --map given; using the built-in test map "
                              "(clients cannot be sent geometry)\n");
     }
-    if (script_arg) {
+    if (script_count > 0) {
         lua::VmConfig vc;
         vc.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
         if (!srv.script_vm.open(vc)) {
@@ -849,12 +957,14 @@ int main(int argc, char** argv) {
         // baffling first experience.
         lua::open_world(srv.script_vm.state(), &srv.lua_ctx);
 
-        if (!srv.script_vm.run_file(script_arg, script_arg)) {
-            std::fprintf(stderr, "[srv] script failed: %s\n", srv.script_vm.last_error());
-            return 1;
+        for (u32 k = 0; k < script_count; ++k) {
+            if (!srv.script_vm.run_file(script_args[k], script_args[k])) {
+                std::fprintf(stderr, "[srv] script failed: %s\n", srv.script_vm.last_error());
+                return 1;
+            }
+            std::fprintf(stderr, "[srv] loaded script %s\n", script_args[k]);
         }
-        srv.script_path = script_arg;
-        std::fprintf(stderr, "[srv] loaded script %s\n", script_arg);
+        srv.script_path = script_args[0];
     }
 
     if (!srv.link.listen(port)) {

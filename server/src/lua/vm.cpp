@@ -325,10 +325,15 @@ void Vm::end_tick(u32 tick) {
     }
 }
 
-void Vm::call_hook(const char* fn_name, u32 tick) {
-    if (!L_) return;
+bool Vm::begin_hook(const char* fn_name) {
+    if (!L_) return false;
     lua_getglobal(L_, fn_name);
-    if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); return; }
+    if (!lua_isfunction(L_, -1)) { lua_pop(L_, 1); return false; }
+    return true;
+}
+
+void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
+    if (!L_) return;
 
     // Each callback gets its own per-call budget; the per-tick total keeps
     // accumulating across them, so a thousand individually cheap callbacks
@@ -338,7 +343,7 @@ void Vm::call_hook(const char* fn_name, u32 tick) {
     lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
 
     ++stats_.callbacks_run;
-    if (lua_pcall(L_, 0, 0, 0) != 0) {
+    if (lua_pcall(L_, nargs, 0, 0) != 0) {
         ++stats_.errors;
         const char* msg = lua_tostring(L_, -1);
         // Rate-limited by tick rather than silenced: an error every frame would
@@ -350,6 +355,11 @@ void Vm::call_hook(const char* fn_name, u32 tick) {
         }
         lua_pop(L_, 1);
     }
+}
+
+void Vm::call_hook(const char* fn_name, u32 tick) {
+    if (!begin_hook(fn_name)) return;
+    end_hook(fn_name, tick, 0);
 }
 
 void Vm::gc_step() {

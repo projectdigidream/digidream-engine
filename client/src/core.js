@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 19
-const BUF32_LEN = 16
+const BUF32_LEN = 17
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -23,7 +23,7 @@ export const IDX = {
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16
 }
 
 export class Core {
@@ -34,6 +34,18 @@ export class Core {
 
   constructor (M) {
     this.M = M
+    // The two halves of this layout are maintained by hand -- the constants
+    // above and BUF32_LEN/BUF64_LEN in client/wasm/bindings.cpp -- so they are
+    // checked against each other rather than kept in step by discipline. A
+    // field appended on the C++ side without one here is a one-word heap
+    // overflow per read, and what it presents as is 212 mispredictions in a
+    // netcode test with nothing wrong with the netcode.
+    const want32 = M._dnp_buf32_len()
+    const want64 = M._dnp_buf64_len()
+    if (want32 !== BUF32_LEN || want64 !== BUF64_LEN) {
+      throw new Error(`[core] agent buffer layout mismatch: wasm wants ` +
+                      `${want64}x64/${want32}x32, JS has ${BUF64_LEN}x64/${BUF32_LEN}x32`)
+    }
     this.buf64 = M._malloc(BUF64_LEN * 8)
     this.buf32 = M._malloc(BUF32_LEN * 4)
     this.argbuf = M._malloc(8)
@@ -283,6 +295,7 @@ export class WasmWorld {
       sector: u32[b32 + IDX.SECTOR] | 0,
       dashHeld: u32[b32 + IDX.DASH_HELD] !== 0,
       grappleHeld: u32[b32 + IDX.GRAP_HELD] !== 0,
+      interactHeld: u32[b32 + IDX.INTR_HELD] !== 0,
       climbing: u32[b32 + IDX.CLIMBING] !== 0,
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
@@ -330,6 +343,7 @@ export class WasmWorld {
     u32[b32 + IDX.SECTOR] = (s.sector ?? -1) >>> 0
     u32[b32 + IDX.DASH_HELD] = s.dashHeld ? 1 : 0
     u32[b32 + IDX.GRAP_HELD] = s.grappleHeld ? 1 : 0
+    u32[b32 + IDX.INTR_HELD] = s.interactHeld ? 1 : 0
     u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
