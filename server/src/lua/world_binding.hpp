@@ -61,6 +61,11 @@ struct PropCatalogueView {
     // Nothing installed at all, which is a different failure from a name that
     // is merely absent and deserves a different message.
     virtual bool empty() const = 0;
+    virtual u8   flags_of(u16 kind) const = 0;
+    // What a script calls it. Behaviour is written per NAME, because a number
+    // in a script is a number somebody has to look up in a file the script does
+    // not mention.
+    virtual const char* name_of(u16 kind) const = 0;
 };
 
 struct MapChangeSink {
@@ -101,6 +106,7 @@ struct WorldContext {
     fx prop_height(u16 kind) const {
         return props ? props->height_of(kind) : fx::from_int(1);
     }
+    u8 prop_flags(u16 kind) const { return props ? props->flags_of(kind) : 0; }
 };
 
 // Install `dnp` and the entity type. `ctx` must outlive the VM.

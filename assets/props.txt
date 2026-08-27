@@ -8,9 +8,15 @@
 # TWO RECORD TYPES, because two different programs need two different halves and
 # neither should have to understand the other's:
 #
-#   prop   <id> <name> radius <r> height <h>
-#           The SIMULATION's half. The server reads it; it decides how close an
-#           agent has to be to touch this thing.
+#   prop   <id> <name> radius <r> height <h> [solid] [usable]
+#           The SIMULATION's half. The server reads it. `radius` and `height`
+#           are the cylinder an agent has to be inside to touch the thing;
+#           `solid` means a body cannot walk through it, and `usable` means
+#           pressing use while facing it is reported to the script.
+#
+#           A prop with neither flag is a trigger volume you walk into -- a key,
+#           a checkpoint. With `solid` it is an obstacle. With `usable` it is
+#           something you press. They compose: a lever on a plinth is both.
 #
 #   sprite <id> size <world-height> [billboard] [state <n>] [fps <f>] frames A,B,C
 #   mesh   <id> model <name> [state <n>] [clip <name>]
@@ -51,3 +57,23 @@ sprite 5 size 0.35 billboard state 0 fps 6 frames YSKUA0,YSKUB0
 
 prop 6 skull_red    radius 0.35 height 0.6
 sprite 6 size 0.35 billboard state 0 fps 6 frames RSKUA0,RSKUB0
+
+# --- an obstacle, and a thing you press --------------------------------------
+#
+# Neither is placed by any map yet; they are here because the catalogue is the
+# documentation for what a prop can be, and a format with no example of its own
+# features is a format nobody uses them from.
+#
+# A barrel is solid: you walk into it and stop. Doom's own explodes, which is a
+# script's decision -- on_prop_use and on_touch are where that would live.
+
+prop 10 barrel radius 0.35 height 0.8 solid
+sprite 10 size 0.8 billboard state 0 fps 0 frames BAR1A0
+sprite 10 state 1 fps 12 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0
+
+# A wall switch you press rather than a wall you press. Two states, and the
+# server declares WHICH -- the client decides how fast it plays.
+
+prop 11 lever radius 0.4 height 1.0 solid usable
+sprite 11 size 1.0 billboard state 0 fps 0 frames SW1BRNGN
+sprite 11 state 1 fps 0 frames SW2BRNGN

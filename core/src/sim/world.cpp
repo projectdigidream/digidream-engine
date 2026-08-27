@@ -20,7 +20,7 @@ void World::reset() noexcept {
         props_[i] = PropState{};
         generation_[MAX_AGENTS + i] = 1;
     }
-    overlaps_.clear();
+    prop_events_.clear();
     tick_ = 0;
 }
 
@@ -115,11 +115,20 @@ void World::step_agent(u32 i) noexcept {
     {
         const bool want = (cmd.buttons & act::INTERACT) != 0;
         if (want && !a.mv.interact_held && map_) {
-            const i32 side = physics::find_interact_side(
-                *map_, a.mv.sector, fx2{a.pos.x, a.pos.y}, a.facing,
-                INTERACT_REACH, a.pos.z, params_[i].height);
-            if (side >= 0) {
-                interacts_.push(InteractEvent{i, static_cast<u32>(side), a.mv.sector});
+            // A prop first. If you are standing in front of a lever, that is
+            // what you meant -- the wall behind it is always also there, and
+            // reporting the wall would make a lever unusable wherever it hangs
+            // on one.
+            const i32 usable = find_usable_prop(i);
+            if (usable >= 0) {
+                prop_events_.push(PropEvent{i, static_cast<u32>(usable), PropEventKind::Use});
+            } else {
+                const i32 side = physics::find_interact_side(
+                    *map_, a.mv.sector, fx2{a.pos.x, a.pos.y}, a.facing,
+                    INTERACT_REACH, a.pos.z, params_[i].height);
+                if (side >= 0) {
+                    interacts_.push(InteractEvent{i, static_cast<u32>(side), a.mv.sector});
+                }
             }
         }
         a.mv.interact_held = want;
@@ -150,6 +159,10 @@ void World::step_agent(u32 i) noexcept {
             if (mi >= 0) a.vel += motions_.at(static_cast<u32>(mi)).velocity();
             a.mv.anchored = false;
         }
+
+        // After the map move, and before the crossing report, so a trip-wire
+        // is judged against where the body actually ended up.
+        resolve_prop_collisions(i);
 
         report_crossings(i, from2, fx2{a.pos.x, a.pos.y}, from_sector);
     } else {
@@ -343,6 +356,7 @@ void World::step() noexcept {
     // exactly what this tick raised.
     crushes_.clear();
     interacts_.clear();
+    prop_events_.clear();
 
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from
@@ -365,7 +379,7 @@ void World::step() noexcept {
     // report a crush on an agent that was about to walk out from under the
     // ceiling in the same tick, and miss one that walked in.
     detect_vertical_crush();
-    detect_overlaps();
+    detect_prop_events();
 
     ++tick_;
 }
@@ -461,7 +475,7 @@ u64 World::agent_hash(u32 i) const noexcept {
     return h.value();
 }
 
-void OverlapLog::hash_into(StateHasher& h) const noexcept {
+void PropEventLog::hash_into(StateHasher& h) const noexcept {
     // Hashed like the crush and interact logs, and for the same reason: the
     // events are a pure function of state the gate already covers, so this adds
     // no information about the world -- what it adds is coverage of the
@@ -472,6 +486,7 @@ void OverlapLog::hash_into(StateHasher& h) const noexcept {
     for (u32 i = 0; i < count_; ++i) {
         h.u32v(events_[i].agent);
         h.u32v(events_[i].prop);
+        h.byte(static_cast<unsigned char>(events_[i].kind));
     }
 }
 
@@ -497,15 +512,109 @@ void World::despawn_prop(u32 entity) noexcept {
     generation_[entity] = static_cast<u8>(generation_[entity] + 1);
 }
 
+// Push an agent out of any solid prop it ended the tick inside.
+//
+// A POST-PASS on the settled position rather than part of the sweep, and the
+// trade is worth naming: the mover guarantees a body never crosses a blocking
+// SIDE, because a side is map geometry it can sweep against. A prop is not
+// geometry -- it appears, moves and vanishes -- so it is resolved by pushing
+// out afterwards, which is correct for anything a body cannot cross in a single
+// tick and is not a tunnelling guarantee. At 60 Hz a barrel is about forty
+// ticks wide at running speed.
+//
+// Iterated in index order so two overlapping props resolve the same way on
+// every target, which is the whole reason this is in core and not in a script.
+void World::resolve_prop_collisions(u32 agent) noexcept {
+    AgentState& a = agents_[agent];
+    const fx r_a = params_[agent].radius;
+    const fx h_a = params_[agent].height;
+
+    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+        const PropState& p = props_[pi];
+        if (!p.active) continue;
+        if ((p.flags & prop_flag::SOLID) == 0) continue;
+
+        // Vertically clear of it: over the top or under the bottom. Checked
+        // first because it rejects most pairs in two compares, and because a
+        // crate you can stand on has to stop being a wall the moment you are
+        // above it.
+        if (a.pos.z >= p.pos.z + p.height) continue;
+        if (a.pos.z + h_a <= p.pos.z) continue;
+
+        const fx dx = a.pos.x - p.pos.x;
+        const fx dy = a.pos.y - p.pos.y;
+        const fx want = r_a + p.radius;
+        const u128 d_sq = len_sq_raw(fx2{dx, dy});
+        const u128 want_sq = static_cast<u128>(static_cast<i128>(want.raw) * want.raw);
+        if (d_sq >= want_sq) continue;
+
+        // Exactly concentric: there is no separation direction to compute, so
+        // pick one. Deterministic and arbitrary beats a normalize of a zero
+        // vector, which has no answer at all.
+        fx2 n = (d_sq == 0) ? fx2{fx::one(), fx::zero()} : normalize(fx2{dx, dy});
+
+        a.pos.x = p.pos.x + n.x * want;
+        a.pos.y = p.pos.y + n.y * want;
+
+        // And drop the velocity pointing into it, or the next tick walks
+        // straight back in and the body buzzes against the surface.
+        const fx into = dot(n, fx2{a.vel.x, a.vel.y});
+        if (into < fx::zero()) {
+            a.vel.x -= n.x * into;
+            a.vel.y -= n.y * into;
+        }
+    }
+}
+
+// The prop an agent is reaching for, or -1.
+//
+// Nearest USABLE prop in front and within reach -- a proximity test, not the ray
+// the map's sides use. Deliberately different: a ray is right for a wall, which
+// is large and continuous, and wrong for a lever, which is a small target the
+// player is aiming at with a camera that is not on their shoulder.
+i32 World::find_usable_prop(u32 agent) const noexcept {
+    const AgentState& a = agents_[agent];
+    const fx2 dir = fx_dir(a.facing);
+    const fx2 from{a.pos.x, a.pos.y};
+
+    i32  best = -1;
+    u128 best_d = 0;
+    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+        const PropState& p = props_[pi];
+        if (!p.active) continue;
+        if ((p.flags & prop_flag::USABLE) == 0) continue;
+
+        // Roughly level with it: you cannot work a lever on the floor above.
+        if (a.pos.z >= p.pos.z + p.height + INTERACT_REACH) continue;
+        if (a.pos.z + params_[agent].height + INTERACT_REACH <= p.pos.z) continue;
+
+        const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
+        if (dot(dir, toward) <= fx::zero()) continue;   // behind
+
+        // Reach measured to the SURFACE, not the centre: a big object is
+        // reachable from further away, which is what a player expects of one.
+        const fx limit = INTERACT_REACH + p.radius;
+        const u128 d_sq = len_sq_raw(toward);
+        if (d_sq > static_cast<u128>(static_cast<i128>(limit.raw) * limit.raw)) continue;
+
+        // Strictly nearer, so a tie resolves to the lower index rather than to
+        // whichever the loop reached last.
+        if (best >= 0 && d_sq >= best_d) continue;
+        best_d = d_sq;
+        best = static_cast<i32>(MAX_AGENTS + pi);
+    }
+    return best;
+}
+
 // Which agents are standing inside which props.
 //
-// A cylinder test, not the collision system: nothing is pushed out of a prop and
-// a prop does not block. Reported EVERY tick the overlap holds rather than only
-// on entry, because "picked up once" is a decision a script makes by removing
-// the prop -- and a key that vanishes is self-limiting in a way an engine-side
-// edge trigger would only duplicate.
-void World::detect_overlaps() noexcept {
-    overlaps_.clear();
+// A cylinder test, not the collision system: touching is about being in the same
+// place, and a SOLID prop is one you can touch without ever being inside.
+// Reported EVERY tick the overlap holds rather than only on entry, because
+// "picked up once" is a decision a script makes by removing the prop -- and a
+// key that vanishes is self-limiting in a way an engine-side edge trigger would
+// only duplicate.
+void World::detect_prop_events() noexcept {
     for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
@@ -513,8 +622,6 @@ void World::detect_overlaps() noexcept {
             if (!agents_[a].active) continue;
             const fx3& ap = agents_[a].pos;
 
-            // Vertical first: it rejects most pairs with two compares, and a
-            // key on a balcony is not picked up from the floor below it.
             const fx a_top = ap.z + params_[a].height;
             if (a_top < p.pos.z) continue;
             if (ap.z > p.pos.z + p.height) continue;
@@ -522,14 +629,11 @@ void World::detect_overlaps() noexcept {
             const fx dx = ap.x - p.pos.x;
             const fx dy = ap.y - p.pos.y;
             const fx r = params_[a].radius + p.radius;
-            // Squared, in 128-bit: comparing distances would need a square root
-            // and the sum of two radii is small enough that the product never
-            // approaches the limit.
             const i128 d_sq = static_cast<i128>(dx.raw) * dx.raw + static_cast<i128>(dy.raw) * dy.raw;
             const i128 r_sq = static_cast<i128>(r.raw) * r.raw;
             if (d_sq > r_sq) continue;
 
-            overlaps_.push(OverlapEvent{a, MAX_AGENTS + pi});
+            prop_events_.push(PropEvent{a, MAX_AGENTS + pi, PropEventKind::Touch});
         }
     }
 }
@@ -540,7 +644,7 @@ u64 World::hash() const noexcept {
     motions_.hash_into(h);
     crushes_.hash_into(h);
     interacts_.hash_into(h);
-    overlaps_.hash_into(h);
+    prop_events_.hash_into(h);
     for (u32 i = 0; i < MAX_PROPS; ++i) {
         h.boolv(props_[i].active);
         if (!props_[i].active) continue;

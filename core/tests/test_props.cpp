@@ -55,11 +55,19 @@ struct Room {
 };
 
 static bool touched(const World& w, u32 agent, u32 prop) {
-    for (u32 i = 0; i < w.overlaps().count(); ++i) {
-        const OverlapEvent& e = w.overlaps().at(i);
-        if (e.agent == agent && e.prop == prop) return true;
+    for (u32 i = 0; i < w.prop_events().count(); ++i) {
+        const PropEvent& e = w.prop_events().at(i);
+        if (e.kind == PropEventKind::Touch && e.agent == agent && e.prop == prop) return true;
     }
     return false;
+}
+
+static i32 used_prop(const World& w, u32 agent) {
+    for (u32 i = 0; i < w.prop_events().count(); ++i) {
+        const PropEvent& e = w.prop_events().at(i);
+        if (e.kind == PropEventKind::Use && e.agent == agent) return static_cast<i32>(e.prop);
+    }
+    return -1;
 }
 
 // Props live above the agents in one index space, which is what lets the wire
@@ -107,7 +115,7 @@ static void test_standing_in_a_prop_is_reported() {
     CHECK(touched(w, a, near_p));
     CHECK(!touched(w, a, far_p));
     CHECK(!touched(w, a, high_p));
-    CHECK(w.overlaps().count() == 1);
+    CHECK(w.prop_events().count() == 1);
 }
 
 // The overlap holds while you stand there, rather than firing once.
@@ -138,7 +146,7 @@ static void test_the_overlap_holds_while_you_stand_there() {
     // pickup actually uses.
     w.despawn_prop(p);
     w.step();
-    CHECK(w.overlaps().count() == 0);
+    CHECK(w.prop_events().count() == 0);
 }
 
 static void test_a_despawned_prop_takes_its_handles_with_it() {
@@ -196,8 +204,127 @@ static void test_props_are_hashed() {
     CHECK(a.hash() != d.hash());
 }
 
+// A solid prop stops a body; the same prop without the flag does not.
+//
+// The control is the whole test. Walking east and stopping proves nothing on
+// its own -- a wall, a bug in the mover and a prop all look identical from the
+// end position. What distinguishes them is that removing ONE FLAG from the
+// catalogue lets the same walk pass straight through.
+static void test_a_solid_prop_stops_a_body() {
+    std::printf("props: `solid` stops a body, and nothing else about the prop does\n");
+
+    auto walk_east = [](u8 flags) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(5), F(20), F(0)});
+        const u32 p = w.spawn_prop(1, fx3{F(20), F(20), F(0)});
+        w.prop_mut(p).flags = flags;
+        w.prop_mut(p).radius = F(2);
+        w.prop_mut(p).height = F(4);
+        for (u32 t = 0; t < 240; ++t) {
+            proto::InputFrame f;
+            f.aim = brad(0u);            // east
+            f.move_x = 32767;
+            w.set_input(a, f);
+            w.step();
+        }
+        return w.agent(a).pos.x;
+    };
+
+    const fx blocked = walk_east(prop_flag::SOLID);
+    const fx through = walk_east(0);
+
+    std::printf("   solid: stopped at x=%.2f    not solid: reached x=%.2f\n",
+                static_cast<double>(blocked.raw) / 4294967296.0,
+                static_cast<double>(through.raw) / 4294967296.0);
+
+    // The prop's centre is at 20 with radius 2, and the body's radius is 0.5,
+    // so a body pushed out of it rests at 20 - 2.5 = 17.5.
+    CHECK(blocked < F(18));
+    CHECK(blocked > F(17));
+    // CONTROL: without the flag the same walk crosses it entirely and ends
+    // against the room's east wall at 40.
+    CHECK(through > F(30));
+}
+
+// Standing on top of one is not standing inside it.
+static void test_a_solid_prop_is_not_a_wall_from_above() {
+    std::printf("props: a solid prop stops being in the way once you are above it\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+
+    const u32 a = w.spawn(fx3{F(20), F(20), F(8)});   // well above it
+    const u32 p = w.spawn_prop(1, fx3{F(20), F(20), F(0)});
+    w.prop_mut(p).flags = prop_flag::SOLID;
+    w.prop_mut(p).radius = F(2);
+    w.prop_mut(p).height = F(4);
+
+    // Directly overhead, which in plan view is a total overlap. A push-out that
+    // ignored height would fling this body sideways for no visible reason.
+    w.step();
+    CHECK(w.agent(a).pos.x == F(20));
+    CHECK(w.agent(a).pos.y == F(20));
+}
+
+static void test_use_reaches_a_usable_prop() {
+    std::printf("props: pressing use names the prop in front, and only a usable one\n");
+
+    auto press = [](u8 flags, fx at_x) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{at_x, F(20), F(0)});
+        const u32 p = w.spawn_prop(1, fx3{F(20), F(20), F(0)});
+        w.prop_mut(p).flags = flags;
+        proto::InputFrame f;
+        f.buttons = proto::button::INTERACT;
+        f.aim = brad(0u);                // east, toward the prop
+        w.set_input(a, f);
+        w.step();
+        return used_prop(w, a);
+    };
+
+    // One unit away, facing it.
+    CHECK(press(prop_flag::USABLE, F(19)) == static_cast<i32>(MAX_AGENTS));
+
+    // CONTROL 1: the same prop without the flag is scenery. If this fired, the
+    // test above would only be saying "there is a prop nearby".
+    CHECK(press(0, F(19)) < 0);
+
+    // CONTROL 2: usable, but out of reach. Reach is 1.5 plus the prop's own
+    // radius of 0.5, so 2.0 -- and this stands 4 away.
+    CHECK(press(prop_flag::USABLE, F(16)) < 0);
+
+    // CONTROL 3: in reach, facing away. Without this, "found it" could mean the
+    // search ignores where the player is looking.
+    {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(19), F(20), F(0)});
+        const u32 p = w.spawn_prop(1, fx3{F(20), F(20), F(0)});
+        w.prop_mut(p).flags = prop_flag::USABLE;
+        proto::InputFrame f;
+        f.buttons = proto::button::INTERACT;
+        f.aim = brad(0x80000000u);       // west, away from it
+        w.set_input(a, f);
+        w.step();
+        CHECK(used_prop(w, a) < 0);
+    }
+}
+
 int main() {
     test_props_share_the_entity_index_space();
+    test_a_solid_prop_stops_a_body();
+    test_a_solid_prop_is_not_a_wall_from_above();
+    test_use_reaches_a_usable_prop();
     test_standing_in_a_prop_is_reported();
     test_the_overlap_holds_while_you_stand_there();
     test_a_despawned_prop_takes_its_handles_with_it();

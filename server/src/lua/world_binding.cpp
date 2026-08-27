@@ -338,6 +338,45 @@ int l_prop_kind(lua_State* L) {
     return 1;
 }
 
+// prop:name() -> the catalogue's name for its kind
+//
+// So behaviour can be written per name. A script dispatching on a number would
+// be dispatching on something an operator can change in a text file the script
+// never mentions.
+int l_prop_name(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0 || ctx.props == nullptr) { lua_pushnil(L); return 1; }
+    const char* n = ctx.props->name_of(ctx.world->prop(static_cast<u32>(e)).kind);
+    if (n == nullptr) { lua_pushnil(L); return 1; }
+    lua_pushstring(L, n);
+    return 1;
+}
+
+int l_prop_solid(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) { lua_pushnil(L); return 1; }
+    lua_pushboolean(L,
+        (ctx.world->prop(static_cast<u32>(e)).flags & sim::prop_flag::SOLID) != 0);
+    return 1;
+}
+
+// prop:set_solid(bool)
+//
+// Immediate, like despawn and for the same reason: nothing sweeps against a
+// prop, so changing whether it blocks cannot invalidate a resolution already in
+// progress. A door that becomes passable when unlocked is this call.
+int l_prop_set_solid(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) return 0;
+    sim::PropState& p = ctx.world->prop_mut(static_cast<u32>(e));
+    if (lua_toboolean(L, 2)) p.flags |= sim::prop_flag::SOLID;
+    else                     p.flags &= static_cast<u8>(~sim::prop_flag::SOLID);
+    return 0;
+}
+
 int l_prop_pos(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
@@ -392,6 +431,9 @@ const luaL_Reg PROP_METHODS[] = {
     {"valid", l_prop_valid},
     {"index", l_prop_index},
     {"kind", l_prop_kind},
+    {"name", l_prop_name},
+    {"solid", l_prop_solid},
+    {"set_solid", l_prop_set_solid},
     {"pos", l_prop_pos},
     {"set_animation", l_prop_set_animation},
     {"despawn", l_prop_despawn},
@@ -708,6 +750,7 @@ int l_dnp_spawn_prop(lua_State* L) {
     // the file and the only half the server reads.
     ctx.world->prop_mut(e).radius = ctx.prop_radius(kind);
     ctx.world->prop_mut(e).height = ctx.prop_height(kind);
+    ctx.world->prop_mut(e).flags  = ctx.prop_flags(kind);
     push_prop(L, ctx, e);
     return 1;
 }

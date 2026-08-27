@@ -29,6 +29,9 @@ struct PropDef {
     std::string   name;
     fx            radius = fx::from_frac(1, 2);
     fx            height = fx::from_int(1);
+    // `solid`, `usable` -- see sim::prop_flag. Bare words on the prop line,
+    // because a flag is a fact about the thing and not a value it carries.
+    u8            flags = 0;
 };
 
 // The binding layer's view of it. An interface rather than a direct dependency
@@ -48,6 +51,14 @@ public:
     fx height_of(u16 kind) const override {
         const PropDef* d = find(static_cast<sim::PropKind>(kind));
         return d ? d->height : fx::from_int(1);
+    }
+    u8 flags_of(u16 kind) const override {
+        const PropDef* d = find(static_cast<sim::PropKind>(kind));
+        return d ? d->flags : 0;
+    }
+    const char* name_of(u16 kind) const override {
+        const PropDef* d = find(static_cast<sim::PropKind>(kind));
+        return d ? d->name.c_str() : nullptr;
     }
 
     // Returns false only if the file cannot be opened. A malformed LINE is
@@ -91,7 +102,17 @@ public:
                 continue;
             }
             bool ok = true;
-            for (size_t i = 3; i + 1 < tok.size(); i += 2) {
+            for (size_t i = 3; i < tok.size(); ++i) {
+                // Bare flags first, so they can appear anywhere on the line and
+                // do not have to be counted as key/value pairs.
+                if (tok[i] == "solid")  { d.flags |= sim::prop_flag::SOLID;  continue; }
+                if (tok[i] == "usable") { d.flags |= sim::prop_flag::USABLE; continue; }
+                if (i + 1 >= tok.size()) {
+                    std::fprintf(stderr, "[props] %s:%d: '%s' has no value\n",
+                                 path, lineno, tok[i].c_str());
+                    ok = false;
+                    break;
+                }
                 if (tok[i] == "radius")      d.radius = parse_fx(tok[i + 1], ok);
                 else if (tok[i] == "height") d.height = parse_fx(tok[i + 1], ok);
                 else {
@@ -99,6 +120,7 @@ public:
                                  path, lineno, tok[i].c_str());
                     ok = false;
                 }
+                ++i;
             }
             if (!ok || d.radius <= fx::zero() || d.height <= fx::zero()) {
                 std::fprintf(stderr, "[props] %s:%d: '%s' has no usable size\n",

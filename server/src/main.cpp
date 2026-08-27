@@ -780,17 +780,18 @@ struct Server : lua::MapChangeSink {
         // the prop -- an engine-side edge trigger would only duplicate that, and
         // would get it wrong for anything that is meant to keep working while
         // you stand in it.
-        const sim::OverlapLog& touches = L.world.overlaps();
-        for (u32 i = 0; i < touches.count(); ++i) {
-            const sim::OverlapEvent& e = touches.at(i);
-            if (!L.vm.begin_hook("on_touch")) break;
+        const sim::PropEventLog& pe = L.world.prop_events();
+        for (u32 i = 0; i < pe.count(); ++i) {
+            const sim::PropEvent& e = pe.at(i);
+            const char* hook = e.kind == sim::PropEventKind::Use ? "on_prop_use" : "on_touch";
+            if (!L.vm.begin_hook(hook)) continue;
             lua::push_entity(L.vm.state(), L.ctx, e.agent);
             lua::push_prop(L.vm.state(), L.ctx, e.prop);
-            L.vm.end_hook("on_touch", t, 2);
+            L.vm.end_hook(hook, t, 2);
         }
-        if (touches.dropped() > 0) {
-            std::fprintf(stderr, "[srv] tick %u: %u overlap events dropped (log full)\n",
-                         t, touches.dropped());
+        if (pe.dropped() > 0) {
+            std::fprintf(stderr, "[srv] tick %u: %u prop events dropped (log full)\n",
+                         t, pe.dropped());
         }
 
         if (uses.dropped() > 0) {
