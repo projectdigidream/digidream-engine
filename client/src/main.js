@@ -400,7 +400,9 @@ function adoptMap (bytes, w) {
   camera.snapTo({
     x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y))
   })
-  say(`entered a new map (${mapData.sectors.length} sectors)`)
+  // No banner. A map change is the game doing what you asked it to; the
+  // geometry in front of you says it happened, and a line of text over the
+  // view says it twice.
   return true
 }
 

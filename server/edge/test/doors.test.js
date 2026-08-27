@@ -246,7 +246,13 @@ async function tickWith (buttons, moveX) {
   maxDoorCeil = Math.max(maxDoorCeil, ceilOf(DOOR))
   minLiftFloor = Math.min(minLiftFloor, floorOf(LIFT))
   maxX = Math.max(maxX, agentX())
-  await sleep(15)
+  // 8 ms, not 15. This loop steps the client once per iteration, so its tick
+  // rate IS its loop rate -- and at ~66 Hz nominal it drops below the server's
+  // 60 the moment the machine is busy. A client running behind the server never
+  // predicts a tick the server has not already run, so it cannot mispredict at
+  // all, and the control asserting that it DOES became a test of the machine's
+  // mood rather than of the flag.
+  await sleep(8)
 }
 
 // Walk east to the door and stop against it.
@@ -260,10 +266,28 @@ for (let i = 0; i < 4; i++) await tickWith(USE, 0)
 for (let i = 0; i < 4; i++) await tickWith(0, 0)
 
 // Give the door time to travel, still walking into it, so the moment it is high
-// enough the agent goes through.
-for (let i = 0; i < 260; i++) await tickWith(0, 1)
+// enough the agent goes through -- and then long enough for its wait to expire
+// and it to shut again. Counted in TICKS but the door's schedule is in server
+// ticks, so this has to cover open (32) + wait (90) + close (32) in wall clock
+// at whatever rate this loop actually manages.
+for (let i = 0; i < 520; i++) await tickWith(0, 1)
 ceilAfterOpen = ceilOf(DOOR)
 liftAfterDown = floorOf(LIFT)
+
+// Back and forth across the trip-wire, which is repeatable.
+//
+// Not decoration: the IGNORE_LUA control needs the client to have predicted the
+// exact tick a motion started before the message describing it arrives, and
+// with only the four changes above that window is one tick wide and closes
+// entirely when the suite is loaded and the client is running behind. Several
+// more crossings spread over a second make it a property of the flag rather
+// than of the machine's mood.
+for (let pass = 0; pass < 3; pass++) {
+  for (let i = 0; i < 70; i++) await tickWith(0, -1)
+  for (let i = 0; i < 70; i++) await tickWith(0, 1)
+}
+await sleep(200)
+drainMotions(); drain()
 await sleep(200)
 drainMotions(); drain()
 
