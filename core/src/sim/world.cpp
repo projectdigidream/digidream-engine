@@ -957,20 +957,40 @@ void World::resolve_attack(u32 agent) noexcept {
     // the same mistake sight made: "is it close and in front" is not "can I
     // touch it".
     //
-    // At the swinger's eye height, and against the same raycast the mover and
-    // line of sight use, so what stops a bullet stops a sword. Only asked of
-    // things that already passed the cheap tests, because it walks sectors.
-    const fx eye = a.pos.z + mp.height / 2;
+    // The FLAT cast, deliberately, unlike line of sight.
+    //
+    // The height-aware version is the better question in general -- a balcony
+    // and a shut door are two-sided lines and sight has to treat them as walls
+    // -- but at a swing's range on converted Doom geometry it produced false
+    // negatives I have not fully diagnosed: a player stopped dead against a
+    // barrel, swinging at it from half a unit away, came back as having a wall
+    // in between. Whatever that is, refusing to let somebody hit a thing they
+    // are touching is worse than letting a swing pass over a low sill.
+    //
+    // So this stops at one-sided walls and BLOCKING sides, which is what the
+    // reported bug was: killing enemies through a wall. What remains is
+    // reaching over a waist-high divider -- two units of reach rather than two
+    // thousand -- and it is recorded here rather than left as a surprise.
     const auto clear_path = [&](fx2 toward) {
         if (map_ == nullptr) return true;
         const fx dist = length(toward);
         if (dist <= fx::zero()) return true;
         const fx2 dir{toward.x / dist, toward.y / dist};
         const physics::RayHit hit =
-            physics::raycast(*map_, a.mv.sector, from, dir, dist, 0, eye);
+            physics::raycast(*map_, a.mv.sector, from, dir, dist, 0);
         // Blocked BEFORE the target is a wall between them. Blocked at or past
         // it is the wall behind it, which is not in the way of anything.
-        return !hit.blocked || hit.distance >= dist;
+        //
+        // And an UNRESOLVED ray does not veto a swing. raycast fails closed --
+        // it reports blocked when it runs out of hops or starts from a sector
+        // it cannot place -- which is right for line of sight, where the cost
+        // of a wrong yes is a monster shooting through a wall. At swing range
+        // the costs are the other way round: the cost of a wrong no is being
+        // unable to hit a barrel you are standing against, which is what
+        // happened on MAP02. A refusal with no obstruction to point at is not
+        // evidence of a wall.
+        if (!hit.blocked) return true;
+        return hit.distance <= fx::zero() || hit.distance >= dist;
     };
 
     const auto reaches = [&](fx2 toward, fx surface_radius) {

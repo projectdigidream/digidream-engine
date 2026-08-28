@@ -41,6 +41,10 @@ public:
     // identical from the outside without a counter to separate them.
     u64 starved_ticks = 0;
     u64 duplicate_frames = 0;
+    // Times the buffer skipped forward because it had fallen a whole ring
+    // behind what it was being sent. Expected once per map change; a stream of
+    // them is a client whose clock is not tracking the server at all.
+    u64 clock_resyncs = 0;
 
     // Panels currently open on this client (docs/protocol.md §11).
     //
@@ -113,9 +117,48 @@ public:
     // Store every frame in the bundle. Bundles repeat recent frames on purpose
     // (docs/protocol.md 4.1), so most of these are duplicates and that is the
     // point -- a single lost datagram must not leave a hole in the input stream.
+    // Forget every buffered and remembered input.
+    //
+    // Called when this session changes level. Two things go wrong without it,
+    // and together they are a player who walks off on their own:
+    //
+    // take() repeats the last frame across a gap -- which is right for jitter,
+    // because repeating is what the client's own replay assumes. But the last
+    // frame before a map change is whatever the player was doing as they
+    // touched the exit, and in the new level there is nothing to replace it
+    // with: the client resets its clock to the new world's tick, so its frames
+    // arrive stamped outside the window this ring is still expecting and are
+    // dropped as too old or too far ahead. So the server goes on simulating
+    // "walking east" indefinitely while every fresh input is discarded.
+    //
+    // Clearing `started_` is the load-bearing part: it makes the next frame
+    // that arrives re-seed the expected tick, whatever it is.
+    void reset_input() noexcept {
+        for (u32 i = 0; i < INPUT_RING; ++i) have_[i] = false;
+        last_applied_frame_ = proto::InputFrame{};
+        started_ = false;
+        next_tick_ = 0;
+        newest_input_tick = 0;
+        last_applied_tick = 0;
+    }
+
     void ingest(const proto::InputBundle& b) noexcept {
         ack_snapshot_tick = b.ack_snapshot_tick > ack_snapshot_tick ? b.ack_snapshot_tick
                                                                     : ack_snapshot_tick;
+        // INPUT ADDRESSED TO THE WORLD THEY JUST LEFT.
+        //
+        // A map change reseats the player in a different simulation and the
+        // client resets its clock to the new world's tick. But frames sent
+        // before it noticed are still in flight, stamped on the old clock -- and
+        // whichever arrives first re-seeds this ring, so the server then spends
+        // a second crawling through empty ticks toward the client's real
+        // position while repeating the last thing the player did before
+        // touching the exit. Which is a character walking off on its own.
+        //
+        // A bundle acknowledges the newest snapshot the client has SEEN, so
+        // that is the honest test of which world it was talking about.
+
+
         for (u8 i = 0; i < b.frame_count; ++i) {
             // frames[] is newest first, so frame i is for tick (client_tick - i).
             if (b.client_tick < i) break;
@@ -142,6 +185,33 @@ public:
     // input the client never sent and guarantee a misprediction.
     const proto::InputFrame& take() noexcept {
         if (!started_) return last_applied_frame_;
+
+        // CATCH UP when the gap is not going to be filled.
+        //
+        // On a starve this used to hold `next_tick_` where it was and replay the
+        // last frame -- correct for jitter, where the missing frame is still in
+        // flight and arrives a moment later. But a gap that will NEVER be filled
+        // stalls the buffer permanently: every later frame sits in the ring
+        // unread, and the server goes on simulating whatever the player was
+        // doing when the gap opened. Forever.
+        //
+        // Which is what a map change does. The client resets its clock to the
+        // new world's tick, so the ticks this buffer is still waiting for do not
+        // exist and never will -- and the last thing the player did before
+        // touching the exit becomes their permanent input. Reported as
+        // "something taking control, and the player character just moves on its
+        // own in a chosen direction".
+        //
+        // The bound is the buffer's own depth: being a whole ring behind the
+        // newest thing received is not jitter, it is a clock that moved.
+        if (newest_input_tick > next_tick_ + INPUT_RING / 2) {
+            next_tick_ = newest_input_tick - INPUT_RING / 4;
+            // Nothing is carried across the jump. The frames either side of a
+            // discontinuity are unrelated, and repeating the old one into the
+            // new world is the bug itself.
+            last_applied_frame_ = proto::InputFrame{};
+            ++clock_resyncs;
+        }
 
         const u32 slot = next_tick_ % INPUT_RING;
         if (have_[slot]) {

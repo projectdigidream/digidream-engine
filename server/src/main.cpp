@@ -493,6 +493,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // opens a second one beside it.
             for (const auto& p : s.open_ui) send_ui_close(s, p.ui_id);
             s.open_ui.clear();
+
+            // And the input buffer, or the last thing they did before touching
+            // the exit is repeated forever in the new level. See
+            // Session::reset_input.
+            s.reset_input();
         }
 
         const fx3 spawn_pos = L.map_bytes.empty()

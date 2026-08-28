@@ -152,6 +152,13 @@ async function connect (name) {
 
 async function send (P, buttons, moveX) {
   P.tick++
+  // Kept LEADING the newest snapshot, which is what a predicting client's own
+  // clock does. This counter only advances when send() is called, so a window
+  // where the test deliberately sends nothing leaves it behind the server by
+  // however long that window lasted -- and every frame after it is then dropped
+  // as too old, which is a property of the test and not of the engine.
+  const lead = (P.snapshots.at(-1)?.serverTick ?? 0) + 8
+  if (P.tick < lead) P.tick = lead
   const f = { buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 }
   P.history = [f, ...P.history].slice(0, 12)
   await P.dw.write(encodeInputBundle({
@@ -208,6 +215,48 @@ if (ONE_LEVEL) {
   // ticks belong to the new level's world.
   const after = mover.snapshots.filter((s) => s.serverTick > 0).length
   check(after > 0, `${after} snapshots since the change`)
+
+  // NOBODY WALKS OFF ON THEIR OWN.
+  //
+  // take() repeats the last input across a gap, which is right for jitter and
+  // wrong across a map change: the last frame before the exit is whatever the
+  // player was doing when they touched it, and the client then resets its clock
+  // to the new world's tick -- so its fresh frames arrive outside the window
+  // the ring expects and are dropped, while the server goes on simulating
+  // "walking east" forever. Reported as "something taking control, and the
+  // player character just moves on its own in a chosen direction".
+  //
+  // Send NOTHING after the change and watch: a body that drifts is a body being
+  // driven by input nobody sent.
+  // The newest self position this client has been told about.
+  const selfX = (P) => {
+    for (let i = P.snapshots.length - 1; i >= 0; i--) {
+      if (P.snapshots[i].self) return fxToNumber(P.snapshots[i].self.pos.x)
+    }
+    return 0
+  }
+  // THE CLIENT RESETS ITS CLOCK on a map change -- main.js rebuilds the world
+  // at the new level's tick and the predictor with it. Without doing the same
+  // here, this test keeps a clock that never jumps and the server's input ring
+  // goes on accepting its frames, which is precisely the case that works.
+  mover.tick = (mover.snapshots.at(-1)?.serverTick ?? 0) + 8
+  mover.history = []
+
+  const startX = selfX(mover)
+  for (let i = 0; i < 90; i++) await sleep(12)
+  const driftX = selfX(mover) - startX
+  check(Math.abs(driftX) < 0.25,
+        `and does not drift when no input is sent (moved ${driftX.toFixed(2)})`)
+
+  // The control, and the one that actually caught this: it CAN still move.
+  //
+  // A buffer stalled on a gap it will never fill is deaf AND repeating -- the
+  // drift assertion above passes on a session that has stopped listening
+  // entirely, because a zeroed repeat does not drift either. Only this one
+  // separates "recovered" from "silenced".
+  for (let i = 0; i < 60; i++) { await send(mover, 0, 1); await sleep(12) }
+  check(selfX(mover) - startX > 0.5,
+        `but still moves when input IS sent (${(selfX(mover) - startX).toFixed(2)})`)
 }
 
 for (const P of [mover, stayer]) { try { P.wt.close() } catch {} }
