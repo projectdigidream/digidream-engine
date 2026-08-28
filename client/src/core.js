@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 19
-const BUF32_LEN = 19
+const BUF32_LEN = 20
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -23,7 +23,7 @@ export const IDX = {
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19
 }
 
 export class Core {
@@ -386,6 +386,7 @@ export class WasmWorld {
       interactHeld: u32[b32 + IDX.INTR_HELD] !== 0,
       attackHeld: u32[b32 + IDX.ATK_HELD] !== 0,
       attackLeft: u32[b32 + IDX.ATK_LEFT],
+      attackCooldownLeft: u32[b32 + IDX.ATK_CD],
       climbing: u32[b32 + IDX.CLIMBING] !== 0,
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
@@ -436,6 +437,7 @@ export class WasmWorld {
     u32[b32 + IDX.INTR_HELD] = s.interactHeld ? 1 : 0
     u32[b32 + IDX.ATK_HELD] = s.attackHeld ? 1 : 0
     u32[b32 + IDX.ATK_LEFT] = s.attackLeft ?? 0
+    u32[b32 + IDX.ATK_CD] = s.attackCooldownLeft ?? 0
     u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0

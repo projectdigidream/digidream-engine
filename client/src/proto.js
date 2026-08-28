@@ -397,6 +397,7 @@ export function decodeSnapshot (buf) {
   snap.self.jumpsUsed = r.u8()
   snap.self.dashesUsed = r.u8()
   snap.self.attackLeft = r.u8()
+  snap.self.attackCooldownLeft = r.u8()
   snap.self.sector = r.i32()
   snap.self.dashTimer = r.fxraw()
   snap.self.dashCooldown = r.fxraw()

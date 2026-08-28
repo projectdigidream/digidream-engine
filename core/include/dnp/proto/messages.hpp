@@ -198,6 +198,15 @@ struct SelfBlock {
     // ends, and a client that lost this on every snapshot would draw its own
     // collider for two frames at a time and never see it travel.
     u8     attack_left     = 0;
+    // Ticks until the next swing is allowed.
+    //
+    // Replicated for the same reason attack_left is: it is part of the state a
+    // client predicts against -- it decides whether a press starts a swing at
+    // all -- and it is in the prediction hash. A hashed field that reconcile
+    // cannot restore is a divergence with no way back: the client would
+    // mispredict every tick and never recover, because the correction carries
+    // nothing to correct it with.
+    u8     attack_cooldown_left = 0;
     i32    sector          = -1;
 
     // Ability state the controller carries between ticks. Present because

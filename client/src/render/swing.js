@@ -66,11 +66,13 @@ export function readSwingShape (world, agent) {
  * construction.
  */
 export function sweptSpan (shape) {
-  const ticks = shape.ticks > 0 ? shape.ticks : 1
-  const first = sweepOffset({ ...shape, left: Math.max(1, ticks - 1) })
-  const last = sweepOffset({ ...shape, left: 1 })
-  const lo = Math.min(first, last) - shape.halfArc
-  const hi = Math.max(first, last) + shape.halfArc
+  // The extremes of the sweep, which are `from` and `to` themselves now that
+  // the phase reaches 1. This used to be derived from the observable countdown
+  // instead, to draw the 168.8 degrees the collider actually reached rather
+  // than the 180 its parameters claimed -- a faithful drawing of a broken
+  // sweep. The sweep is fixed; the region is the parameters again.
+  const lo = Math.min(shape.from, shape.to) - shape.halfArc
+  const hi = Math.max(shape.from, shape.to) + shape.halfArc
   return { mid: (lo + hi) / 2, half: (hi - lo) / 2 }
 }
 
@@ -102,9 +104,13 @@ export function sameSwingShape (a, b) {
  */
 export function sweepOffset ({ from, to, ticks, left }) {
   if (!left || left <= 0) return null
+  // total - 1, not total: N ticks visit N positions, and for the first to be
+  // `from` and the last `to` the step is 1/(N-1). Mirrors World::resolve_attack
+  // exactly -- when this said `/ total` the engine did too, and a swing stopped
+  // one step short of the angle it was told to sweep to.
   const total = ticks > 0 ? ticks : 1
   const elapsed = total - left
-  const phase = Math.max(0, Math.min(1, elapsed / total))
+  const phase = total > 1 ? Math.max(0, Math.min(1, elapsed / (total - 1))) : 0.5
   return from + (to - from) * phase
 }
 

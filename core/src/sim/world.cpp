@@ -927,11 +927,24 @@ void World::resolve_attack(u32 agent) noexcept {
     // test it replaces, and it is why the parameters describe a path rather
     // than a shape.
     //
-    // Phase runs 0..1 across the swing. attack_left counts DOWN, so the first
-    // live tick is the last value and phase has to be derived from the total.
+    // Phase runs 0..1 INCLUSIVE across the swing. attack_left counts DOWN, so
+    // the first live tick is the last value and phase is derived from the total.
+    //
+    // The divisor is total - 1, not total, and that is the whole of a bug that
+    // was reported as "the physics doesn't reach the end of the arc". `elapsed`
+    // runs 0 .. total-1, so dividing by `total` gives a phase that reaches
+    // (total-1)/total and never 1 -- a sixteen-tick swing stopping at 0.9375,
+    // which is 0.109 of a turn against the 0.125 it was told to sweep to. The
+    // collider covered 168.8 degrees of the 180 its parameters described, every
+    // time, and the missing sliver was blamed on the drawing.
+    //
+    // N ticks visit N positions, and to have the first at `from` and the last
+    // at `to` the step is 1/(N-1). A one-tick swing has no step at all, so it
+    // takes the middle of the range rather than an arbitrary end.
     const u8 total = mp.attack_ticks == 0 ? 1 : mp.attack_ticks;
     const u8 elapsed = static_cast<u8>(total - a.mv.attack_left);
-    const fx phase = fx::from_frac(elapsed, total);
+    const fx phase = total > 1 ? fx::from_frac(elapsed, total - 1)
+                               : fx::from_frac(1, 2);
     const fx offset = fx_lerp(mp.attack_sweep_from, mp.attack_sweep_to, phase);
 
     // Turn fractions to brad. A turn is 2^32, so a fraction of a turn is the

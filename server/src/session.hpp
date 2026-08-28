@@ -15,6 +15,11 @@ using namespace dnp;
 // anything beyond it is a client that has lost the plot and should resync.
 inline constexpr u32 INPUT_RING = 128;
 
+// Consecutive starved ticks after which a gap is judged unfillable. Half a
+// second: a jittery link starves in ones and twos and refills, and anything
+// that has starved this long is waiting for ticks that do not exist.
+inline constexpr u32 STARVE_GIVE_UP = 30;
+
 class Session {
 public:
     u32  id            = 0;
@@ -45,6 +50,8 @@ public:
     // behind what it was being sent. Expected once per map change; a stream of
     // them is a client whose clock is not tracking the server at all.
     u64 clock_resyncs = 0;
+    // Starved ticks since the last frame was consumed. See take().
+    u32 consecutive_starves_ = 0;
 
     // Panels currently open on this client (docs/protocol.md §11).
     //
@@ -139,6 +146,7 @@ public:
         started_ = false;
         next_tick_ = 0;
         newest_input_tick = 0;
+        consecutive_starves_ = 0;
         last_applied_tick = 0;
     }
 
@@ -204,23 +212,48 @@ public:
         //
         // The bound is the buffer's own depth: being a whole ring behind the
         // newest thing received is not jitter, it is a clock that moved.
-        if (newest_input_tick > next_tick_ + INPUT_RING / 2) {
-            next_tick_ = newest_input_tick - INPUT_RING / 4;
-            // Nothing is carried across the jump. The frames either side of a
-            // discontinuity are unrelated, and repeating the old one into the
-            // new world is the bug itself.
-            last_applied_frame_ = proto::InputFrame{};
-            ++clock_resyncs;
-        }
-
         const u32 slot = next_tick_ % INPUT_RING;
         if (have_[slot]) {
             last_applied_frame_ = ring_[slot];
             have_[slot] = false;
             last_applied_tick = next_tick_;
             ++next_tick_;
-        } else {
-            ++starved_ticks;
+            consecutive_starves_ = 0;
+            return last_applied_frame_;
+        }
+
+        ++starved_ticks;
+        ++consecutive_starves_;
+
+        // GIVE UP ON A GAP THAT IS NEVER GOING TO BE FILLED.
+        //
+        // Waiting is right for jitter: the missing frame is in flight and
+        // arrives a moment later, and repeating until it does is what the
+        // client's own replay assumes. It is wrong for a gap that does not
+        // exist -- a map change resets the client's clock, so the ticks this
+        // buffer is waiting for will never be sent, and without this it waits
+        // there forever replaying whatever the player was doing when the gap
+        // opened. Which is a character walking off on its own.
+        //
+        // The discriminator is HOW LONG IT HAS STARVED, not how far ahead the
+        // newest frame is. Two earlier versions used the gap and both were
+        // wrong: a client whose clock merely runs fast leads by more and more
+        // without anything being broken, and skipping on that threw away input
+        // sitting in the ring waiting its turn -- attack.test.js swung six
+        // times and the server saw none of them, one run in three, and the
+        // netsim matrix mispredicted at 150 ms where it had been exact.
+        //
+        // Half a second of continuous starvation is not jitter. A 300 ms link
+        // starves in ones and twos and refills; a gap that will never be filled
+        // starves every tick from now on.
+        if (consecutive_starves_ > STARVE_GIVE_UP && newest_input_tick > next_tick_) {
+            next_tick_ = newest_input_tick;
+            // Nothing is carried across: the frames either side of a
+            // discontinuity are unrelated, and repeating the old one into the
+            // new world is the bug itself.
+            last_applied_frame_ = proto::InputFrame{};
+            consecutive_starves_ = 0;
+            ++clock_resyncs;
         }
         return last_applied_frame_;
     }

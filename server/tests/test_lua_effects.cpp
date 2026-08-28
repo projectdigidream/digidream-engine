@@ -186,9 +186,83 @@ static void test_the_table_is_bounded_and_says_so() {
     CHECK(s.add(0, 60000, EffectOp::Add, fx::zero(), 0) == 0);
 }
 
+
+// An effect on a field whose "raw" is a PLAIN INTEGER, not a Q32.32 raw.
+//
+// param_get_raw does not return one kind of number: for an Fx field it is a
+// fixed-point raw, and for a U8 or a Bool it is the value itself -- 16 means
+// sixteen. The effect stack did fx arithmetic on both, which was wrong in two
+// directions at once and had been since effects existed. Nothing set an integer
+// parameter until a debug panel did, and then:
+//
+//   Set attack_ticks to 10  ->  wrote fx(10)'s raw, 42949672960, which
+//   param_set_raw clamps to 255. A swing meant to last a sixth of a second
+//   lasted four and a quarter seconds and its sweep advanced a 255th of a turn
+//   per tick -- which reads, correctly, as a wedge that has stopped moving.
+//
+//   Multiply max_jumps by 1.5  ->  fx::from_raw(2) is 4.7e-10, so two jumps
+//   became zero.
+static void test_integer_parameters_take_the_number_not_the_raw() {
+    std::printf("effects: a U8 field is set to the NUMBER, not to a fixed-point raw\n");
+
+    static EffectStack fx_stack;
+    fx_stack.clear();
+
+    MoveParams base;
+    const i32 ticks = param_id_by_name("attack_ticks");
+    const i32 jumps = param_id_by_name("max_jumps");
+    CHECK(ticks >= 0 && jumps >= 0);
+    fx_stack.set_base(0, base);
+
+    // SET. The number asked for, not 255 -- which is what a clamped fx raw
+    // gives for any value at all, so "it clamped" and "it worked" are
+    // indistinguishable unless the value asked for is small.
+    fx_stack.add(0, static_cast<u16>(ticks), EffectOp::Set, fx::from_int(10), 0);
+    MoveParams out = fx_stack.compute(0);
+    std::printf("       set attack_ticks=10 -> %u\n", out.attack_ticks);
+    CHECK(out.attack_ticks == 10);
+
+    // MUL. Two jumps and a half gives three, truncating toward zero like every
+    // other product in this engine.
+    fx_stack.clear();
+    fx_stack.set_base(0, base);
+    fx_stack.add(0, static_cast<u16>(jumps), EffectOp::Mul, fx::from_frac(3, 2), 0);
+    out = fx_stack.compute(0);
+    std::printf("       max_jumps %u x1.5 -> %u\n", base.max_jumps, out.max_jumps);
+    CHECK(out.max_jumps == static_cast<u8>((base.max_jumps * 3) / 2));
+
+    // ADD, including downward.
+    fx_stack.clear();
+    fx_stack.set_base(0, base);
+    fx_stack.add(0, static_cast<u16>(ticks), EffectOp::Add, fx::from_int(-6), 0);
+    out = fx_stack.compute(0);
+    CHECK(out.attack_ticks == static_cast<u8>(base.attack_ticks - 6));
+
+    // The clamp still applies to a value that genuinely is out of range: a
+    // script asking for 300 gets 255, not 44.
+    fx_stack.clear();
+    fx_stack.set_base(0, base);
+    fx_stack.add(0, static_cast<u16>(ticks), EffectOp::Set, fx::from_int(300), 0);
+    out = fx_stack.compute(0);
+    CHECK(out.attack_ticks == 255);
+
+    // And an Fx field is UNCHANGED by all of this -- the two domains must not
+    // have been merged into one wrong answer.
+    const i32 speed = param_id_by_name("move_speed");
+    fx_stack.clear();
+    fx_stack.set_base(0, base);
+    fx_stack.add(0, static_cast<u16>(speed), EffectOp::Set, fx::from_frac(25, 2), 0);
+    out = fx_stack.compute(0);
+    CHECK(out.move_speed == fx::from_frac(25, 2));
+    // Which a fraction proves and a whole number would not: 12.5 cannot survive
+    // being routed through the integer path.
+    CHECK(out.move_speed != fx::from_int(12));
+}
+
 int main() {
     std::printf("== server/lua effects suite ==\n");
     test_apply_and_remove_leaves_no_residue();
+    test_integer_parameters_take_the_number_not_the_raw();
     test_the_naive_implementation_drifts();
     test_order_is_insertion_order_and_the_engine_decides_nothing();
     test_expiry_and_cleanup();

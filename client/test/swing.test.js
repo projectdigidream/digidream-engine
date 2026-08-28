@@ -94,7 +94,13 @@ console.log('\n--- the drawn angle is the engine\'s angle ---')
   const engineOffset = (left) => {
     const total = shape.ticks === 0 ? 1 : shape.ticks
     const elapsed = total - left
-    return shape.from + (shape.to - shape.from) * (elapsed / total)
+    // total - 1: N ticks visit N positions, so the step that puts the first at
+    // `from` and the last at `to` is 1/(N-1). Dividing by `total` reaches
+    // (N-1)/N and stops one step short of the angle the swing was told to
+    // sweep to -- which is what both this mirror and the engine used to do,
+    // agreeing with each other about the wrong answer.
+    const phase = total > 1 ? elapsed / (total - 1) : 0.5
+    return shape.from + (shape.to - shape.from) * phase
   }
 
   let agreed = 0
@@ -304,28 +310,43 @@ check(fadeTrail(0.5, 0.5) === 0, 'and at its life it is gone')
   const shape = { from: -0.125, to: 0.125, halfArc: 0.125, ticks: 16 }
   const span = sweptSpan(shape)
 
-  // Every angle the collider occupies is inside the drawn region.
+  // THE SWEEP REACHES BOTH ENDS. It did not: the phase divided by `total` when
+  // it should divide by `total - 1`, so a sixteen-tick swing stopped at 0.9375
+  // of the way and the collider covered 168.8 degrees of the 180 its parameters
+  // described. Reported as "the physics doesn't reach the end of the arc", and
+  // before that as a red wedge that never filled its own grey region -- the
+  // drawing was faithful to a sweep that was short.
+  const first = sweepOffset({ ...shape, left: shape.ticks })
+  const last = sweepOffset({ ...shape, left: 1 })
+  check(Math.abs(first - shape.from) < 1e-9,
+        `the first tick sits at attack_sweep_from (${first})`)
+  check(Math.abs(last - shape.to) < 1e-9,
+        `and the last at attack_sweep_to (${last})`)
+
+  // So the region a swing covers IS the one its parameters describe, and the
+  // drawn one is exactly that -- no slack, since slack in it is a claim that
+  // the swing hits things it does not.
+  const naive = Math.abs(shape.to - shape.from) / 2 + shape.halfArc
+  check(Math.abs(span.half - naive) < 1e-9,
+        `the drawn region is the declared one (${(span.half * 2 * 360).toFixed(1)} deg)`)
+
+  // And every angle the collider occupies is inside it.
   let lo = 1
   let hi = -1
-  for (let left = shape.ticks - 1; left >= 1; left--) {
+  for (let left = shape.ticks; left >= 1; left--) {
     const o = sweepOffset({ ...shape, left })
     lo = Math.min(lo, o - shape.halfArc)
     hi = Math.max(hi, o + shape.halfArc)
   }
   check(span.mid - span.half <= lo + 1e-9 && span.mid + span.half >= hi - 1e-9,
-        'the drawn region contains every angle the collider reaches')
-
-  // And is not LARGER than it: the region is a claim about what the swing hits,
-  // so slack in it is a lie in the direction that matters.
-  check(Math.abs((span.half * 2) - (hi - lo)) < 1e-9,
-        `and is exactly that wide (${(span.half * 2 * 360).toFixed(1)} deg)`)
-
-  // The CONTROL: the naive region, straight from the parameters, is wider --
-  // which is the version that shipped, and the reason a swing appeared not to
-  // cover its own arc.
-  const naive = Math.abs(shape.to - shape.from) / 2 + shape.halfArc
-  check(naive > span.half,
-        `the parameters alone describe a wider one (${(naive * 2 * 360).toFixed(1)} deg)`)
+        'and contains every angle the collider reaches')
+  // The CONTROL: dividing by `total` instead falls short of the far edge, so
+  // the assertion above is the fix rather than a region wide enough to contain
+  // anything.
+  const shortLast = shape.from + (shape.to - shape.from) *
+                    ((shape.ticks - 1) / shape.ticks)
+  check(shortLast + shape.halfArc < hi - 1e-9,
+        `the old divisor stopped short of it (${shortLast.toFixed(4)} vs ${shape.to})`)
 
   // A thrust -- no sweep at all -- is a wedge of exactly the arc, centred.
   const thrust = sweptSpan({ from: 0.1, to: 0.1, halfArc: 0.05, ticks: 8 })

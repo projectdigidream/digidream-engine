@@ -66,7 +66,8 @@ constexpr int BUF32_ANCHORED  = 15;
 constexpr int BUF32_INTR_HELD = 16;
 constexpr int BUF32_ATK_HELD  = 17;
 constexpr int BUF32_ATK_LEFT  = 18;
-constexpr int BUF32_LEN       = 19;
+constexpr int BUF32_ATK_CD    = 19;
+constexpr int BUF32_LEN       = 20;
 
 }  // namespace
 
@@ -497,6 +498,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_INTR_HELD] = m.interact_held ? 1u : 0u;
     out32[BUF32_ATK_HELD]  = m.attack_held ? 1u : 0u;
     out32[BUF32_ATK_LEFT]  = m.attack_left;
+    out32[BUF32_ATK_CD]    = m.attack_cooldown_left;
 }
 
 // Adopt authoritative state. This is step 2 of reconciliation
@@ -550,6 +552,7 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.interact_held = in32[BUF32_INTR_HELD] != 0;
     m.attack_held = in32[BUF32_ATK_HELD] != 0;
     m.attack_left = static_cast<u8>(in32[BUF32_ATK_LEFT]);
+    m.attack_cooldown_left = static_cast<u8>(in32[BUF32_ATK_CD]);
 }
 
 // Input quantisation, exposed so the client uses the SAME function the server

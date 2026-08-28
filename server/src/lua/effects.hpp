@@ -127,12 +127,45 @@ public:
         for (u32 i = 0; i < MAX_EFFECTS; ++i) {
             const Effect& e = fx_[i];
             if (e.id == 0 || e.agent != agent) continue;
+            // TYPE-AWARE, because param_get_raw does not return one kind of
+            // number.
+            //
+            // For an Fx field the "raw" is Q32.32 and arithmetic in that domain
+            // is exactly right. For a U8 or a Bool it is a PLAIN INTEGER -- 16
+            // means sixteen, not sixteen divided by four billion -- and doing
+            // fx arithmetic on it was wrong in both directions at once:
+            //
+            //   Set attack_ticks to 10  ->  wrote fx(10).raw = 42949672960,
+            //   which param_set_raw clamps to 255. A swing meant to last a
+            //   sixth of a second lasted four and a quarter, its sweep advanced
+            //   1/255 of a turn per tick, and it read as a wedge that had
+            //   stopped moving. That is how this was found.
+            //
+            //   Mul a U8 by 1.5  ->  fx::from_raw(16) is 3.7e-9, so the result
+            //   was zero. Every effect on max_jumps, max_dashes, attack_ticks,
+            //   attack_cooldown or any Bool has been wrong since effects
+            //   existed; nothing had set one until the debug panel did.
+            //
+            // The effect's value is an fx either way -- a script says 1.5 or 10
+            // and means the number, not a bit pattern -- so for integer fields
+            // the answer is computed in fx and truncated once, at the end.
             const i64 cur = physics::param_get_raw(out, e.field);
+            const bool integral = e.field < physics::PARAM_COUNT &&
+                                  physics::PARAM_TABLE[e.field].type != physics::ParamType::Fx;
             i64 next = cur;
-            switch (e.op) {
-                case EffectOp::Mul: next = (fx::from_raw(cur) * e.value).raw; break;
-                case EffectOp::Add: next = (fx::from_raw(cur) + e.value).raw; break;
-                case EffectOp::Set: next = e.value.raw; break;
+            if (integral) {
+                const fx now = fx::from_int(cur);
+                switch (e.op) {
+                    case EffectOp::Mul: next = (now * e.value).trunc_int(); break;
+                    case EffectOp::Add: next = (now + e.value).trunc_int(); break;
+                    case EffectOp::Set: next = e.value.trunc_int(); break;
+                }
+            } else {
+                switch (e.op) {
+                    case EffectOp::Mul: next = (fx::from_raw(cur) * e.value).raw; break;
+                    case EffectOp::Add: next = (fx::from_raw(cur) + e.value).raw; break;
+                    case EffectOp::Set: next = e.value.raw; break;
+                }
             }
             physics::param_set_raw(out, e.field, next);
         }

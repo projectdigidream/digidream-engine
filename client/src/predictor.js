@@ -169,6 +169,7 @@ export class Predictor {
       // zero, so the collider was drawn for the two frames between snapshots
       // and never seen to travel -- which reads as a swing that does not move.
       attackLeft: sb.attackLeft ?? 0,
+      attackCooldownLeft: sb.attackCooldownLeft ?? 0,
       active: true
     }
 
