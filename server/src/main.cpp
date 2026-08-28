@@ -482,6 +482,17 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             old.effects.clear_agent(s.agent);
             old.world.despawn(s.agent);
             s.has_agent = false;
+
+            // Panels do not travel between levels.
+            //
+            // Each level runs its own VM, so a panel opened by the old level's
+            // script is held by a script that is about to stop being consulted
+            // about this player -- its handlers are in a different Lua state
+            // and will never see another event from it. Left alone the window
+            // stays on screen, permanently dead, and the new level's script
+            // opens a second one beside it.
+            for (const auto& p : s.open_ui) send_ui_close(s, p.ui_id);
+            s.open_ui.clear();
         }
 
         const fx3 spawn_pos = L.map_bytes.empty()

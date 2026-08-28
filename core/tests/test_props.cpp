@@ -599,6 +599,94 @@ static void test_a_swing_reports_agents_and_props_alike() {
     for (u32 i = 0; i < w.attacks().count(); ++i) CHECK(w.attacks().at(i).target != a);
 }
 
+
+// A cooldown is what makes a weapon have a RATE.
+//
+// Without one, an attack is bounded only by the button being released, so a
+// player who can click quickly swings quickly and the weapon has no character
+// of its own.
+static void test_a_cooldown_limits_how_often_you_swing() {
+    std::printf("attack: a cooldown limits the rate, not the press\n");
+
+    static Room r;
+    auto swings_in = [&](u8 cooldown, u32 ticks) {
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        w.params_mut(a).attack_cooldown = cooldown;
+        w.params_mut(a).attack_ticks = 4;
+
+        u32 swings = 0;
+        bool was_swinging = false;
+        for (u32 t = 0; t < ticks; ++t) {
+            proto::InputFrame f;
+            // Pressed every other tick: released often enough that the edge
+            // trigger is never what limits this, so what is measured is the
+            // cooldown and nothing else.
+            if (t % 2 == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+            w.set_input(a, f);
+            w.step();
+            const bool swinging = w.agent(a).mv.attack_left > 0;
+            if (swinging && !was_swinging) ++swings;
+            was_swinging = swinging;
+        }
+        return swings;
+    };
+
+    const u32 free_swings = swings_in(0, 240);
+    const u32 slow_swings = swings_in(60, 240);
+    std::printf("   no cooldown: %u swings    60-tick cooldown: %u\n",
+                free_swings, slow_swings);
+    CHECK(slow_swings < free_swings);
+    // And it is actually the number the cooldown implies, not merely fewer:
+    // 240 ticks, each swing 4 ticks live plus 60 recovering.
+    CHECK(slow_swings >= 3 && slow_swings <= 4);
+    // The control: with no cooldown the same input swings far more often, so
+    // the assertion above is the cooldown working rather than the swing being
+    // broken in both runs.
+    CHECK(free_swings > 20);
+}
+
+// The inner edge is what makes a spear a spear.
+static void test_a_minimum_reach_makes_a_ring_rather_than_a_wedge() {
+    std::printf("attack: a minimum reach misses what is pressed against you\n");
+
+    static Room r;
+    auto hits_at = [&](fx distance, fx min_reach) {
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        w.params_mut(a).attack_min_reach = min_reach;
+        w.params_mut(a).attack_reach = F(4);
+        const u32 victim = w.spawn(fx3{F(20) + distance, F(20), F(0)});
+        // Both bodies thin, so the distance under test is between centres and
+        // not mostly made of radius.
+        w.params_mut(a).radius = fx::from_frac(1, 10);
+        w.params_mut(victim).radius = fx::from_frac(1, 10);
+
+        proto::InputFrame f;
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+        for (u32 i = 0; i < w.attacks().count(); ++i) {
+            if (w.attacks().at(i).target == victim) return true;
+        }
+        return false;
+    };
+
+    // A halberd: reaches out to 4, misses inside 2.
+    CHECK(hits_at(F(3), F(2)));
+    CHECK(!hits_at(fx::from_frac(1, 2), F(2)));
+    // The controls. The same close target IS hit with no minimum, so the miss
+    // above is the inner edge and not the target being unreachable; and the far
+    // one is still hit, so the minimum has not simply broken the swing.
+    CHECK(hits_at(fx::from_frac(1, 2), fx::zero()));
+    CHECK(hits_at(F(3), fx::zero()));
+}
+
 int main() {
     test_props_share_the_entity_index_space();
     test_a_swing_hits_what_is_in_front_of_it();
@@ -612,6 +700,8 @@ int main() {
     test_standing_in_a_prop_is_reported();
     test_the_overlap_holds_while_you_stand_there();
     test_a_despawned_prop_takes_its_handles_with_it();
+    test_a_cooldown_limits_how_often_you_swing();
+    test_a_minimum_reach_makes_a_ring_rather_than_a_wedge();
     test_props_are_hashed();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

@@ -180,7 +180,12 @@ void World::step_agent(u32 i) noexcept {
         // A press STARTS a swing; it does not resolve one. What the collider
         // touches is decided over the ticks that follow, and a press while one
         // is already running is ignored -- the weapon is busy.
-        if (swing && !a.mv.attack_held && a.mv.attack_left == 0) {
+        // The cooldown runs down whether or not the button is held, so holding
+        // it does not extend the wait and releasing it does not shorten one.
+        if (a.mv.attack_cooldown_left > 0) --a.mv.attack_cooldown_left;
+
+        if (swing && !a.mv.attack_held && a.mv.attack_left == 0 &&
+            a.mv.attack_cooldown_left == 0) {
             a.mv.attack_left = params_[i].attack_ticks == 0 ? 1 : params_[i].attack_ticks;
             for (u64& w : a.mv.attack_hit_agents) w = 0;
             a.mv.attack_hit_props[0] = 0;
@@ -194,6 +199,10 @@ void World::step_agent(u32 i) noexcept {
         if (a.mv.attack_left > 0) {
             resolve_attack(i);
             --a.mv.attack_left;
+            // Started when the swing ENDS, not when it begins, so the two are
+            // additive: a weapon's rate is how long it swings plus how long it
+            // takes to recover, which is how a player experiences it.
+            if (a.mv.attack_left == 0) a.mv.attack_cooldown_left = params_[i].attack_cooldown;
         }
     }
 
@@ -527,6 +536,11 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.interact_held);
     h.boolv(m.attack_held);
     h.u32v(m.attack_left);
+    // The cooldown IS predictable -- it counts down from a replicated parameter
+    // on a schedule the client can run itself -- so unlike the hit masks below
+    // it belongs here. A client that thought its weapon was ready when the
+    // server did not would predict a swing that never happened.
+    h.u32v(m.attack_cooldown_left);
     // The hit masks are deliberately ABSENT.
     //
     // agent_hash is the prediction comparison, so what belongs in it is what
@@ -936,9 +950,18 @@ void World::resolve_attack(u32 agent) noexcept {
         return diff <= half || diff >= (0u - half);
     };
     const auto reaches = [&](fx2 toward, fx surface_radius) {
-        const fx limit = mp.attack_reach + surface_radius;
         const u128 d_sq = len_sq_raw(toward);
-        return d_sq <= static_cast<u128>(static_cast<i128>(limit.raw) * limit.raw);
+        const fx limit = mp.attack_reach + surface_radius;
+        if (d_sq > static_cast<u128>(static_cast<i128>(limit.raw) * limit.raw)) return false;
+        // And the INNER edge, which is what makes a spear a spear: too close
+        // and the weapon misses. Measured to the target's surface like the
+        // outer edge, so a wide target is reachable from further in than a
+        // narrow one -- the alternative is a halberd that cannot hit a wall.
+        if (mp.attack_min_reach > fx::zero()) {
+            const fx inner = mp.attack_min_reach + surface_radius;
+            if (d_sq < static_cast<u128>(static_cast<i128>(inner.raw) * inner.raw)) return false;
+        }
+        return true;
     };
 
     for (u32 t = 0; t < MAX_AGENTS; ++t) {

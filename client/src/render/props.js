@@ -81,6 +81,7 @@ export function parseProps (text) {
     // One state per line, defaulting to state 0 so the common case -- a thing
     // with one look -- needs no state keyword at all.
     let state = 0
+    let once = false
     let fps = 0
     let frames = null
     let model = null
@@ -96,6 +97,15 @@ export function parseProps (text) {
       // monster read as facing somewhere: without it an imp walking away from
       // you looks exactly like an imp walking towards you.
       if (key === 'rot8') { d.rot8 = true; continue }
+      // PLAY ONCE, then hold the last frame -- per STATE, not per kind, so a
+      // thing can loop while it walks and stop when it dies.
+      //
+      // A death or an explosion is an event, not a loop, and without this the
+      // engine's only options are to cycle it forever or to remove the entity
+      // the moment it ends. A barrel has been re-exploding on a loop since
+      // bursts were added, which nobody noticed because it vanishes shortly
+      // after.
+      if (key === 'once') { once = true; continue }
       const val = tok[k + 1]
       if (val === undefined) { warnings.push(`line ${i + 1}: '${key}' has no value`); break }
       k++
@@ -115,7 +125,7 @@ export function parseProps (text) {
         warnings.push(`line ${i + 1}: sprite ${id} state ${state} has no frames`)
         return
       }
-      d.states.set(state, { frames, fps })
+      d.states.set(state, { frames, fps, once })
     } else {
       d.states.set(state, { model, clip, fps })
     }

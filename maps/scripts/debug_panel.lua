@@ -18,12 +18,29 @@ local W_MAP    = 4
 local W_GO     = 5
 local W_HEAL   = 6
 local W_TURN   = 7
+-- The attack, which is a collider with a shape, a sweep and a rate rather than
+-- a single number. Each of these is a replicated parameter, so changing one
+-- changes what the CLIENT predicts too -- the swing on screen follows.
+local W_REACH  = 8
+local W_INNER  = 9
+local W_ARC    = 10
+local W_FROM   = 11
+local W_TO     = 12
+local W_DUR    = 13
+local W_COOL   = 14
 
 -- Effect ids, per agent, so a change REPLACES the previous one rather than
 -- stacking on it. Without this, dragging a slider five times leaves five
 -- effects on the same parameter and the value depends on the order they are
 -- combined in.
 local effects = {}   -- agent index -> { speed = id, turn = id }
+-- The panel's own copy of the monster damage.
+--
+-- Kept here as well as pushed into the monster script, because that script is
+-- not always loaded -- a map with no monsters does not load it -- and a slider
+-- that snapped back to 20 every time the panel opened would look broken when it
+-- was merely talking to nobody.
+local damage = nil
 local chosen_map = {}
 local panel_of = {}
 
@@ -49,6 +66,16 @@ local function level_names()
   return out
 end
 
+-- An fx as an integer number of hundredths, for a slider to carry.
+--
+-- fx has no `to number` that is not lossy, which is the point of it -- so the
+-- conversion is done by multiplying in fx and taking the integer part, and the
+-- rounding happens once, here, rather than somewhere it would be a surprise.
+local function hundredths(v)
+  if v == nil then return 0 end
+  return (v * fx.int(100)).int
+end
+
 local function build(e)
   local maps = level_names()
   local idx = e:index()
@@ -65,10 +92,29 @@ local function build(e)
       { kind = "slider", id = W_TURN,   label = "Turn/s",
         value = (e:param("turn_speed")).int, lo = 1, hi = 20 },
       { kind = "slider", id = W_DAMAGE, label = "Damage",
-        value = (enemies and enemies.melee_damage) or 20, lo = 1, hi = 200 },
+        value = damage or (enemies and enemies.melee_damage) or 20, lo = 1, hi = 200 },
       { kind = "slider", id = W_HP,     label = "Health",
         value = e:hp() or 100, lo = 1, hi = 200 },
       { kind = "button", id = W_HEAL,   label = "Full health" },
+      { kind = "label",  id = 0, label = "Attack" },
+      -- Distances in HUNDREDTHS of a world unit, angles in hundredths of a
+      -- turn. A slider carries an integer, and rounding a reach of 2.0 to the
+      -- nearest unit would give a weapon three usable lengths -- so the
+      -- fraction lives in the scale rather than being lost.
+      { kind = "slider", id = W_REACH,  label = "Reach /100",
+        value = hundredths(e:param("attack_reach")), lo = 25, hi = 800 },
+      { kind = "slider", id = W_INNER,  label = "Min reach /100",
+        value = hundredths(e:param("attack_min_reach")), lo = 0, hi = 600 },
+      { kind = "slider", id = W_ARC,    label = "Half arc /100 turn",
+        value = hundredths(e:param("attack_half_arc")), lo = 1, hi = 50 },
+      { kind = "slider", id = W_FROM,   label = "Sweep from /100",
+        value = hundredths(e:param("attack_sweep_from")), lo = -50, hi = 50 },
+      { kind = "slider", id = W_TO,     label = "Sweep to /100",
+        value = hundredths(e:param("attack_sweep_to")), lo = -50, hi = 50 },
+      { kind = "slider", id = W_DUR,    label = "Swing ticks",
+        value = (e:param("attack_ticks")).int, lo = 1, hi = 60 },
+      { kind = "slider", id = W_COOL,   label = "Cooldown ticks",
+        value = (e:param("attack_cooldown")).int, lo = 0, hi = 180 },
       { kind = "select", id = W_MAP,    label = "Map",
         value = chosen_map[idx] or 0, options = maps },
       { kind = "button", id = W_GO,     label = "Go to map" },
@@ -77,8 +123,21 @@ local function build(e)
 end
 
 local function show(e)
+  local idx = e:index()
+  -- CLOSE THE OLD ONE FIRST.
+  --
+  -- Every open allocates a fresh ui_id -- deliberately, so an event for a panel
+  -- that has closed names an id that no longer exists rather than one recycled
+  -- into a different panel. The consequence is that reopening does not replace:
+  -- the client keys panels by id, sees a new one, and draws it beside the old.
+  -- That is what "multiple panels are created" looks like, and the fix belongs
+  -- here rather than in the client, because a script opening two panels at once
+  -- is a legitimate thing to want.
+  local old = panel_of[idx]
+  if old then dnp.ui_close(e, old) end
+
   local id = dnp.ui_open(e, build(e))
-  if id ~= 0 then panel_of[e:index()] = id end
+  if id ~= 0 then panel_of[idx] = id end
 end
 
 -- Opened when somebody arrives, and not before: dnp.ui_open needs a session to
@@ -106,7 +165,22 @@ function on_ui_event(e, ui_id, widget, value)
     -- Reaches the monster script through the table it publishes. Both are
     -- ordinary globals in one VM, which is the whole extension mechanism here:
     -- a script cooperates with another by name, not through the engine.
+    damage = value
     if enemies then enemies.melee_damage = value end
+  elseif widget == W_REACH then
+    set_param(e, "reach", "attack_reach", fx.frac(value, 100))
+  elseif widget == W_INNER then
+    set_param(e, "inner", "attack_min_reach", fx.frac(value, 100))
+  elseif widget == W_ARC then
+    set_param(e, "arc", "attack_half_arc", fx.frac(value, 100))
+  elseif widget == W_FROM then
+    set_param(e, "from", "attack_sweep_from", fx.frac(value, 100))
+  elseif widget == W_TO then
+    set_param(e, "to", "attack_sweep_to", fx.frac(value, 100))
+  elseif widget == W_DUR then
+    set_param(e, "dur", "attack_ticks", fx.int(value))
+  elseif widget == W_COOL then
+    set_param(e, "cool", "attack_cooldown", fx.int(value))
   elseif widget == W_HP then
     e:set_hp(value)
   elseif widget == W_HEAL then

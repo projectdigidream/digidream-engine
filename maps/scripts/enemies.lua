@@ -36,16 +36,32 @@ local ZERO = fx.int(0)
 -- catalogue's numbering is one edit here rather than a hunt for magic numbers.
 local IDLE, WALK, ATTACK, PAIN, DIE = 0, 1, 2, 3, 4
 
--- What one swing takes off. A number here rather than a parameter on the
--- attacker, because the engine's attack carries no damage: MoveParams shapes
--- the COLLIDER -- its reach, its arc, how long it sweeps -- and what a hit
--- means is never the engine's opinion.
-local MELEE_DAMAGE = 20
+-- What one player swing takes off, and what a monster's attacks take off.
+--
+-- Numbers here rather than parameters on the attacker, because the engine's
+-- attack carries no damage: MoveParams shapes the COLLIDER -- its reach, its
+-- arc, how long it sweeps -- and what a hit MEANS is never the engine's opinion.
+--
+-- On M rather than as locals, so another script can change them. The debug
+-- panel does exactly that, and when these were locals it set a field nothing
+-- ever read: the panel moved a slider and the number it was pointing at was not
+-- the number being used.
+M.melee_damage = M.melee_damage or 20   -- a player swing
+M.shot_damage  = M.shot_damage  or 9    -- a zombieman's bullet, Doom's average
+M.claw_damage  = M.claw_damage  or 13   -- an imp's claw, and its fireball
 
--- How long a corpse lies there before it is taken away. Long enough for the
--- death animation to finish; the client decides how fast that plays, this only
--- decides when the thing stops existing.
-local CORPSE_TICKS = 90
+-- How many corpses to leave lying about.
+--
+-- They STAY -- a level you have fought through should look like it -- but not
+-- without a bound: a corpse is still an agent, agent slots are finite, and a
+-- long session on a busy map would otherwise fill them and quietly stop new
+-- monsters spawning. The oldest goes when the cap is reached, which is the
+-- least surprising one to lose.
+--
+-- The death animation holds its last frame (`once` in the catalogue) rather
+-- than looping, so what is left on the floor is a body and not a monster dying
+-- over and over.
+local MAX_CORPSES = 32
 
 -- How long the flinch lasts. Doom's monsters interrupt what they were doing
 -- when hit, which is most of what makes a fight readable -- without it, a
@@ -133,6 +149,11 @@ local shots = {}
 -- level that does not.
 local players = {}
 local players_tick = -1
+-- Where each player first appeared, which is where they go back to on death.
+-- Declared here rather than beside hurt_player because refresh_players fills
+-- it, and a local used above its declaration is a global -- which in this
+-- sandbox is nil, and indexing nil is an error on the first shot fired.
+local spawn_of = {}
 -- Whether the monsters have already been put down for the night. A flag rather
 -- than doing it every tick: the point of the check is to stop doing work.
 local asleep = false
@@ -157,7 +178,13 @@ local function refresh_players(tick)
   -- dnp.entities() built a handle for all thirty-eight monsters on MAP02 to
   -- find the one person among them.
   for _, e in ipairs(dnp.players()) do
-    players[#players + 1] = { e = e, pos = e:pos() }
+    local p = e:pos()
+    players[#players + 1] = { e = e, pos = p }
+    -- Where this player first appeared, which is where they go back to. Taken
+    -- from the first sighting rather than from a spawn tag, because a script
+    -- that hardcoded a tag would be wrong on every map that named it something
+    -- else.
+    if spawn_of[e:index()] == nil then spawn_of[e:index()] = p end
   end
 end
 
@@ -257,6 +284,27 @@ function M.spawn(name, x, y, z, opts)
   return e
 end
 
+-- Hurt a player, and put them back on their feet if that finished them.
+--
+-- The engine has no notion of health, so nothing here is engine behaviour: a
+-- monster's shot is a raycast the engine answered, and what it COSTS is this
+-- file's decision, exactly as a player's swing killing a monster is.
+--
+-- Death is a respawn rather than anything more elaborate. A player left at zero
+-- with nothing happening is worse than either a death screen or a respawn, and
+-- of the three this is the one that does not need a whole feature behind it.
+local function hurt_player(e, amount)
+  if e == nil or not e:valid() then return end
+  local hp = (e:hp() or 100) - amount
+  if hp > 0 then
+    e:set_hp(hp)
+    return
+  end
+  e:set_hp(100)
+  local home = spawn_of[e:index()]
+  if home then e:teleport(home) end
+end
+
 local function fire_hitscan(m, from, aim)
   local target, at = dnp.hitscan(m.e, m.def.range)
   if at == nil then return nil end
@@ -282,6 +330,12 @@ local function fire_hitscan(m, from, aim)
   local dx, dy = at.x - muzzle.x, at.y - muzzle.y
   local len = dnp.length(vec3.new(dx, dy, ZERO))
   dnp.vfx(m.def.tracer, muzzle, m.e:facing(), (len * fx.int(256)).int)
+
+  -- The shot ARRIVES. dnp.hitscan already answered what was in the way, walls
+  -- included, so a target here is one the bullet actually reached.
+  if target ~= nil and target:valid() and target:kind() == 0 then
+    hurt_player(target, M.shot_damage)
+  end
   return target
 end
 
@@ -309,16 +363,17 @@ end
 -- spent a commit getting rid of.
 local corpses = {}
 
-local function update_corpses(tick)
+-- Corpses are not on a timer any more, so this only enforces the cap and
+-- forgets ones that have gone for other reasons -- a map change, a despawn from
+-- somewhere else.
+local function update_corpses(_tick)
   for i = #corpses, 1, -1 do
-    local m = corpses[i]
-    if not m.e:valid() then
-      table.remove(corpses, i)
-    elseif tick >= m.dead_at then
-      table.remove(corpses, i)
-      live[m.idx] = nil
-      m.e:despawn()
-    end
+    if not corpses[i].e:valid() then table.remove(corpses, i) end
+  end
+  while #corpses > MAX_CORPSES do
+    local oldest = table.remove(corpses, 1)
+    live[oldest.idx] = nil
+    if oldest.e:valid() then oldest.e:despawn() end
   end
 end
 
@@ -419,8 +474,21 @@ function on_tick()
       m.fire_at = nil
       table.remove(firing, i)
       local from = m.e:pos()
-      if m.def.attack == "hitscan" then fire_hitscan(m, from, m.aim or 0)
-      else fire_projectile(m, from, m.aim or 0) end
+      -- CLOSE ENOUGH TO CLAW. Doom's imp throws a fireball at range and swipes
+      -- when you are next to it, and the difference matters more than it looks:
+      -- a fireball spawned inside somebody explodes on its owner or sails past,
+      -- so a monster with only a ranged attack is harmless the moment you are
+      -- standing in it. `melee` was in the catalogue from the start and nothing
+      -- read it.
+      local melee = m.def.melee
+      local target, d2 = nearest_player(from)
+      if melee ~= nil and target ~= nil and d2 ~= nil and d2 < melee * melee then
+        hurt_player(target, M.claw_damage)
+      elseif m.def.attack == "hitscan" then
+        fire_hitscan(m, from, m.aim or 0)
+      else
+        fire_projectile(m, from, m.aim or 0)
+      end
       m.ready_at = tick + m.def.cooldown
       set_state(m, WALK)
     end
@@ -508,7 +576,7 @@ function on_attack(attacker, target)
   local m = live[target:index()]
   if m == nil or m.dead_at ~= nil then return end
 
-  m.hp = m.hp - MELEE_DAMAGE
+  m.hp = m.hp - M.melee_damage
   if m.hp > 0 then
     -- Flinch. It interrupts whatever the monster was doing, which is most of
     -- what makes a fight readable: without it a hit looks identical to a miss
@@ -521,11 +589,10 @@ function on_attack(attacker, target)
     return
   end
 
-  -- Dead. It stops deciding anything, plays its death animation, and is taken
-  -- away when that has had time to finish -- rather than vanishing on the tick
-  -- it dies, which reads as a bug rather than as a kill.
-  local tick = dnp.tick()
-  m.dead_at = tick + CORPSE_TICKS
+  -- Dead. It stops deciding anything and plays its death animation, which holds
+  -- on its last frame -- so what is left is a body on the floor. It is removed
+  -- only when the corpse cap pushes it out.
+  m.dead_at = dnp.tick()
   m.fire_at = nil
   corpses[#corpses + 1] = m
   set_state(m, DIE)
@@ -542,6 +609,12 @@ function on_touch(entity, prop)
   local s = shots[prop:index()]
   if s == nil then return end
   shots[prop:index()] = nil
+  -- What it hit. A fireball touches whatever gets in its way, which includes
+  -- the monster that fired it -- so only a player is hurt by one, and the
+  -- alternative would be imps killing each other in corridors.
+  if entity ~= nil and entity:valid() and entity:kind() == 0 then
+    hurt_player(entity, M.claw_damage)
+  end
   prop:set_animation(1)
   -- Left visible long enough for the burst to play, then removed. The client
   -- decides how fast it plays; this only says when it stops existing.

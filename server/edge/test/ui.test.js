@@ -51,7 +51,10 @@ function mapPath (name) {
   }
   return null
 }
-const MAP_A = mapPath('level_a.dnpm')
+// monsters.dnpm because it declares the MONSTER script, and the damage slider
+// is a claim about this panel reaching that one. A map without it would be
+// testing the panel talking to itself.
+const MAP_A = mapPath('monsters.dnpm')
 const MAP_B = mapPath('level_b.dnpm')
 if (!MAP_A || !MAP_B) { console.error('no baked levels'); process.exit(2) }
 
@@ -59,7 +62,12 @@ const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 
 // Two maps, so the panel's map selector has somewhere to go.
-const args = ['--port', String(LINK_PORT), '--map', MAP_A, '--map', MAP_B, '--spawn', 'start']
+// --props with an absolute path: the default is relative to the working
+// directory, and this does not run from the repository root -- which is also
+// true of any real deployment. Needed because MAP_A spawns monsters, and a
+// catalogue that is not found is fatal for the level that wanted it.
+const args = ['--port', String(LINK_PORT), '--map', MAP_A, '--map', MAP_B, '--spawn', 'start',
+              '--props', join(ROOT, 'assets', 'props.txt')]
 if (!NO_SCRIPT) args.push('--script', join(ROOT, 'maps', 'scripts', 'debug_panel.lua'))
 
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
@@ -67,7 +75,8 @@ const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })
 process.on('exit', () => { try { server.kill('SIGKILL') } catch {} })
-await waitFor(() => serverLog.includes('listening for edge'), 5000, 'server')
+await waitFor(() => serverLog.includes('listening for edge'), 15000,
+              `server (log: ${serverLog.slice(-200)})`)
 
 const edge = new Edge({
   port: WT_PORT, host: '127.0.0.1', path: '/dnp', upstreamPort: LINK_PORT,
@@ -87,6 +96,10 @@ const dw = wt.datagrams.createWritable().getWriter()
 
 let welcome = null
 let panel = null
+// PARAM_UPDATEs seen. A replicated parameter changing is the client's own copy
+// of the rules changing, which is what makes an attack slider a physics change
+// rather than a number in a script.
+let paramUpdates = 0
 let closed = []
 ;(async () => {
   const r = control.readable.getReader()
@@ -104,6 +117,7 @@ let closed = []
         if (m?.type === MSG.WELCOME) welcome = m
         else if (m?.type === MSG.UI_OPEN) panel = m
         else if (m?.type === MSG.UI_CLOSE) closed.push(m.uiId)
+        else if (m?.type === MSG.PARAM_UPDATE) paramUpdates++
       }
     }
   } catch {}
@@ -161,8 +175,8 @@ check((panel?.widgets.length ?? 0) >= 6, `and its widgets (${panel?.widgets.leng
 const mapSel = panel?.widgets.find((w) => w.kind === UI_KIND.SELECT)
 check(mapSel != null && mapSel.options.length === 2,
       `the map selector lists the server's own levels (${mapSel?.options.join(',')})`)
-check(mapSel?.options.includes('level_a') && mapSel?.options.includes('level_b'),
-      'by name, not by path')
+check(mapSel?.options.includes('monsters') && mapSel?.options.includes('level_b'),
+      `by name, not by path (${mapSel?.options.join(',')})`)
 
 // --- a slider changes physics ------------------------------------------------
 //
@@ -171,8 +185,6 @@ check(mapSel?.options.includes('level_a') && mapSel?.options.includes('level_b')
 
 const speed = panel.widgets.find((w) => w.kind === UI_KIND.SLIDER && w.label === 'Speed')
 check(speed != null, 'there is a speed slider')
-let paramUpdates = 0
-;(async () => {})()
 await cw.write(encodeUiEvent(panel.uiId, speed.id, 3))
 await step(30)
 check(serverLog.includes('error') === false, 'and setting it raised no script error')
@@ -215,6 +227,81 @@ await step(30)
 check(hpOf() === 100, `the heal button restored health (${hpOf()})`)
 check(panel !== null && panel.uiId !== wasId,
       'and reopened the panel so its slider shows the new value')
+
+// --- one panel, not a pile of them -------------------------------------------
+//
+// Every open allocates a fresh ui_id, so reopening does not replace: the client
+// keys panels by id and draws a second one beside the first. The script has to
+// close the old one, and the proof is a UI_CLOSE arriving for it -- not just
+// "a panel exists", which was true the whole time it was going wrong.
+{
+  const opened = panel.uiId
+  closed = []
+  panel = null
+  await cw.write(encodeUiEvent(opened, heal.id, 1))
+  await step(30)
+  check(closed.includes(opened),
+        `reopening closes the panel it replaces (closed ${closed.join(',')})`)
+  check(panel !== null, 'and opens exactly one new one')
+}
+
+// --- the panel changes the monster script's numbers --------------------------
+//
+// The panel writes enemies.melee_damage and the monster script reads it. Both
+// halves are ordinary globals in one VM, which is the extension mechanism here
+// -- and when the script kept the number in a LOCAL instead, the slider moved a
+// field nothing ever read. Nothing failed; the damage simply never changed.
+{
+  const dmg = panel.widgets.find((w) => w.label === 'Damage')
+  check(dmg != null, `there is a damage slider (showing ${dmg?.value})`)
+  await cw.write(encodeUiEvent(panel.uiId, dmg.id, 77))
+  await step(20)
+
+  // Read it back through a FRESH panel. A panel is built from state at the
+  // moment it is opened, so one that now shows 77 is the monster script's own
+  // number having changed -- not the widget remembering what was set on it.
+  const wasId = panel.uiId
+  panel = null
+  await cw.write(encodeUiEvent(wasId, heal.id, 1))
+  await step(30)
+  const again = panel?.widgets.find((w) => w.label === 'Damage')
+  check(again?.value === 77,
+        `and the monster script now reads 77 from it (${again?.value})`)
+}
+
+// --- the attack sliders reach the physics ------------------------------------
+//
+// These are replicated parameters, so the proof is a PARAM_UPDATE arriving --
+// the CLIENT's own copy of the rules changing. A panel that renders but changes
+// nothing looks identical to one that works until you swing at something, and
+// the whole point of these being parameters rather than script numbers is that
+// the client predicts the swing too.
+{
+  const names = ['Reach /100', 'Min reach /100', 'Half arc /100 turn',
+                 'Sweep from /100', 'Sweep to /100', 'Swing ticks',
+                 'Cooldown ticks']
+  const found = names.filter((n) => panel.widgets.some((w) => w.label === n))
+  check(found.length === names.length,
+        `the panel offers every attack parameter (${found.length}/${names.length})`)
+
+  const reach = panel.widgets.find((w) => w.label === 'Reach /100')
+  check(reach.value === 200, `reach starts at the engine default of 2.00 (${reach.value / 100})`)
+
+  paramUpdates = 0
+  await cw.write(encodeUiEvent(panel.uiId, reach.id, 550))
+  await step(30)
+  check(paramUpdates > 0,
+        `changing it replicated a PARAM_UPDATE to the client (${paramUpdates})`)
+
+  // And read it back through a fresh panel, so this is the parameter having
+  // actually changed rather than a message having been sent about it.
+  const wasId = panel.uiId
+  panel = null
+  await cw.write(encodeUiEvent(wasId, heal.id, 1))
+  await step(30)
+  const again = panel?.widgets.find((w) => w.label === 'Reach /100')
+  check(again?.value === 550, `and the engine now reports 5.50 (${again?.value / 100})`)
+}
 
 console.log(`\nui: ${checks} checks, ${fails} failures`)
 try { wt.close() } catch {}

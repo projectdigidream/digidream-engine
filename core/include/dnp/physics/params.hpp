@@ -119,6 +119,23 @@ struct MoveParams {
     // technically a sweep and read as an instant -- the collider was on screen
     // for a sixth of a second, which is not long enough to see anything travel.
     u8 attack_ticks      = 16;
+
+    // The INNER edge of the collider, as a distance from the body's surface.
+    //
+    // Zero is a wedge starting at the body -- a fist or a sword. Non-zero makes
+    // it a ring segment, which misses anything pressed right up against you: a
+    // spear or a halberd, where getting inside the weapon's reach is how you
+    // beat it. This is the parameter that changes the SHAPE rather than the
+    // size, and it is the one a swing had no way to express.
+    fx attack_min_reach  = fx::zero();
+
+    // Ticks before another swing may start. Zero is the old behaviour: bounded
+    // only by the button being released, since the attack is edge-triggered.
+    //
+    // A u8 caps a cooldown at a little over four seconds, which is long for a
+    // melee weapon and short for a siege engine; the day something wants the
+    // latter it should be a u16 rather than a second parameter.
+    u8 attack_cooldown   = 0;
 };
 
 // Runtime state the abilities carry between ticks.
@@ -159,6 +176,10 @@ struct MoveState {
     // Ticks of swing left, counting down. Non-zero means the collider is live
     // this tick and sweeping; the client reads it to draw the thing.
     u8   attack_left   = 0;
+    // Ticks until the next swing is allowed. Simulation state and hashed: a
+    // client that thought its weapon was ready when the server did not would
+    // predict a swing that never happened.
+    u8   attack_cooldown_left = 0;
     // Targets already hit by the swing in progress, as a bitmask over entity
     // slots. A swing lasting ten ticks must hit a barrel once, not ten times,
     // and "once per swing" is a property of the swing rather than of the

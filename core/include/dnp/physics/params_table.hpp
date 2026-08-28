@@ -75,6 +75,12 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     DNP_PARAM(attack_sweep_from,    ParamType::Fx),
     DNP_PARAM(attack_sweep_to,      ParamType::Fx),
     DNP_PARAM(attack_ticks,         ParamType::U8),
+    // APPENDED, never inserted. The index into this table IS the wire id, so
+    // putting a new parameter in the middle silently renumbers every one after
+    // it and a client applies the wrong field to the wrong value. That has
+    // happened once, with turn_speed.
+    DNP_PARAM(attack_min_reach,     ParamType::Fx),
+    DNP_PARAM(attack_cooldown,      ParamType::U8),
     // Appended, not inserted beside jump_impulse where the field lives: this
     // table's ORDER is the wire format, and the struct's order is not. Putting
     // it next to its neighbour shifted the id of every parameter after it.
@@ -95,7 +101,7 @@ inline constexpr u16 PARAM_COUNT = static_cast<u16>(sizeof(PARAM_TABLE) / sizeof
 //
 // If this fires: add the new field to PARAM_TABLE (at the END -- ids are a wire
 // contract) and update the number here.
-static_assert(sizeof(MoveParams) == 264,
+static_assert(sizeof(MoveParams) == 280,
               "MoveParams changed. Append the new field(s) to PARAM_TABLE in this "
               "file -- appending is safe, reordering breaks the wire format -- "
               "then update this size. See docs/protocol.md 8.4.");

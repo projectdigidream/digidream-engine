@@ -77,7 +77,7 @@ sprite 6 size 0.35 billboard state 0 fps 6 frames RSKUA0,RSKUB0
 
 prop 10 barrel radius 0.21 height 0.875 solid
 sprite 10 size 0.875 billboard state 0 fps 2 frames BAR1A0,BAR1B0
-sprite 10 state 1 fps 14 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0,BEXPE0
+sprite 10 once state 1 fps 14 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0,BEXPE0
 
 # A wall switch you press rather than a wall you press. Two states, and the
 # server declares WHICH -- the client decides how fast it plays.
@@ -116,20 +116,20 @@ sprite 20 size 1.167 billboard rot8 state 0 fps 0  frames POSSA
 sprite 20 rot8 state 1 fps 6  frames POSSA,POSSB,POSSC,POSSD
 sprite 20 rot8 state 2 fps 5  frames POSSE,POSSF
 sprite 20 rot8 state 3 fps 0  frames POSSG
-sprite 20 rot8 state 4 fps 8  frames POSSH,POSSI,POSSJ,POSSK,POSSL,POSSM
+sprite 20 rot8 once state 4 fps 8  frames POSSH,POSSI,POSSJ,POSSK,POSSL,POSSM
 
 prop 21 imp radius 0.417 height 1.167 speed 5.83 solid
 sprite 21 size 1.167 billboard rot8 state 0 fps 0  frames TROOA
 sprite 21 rot8 state 1 fps 6  frames TROOA,TROOB,TROOC,TROOD
 sprite 21 rot8 state 2 fps 5  frames TROOE,TROOF,TROOG
 sprite 21 rot8 state 3 fps 0  frames TROOH
-sprite 21 rot8 state 4 fps 8  frames TROOI,TROOJ,TROOK,TROOL,TROOM
+sprite 21 rot8 once state 4 fps 8  frames TROOI,TROOJ,TROOK,TROOL,TROOM
 
 # The imp's fireball. A prop rather than an agent: it has no controller, it does
 # not walk, and what it needs is a straight line and something to hit.
 prop 22 fireball radius 0.13 height 0.26
 sprite 22 size 0.4 billboard state 0 fps 10 frames BAL1A0,BAL1B0
-sprite 22 state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
+sprite 22 once state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
 
 # --- transient effects -------------------------------------------------------
 #
