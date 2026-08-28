@@ -1298,6 +1298,68 @@ int l_dnp_camera(lua_State* L) {
     return 0;
 }
 
+// dnp.side_texture(side, "middle") -> name, and
+// dnp.set_side_texture(side, "middle", "SW2COMP")
+//
+// The picture on one field of one side. A switch that has been thrown.
+//
+// The ENGINE has no idea what a switch is: it reports that an entity reached
+// for a side and stops there, exactly as it does for a door. Which texture
+// pairs with which -- Doom's SW1/SW2 convention -- belongs in the Doom script,
+// so the read exists to let a script work the pairing out for itself rather
+// than have the engine know it.
+static const char* const SIDE_FIELD_NAMES[] = { "upper", "middle", "lower" };
+
+static bool side_field_of(lua_State* L, int idx, proto::SideField& out) {
+    const char* n = luaL_checkstring(L, idx);
+    for (u8 i = 0; i < 3; ++i) {
+        if (std::strcmp(n, SIDE_FIELD_NAMES[i]) == 0) {
+            out = static_cast<proto::SideField>(i);
+            return true;
+        }
+    }
+    luaL_error(L, "side field must be 'upper', 'middle' or 'lower', got '%s'", n);
+    return false;
+}
+
+int l_dnp_side_texture(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    const u32 side = static_cast<u32>(luaL_checknumber(L, 1));
+    proto::SideField f;
+    if (m == nullptr || ctx.map_store == nullptr || side >= m->side_count ||
+        !side_field_of(L, 2, f)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    const geom::RenderData rd = ctx.map_store->render_view();
+    if (side >= rd.side_count) { lua_pushnil(L); return 1; }
+    const geom::SideRender& r = rd.side(side);
+    const u16 tex = f == proto::SideField::Upper ? r.upper
+                  : f == proto::SideField::Lower ? r.lower
+                                                 : r.middle;
+    if (tex == geom::NO_TEXTURE || tex >= rd.texture_count) { lua_pushnil(L); return 1; }
+    const geom::TextureName& tn = rd.texture(tex);
+    lua_pushlstring(L, tn.name, tn.len);
+    return 1;
+}
+
+int l_dnp_set_side_texture(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    const u32 side = static_cast<u32>(luaL_checknumber(L, 1));
+    proto::SideField f;
+    if (m == nullptr || side >= m->side_count || !side_field_of(L, 2, f)) return 0;
+    if (ctx.ui == nullptr) return 0;
+
+    proto::SideTexture t;
+    t.side = static_cast<u16>(side);
+    t.field = f;
+    if (!ui_text(L, 3, t.name, "texture name")) return 0;
+    ctx.ui->set_side_texture(ctx.level, t);
+    return 0;
+}
+
 // dnp.ui_close(entity, ui_id)
 int l_dnp_ui_close(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -1473,6 +1535,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},
     {"camera", l_dnp_camera},
+    {"side_texture", l_dnp_side_texture},
+    {"set_side_texture", l_dnp_set_side_texture},
     {"ui_set", l_dnp_ui_set},
     {"ui_close", l_dnp_ui_close},
     {"prop", l_dnp_prop},

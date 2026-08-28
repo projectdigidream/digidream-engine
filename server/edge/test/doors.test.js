@@ -140,6 +140,8 @@ const dw = wt.datagrams.createWritable().getWriter()
 let welcome = null
 const acc = new MapAccumulator()
 const motionSets = []
+// Switch faces the server has changed (docs/protocol.md §11.1).
+const sideTextures = []
 const pending = []
 
 ;(async () => {
@@ -158,6 +160,7 @@ const pending = []
         if (m?.type === MSG.WELCOME) welcome = m
         else if (m?.type === MSG.MAP_DATA) acc.push(m)
         else if (m?.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
+        else if (m?.type === MSG.SIDE_TEXTURE) sideTextures.push(m)
       }
     }
   } catch {}
@@ -382,6 +385,27 @@ for (let i = 0; i < 4; i++) await tickWith(0, 0)
 for (let i = 0; i < 520; i++) await tickWith(0, 1)
 ceilAfterOpen = ceilOf(DOOR)
 liftAfterDown = floorOf(LIFT)
+
+// THE SWITCH SHOWS ITS OTHER FACE.
+//
+// Doom pairs switch textures by name -- SW1COMP unpressed, SW2COMP pressed --
+// and that convention lives in the Doom script, not the engine: the engine
+// reports that an entity reached for a side and stops there, the same division
+// it draws for the door itself. Purely visual, so nothing about it is predicted
+// or hashed; what the switch DID is the sector motion this file already
+// asserts.
+if (!NO_USE && !NO_SCRIPT) {
+  console.log(`  side textures: ` +
+              (sideTextures.map((t) => `${t.side}:${t.name}`).join(', ') || 'none'))
+  const flip = sideTextures.find((t) => t.name.startsWith('SW2'))
+  check(flip != null, `pressing the switch changed its texture (${flip?.name ?? 'nothing'})`)
+  check(flip?.side === 2, `on the side that was pressed (${flip?.side})`)
+  // Once, not once per press. The walk above presses for several ticks and
+  // crosses the trip-wire six times; a switch that re-sent on every one would
+  // be a reliable control message per tick held.
+  check(sideTextures.length === 1,
+        `and said so once (${sideTextures.length} messages)`)
+}
 
 // Back and forth across the trip-wire, which is repeatable.
 //

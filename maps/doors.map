@@ -20,7 +20,7 @@
 sector floor 0 ceil 8 tag 1 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
   vertex 0 0    wall tex STARTAN3
   vertex 10 0   wall tex STARTAN3
-  vertex 10 3   neighbor 1
+  vertex 10 3   neighbor 1 lower SW1COMP
   vertex 10 7   wall tex STARTAN3
   vertex 10 10  wall tex STARTAN3
   vertex 0 10   wall tex STARTAN3

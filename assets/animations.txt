@@ -1,0 +1,52 @@
+# Animated textures and flats.
+#
+# Doom cycles certain textures through a fixed sequence of frames: nukage,
+# water, lava, blood, and a handful of wall effects. A map never names the
+# frames -- it names the FIRST one and the engine animates from there -- so the
+# sequences have to be written down somewhere, and in Doom they were compiled
+# into the executable (P_InitPicAnims).
+#
+# Here they are data, for the same reason the prop catalogue is: adding an
+# animation should be editing a text file, not rebuilding a binary.
+#
+# CLIENT ONLY. This is the one catalogue the server does not read, and
+# deliberately: which picture is on a wall changes nothing the simulation can
+# observe. Nothing here is hashed, replicated, or predicted. A client that
+# lacks this file draws the first frame of everything and is otherwise correct,
+# which is exactly the right failure.
+#
+#   anim <fps> <FIRST> <NEXT> ...
+#
+# The FIRST name is the one maps refer to; the rest are the frames it cycles
+# through. Doom runs these at 8 tics a frame, which at its 35 Hz is 4.375 a
+# second -- kept rather than rounded, because a nukage pool at 4 and one at 5
+# look different and the one people remember is Doom's.
+#
+# A frame whose image the client does not have is skipped rather than drawn as
+# a missing texture: a partial extraction should lose motion, not the wall.
+
+# --- flats: the floors you stand in and regret ---
+anim 4.375 NUKAGE1 NUKAGE2 NUKAGE3
+anim 4.375 FWATER1 FWATER2 FWATER3 FWATER4
+anim 4.375 SWATER1 SWATER2 SWATER3 SWATER4
+anim 4.375 LAVA1 LAVA2 LAVA3 LAVA4
+anim 4.375 BLOOD1 BLOOD2 BLOOD3
+anim 4.375 RROCK05 RROCK06 RROCK07 RROCK08
+anim 4.375 SLIME01 SLIME02 SLIME03 SLIME04
+anim 4.375 SLIME05 SLIME06 SLIME07 SLIME08
+anim 4.375 SLIME09 SLIME10 SLIME11 SLIME12
+
+# --- wall textures ---
+anim 4.375 BLODGR1 BLODGR2 BLODGR3 BLODGR4
+anim 4.375 BLODRIP1 BLODRIP2 BLODRIP3 BLODRIP4
+anim 4.375 FIREBLU1 FIREBLU2
+anim 4.375 FIRELAV3 FIRELAVA
+anim 4.375 FIREMAG1 FIREMAG2 FIREMAG3
+anim 4.375 FIREWALA FIREWALB FIREWALL
+anim 4.375 GSTFONT1 GSTFONT2 GSTFONT3
+anim 4.375 ROCKRED1 ROCKRED2 ROCKRED3
+anim 4.375 SLADRIP1 SLADRIP2 SLADRIP3
+anim 4.375 BFALL1 BFALL2 BFALL3 BFALL4
+anim 4.375 SFALL1 SFALL2 SFALL3 SFALL4
+anim 4.375 WFALL1 WFALL2 WFALL3 WFALL4
+anim 4.375 DBRAIN1 DBRAIN2 DBRAIN3 DBRAIN4

@@ -42,6 +42,9 @@ inline constexpr u8 MSG_UI_SET   = 0x23;
 // camera lives on the client and the server never says where it IS -- only how
 // it should behave.
 inline constexpr u8 MSG_CAMERA_SET = 0x24;
+// One field of one side changes its picture (docs/protocol.md §11.1). A switch
+// that has been thrown. Not simulation state -- never hashed, never predicted.
+inline constexpr u8 MSG_SIDE_TEXTURE = 0x25;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -321,6 +324,18 @@ struct CameraSet {
 
 void encode_camera_set(ByteWriter& w, const CameraSet& c) noexcept;
 bool decode_camera_set(ByteReader& r, CameraSet& out) noexcept;
+
+// Which of a side's three texture fields (docs/protocol.md §11.1).
+enum class SideField : u8 { Upper = 0, Middle = 1, Lower = 2 };
+
+struct SideTexture {
+    u16      side = 0;
+    SideField field = SideField::Middle;
+    UiText   name{};        // a texture name, reusing the capped-string type
+};
+
+void encode_side_texture(ByteWriter& w, const SideTexture& t) noexcept;
+bool decode_side_texture(ByteReader& r, SideTexture& out) noexcept;
 
 struct UiEvent {
     u32 ui_id = 0;

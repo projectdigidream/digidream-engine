@@ -50,23 +50,7 @@ export class MapView {
     // is not the conventional one: sector light is an ADDITIVE FLOOR, not a
     // multiplier. See lighting.js -- multiplying, which is what vertexColors on
     // a standard material does, makes a torch in a dark room stay dark.
-    this.materials = this.textures.map((tex) => new THREE.ShaderMaterial({
-      uniforms: {
-        map: { value: tex },
-        repeat: { value: new THREE.Vector2(1 / DEFAULT_WORLD_SIZE, 1 / DEFAULT_WORLD_SIZE) },
-        ...this.lightUniforms
-      },
-      vertexShader: VERTEX_SHADER,
-      fragmentShader: FRAGMENT_SHADER,
-      side: THREE.FrontSide,
-      // Transparent so the occlusion window can fade, but depth is still
-      // WRITTEN: everything outside the window is at alpha 1, where blending is
-      // identical to opaque. Turning depth writing off -- the usual reflex for
-      // a transparent material -- would make the entire map sort per object
-      // instead of per fragment, and a map is a handful of merged meshes.
-      transparent: true,
-      depthWrite: true
-    }))
+    this.materials = this.textures.map((tex) => this.#material(tex))
 
     // Anything the map left untextured. Visible rather than invisible: a
     // missing texture should look like a missing texture, not like a hole.
@@ -79,9 +63,87 @@ export class MapView {
     this.rebuildStatic()
   }
 
+
+  /**
+   * One surface material. Extracted so a texture added at RUNTIME -- a switch's
+   * opposite face, which the map never named -- is built exactly like every
+   * other one. Two constructions differing by a flag would show as a wall that
+   * changes how it is lit the moment it is switched.
+   */
+  #material (tex) {
+    return new THREE.ShaderMaterial({
+        uniforms: {
+          map: { value: tex },
+          repeat: { value: new THREE.Vector2(1 / DEFAULT_WORLD_SIZE, 1 / DEFAULT_WORLD_SIZE) },
+          ...this.lightUniforms
+        },
+        vertexShader: VERTEX_SHADER,
+        fragmentShader: FRAGMENT_SHADER,
+        side: THREE.FrontSide,
+        // Transparent so the occlusion window can fade, but depth is still
+        // WRITTEN: everything outside the window is at alpha 1, where blending is
+        // identical to opaque. Turning depth writing off -- the usual reflex for
+        // a transparent material -- would make the entire map sort per object
+        // instead of per fragment, and a map is a handful of merged meshes.
+        transparent: true,
+        depthWrite: true
+    })
+  }
+
+  /**
+   * Change one field of one side to a named texture, and redraw its sector.
+   *
+   * The name is usually one the map never references -- a switch's opposite
+   * face -- so it has no slot in the texture list and no material. Both are
+   * created here, which is why this is client-side and needs no change to the
+   * map format: a texture the map did not know about is still just a picture.
+   *
+   * Returns the sector to rebuild, or -1 if nothing changed. The caller
+   * rebuilds rather than this method, because a burst of switches thrown on
+   * join should cost one rebuild per sector and not one per switch.
+   */
+  setSideTexture (sideIndex, field, name, loadOpts = {}) {
+    const side = this.map.sides?.[sideIndex]
+    if (!side) return -1
+
+    let slot = this.map.textures.indexOf(name)
+    if (slot < 0) {
+      slot = this.map.textures.length
+      this.map.textures.push(name)
+      const tex = makeTextureSet(THREE, [name])[0]
+      this.textures.push(tex)
+      this.materials.push(this.#material(tex))
+      // Loaded after the material exists, so a slow fetch shows the
+      // placeholder rather than nothing. Deliberately not awaited: a switch
+      // should change the moment it is thrown.
+      loadRealTextures(THREE, [name], [this.materials[slot]], loadOpts)
+        .then((r) => { for (const [n, t] of r.frames ?? []) this.frameTextures?.set(n, t) })
+        .catch(() => {})
+    }
+
+    const key = field === 0 ? 'upper' : field === 2 ? 'lower' : 'middle'
+    if (side[key] === slot) return -1
+    side[key] = slot
+    return side.sector ?? this.#sectorOf(sideIndex)
+  }
+
+  /** Which sector owns a side. Linear, and called once per switch. */
+  #sectorOf (sideIndex) {
+    for (let i = 0; i < this.map.sectors.length; i++) {
+      const s = this.map.sectors[i]
+      if (sideIndex >= s.firstSide && sideIndex < s.firstSide + s.sideCount) return i
+    }
+    return -1
+  }
+
   /** Replace the placeholders with real images where the client has them. */
   async loadTextures (opts) {
-    return loadRealTextures(THREE, this.map.textures, this.materials, opts)
+    const res = await loadRealTextures(THREE, this.map.textures, this.materials, opts)
+    // Every loaded picture, by name -- including the animation frames no
+    // material of its own refers to. Kept so the animator can swap between
+    // them without loading a second copy.
+    this.frameTextures = res.frames ?? new Map()
+    return res
   }
 
   materialFor (texture) {

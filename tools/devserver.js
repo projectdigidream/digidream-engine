@@ -123,6 +123,18 @@ createServer(async (req, res) => {
     // The client reads the renderer's half of the same file the server reads
     // the simulation's half of. One file, so the two cannot end up describing
     // different worlds.
+    // The animation catalogue, alongside the prop one and for the same reason:
+    // a named route, because MOUNTS are directory prefixes matched with
+    // startsWith and '/animations.txt' would resolve to a directory.
+    if (req.url.split('?')[0] === '/animations.txt') {
+      const body = await readFile(join(ROOT, 'assets', 'animations.txt')).catch(() => null)
+      log(body ? 200 : 404, req.url)
+      if (!body) { res.writeHead(404).end('no assets/animations.txt'); return }
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+         .end(body)
+      return
+    }
+
     if (req.url.split('?')[0] === '/props.txt') {
       const body = await readFile(join(ROOT, 'assets', 'props.txt')).catch(() => null)
       log(body ? 200 : 404, req.url)

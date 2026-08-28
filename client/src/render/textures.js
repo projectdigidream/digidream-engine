@@ -101,7 +101,7 @@ export function paintPlaceholder (ctx, name, { pixels = PIXELS } = {}) {
  * a 64-pixel Doom texture covers 64 Doom units and therefore 64/48 of ours.
  */
 export async function loadRealTextures (THREE, names, materials, {
-  baseUrl = '/textures', pxPerUnit = 32
+  baseUrl = '/textures', pxPerUnit = 32, extra = []
 } = {}) {
   let index = null
   try {
@@ -114,18 +114,42 @@ export async function loadRealTextures (THREE, names, materials, {
 
   const loader = new THREE.TextureLoader()
   let loaded = 0
+
+  // Shared setup, so a frame loaded for an animation is configured exactly like
+  // one loaded for a material. They are the same pictures on the same walls;
+  // two code paths differing by a filter setting would show as a texture that
+  // changes appearance the moment it starts moving.
+  const configure = (tex) => {
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    tex.colorSpace = THREE.NoColorSpace
+    tex.magFilter = THREE.NearestFilter
+    // Mipmaps off. Doom art is 64 to 128 pixels and reads as mush the moment
+    // it is filtered down; nearest with no mips is what it was drawn for.
+    tex.minFilter = THREE.NearestFilter
+    tex.generateMipmaps = false
+    tex.flipY = false
+    return tex
+  }
+
+  // ANIMATION FRAMES the map never names.
+  //
+  // A map says NUKAGE1; the sequence also needs NUKAGE2 and NUKAGE3, which
+  // appear in no texture list and so have no material of their own. Loaded into
+  // a by-name table instead, for the animator to swap between.
+  const frames = new Map()
+  await Promise.all(extra.map((name) => new Promise((resolve) => {
+    if (!sizes[name] || names.includes(name)) { resolve(); return }
+    loader.load(`${baseUrl}/${name}.png`, (tex) => {
+      frames.set(name, configure(tex))
+      resolve()
+    }, undefined, () => resolve())
+  })))
   await Promise.all(names.map((name, i) => new Promise((resolve) => {
     const dim = sizes[name]
     if (!dim || !materials[i]) { resolve(); return }
     loader.load(`${baseUrl}/${name}.png`, (tex) => {
-      tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-      tex.colorSpace = THREE.NoColorSpace
-      tex.magFilter = THREE.NearestFilter
-      // Mipmaps off. Doom art is 64 to 128 pixels and reads as mush the moment
-      // it is filtered down; nearest with no mips is what it was drawn for.
-      tex.minFilter = THREE.NearestFilter
-      tex.generateMipmaps = false
-      tex.flipY = false
+      configure(tex)
+      frames.set(name, tex)
       materials[i].uniforms.map.value = tex
       // Each texture covers its own amount of world, so the divisor is
       // per-material rather than one shared constant.
@@ -138,7 +162,7 @@ export async function loadRealTextures (THREE, names, materials, {
       resolve()
     }, undefined, () => resolve())
   })))
-  return { loaded, total: names.length }
+  return { loaded, total: names.length, frames }
 }
 
 export function makeTextureSet (THREE, names) {

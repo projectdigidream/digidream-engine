@@ -18,6 +18,7 @@ export const MSG = {
   UI_CLOSE: 0x22,
   UI_SET: 0x23,
   CAMERA_SET: 0x24,
+  SIDE_TEXTURE: 0x25,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -268,6 +269,18 @@ export function decodeControlMessage (buf) {
       fields.push({ id, value: milli / 1000 })
     }
     return r.ok ? { type, fields } : null
+  }
+
+  // A side's picture changes -- a switch thrown (docs/protocol.md §11.1).
+  if (type === MSG.SIDE_TEXTURE) {
+    const side = r.u16()
+    const field = r.u8()
+    if (!r.ok || field > 2) return null
+    const n = r.u16()
+    if (!r.ok || n > UI_MAX_TEXT) return null
+    const b = r.bytes(n)
+    if (b === null) return null
+    return { type, side, field, name: new TextDecoder().decode(b) }
   }
 
   // One widget's value, in a panel already on screen (docs/protocol.md §11.1).

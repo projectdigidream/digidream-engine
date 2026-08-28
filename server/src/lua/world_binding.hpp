@@ -107,6 +107,10 @@ struct UiSink {
     // Camera settings for whoever is watching this agent (design §4.1: the
     // camera is the client's, and Lua configures and triggers it).
     virtual void set_camera(u32 level, u32 agent, const proto::CameraSet& c) = 0;
+    // A side's picture changes -- a switch thrown. Broadcast to everyone in the
+    // level and remembered, because a switch thrown before you arrived is part
+    // of the world you are arriving in.
+    virtual void set_side_texture(u32 level, const proto::SideTexture& t) = 0;
 };
 
 struct WorldContext {

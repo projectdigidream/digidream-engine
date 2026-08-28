@@ -70,6 +70,13 @@ constexpr size_t MAP_CHUNK_BYTES = 8192;
 // DOOM2 is about twenty megabytes and the count is not a thing to ration.
 struct Level {
     std::string      path;
+    // Side textures a script has changed, in the order it changed them.
+    //
+    // Remembered rather than merely broadcast: a client joining later must see
+    // the switches that have already been thrown, and one that had to witness
+    // the event to know the state would show every returning player a different
+    // wall. Same reasoning as the sector motions re-sent on join.
+    std::vector<proto::SideTexture> side_textures;
     // Cached basename, filled by Server::level_name. Mutable state on a const
     // accessor is a smell; the alternative is either a std::string returned by
     // value across a C API boundary or a second copy of the parsing.
@@ -566,6 +573,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // after this; the client computes them for any tick. A door already
         // open when you arrive is one of these.
         send_motion_sets(L, id);
+        // And the switches already thrown in this level. A wall that changed
+        // before you arrived is part of the world you are arriving in.
+        for (const auto& t : L.side_textures) send_side_texture(s, t);
         // And the movement parameters. FULL, because a client arriving in a
         // level has no history to patch (docs/protocol.md 8.4). Sent before the
         // first snapshot so it is never predicting with rules it has not been
@@ -1146,6 +1156,46 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             send_ui_set(*s, ui_id, widget_id, value);
             return;
         }
+    }
+
+    void set_side_texture(u32 level_index, const proto::SideTexture& t) override {
+        if (level_index >= level_count()) return;
+        Level& L = level(level_index);
+        // One entry per (side, field): a switch thrown twice is one state, not
+        // two events, and a join must not replay a history.
+        bool replaced = false;
+        for (auto& e : L.side_textures) {
+            if (e.side == t.side && e.field == t.field) { e = t; replaced = true; break; }
+        }
+        if (!replaced) {
+            if (L.side_textures.size() >= 512) {
+                std::fprintf(stderr, "[srv] level %u: too many side textures, ignoring\n",
+                             level_index);
+                return;
+            }
+            L.side_textures.push_back(t);
+        }
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (s.has_agent && s.level == level_index) send_side_texture(s, t);
+        }
+    }
+
+    void send_side_texture(Session& s, const proto::SideTexture& t) {
+        u8 buf[512];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_SIDE_TEXTURE);
+        proto::encode_side_texture(w, t);
+        if (!w.ok()) return;
+        const size_t end = w.size();
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(s.id, buf, end);
     }
 
     void set_camera(u32 level_index, u32 agent, const proto::CameraSet& c) override {

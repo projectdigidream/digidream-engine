@@ -34,6 +34,7 @@ import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
          sweptSpan, SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { UiView } from './render/ui.js'
+import { parseAnimations, TextureAnimator } from './render/animtex.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
@@ -135,6 +136,17 @@ if (LIVE) {
       // must not be missed.
       else if (m.type === MSG.UI_OPEN) ui.open(m)
       else if (m.type === MSG.UI_CLOSE) ui.close(m.uiId)
+      // A switch was thrown, here or before we arrived. Purely visual: what the
+      // switch DID travels as sector motion, exactly as it did before.
+      else if (m.type === MSG.SIDE_TEXTURE) {
+        const sector = view.setSideTexture(m.side, m.field, m.name.toUpperCase(),
+                                           { pxPerUnit: Number(params.get('texpx') ?? 32) })
+        if (sector >= 0) {
+          mapData.sides[m.side] = view.map.sides[m.side]
+          view.setDynamicSectors([...new Set([...movers, sector])])
+          view.rebuildDynamic()
+        }
+      }
       else if (m.type === MSG.UI_SET) ui.set(m.uiId, m.widgetId, m.value)
       // How the camera should follow (design §4.1). The server never says where
       // the camera IS -- only how it behaves -- so this is applied to the
@@ -368,7 +380,20 @@ if (movers.length) view.setDynamicSectors(movers)
 // Real texture images, if this client has them. Not awaited: the map is already
 // on screen with generated placeholders, and each real texture replaces one as
 // it arrives.
-view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32) })
+// Every frame of every sequence, so the animator has something to swap
+// between: the frames after the first appear in no map's texture list.
+async function loadMapTextures () {
+  const extra = animCatalogue.groups.flatMap((g) => g.frames)
+  await view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32), extra })
+  animator = new TextureAnimator({
+    groups: animCatalogue.groups,
+    names: mapData.textures,
+    materials: view.materials,
+    frameTexture: (n) => view.frameTextures?.get(n) ?? null
+  })
+  if (animator.count > 0) console.log(`[anim] ${animator.count} animated textures`)
+}
+loadMapTextures()
   .then(({ loaded, total }) => {
     if (loaded) console.log(`[render] ${loaded}/${total} textures loaded from /textures`)
   })
@@ -469,9 +494,24 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // and says so once.
 let props = null
 let vfx = null
+// Animated textures -- nukage, water, lava (render/animtex.js). Client only:
+// which picture is on a wall changes nothing the simulation can observe.
+let animCatalogue = { groups: [], warnings: [] }
+let animator = null
 // Tracer accounting, for the HUD. See the counting site in drainSnapshots.
 let vfxSeen = 0
 let vfxNoView = 0
+// The animation catalogue, before the first texture load: the loader needs to
+// know which extra frames to fetch, and a map's textures are loaded once.
+try {
+  animCatalogue = parseAnimations(await (await fetch('/animations.txt')).text())
+  for (const w of animCatalogue.warnings) console.warn(`[anim] ${w}`)
+} catch (e) {
+  // Not fatal, and the failure is the right one: everything draws its first
+  // frame and nothing moves.
+  console.warn(`[anim] no animation catalogue (${e.message}); textures will be still`)
+}
+
 try {
   const text = await (await fetch('/props.txt')).text()
   const catalogue = parseProps(text)
@@ -627,7 +667,7 @@ function adoptMap (bytes, w) {
   scene.remove(view.root)
   view = new MapView(mapData)
   scene.add(view.root)
-  view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32) })
+  loadMapTextures()
 
   movers = []
 
@@ -947,6 +987,9 @@ function frame (now) {
       // to show: the view depends on the angle between the thing's facing and
       // the direction to the viewer, and only the caller knows the second half.
       props.update(now / 1000, cam3.position)
+      // One clock for every animated surface: two nukage pools out of phase read
+      // as a bug nobody can name.
+      if (animator) animator.update(now / 1000)
       // performance.now(), NOT the frame's `now`. They are the same clock but
       // not the same instant: `now` is when the frame began, and the tracers
       // being faded here were spawned later in this same frame, from

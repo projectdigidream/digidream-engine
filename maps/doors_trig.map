@@ -1,0 +1,81 @@
+# maps/doors.map, with its behaviour written as TRIGGERS instead of as Doom
+# line actions. Same geometry, to the vertex.
+#
+# This is the hand-authored proof that the trigger vocabulary can express a
+# map that already works: door, lift, trip-wire and exit switch, against the
+# same body proportions and the same spawns. maps/doors_trig.lua is the table;
+# maps/doors.map keeps its doom.lua line table, and server/edge/test/doors.test.js
+# still runs against it unchanged -- so the two implementations are compared on
+# identical ground rather than one replacing the other.
+#
+# THE GEOMETRY IS NOT MAINTAINED TWICE. scripts/check_doors_twin.sh asserts this
+# file and maps/doors.map are identical once comments and `script` lines are
+# stripped, so an edit to one that is not made to the other fails the suite
+# rather than quietly making the comparison meaningless.
+
+sector floor 0 ceil 8 tag 1 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 0 0    wall tex STARTAN3
+  vertex 10 0   wall tex STARTAN3
+  vertex 10 3   neighbor 1 lower SW1COMP
+  vertex 10 7   wall tex STARTAN3
+  vertex 10 10  wall tex STARTAN3
+  vertex 0 10   wall tex STARTAN3
+end
+
+# The door. Closed: its ceiling sits on its floor.
+sector floor 0 ceil 0 tag 2 light 160 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 10 3  wall tex DOORSTOP
+  vertex 12 3  neighbor 2
+  vertex 12 7  wall tex DOORSTOP
+  vertex 10 7  neighbor 0
+end
+
+sector floor 0 ceil 1.5 tag 3 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 12 0   wall tex STARTAN3
+  vertex 17 0   neighbor 3 trigger
+  vertex 17 10  wall tex STARTAN3
+  vertex 12 10  wall tex STARTAN3
+  vertex 12 7   neighbor 1
+  vertex 12 3   wall tex STARTAN3
+end
+
+sector floor 0 ceil 1.5 tag 4 light 200 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 17 0   wall tex STARTAN3
+  vertex 22 0   wall tex STARTAN3
+  vertex 22 3   neighbor 4
+  vertex 22 7   wall tex STARTAN3
+  vertex 22 10  wall tex STARTAN3
+  vertex 17 10  neighbor 2 trigger
+end
+
+# The lift, parked up at 3 so lowering it to its lowest neighbour is visible.
+sector floor 3 ceil 8 tag 5 light 180 floortex FLOOR4_8 ceiltex CEIL3_5
+  vertex 22 3  wall tex STARTAN3
+  vertex 26 3  wall tex STARTAN3
+  vertex 26 7  wall tex STARTAN3
+  vertex 22 7  neighbor 3
+end
+
+# Doom's player at 1/48: a 16-unit radius and a 56-unit height. Stated here
+# because the door's opening is 1.5 tall -- a Doom 72-unit doorway -- and the
+# engine's default 2.0 body does not fit through it.
+body radius 0.3333 height 1.1667
+
+# What this map needs to behave. mapc copies each one next to the baked map and
+# the server loads them from there -- no --script arguments required.
+#
+# scripts/doom.lua is DELIBERATELY ABSENT. This map's doors are triggers, and
+# loading the Doom line-action library beside them would put two
+# implementations on the same hooks -- both dispatched, both complaining about
+# sides the other one owns. maps/doors.map is where doom.lua is under test.
+#
+# The vocabulary must be declared BEFORE the runtime, which validates against
+# it, and the runtime before the table, which is loaded into it. Out of order
+# is an error that names the missing declaration.
+script scripts/enemies.lua
+script scripts/trigger_vocab.lua
+script scripts/triggers.lua
+script doors_trig.lua
+
+spawn start 5 5 1
+spawn behind_door 14 5 1

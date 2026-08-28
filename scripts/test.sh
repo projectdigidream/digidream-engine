@@ -18,6 +18,10 @@ echo "=== 1/5  purity guards ==="
 # MapData; this catches the other direction -- a physics routine handed a
 # RenderData because it was convenient.
 ./scripts/check_render_isolation.sh
+# maps/doors.map and maps/doors_trig.map are the same map with two different
+# implementations of its behaviour. The comparison between them is worth nothing
+# once the geometry drifts, so it is checked rather than promised.
+./scripts/check_doors_twin.sh
 
 echo
 echo "=== 2/5  core unit + property tests ==="
@@ -47,6 +51,10 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
 ./scripts/check_map_scripts.sh
 "./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
+# The same map, its behaviour written as triggers instead of as Doom line
+# actions. Both are baked and both are driven, so the two implementations are
+# compared rather than one replacing the other.
+"./build/$HOST_ARCH/mapc" maps/doors_trig.map "build/$HOST_ARCH/doors_trig.dnpm"
 "./build/$HOST_ARCH/mapc" maps/monsters.map "build/$HOST_ARCH/monsters.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_a.map "build/$HOST_ARCH/level_a.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_b.map "build/$HOST_ARCH/level_b.dnpm"
@@ -106,6 +114,17 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   "./build/lua/test_lua_vm"
   "./build/lua/test_lua_fx"
   "./build/lua/test_lua_effects"
+  # The trigger interpreter, against a world made of test doubles: dispatch,
+  # validation, tick deadlines and the bounded `run`. It is also the only place
+  # a syntax error in maps/scripts/triggers.lua is caught without standing up a
+  # server, and it is where docs/TRIGGERS.md is checked against the vocabulary
+  # it is written from.
+  "./build/lua/test_lua_triggers" .
+  # The editor's trigger-table WRITER, checked by the runtime that has to read
+  # it. It runs here rather than beside the other editor tests because its
+  # oracle is build/lua/triggercheck, which is built one line above -- and a
+  # test whose oracle is missing skips loudly rather than passing.
+  node editor/test/triggerlua.test.js | tail -2
 else
   echo "  skip lua tests (run: scripts/setup_luajit.sh)"
 fi
@@ -163,6 +182,8 @@ else
   node client/test/vfx.test.js | tail -2
   # Panels: the client's decoder against real bytes from the C++ encoder.
   node client/test/ui.test.js | tail -2
+  # Animated textures, and that every sequence a map uses was fully extracted.
+  node client/test/animtex.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2
@@ -194,6 +215,7 @@ else
      && node test/params.test.js 2>/dev/null | tail -2 \
      && node test/lua.test.js 2>/dev/null | tail -2 \
      && node test/doors.test.js 2>/dev/null | tail -2 \
+     && node test/triggers.test.js 2>/dev/null | tail -2 \
      && node test/attack.test.js 2>/dev/null | tail -2 \
      && node test/enemies.test.js 2>/dev/null | tail -2 \
      && node test/levels.test.js 2>/dev/null | tail -2 \
@@ -219,6 +241,13 @@ else
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
   (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34494 DNP_LINK_PORT=34568 \
      node test/doors.test.js 2>/dev/null | grep -E "CONTROL|doors:")
+  # The same two controls against the trigger-driven twin of that map. A trigger
+  # table that opened the door on a timer, or an engine still moving sectors on
+  # its own, would satisfy every positive assertion in triggers.test.js.
+  (cd server/edge && DNP_NO_USE=1 DNP_WT_PORT=34701 DNP_LINK_PORT=34711 \
+     node test/triggers.test.js 2>/dev/null | grep -E "CONTROL|triggers:")
+  (cd server/edge && DNP_NO_SCRIPT=1 DNP_WT_PORT=34702 DNP_LINK_PORT=34712 \
+     node test/triggers.test.js 2>/dev/null | grep -E "CONTROL|triggers:")
   # Monsters chase a player. With nobody connected there is nothing to chase, so
   # nothing may advance and nothing may shoot -- otherwise "the monster moved"
   # is satisfied by anything that drifts.
