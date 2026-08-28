@@ -190,6 +190,15 @@ struct AgentState {
     brad facing{};
     bool active = false;
 
+    // Whether other bodies collide with this one.
+    //
+    // True for anything alive. A script turns it off for a corpse: Doom's dead
+    // do not block, and a body left solid in a doorway is a wall that appeared
+    // where you were about to run. Simulation state and hashed, like everything
+    // a client has to predict against -- a client that thought a corpse was
+    // solid would be stopped by something the server walked through.
+    bool solid = true;
+
     // What this agent IS, for anything that is not a player.
     //
     // Zero means a player, which the client draws as a body. Anything else is a

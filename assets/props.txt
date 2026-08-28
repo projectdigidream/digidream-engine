@@ -108,18 +108,22 @@ sprite 11 state 1 fps 0 frames SW2BRNGN
 # which at 1/48 scale is N * 35 / 48 world units per second. A zombieman and an
 # imp both move 8 -- 5.83 -- and a demon moves 10.
 prop 20 zombieman radius 0.417 height 1.167 speed 5.83 solid
-sprite 20 size 1.167 billboard state 0 fps 0  frames POSSA1
-sprite 20 state 1 fps 6  frames POSSA1,POSSB1,POSSC1,POSSD1
-sprite 20 state 2 fps 5  frames POSSE1,POSSF1
-sprite 20 state 3 fps 0  frames POSSG1
-sprite 20 state 4 fps 8  frames POSSH0,POSSI0,POSSJ0,POSSK0,POSSL0,POSSM0
+# `rot8`: eight viewing angles. The frames below are then named WITHOUT their
+# rotation digit -- POSSA, not POSSA1 -- and the renderer appends 1..8 from the
+# angle between where the monster faces and where you are standing. Extract them
+# with:  node tools/wad/extract_sprites.js DOOM2.WAD --rot POSS,TROO
+sprite 20 size 1.167 billboard rot8 state 0 fps 0  frames POSSA
+sprite 20 rot8 state 1 fps 6  frames POSSA,POSSB,POSSC,POSSD
+sprite 20 rot8 state 2 fps 5  frames POSSE,POSSF
+sprite 20 rot8 state 3 fps 0  frames POSSG
+sprite 20 rot8 state 4 fps 8  frames POSSH,POSSI,POSSJ,POSSK,POSSL,POSSM
 
 prop 21 imp radius 0.417 height 1.167 speed 5.83 solid
-sprite 21 size 1.167 billboard state 0 fps 0  frames TROOA1
-sprite 21 state 1 fps 6  frames TROOA1,TROOB1,TROOC1,TROOD1
-sprite 21 state 2 fps 5  frames TROOE1,TROOF1,TROOG1
-sprite 21 state 3 fps 0  frames TROOH1
-sprite 21 state 4 fps 8  frames TROOI0,TROOJ0,TROOK0,TROOL0,TROOM0
+sprite 21 size 1.167 billboard rot8 state 0 fps 0  frames TROOA
+sprite 21 rot8 state 1 fps 6  frames TROOA,TROOB,TROOC,TROOD
+sprite 21 rot8 state 2 fps 5  frames TROOE,TROOF,TROOG
+sprite 21 rot8 state 3 fps 0  frames TROOH
+sprite 21 rot8 state 4 fps 8  frames TROOI,TROOJ,TROOK,TROOL,TROOM
 
 # The imp's fireball. A prop rather than an agent: it has no controller, it does
 # not walk, and what it needs is a straight line and something to hit.

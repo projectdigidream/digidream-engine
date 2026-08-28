@@ -36,9 +36,29 @@ local ZERO = fx.int(0)
 -- catalogue's numbering is one edit here rather than a hunt for magic numbers.
 local IDLE, WALK, ATTACK, PAIN, DIE = 0, 1, 2, 3, 4
 
+-- What one swing takes off. A number here rather than a parameter on the
+-- attacker, because the engine's attack carries no damage: MoveParams shapes
+-- the COLLIDER -- its reach, its arc, how long it sweeps -- and what a hit
+-- means is never the engine's opinion.
+local MELEE_DAMAGE = 20
+
+-- How long a corpse lies there before it is taken away. Long enough for the
+-- death animation to finish; the client decides how fast that plays, this only
+-- decides when the thing stops existing.
+local CORPSE_TICKS = 90
+
+-- How long the flinch lasts. Doom's monsters interrupt what they were doing
+-- when hit, which is most of what makes a fight readable -- without it, a
+-- monster shrugs off a hit mid-stride and you cannot tell whether you connected.
+local PAIN_TICKS = 8
+
 -- What each kind does. Everything about a monster's behaviour is one entry.
 local KINDS = {
   zombieman = {
+    -- Doom's own. The engine has no idea what health is: it reports that a
+    -- swing reached something and stops there, exactly as it does for crushing
+    -- and for interaction. What that costs is this file's business.
+    hp = 20,
     -- How FAST it walks is not here: it is `speed` on the catalogue's prop
     -- line, applied as the entity's move_speed at spawn. That keeps one
     -- question in one file -- how big a thing is and how fast it moves are both
@@ -52,6 +72,7 @@ local KINDS = {
     tracer = 1,
   },
   imp = {
+    hp = 60,
     sight = du(1024),
     attack = "projectile",
     melee = du(64),
@@ -82,6 +103,14 @@ local THINK = 4
 -- the share of them that is actually going to decide anything. A monster's
 -- input persists between decisions, so the ones not in this tick's bucket carry
 -- on doing what they were last told at no cost whatsoever.
+-- Pre-created, all THINK of them, and never created lazily.
+--
+-- They were made on demand in spawn(), which leaves the buckets no monster
+-- landed in as nil -- and on a map with fewer monsters than THINK that is most
+-- of them, so on_tick raised "attempt to get length of local 'bucket'" on two
+-- ticks in four. It had been doing so for a while: the tests that were watching
+-- only needed SOME monster to act, and half the ticks working looks a great
+-- deal like all of them.
 local buckets = {}
 
 -- Monsters mid-windup. Short, usually empty, and separate because finding them
@@ -109,6 +138,7 @@ local players_tick = -1
 local asleep = false
 -- How many have been placed, for round-robin bucketing.
 local spawned = 0
+for b = 0, THINK - 1 do buckets[b] = {} end
 
 local function refresh_players(tick)
   if players_tick == tick then return end
@@ -213,6 +243,7 @@ function M.spawn(name, x, y, z, opts)
   local m = {
     e = e, def = def, idx = e:index(),
     ready_at = 0, fire_at = nil, aim = nil, state = IDLE,
+    hp = def.hp or 20, dead_at = nil, pain_until = 0,
     dormant = opts ~= nil and opts.dormant or false
   }
   live[m.idx] = m
@@ -220,7 +251,6 @@ function M.spawn(name, x, y, z, opts)
   -- are spread evenly whatever their entity indices turn out to be.
   local b = spawned % THINK
   spawned = spawned + 1
-  buckets[b] = buckets[b] or {}
   local list = buckets[b]
   list[#list + 1] = m
   e:set_animation(IDLE)
@@ -272,6 +302,26 @@ end
 -- still run it. A fireball with nobody left to hit still has to expire --
 -- skipping it would leak a prop slot per shot, which is a slower and much
 -- more confusing failure than a stall.
+-- Corpses whose death animation has finished.
+--
+-- Its own short list, like the mid-windup monsters: the alternative is a
+-- deadline on every monster checked every tick, which is the shape this file
+-- spent a commit getting rid of.
+local corpses = {}
+
+local function update_corpses(tick)
+  for i = #corpses, 1, -1 do
+    local m = corpses[i]
+    if not m.e:valid() then
+      table.remove(corpses, i)
+    elseif tick >= m.dead_at then
+      table.remove(corpses, i)
+      live[m.idx] = nil
+      m.e:despawn()
+    end
+  end
+end
+
 local function update_shots(tick)
   -- Fireballs whose burst has finished playing.
   if M.expire then
@@ -347,9 +397,11 @@ function on_tick()
         end
       end
     end
-    -- Fireballs still in flight are finished off below; a projectile with
-    -- nobody to hit still has to stop existing.
+    -- Fireballs in flight and corpses still have to finish: a projectile with
+    -- nobody to hit, and a body nobody is watching, both still have to stop
+    -- existing. Leaking either one leaks a slot per shot and per kill.
     update_shots(tick)
+    update_corpses(tick)
     return
   end
   asleep = false
@@ -387,8 +439,11 @@ function on_tick()
     if not m.e:valid() then
       live[m.idx] = nil
       table.remove(bucket, i)
-    elseif m.dormant or m.fire_at ~= nil then
-      -- Present and replicated, or already mid-attack and handled above.
+    elseif m.dead_at ~= nil or m.dormant or m.fire_at ~= nil then
+      -- Dead, or a fixture, or already mid-attack and handled above.
+    elseif tick < m.pain_until then
+      -- Flinching. It stops where it is, which is what makes a hit readable.
+      set_move(m, ZERO, ZERO, m.aim)
     else
       local from = m.e:pos()
       local player, d2, ppos = nearest_player(from)
@@ -434,7 +489,51 @@ function on_tick()
   end
 
   update_shots(tick)
+  update_corpses(tick)
 
+end
+
+-- A swing reached something.
+--
+-- The engine reports the contact and stops: it says which entity swung and what
+-- the moving collider found, and has no opinion about health, damage or death.
+-- The same division it draws for crushing and for interaction.
+--
+-- `target` may be a prop or an agent -- the engine pushes each as the handle
+-- type it is -- so this asks whether it is one of ours rather than comparing
+-- an index against a limit it would then have to know.
+function on_attack(attacker, target)
+  print('[dbg] on_attack idx=' .. tostring(target and target:index()) .. ' known=' .. tostring(target and live[target:index()] ~= nil))
+  if target == nil or not target:valid() then return end
+  local m = live[target:index()]
+  if m == nil or m.dead_at ~= nil then return end
+
+  m.hp = m.hp - MELEE_DAMAGE
+  if m.hp > 0 then
+    -- Flinch. It interrupts whatever the monster was doing, which is most of
+    -- what makes a fight readable: without it a hit looks identical to a miss
+    -- until the thing finally falls over.
+    local tick = dnp.tick()
+    m.pain_until = tick + PAIN_TICKS
+    m.fire_at = nil
+    set_state(m, PAIN)
+    set_move(m, ZERO, ZERO, m.aim)
+    return
+  end
+
+  -- Dead. It stops deciding anything, plays its death animation, and is taken
+  -- away when that has had time to finish -- rather than vanishing on the tick
+  -- it dies, which reads as a bug rather than as a kill.
+  local tick = dnp.tick()
+  m.dead_at = tick + CORPSE_TICKS
+  m.fire_at = nil
+  corpses[#corpses + 1] = m
+  set_state(m, DIE)
+  set_move(m, ZERO, ZERO, m.aim)
+  -- Nothing walks into a corpse. Doom's do not block either, and a body left
+  -- solid in a doorway for a second and a half is a wall that appeared where
+  -- you were about to run.
+  target:set_solid(false)
 end
 
 -- A fireball that touches something goes off. Reported by the engine's overlap

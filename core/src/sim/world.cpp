@@ -1,6 +1,7 @@
 //
 // The simulation world. See world.hpp for why it lives in core/.
 //
+#include <cstdio>
 #include "dnp/sim/world.hpp"
 
 namespace dnp::sim {
@@ -828,14 +829,14 @@ void World::resolve_prop_collisions(u32 agent) noexcept {
 void World::resolve_agent_collisions() noexcept {
     const fx3* was = tick_start_pos_;
     for (u32 j = 0; j < agent_high_water_; ++j) {
-        if (!agents_[j].active) continue;
+        if (!agents_[j].active || !agents_[j].solid) continue;
         AgentState& b = agents_[j];
         const fx2 before{b.pos.x, b.pos.y};
         const fx2 travelled{b.pos.x - was[j].x, b.pos.y - was[j].y};
         const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
 
         for (u32 i = 0; i < agent_high_water_; ++i) {
-            if (i == j || !agents_[i].active) continue;
+            if (i == j || !agents_[i].active || !agents_[i].solid) continue;
             const fx3 a = was[i];
             push_out_of_cylinder(b.pos, b.vel, params_[j].radius, params_[j].height,
                                  fx2{a.x, a.y}, params_[i].radius, a.z,
@@ -1021,6 +1022,10 @@ u64 World::hash() const noexcept {
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         h.boolv(agents_[i].active);
         if (!agents_[i].active) continue;
+        // Whether a body collides is something a client predicts against, so a
+        // disagreement about it has to show up on the gate rather than as an
+        // agent being stopped by something that is not there.
+        h.boolv(agents_[i].solid);
         h.u32v(i);
         h.byte(generation_[i]);
         h.u64v(agent_hash(i));

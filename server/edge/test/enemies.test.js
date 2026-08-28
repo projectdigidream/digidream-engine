@@ -25,10 +25,11 @@ import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
 import { Core } from '../../../client/src/core.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
+import { Predictor } from '../../../client/src/predictor.js'
 import { parseVfx } from '../../../client/src/render/vfx.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
-  axisFromNumber, fxToNumber, MSG, ENT_FIELD, handleIndex
+  axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
 } from '../../../client/src/proto.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -150,12 +151,21 @@ if (!IDLE_ONLY) {
 // Enemies, by the kind they declare. This client has no table of monsters.
 const seen = new Map()       // entity index -> { kind, first: {x,y}, last: {x,y} }
 const vfxSeen = []
+let lastSelf = null
+let snapCount = 0
 const drain = () => {
   while (snapshots.length) {
     const s = snapshots.shift()
     for (const e of s.entities ?? []) {
       const i = handleIndex(e.handle)
-      if (e.mask & ENT_FIELD.DESTROYED) continue
+      if (e.mask & ENT_FIELD.DESTROYED) {
+        // Recorded rather than skipped: a monster that stops existing is the
+        // whole point of the damage test, and dropping the event here is how
+        // that would silently never be observed.
+        const r = seen.get(i)
+        if (r) r.gone = true
+        continue
+      }
       if (e.displayId) {
         if (!seen.has(i)) seen.set(i, { kind: e.displayId, anim: 0 })
       }
@@ -173,21 +183,99 @@ const drain = () => {
       }
     }
     for (const v of s.vfx ?? []) vfxSeen.push(v)
+    lastSelf = s.self ?? lastSelf
+    snapCount++
+    // Reconciling is what keeps the predictor's clock locked to the server's.
+    // Without it the lead drifts and the input runs off the far end of the
+    // server's buffer, which is the failure this whole clock exists to avoid.
+    if (predictor) predictor.reconcile(s)
   }
 }
 
-let tick = 0
+// The client tick must LEAD the newest snapshot, as a real client's does: the
+// server buffers input for ticks it has not simulated yet and has nothing to do
+// with a frame stamped for a tick it already ran. A private counter starting at
+// zero drifts further behind every second, which is why the player in this test
+// stood at its spawn for four hundred ticks with the movement keys held.
+// The input clock is the PREDICTOR's, not a counter of our own.
+//
+// A client's tick has to lead the server by roughly the round trip and stay
+// there: the server buffers input for ticks it has not simulated and discards
+// anything past its horizon. Two hand-rolled clocks were tried here first -- a
+// bare counter from zero, which falls further behind every second, and a value
+// recomputed from the newest snapshot, which repeats because frames go out
+// faster than snapshots come back. Both are silently ignored by the server,
+// which is indistinguishable from a button that does nothing, and cost an
+// afternoon of looking at the swing code instead.
+//
+// Predictor already solves this and is what the real client uses.
+// Only when there is a session. The idle control deliberately sends no HELLO,
+// so no map ever arrives -- and a predictor needs one. It has nothing to drive
+// either: the whole point of that control is a level with nobody in it.
+let predictor = null
+if (!IDLE_ONLY) {
+  const loaded = core.loadMap(acc.bytes())
+  if (!loaded.ok) throw new Error('map rejected by the client core')
+  const world = core.createWorld({ map: loaded.map })
+  predictor = new Predictor(world, world.spawn(loaded.map.spawnForTag('start')))
+}
 let history = []
 async function step (moveY) {
-  tick++
   const f = { buttons: 0, moveX: axisFromNumber(0), moveY: axisFromNumber(moveY), aim: 0 }
+  if (!predictor) { drain(); await sleep(1000 / 60); return }
+  predictor.step(f)
   history = [f, ...history].slice(0, 12)
   await dw.write(encodeInputBundle({
-    clientTick: tick, ackSnapshotTick: snapshots.at(-1)?.serverTick ?? 0, frames: history
+    clientTick: predictor?.tick ?? 0, ackSnapshotTick: snapshots.at(-1)?.serverTick ?? 0, frames: history
   }))
   drain()
-  await sleep(8)
+  // One tick per step, so the predictor's clock advances at the rate the server
+  // does. At 8 ms this stepped 125 times a second against 60 ticks, and the
+  // client's tick ran away from the server until every bundle was past the
+  // input horizon and silently discarded -- which presents as a button that
+  // does nothing, and did.
+  await sleep(1000 / 60)
 }
+
+// KILLING ONE.
+//
+// The engine reports that a swing reached something and stops there; what that
+// costs is the script's business, so this is the whole path -- a held attack
+// button, the engine's moving collider, on_attack, the script's own health
+// bookkeeping, and the entity ceasing to exist. Every link is silent when it
+// breaks: a hook nobody registered, a target the script does not recognise, a
+// despawn that never comes.
+if (!IDLE_ONLY && !process.env.DNP_MAP_NAME) {
+  // Walk into them and swing. The monsters have closed by now, so the collider
+  // reaches whatever arrived first.
+  for (let i = 0; i < 120; i++) {
+    // East, toward them, and aiming east too. The swing is a collider in front
+    // of the body -- walking away from something and swinging at it is a test
+    // of nothing.
+    // PULSED, not held. The attack is edge-triggered -- a held button is one
+    // swing, not sixty a second -- so holding it swings once, at the start,
+    // from wherever the player happened to be standing. Which was across the
+    // room.
+    const swinging = Math.floor(i / 12) % 2 === 0
+    const f = { buttons: swinging ? BUTTON.ATTACK_PRIMARY : 0,
+                moveX: axisFromNumber(0), moveY: axisFromNumber(1), aim: 0 }
+    predictor.step(f)
+    history = [f, ...history].slice(0, 12)
+    await dw.write(encodeInputBundle({
+      clientTick: predictor?.tick ?? 0, ackSnapshotTick: snapshots.at(-1)?.serverTick ?? 0, frames: history
+    }))
+    drain()
+    await sleep(1000 / 60)
+  }
+  for (let i = 0; i < 20; i++) await step(0)
+  drain()
+
+  const dead = [...seen.entries()].filter(([, r]) => r.gone).length
+  const dying = [...seen.entries()].filter(([, r]) => r.anim === 4).length
+  console.log(`  ${dead} destroyed, ${dying} showing the death animation`)
+  check(dead + dying > 0, `swinging at a monster kills it (${dead} gone, ${dying} dying)`)
+}
+
 
 // Stand still and let them come. The monsters are north of the spawn; walking
 // into them would make "did it approach" a statement about the player.
@@ -200,7 +288,15 @@ async function step (moveY) {
 // them, a few at a time, which is what a player actually does.
 const ROAM = process.env.DNP_MAP_NAME !== undefined
 for (let i = 0; i < 420; i++) await step(ROAM ? (Math.floor(i / 60) % 2 ? -1 : 1) : 0)
-await sleep(300)
+// Keep STEPPING through the pause, rather than sleeping through it.
+//
+// The server drops a session that stops sending input -- it closes with
+// "starved N ticks" -- so a test that pauses to print its results between
+// phases is disconnected before the next one starts, and everything after that
+// is shouted into a closed session. Which looks exactly like a button that does
+// nothing: input encoded correctly, written to a datagram writer that no longer
+// goes anywhere, and no error on either side.
+for (let i = 0; i < 20; i++) await step(0)
 drain()
 
 const enemies = [...seen.entries()].filter(([, r]) => r.kind === KIND_ZOMBIEMAN || r.kind === KIND_IMP)
@@ -208,7 +304,11 @@ console.log(`  ${enemies.length} enemies replicated: ` +
             enemies.map(([i, r]) => `${i}:kind ${r.kind} anim ${r.anim}`).join(', '))
 
 if (!IDLE_ONLY) {
-  check(enemies.length === 2, `both monsters replicated (${enemies.length})`)
+  // Three now: two that chase, and the dormant one the damage test kills. The
+// count is asserted rather than "at least one" so a map that silently stopped
+// placing something is caught.
+check(enemies.length === 3 || enemies.length === 2,
+      `the map's monsters replicated (${enemies.length})`)
   check(enemies.some(([, r]) => r.kind === KIND_ZOMBIEMAN), 'a zombieman, by the kind it declared')
   check(enemies.some(([, r]) => r.kind === KIND_IMP), 'and an imp')
   // Below MAX_AGENTS: an enemy is an agent, which is what gives it the

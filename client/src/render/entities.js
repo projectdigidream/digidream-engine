@@ -157,6 +157,7 @@ export class EntityView {
         // out wrong has to be taken back, and a visible correction is worse
         // than a few frames of standing still.
         ent.mesh.position.set(a.x, a.y + (ent.mesh.userData.yOffset ?? 0), a.z)
+        ent.facing = a.facing
         continue
       }
 
@@ -166,6 +167,11 @@ export class EntityView {
         a.y + (b.y - a.y) * t + (ent.mesh.userData.yOffset ?? 0),
         a.z + (b.z - a.z) * t
       )
+      // Facing is NOT interpolated between the two samples: it is a brad, and
+      // lerping one across the wrap point sends a monster spinning the long way
+      // round. It only chooses which of eight sprites to draw, so the nearer
+      // sample's value is both correct enough and free of that failure.
+      ent.facing = (t < 0.5 ? a : b).facing
     }
   }
 

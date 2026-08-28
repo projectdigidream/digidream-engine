@@ -6,7 +6,7 @@
 // are about the parser being tolerant in the right places and strict in the
 // right places, and about the animation clock being the client's own.
 //
-import { parseProps, frameAt, PropRegistry } from '../src/render/props.js'
+import { parseProps, frameAt, rotationFor, frameName, PropRegistry } from '../src/render/props.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -161,6 +161,54 @@ sprite 10 state 1 fps 10 frames BOOM1,BOOM2,BOOM3
   reg.setState(third, 1)
   reg.update(99.7)
   check(third.material.map === 'tex:b1', 'a state entered late still starts at its first frame')
+}
+
+
+// --- eight viewing angles -------------------------------------------------
+//
+// Doom stores a monster as eight sprites and picks by the angle between where
+// it faces and where you stand. Both previous angle conventions in this
+// renderer shipped mirrored -- the billboard and the swing collider -- so this
+// is checked at the cardinal points rather than reasoned about.
+
+{
+  const cat = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+  const poss = cat.kinds.get(20)
+  check(poss?.rot8 === true, 'the zombieman declares eight rotations')
+  check(poss?.states.get(1)?.frames?.[0] === 'POSSA',
+        `and its frames drop the rotation digit (${poss?.states.get(1)?.frames?.[0]})`)
+  check(frameName(poss, poss.states.get(1), 0, 5) === 'POSSA5',
+        'which the renderer puts back')
+  // A prop with no rot8 is untouched, or every key and barrel would ask for a
+  // file that does not exist.
+  const key = cat.kinds.get(1)
+  check(frameName(key, key.states.get(0), 0, 3) === key.states.get(0).frames[0],
+        'a sprite without rot8 keeps its frame name exactly')
+}
+
+// Rotation 1 is the FRONT: the thing facing the camera. Facing east with the
+// camera to its east means it is looking straight at you.
+check(rotationFor(0, 0) === 1, 'facing the camera shows the front view (1)')
+// Directly away: half a turn round, which is view 5.
+check(rotationFor(0, 0.5) === 5, 'facing away shows the back view (5)')
+// And the two sides are distinct and opposite each other.
+const left = rotationFor(0, 0.25)
+const right = rotationFor(0, 0.75)
+check(left !== right && left !== 1 && right !== 1,
+      `the two profiles differ and are not the front (${left} vs ${right})`)
+check(((left - 1) + (right - 1)) % 8 === 0,
+      `and are mirror images about the front (${left}, ${right})`)
+
+// Every view is reachable, and the wrap is clean: sweeping a full turn must
+// visit all eight and come back to where it started. An off-by-one in the
+// rounding shows up here as a view that never appears.
+{
+  const seen = new Set()
+  for (let i = 0; i < 64; i++) seen.add(rotationFor(0, i / 64))
+  check(seen.size === 8, `a full sweep visits all eight views (${seen.size})`)
+  check(rotationFor(0, 0) === rotationFor(0, 1),
+        'and a whole turn is the same view it started on')
+  check(rotationFor(0.3, 0.3) === 1, 'the angle is RELATIVE, not either one alone')
 }
 
 console.log(`\nprops: ${checks} checks, ${fails} failures`)

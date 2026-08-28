@@ -29,3 +29,15 @@ enemies.spawn("zombieman", 1104, 480, 48)
 -- at y = 7.6, below the 8..12 opening -- so the wall is between them until the
 -- imp moves into the doorway.
 enemies.spawn("imp", 1152, 336, 48)
+
+-- A THIRD monster, dormant, right next to the spawn.
+--
+-- The damage test needs a target it can reach in the first second: the session
+-- is young then, and a test that first watches the level for seven seconds and
+-- only then starts swinging has been disconnected before it begins. Dormant so
+-- it stays where it is put -- what is under test is that a swing kills it, not
+-- that it can be chased down.
+--
+-- Doom (336, 480) is engine (7, 10): two units east of the player's spawn, well
+-- inside the swing's reach.
+enemies.spawn("zombieman", 336, 480, 48, { dormant = true })

@@ -431,7 +431,16 @@ try {
   // holes in it, so it is indexed and loaded exactly like a wall texture.
   const wanted = new Set()
   for (const def of catalogue.kinds.values()) {
-    for (const st of def.states.values()) for (const f of st.frames ?? []) wanted.add(f)
+    for (const st of def.states.values()) {
+      for (const f of st.frames ?? []) {
+        // A rot8 frame names eight files, not one -- the catalogue gives the
+        // base and the renderer appends the view. Loading only the base would
+        // leave every sprite magenta, which is what a missing texture looks
+        // like and not at all what a missing ROTATION looks like.
+        if (def.rot8) { for (let r = 1; r <= 8; r++) wanted.add(`${f}${r}`) }
+        else wanted.add(f)
+      }
+    }
   }
   const textures = new Map()
   if (wanted.size) {
@@ -844,7 +853,10 @@ function frame (now) {
       for (const ent of others.entities.values()) {
         if (ent.kind) props.setState(ent.mesh, ent.animationState ?? 0)
       }
-      props.update(now / 1000)
+      // The camera's position, so a sprite can choose which of its eight views
+      // to show: the view depends on the angle between the thing's facing and
+      // the direction to the viewer, and only the caller knows the second half.
+      props.update(now / 1000, cam3.position)
       // performance.now(), NOT the frame's `now`. They are the same clock but
       // not the same instant: `now` is when the frame began, and the tracers
       // being faded here were spawned later in this same frame, from
@@ -855,7 +867,13 @@ function frame (now) {
       // billboardYaw -- the first version had the sign of yaw backwards.
       const bb = billboardYaw(yaw)
       for (const ent of others.entities.values()) {
-        if (ent.kind) ent.mesh.rotation.y = bb
+        if (!ent.kind) continue
+        ent.mesh.rotation.y = bb
+        // Which way the thing is POINTING, kept on the mesh for the eight-view
+        // sprites to read. It cannot be recovered from the mesh's own rotation,
+        // because that has just been overwritten to face the camera -- which is
+        // what billboarding is.
+        ent.mesh.userData.facingTurns = ((ent.facing ?? 0) >>> 0) / 4294967296
       }
     }
   }

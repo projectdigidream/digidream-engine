@@ -89,6 +89,13 @@ export function parseProps (text) {
     for (let k = 2; k < tok.length; k++) {
       const key = tok[k]
       if (key === 'billboard') { d.billboard = true; continue }
+      // EIGHT VIEWING ANGLES. The frame names on this line are then given
+      // WITHOUT their rotation digit -- POSSA, not POSSA1 -- and the renderer
+      // appends 1..8 according to where the thing is facing relative to the
+      // camera. Doom's own sprites are stored this way and it is what makes a
+      // monster read as facing somewhere: without it an imp walking away from
+      // you looks exactly like an imp walking towards you.
+      if (key === 'rot8') { d.rot8 = true; continue }
       const val = tok[k + 1]
       if (val === undefined) { warnings.push(`line ${i + 1}: '${key}' has no value`); break }
       k++
@@ -128,6 +135,40 @@ export function parseProps (text) {
  * one-frame animation at any rate is the same frame forever, and expressing
  * "still" as "zero rate" keeps one path.
  */
+/**
+ * Which of the eight views to show, 1..8, Doom's numbering.
+ *
+ * Rotation 1 is the thing seen from the FRONT -- facing the camera -- and they
+ * go anticlockwise from there in eighths of a turn. So the index comes from the
+ * angle between where the thing is facing and where the camera is looking at
+ * it, not from either angle alone: a monster facing north looks different
+ * depending on which side of it you stand.
+ *
+ * Both angles are in turns, and the arithmetic is done in turns for the same
+ * reason the engine uses brad -- a turn wraps exactly at 1 and there is no
+ * factor of pi to get the wrong way round. Two rotations in this renderer have
+ * already shipped mirrored from exactly that mistake.
+ */
+export function rotationFor (facingTurns, cameraToThingTurns) {
+  // No offset. Rotation 1 is the view where the thing faces the camera, and
+  // "faces the camera" is when its facing and the direction from it TO the
+  // camera are the SAME -- the first version added half a turn here on the
+  // reasoning that they were opposite, which swapped every monster's front for
+  // its back. Checked at the cardinal points rather than argued about, because
+  // this renderer has now shipped two mirrored angle conventions.
+  const rel = (cameraToThingTurns - facingTurns) % 1
+  const wrapped = rel < 0 ? rel + 1 : rel
+  // Rounded, not truncated: each of the eight views should own the 45 degrees
+  // CENTRED on its angle, so the boundary falls at 22.5 and not at 0.
+  return (Math.round(wrapped * 8) % 8) + 1
+}
+
+/** The texture name for a frame, given the view. */
+export function frameName (def, state, index, rotation) {
+  const base = state.frames[index]
+  return def?.rot8 ? `${base}${rotation}` : base
+}
+
 export function frameAt (state, seconds) {
   const n = state.frames?.length ?? 0
   if (n <= 1 || !state.fps) return 0
@@ -227,7 +268,7 @@ export class PropRegistry {
    * lockstep in Doom, and independent phases would look like a bug nobody could
    * name.
    */
-  update (seconds) {
+  update (seconds, cameraPos = null) {
     for (const [mesh, a] of this.animated) {
       if (!mesh.parent) continue                   // removed from the scene
       const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
@@ -236,7 +277,23 @@ export class PropRegistry {
       // the server switched INTO runs from its own start, because it is an
       // event rather than a loop.
       if (a.startedAt == null) a.startedAt = a.stateId === 0 ? 0 : seconds
-      const tex = this.textures.get(state.frames[frameAt(state, seconds - a.startedAt)])
+
+      // Which of the eight views, for a sprite that has them. The angle is
+      // between where the thing is FACING and where the camera is standing
+      // relative to it -- the mesh's own yaw is not it, because a billboard is
+      // always turned to face the viewer and so carries no information about
+      // which way the thing is pointing.
+      let rot = 1
+      if (a.def.rot8 && cameraPos) {
+        const dx = cameraPos.x - mesh.position.x
+        const dz = cameraPos.z - mesh.position.z
+        // Screen space is x/-z for world x/y (see main.js), and atan2 returns
+        // radians, so this is converted to turns before it meets a facing.
+        const toCamera = Math.atan2(-dz, dx) / (Math.PI * 2)
+        rot = rotationFor(mesh.userData.facingTurns ?? 0, toCamera)
+      }
+      const idx = frameAt(state, seconds - a.startedAt)
+      const tex = this.textures.get(frameName(a.def, state, idx, rot))
       if (tex && mesh.material.map !== tex) {
         mesh.material.map = tex
         mesh.material.color.setHex(0xffffff)

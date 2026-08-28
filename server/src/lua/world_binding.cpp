@@ -191,6 +191,22 @@ int l_entity_set_input(lua_State* L) {
 }
 
 // entity:set_animation(n) -- the STATE, never the frame or the timing.
+// entity:set_solid(bool)
+//
+// Whether other bodies collide with this one. A script turns it off for a
+// corpse: Doom's dead do not block, and a body left solid in a doorway is a
+// wall that appeared where you were about to run.
+//
+// The engine has no notion of dead, so it cannot decide this on its own -- the
+// same division everything else here draws.
+int l_entity_set_solid(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) return 0;
+    ctx.world->agent_mut(static_cast<u32>(a)).solid = lua_toboolean(L, 2) != 0;
+    return 0;
+}
+
 int l_entity_set_animation(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -360,6 +376,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"index", l_entity_index_of},
     {"teleport", l_entity_teleport},
     {"set_input", l_entity_set_input},
+    {"set_solid", l_entity_set_solid},
     {"set_animation", l_entity_set_animation},
     {"kind", l_entity_kind},
     {"name", l_entity_name},
