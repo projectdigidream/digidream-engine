@@ -13,6 +13,9 @@
 //
 
 export const MSG = {
+  UI_OPEN: 0x20,
+  UI_EVENT: 0x21,
+  UI_CLOSE: 0x22,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -36,6 +39,14 @@ export const BUTTON = {
   USE: 0x0200,
   CROUCH: 0x0400
 }
+
+// docs/protocol.md §11. Reliable control messages, never datagrams.
+export const UI_KIND = {
+  LABEL: 0, BUTTON: 1, SLIDER: 2, SELECT: 3, TOGGLE: 4
+}
+export const UI_MAX_TEXT = 128
+export const UI_MAX_WIDGETS = 32
+export const UI_MAX_OPTIONS = 32
 
 export const ENT_FIELD = {
   POS: 1 << 0,
@@ -106,6 +117,7 @@ class Writer {
   u16 (v) { this.view.setUint16(this.pos, v & 0xffff, LE); this.pos += 2; return this }
   i16 (v) { this.view.setInt16(this.pos, v, LE); this.pos += 2; return this }
   u32 (v) { this.view.setUint32(this.pos, v >>> 0, LE); this.pos += 4; return this }
+  i32 (v) { this.view.setInt32(this.pos, v | 0, LE); this.pos += 4; return this }
   u64 (v) { this.view.setBigUint64(this.pos, BigInt(v), LE); this.pos += 8; return this }
   bytes (b) { this.buf.set(b, this.pos); this.pos += b.length; return this }
   done () { return this.buf.subarray(0, this.pos) }
@@ -130,6 +142,15 @@ class Reader {
   u16 () { if (!this.need(2)) return 0; const v = this.view.getUint16(this.pos, LE); this.pos += 2; return v }
   u32 () { if (!this.need(4)) return 0; const v = this.view.getUint32(this.pos, LE); this.pos += 4; return v }
   i32 () { if (!this.need(4)) return 0; const v = this.view.getInt32(this.pos, LE); this.pos += 4; return v }
+  // Returns null rather than a short view when the buffer does not hold n
+  // bytes. A caller that got a short string back would decode the rest of the
+  // message from the wrong offset and never know.
+  bytes (n) {
+    if (!this.need(n)) return null
+    const v = new Uint8Array(this.view.buffer, this.view.byteOffset + this.pos, n)
+    this.pos += n
+    return v
+  }
   i64 () { if (!this.need(8)) return 0n; const v = this.view.getBigInt64(this.pos, LE); this.pos += 8; return v }
   u64 () { if (!this.need(8)) return 0n; const v = this.view.getBigUint64(this.pos, LE); this.pos += 8; return v }
 
@@ -177,6 +198,51 @@ export function decodeControlMessage (buf) {
   const len = r.u32()
   const type = r.u8()
   if (!r.ok) return null
+
+  // A panel (docs/protocol.md §11.1). Every length in this message is a number
+  // the sender chose, so each one is checked against the protocol's cap rather
+  // than trusted -- a decoder that believed them would read past the buffer.
+  if (type === MSG.UI_OPEN) {
+    const readText = () => {
+      const n = r.u16()
+      if (!r.ok || n > UI_MAX_TEXT) return null
+      const b = r.bytes(n)
+      return b === null ? null : new TextDecoder().decode(b)
+    }
+    const uiId = r.u32()
+    const title = readText()
+    if (title === null) return null
+    const count = r.u16()
+    if (!r.ok || count > UI_MAX_WIDGETS) return null
+    const widgets = []
+    for (let i = 0; i < count; i++) {
+      const kind = r.u8()
+      // An unknown kind cannot be skipped: its fields are not self-describing,
+      // so there is no way to step over one and stay aligned.
+      if (!r.ok || kind > UI_KIND.TOGGLE) return null
+      const id = r.u16()
+      const label = readText()
+      if (label === null) return null
+      const value = r.i32()
+      const lo = r.i32()
+      const hi = r.i32()
+      const optCount = r.u16()
+      if (!r.ok || optCount > UI_MAX_OPTIONS) return null
+      const options = []
+      for (let k = 0; k < optCount; k++) {
+        const o = readText()
+        if (o === null) return null
+        options.push(o)
+      }
+      widgets.push({ kind, id, label, value, lo, hi, options })
+    }
+    return r.ok ? { type, uiId, title, widgets } : null
+  }
+
+  if (type === MSG.UI_CLOSE) {
+    const uiId = r.u32()
+    return r.ok ? { type, uiId } : null
+  }
 
   if (type === MSG.WELCOME) {
     const msg = {
@@ -251,6 +317,13 @@ export function decodeControlMessage (buf) {
 }
 
 // --------------------------------------------------------------- state channel
+
+/** What the player did with a panel (docs/protocol.md §11.1). */
+export function encodeUiEvent (uiId, widgetId, value) {
+  const w = new Writer(16)
+  w.u32(1 + 10).u8(MSG.UI_EVENT).u32(uiId).u16(widgetId).i32(value | 0)
+  return w.done()
+}
 
 export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) {
   const n = Math.min(frames.length, 16)

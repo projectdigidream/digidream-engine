@@ -32,11 +32,12 @@ import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { sweepOffset, makeSwingMesh, swingYaw } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
+import { UiView } from './render/ui.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
 import { MapAccumulator } from './maploader.js'
-import { MSG } from './proto.js'
+import { MSG, encodeUiEvent } from './proto.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -81,6 +82,9 @@ const core = await Core.load()
 let mapBytes
 let conn = null
 let welcome = null
+// Panels the server has opened on us. Not simulation state: never hashed, never
+// predicted, and it survives nothing -- a reconnect starts with none.
+let ui = null
 // Why the transport closed, if it has. Read by the handshake loop, which must
 // stop waiting for a reply that a closed connection can never deliver.
 let closedWhy = null
@@ -126,6 +130,10 @@ if (LIVE) {
       else if (m.type === MSG.MAP_DATA) (movingMap ?? acc).push(m)
       else if (m.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
       else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
+      // Panels (docs/protocol.md §11). Reliable channel, like everything that
+      // must not be missed.
+      else if (m.type === MSG.UI_OPEN) ui.open(m)
+      else if (m.type === MSG.UI_CLOSE) ui.close(m.uiId)
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
     },
     onSnapshot (s) { pendingSnapshots.push(s) },
@@ -138,6 +146,13 @@ if (LIVE) {
       say(`disconnected: ${closedWhy}`)
     }
   })
+  // Panels, and the way back. A UI event is a reliable control message: a
+  // click that arrived late still bought the thing, and one that arrived never
+  // is a player pressing a button that does nothing.
+  ui = new UiView({
+    onEvent: (uiId, widgetId, value) => conn.sendControl(encodeUiEvent(uiId, widgetId, value))
+  })
+
   await conn.open()
   say('connected; waiting for WELCOME...')
 

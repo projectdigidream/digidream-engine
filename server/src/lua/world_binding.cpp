@@ -207,6 +207,26 @@ int l_entity_set_solid(lua_State* L) {
     return 0;
 }
 
+// entity:hp() -> integer, and entity:set_hp(n)
+//
+// Health is the server's, not the simulation's: the engine has no notion of it,
+// and a client only ever learns its OWN, through the private block.
+int l_entity_hp(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.hp == nullptr) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, static_cast<double>(ctx.hp[a]));
+    return 1;
+}
+
+int l_entity_set_hp(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.hp == nullptr) return 0;
+    ctx.hp[a] = static_cast<i32>(luaL_checknumber(L, 2));
+    return 0;
+}
+
 int l_entity_set_animation(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -377,6 +397,8 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"teleport", l_entity_teleport},
     {"set_input", l_entity_set_input},
     {"set_solid", l_entity_set_solid},
+    {"hp", l_entity_hp},
+    {"set_hp", l_entity_set_hp},
     {"set_animation", l_entity_set_animation},
     {"kind", l_entity_kind},
     {"name", l_entity_name},
@@ -1095,6 +1117,141 @@ int l_dnp_hitscan(lua_State* L) {
     return 2;
 }
 
+// --- UI (docs/protocol.md section 11) ----------------------------------------
+
+// Copy a Lua string into a fixed UiText, refusing rather than truncating.
+//
+// Truncating a label is the kind of silent damage that gets noticed months
+// later by someone wondering why one shop item has a short name.
+static bool ui_text(lua_State* L, int idx, proto::UiText& out, const char* what) {
+    size_t n = 0;
+    const char* p = lua_tolstring(L, idx, &n);
+    if (p == nullptr) { out.len = 0; out.text[0] = '\0'; return true; }
+    if (n > proto::UI_MAX_TEXT) {
+        luaL_error(L, "ui: %s is %d bytes, the limit is %d", what,
+                   static_cast<int>(n), static_cast<int>(proto::UI_MAX_TEXT));
+        return false;
+    }
+    out.len = static_cast<u16>(n);
+    for (size_t i = 0; i < n; ++i) out.text[i] = p[i];
+    if (n < proto::UI_MAX_TEXT) out.text[n] = '\0';
+    return true;
+}
+
+static proto::UiWidgetKind ui_kind_of(lua_State* L, const char* name) {
+    if (name == nullptr) return proto::UiWidgetKind::Label;
+    if (std::strcmp(name, "label") == 0)  return proto::UiWidgetKind::Label;
+    if (std::strcmp(name, "button") == 0) return proto::UiWidgetKind::Button;
+    if (std::strcmp(name, "slider") == 0) return proto::UiWidgetKind::Slider;
+    if (std::strcmp(name, "select") == 0) return proto::UiWidgetKind::Select;
+    if (std::strcmp(name, "toggle") == 0) return proto::UiWidgetKind::Toggle;
+    luaL_error(L, "ui: unknown widget kind '%s'", name);
+    return proto::UiWidgetKind::Label;
+}
+
+// dnp.levels() -> { "map01", ... }
+//
+// What the operator actually loaded, in progression order. The index into this
+// list is what entity:change_map takes.
+int l_dnp_levels(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    lua_newtable(L);
+    if (ctx.levels == nullptr) return 1;
+    const u32 n = ctx.levels->level_count();
+    for (u32 i = 0; i < n; ++i) {
+        lua_pushstring(L, ctx.levels->level_name(i));
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    return 1;
+}
+
+// dnp.ui_open(entity, { title = "...", widgets = { {...}, ... } }) -> ui_id
+//
+// A widget is a table: kind, id, label, and whichever of value/lo/hi/options
+// its kind uses. `id` is the script's own number and comes back untouched in
+// on_ui_event, so a script indexes its own handlers rather than matching labels.
+int l_dnp_ui_open(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.ui == nullptr) { lua_pushnumber(L, 0); return 1; }
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    proto::UiPanel panel;
+    lua_getfield(L, 2, "title");
+    ui_text(L, -1, panel.title, "title");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "widgets");
+    if (lua_istable(L, -1)) {
+        const int n = static_cast<int>(lua_objlen(L, -1));
+        if (n > static_cast<int>(proto::UI_MAX_WIDGETS)) {
+            return luaL_error(L, "ui: %d widgets, the limit is %d", n,
+                              static_cast<int>(proto::UI_MAX_WIDGETS));
+        }
+        for (int i = 1; i <= n; ++i) {
+            lua_rawgeti(L, -1, i);
+            if (!lua_istable(L, -1)) { lua_pop(L, 1); continue; }
+            proto::UiWidget& g = panel.widgets[panel.count];
+
+            lua_getfield(L, -1, "kind");
+            g.kind = ui_kind_of(L, lua_tostring(L, -1));
+            lua_pop(L, 1);
+
+            lua_getfield(L, -1, "id");
+            g.id = static_cast<u16>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+
+            lua_getfield(L, -1, "label");
+            ui_text(L, -1, g.label, "label");
+            lua_pop(L, 1);
+
+            lua_getfield(L, -1, "value");
+            g.value = static_cast<i32>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+            lua_getfield(L, -1, "lo");
+            g.lo = static_cast<i32>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+            lua_getfield(L, -1, "hi");
+            g.hi = static_cast<i32>(lua_tonumber(L, -1));
+            lua_pop(L, 1);
+
+            lua_getfield(L, -1, "options");
+            if (lua_istable(L, -1)) {
+                const int m = static_cast<int>(lua_objlen(L, -1));
+                if (m > static_cast<int>(proto::UI_MAX_OPTIONS)) {
+                    return luaL_error(L, "ui: %d options, the limit is %d", m,
+                                      static_cast<int>(proto::UI_MAX_OPTIONS));
+                }
+                for (int k = 1; k <= m; ++k) {
+                    lua_rawgeti(L, -1, k);
+                    ui_text(L, -1, g.options[g.option_count], "option");
+                    ++g.option_count;
+                    lua_pop(L, 1);
+                }
+            }
+            lua_pop(L, 1);   // options
+
+            ++panel.count;
+            lua_pop(L, 1);   // the widget table
+        }
+    }
+    lua_pop(L, 1);   // widgets
+
+    lua_pushnumber(L, static_cast<double>(
+        ctx.ui->open_ui(ctx.level, static_cast<u32>(a), panel)));
+    return 1;
+}
+
+// dnp.ui_close(entity, ui_id)
+int l_dnp_ui_close(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.ui == nullptr) return 0;
+    ctx.ui->close_ui(ctx.level, static_cast<u32>(a),
+                     static_cast<u32>(luaL_checknumber(L, 2)));
+    return 0;
+}
+
 // dnp.vfx(kind, position [, direction] [, param])
 //
 // A transient visual: a tracer, a flash, an impact. Fire and forget, off the
@@ -1257,6 +1414,9 @@ const luaL_Reg DNP_FUNCS[] = {
     {"atan2", l_dnp_atan2},
     {"dir", l_dnp_dir},
     {"vfx", l_dnp_vfx},
+    {"levels", l_dnp_levels},
+    {"ui_open", l_dnp_ui_open},
+    {"ui_close", l_dnp_ui_close},
     {"prop", l_dnp_prop},
     {"props", l_dnp_props},
     {"side", l_dnp_side},

@@ -3,6 +3,7 @@
 // Per-client session state: the input jitter buffer and the bookkeeping
 // reconciliation and clock sync depend on.
 //
+#include <vector>
 #include "dnp/proto/messages.hpp"
 #include "snapshot_history.hpp"
 
@@ -40,6 +41,28 @@ public:
     // identical from the outside without a counter to separate them.
     u64 starved_ticks = 0;
     u64 duplicate_frames = 0;
+
+    // Panels currently open on this client (docs/protocol.md §11).
+    //
+    // Kept per session rather than per level, because a panel belongs to the
+    // person looking at it. Held whole, not just by id, because an incoming
+    // event has to be validated against what was actually offered -- a value
+    // clamped to the widget's own range, a select index inside its own option
+    // list, and nothing at all for a widget the panel does not contain.
+    //
+    // A small vector: a client with more than a handful of panels open at once
+    // is a script bug, and the cap makes that visible rather than unbounded.
+    static constexpr u32 MAX_OPEN_UI = 8;
+    std::vector<proto::UiPanel> open_ui;
+    // Allocated per session and never reused within one, so an event for a
+    // panel that has closed names an id that no longer exists rather than one
+    // that has been recycled into a different panel.
+    u32 next_ui_id = 1;
+
+    proto::UiPanel* find_ui(u32 ui_id) {
+        for (auto& p : open_ui) if (p.ui_id == ui_id) return &p;
+        return nullptr;
+    }
 
     // What this client has been sent, for delta encoding (docs/protocol.md 5.3).
     SnapshotHistory history;

@@ -125,12 +125,15 @@ else
   node client/test/props.test.js | tail -2
   node client/test/swing.test.js | tail -2
   node client/test/vfx.test.js | tail -2
+  # Panels: the client's decoder against real bytes from the C++ encoder.
+  node client/test/ui.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/noupstream.test.js 2>/dev/null | tail -2 \
+     && node test/ui.test.js 2>/dev/null | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2 \
      && node test/delta.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/mapdata.test.js 2>/dev/null | tail -2 \
@@ -172,6 +175,10 @@ else
   # is satisfied by anything that drifts.
   (cd server/edge && DNP_ENEMY_IDLE=1 DNP_WT_PORT=34487 DNP_LINK_PORT=34587 \
      node test/enemies.test.js 2>/dev/null | grep -E "CONTROL|enemies:")
+  # A panel is a script's doing. With the script left out nothing may open one,
+  # or "a panel arrived" is satisfied by the engine opening it itself.
+  (cd server/edge && DNP_NO_UI_SCRIPT=1 DNP_WT_PORT=34650 DNP_LINK_PORT=34651 \
+     node test/ui.test.js 2>/dev/null | grep -E "CONTROL|ui:")
   # A solid prop that stops you, and a swing that removes it: without the swing
   # the same walk must end in the same place, or `solid` is doing nothing.
   (cd server/edge && DNP_NO_ATTACK=1 DNP_WT_PORT=34499 DNP_LINK_PORT=34573 \

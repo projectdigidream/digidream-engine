@@ -18,6 +18,7 @@
 // increments a counter. "My script silently does nothing" has to be
 // diagnosable, or the defined-no-op rule just moves the confusion.
 //
+#include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapstore.hpp"
 #include "dnp/math/rng.hpp"
 #include "dnp/sim/world.hpp"
@@ -76,6 +77,32 @@ struct MapChangeSink {
     virtual void request_map_change(u32 level, u32 agent, i32 to) = 0;
 };
 
+// Where a panel goes. Implemented by the server, which owns the sessions.
+//
+// A UI belongs to a PERSON, not to a world: the simulation has agents and knows
+// nothing about who is watching one. So this is a sink like MapChangeSink
+// rather than something reachable through sim::World, and a script addresses a
+// panel by entity because that is the only handle on a person it has.
+// What levels this server was started with, by name.
+//
+// A script that offers a map selector must show what the OPERATOR loaded, not a
+// list written into the script -- which would go stale the first time somebody
+// ran the server with different arguments, and would offer maps that are not
+// there.
+struct LevelListSink {
+    virtual ~LevelListSink() = default;
+    virtual u32         level_count() const = 0;
+    virtual const char* level_name(u32 i) const = 0;
+};
+
+struct UiSink {
+    virtual ~UiSink() = default;
+    // Returns the allocated ui_id, or 0 if the agent has nobody watching it --
+    // which is the ordinary case for a monster, and is not an error.
+    virtual u32  open_ui(u32 level, u32 agent, const proto::UiPanel& panel) = 0;
+    virtual void close_ui(u32 level, u32 agent, u32 ui_id) = 0;
+};
+
 struct WorldContext {
     sim::World*       world = nullptr;
     geom::MapStorage* map_store = nullptr;
@@ -85,6 +112,18 @@ struct WorldContext {
     // says "next".
     u32               level = 0;
     MapChangeSink*    map_changes = nullptr;
+    UiSink*           ui = nullptr;
+    LevelListSink*    levels = nullptr;
+
+    // Health, one per agent slot.
+    //
+    // SERVER state, not simulation state. The core has no notion of health --
+    // it reports that a swing reached something or that a ceiling closed on
+    // somebody, and what that costs is decided elsewhere. Keeping it here means
+    // it is not hashed, not in the determinism gate, and not something a client
+    // predicts; it reaches the right client through the snapshot's private
+    // block, which design section 2 already requires be per-observer.
+    i32*              hp = nullptr;
     const PropCatalogueView* props = nullptr;
 
     // Deterministic, seeded from the map hash and the script name -- never from

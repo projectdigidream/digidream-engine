@@ -27,6 +27,12 @@ inline constexpr u8 MSG_REJECT  = 0x03;
 inline constexpr u8 MSG_MAP_DATA = 0x10;
 inline constexpr u8 MSG_SECTOR_MOTION_SET = 0x12;
 inline constexpr u8 MSG_PARAM_UPDATE = 0x14;
+// UI (docs/protocol.md §11). Reliable, never datagrams: a panel that arrived
+// late is still a panel; one that arrived never is a player staring at a shop
+// that does not open.
+inline constexpr u8 MSG_UI_OPEN  = 0x20;
+inline constexpr u8 MSG_UI_EVENT = 0x21;
+inline constexpr u8 MSG_UI_CLOSE = 0x22;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -230,6 +236,60 @@ struct ParamField {
     u16 id  = 0;    // index into the field table; see server/src/lua/params_table.hpp
     i64 raw = 0;    // fx raw, or a bool/u8 widened -- the table says which
 };
+
+// --- UI (docs/protocol.md §11) ------------------------------------------------
+
+inline constexpr u32 UI_MAX_TEXT    = 128;   // bytes, per string
+inline constexpr u32 UI_MAX_WIDGETS = 32;
+inline constexpr u32 UI_MAX_OPTIONS = 32;
+
+enum class UiWidgetKind : u8 {
+    Label  = 0,   // static text; sends nothing
+    Button = 1,   // sends value 1 when pressed
+    Slider = 2,   // integer in [lo, hi]
+    Select = 3,   // index into `options`
+    Toggle = 4    // 0 or 1
+};
+
+// A fixed-size string, like everything else on this wire.
+//
+// Not a std::string: this header is included by core/, which allocates nothing
+// in the tick path, and by the wasm build. The cap is the protocol's, so a
+// hostile length cannot make the decoder reserve anything.
+struct UiText {
+    u16 len = 0;
+    char text[UI_MAX_TEXT]{};
+};
+
+struct UiWidget {
+    UiWidgetKind kind = UiWidgetKind::Label;
+    u16    id = 0;          // opaque to the client; echoed back in UI_EVENT
+    UiText label{};
+    i32    value = 0;
+    i32    lo = 0;
+    i32    hi = 0;
+    u16    option_count = 0;
+    UiText options[UI_MAX_OPTIONS]{};
+};
+
+struct UiPanel {
+    u32      ui_id = 0;
+    UiText   title{};
+    u16      count = 0;
+    UiWidget widgets[UI_MAX_WIDGETS]{};
+};
+
+struct UiEvent {
+    u32 ui_id = 0;
+    u16 widget_id = 0;
+    i32 value = 0;
+};
+
+// Body only, like SECTOR_MOTION_SET and PARAM_UPDATE: the caller frames it.
+void encode_ui_open(ByteWriter& w, const UiPanel& p) noexcept;
+bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept;
+void encode_ui_event(ByteWriter& w, const UiEvent& e) noexcept;
+bool decode_ui_event(ByteReader& r, UiEvent& out) noexcept;
 
 struct ParamUpdate {
     Handle     handle{};

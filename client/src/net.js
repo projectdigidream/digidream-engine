@@ -125,6 +125,19 @@ export class Connection {
    * contains the frame that went missing, which costs a few bytes and no
    * latency at all.
    */
+  /**
+   * Anything on the RELIABLE channel -- currently UI events.
+   *
+   * Separate from send(), which writes datagrams: an input frame that is lost
+   * is replaced by the next one a sixtieth of a second later, and a click on a
+   * shop's buy button is not.
+   */
+  sendControl (bytes) {
+    if (!this.cw) return false
+    this.cw.write(bytes).catch(() => {})
+    return true
+  }
+
   send (clientTick, ackSnapshotTick, frames) {
     if (this.closed || !this.dw) return
     // Deliberately not awaited. Awaiting a datagram write ties the input rate

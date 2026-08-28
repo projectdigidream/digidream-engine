@@ -626,7 +626,179 @@ static void test_fuzz() {
     }
 }
 
+
+// Small helpers for the UI tests: UiText is a fixed buffer, not a std::string.
+static void set_text(UiText& t, const char* s) {
+    u16 n = 0;
+    while (s[n] != '\0' && n < UI_MAX_TEXT) { t.text[n] = s[n]; ++n; }
+    t.len = n;
+    if (n < UI_MAX_TEXT) t.text[n] = '\0';
+}
+static bool same_text(const UiText& t, const char* s) {
+    u16 n = 0;
+    while (s[n] != '\0') ++n;
+    if (t.len != n) return false;
+    for (u16 i = 0; i < n; ++i) if (t.text[i] != s[i]) return false;
+    return true;
+}
+
+// --- UI (docs/protocol.md section 11) ----------------------------------------
+//
+// A panel is the first thing on this wire that carries TEXT, and text is where
+// a decoder gets hurt: a length field the sender controls, read into a fixed
+// buffer, on data that arrives from the network.
+
+static void test_ui_panel_round_trip() {
+    std::printf("ui: a panel survives the wire\n");
+
+    UiPanel p;
+    p.ui_id = 7;
+    set_text(p.title, "Debug");
+    p.count = 3;
+    p.widgets[0].kind = UiWidgetKind::Label;
+    p.widgets[0].id = 1;
+    set_text(p.widgets[0].label, "Player");
+    p.widgets[1].kind = UiWidgetKind::Slider;
+    p.widgets[1].id = 2;
+    set_text(p.widgets[1].label, "Speed");
+    p.widgets[1].value = 8; p.widgets[1].lo = 1; p.widgets[1].hi = 40;
+    p.widgets[2].kind = UiWidgetKind::Select;
+    p.widgets[2].id = 3;
+    set_text(p.widgets[2].label, "Map");
+    p.widgets[2].option_count = 2;
+    set_text(p.widgets[2].options[0], "MAP01");
+    set_text(p.widgets[2].options[1], "MAP02");
+
+    u8 buf[2048];
+    ByteWriter w(buf, sizeof(buf));
+    encode_ui_open(w, p);
+    CHECK(w.ok());
+
+    ByteReader r(buf, w.size());
+    UiPanel got;
+    CHECK(decode_ui_open(r, got));
+    CHECK(got.ui_id == 7);
+    CHECK(same_text(got.title, "Debug"));
+    CHECK(got.count == 3);
+    CHECK(got.widgets[1].kind == UiWidgetKind::Slider);
+    CHECK(got.widgets[1].value == 8 && got.widgets[1].lo == 1 && got.widgets[1].hi == 40);
+    CHECK(same_text(got.widgets[1].label, "Speed"));
+    CHECK(got.widgets[2].option_count == 2);
+    CHECK(same_text(got.widgets[2].options[1], "MAP02"));
+}
+
+static void test_ui_event_round_trip() {
+    std::printf("ui: an event survives the wire\n");
+    UiEvent e{42, 9, -3};
+    u8 buf[64];
+    ByteWriter w(buf, sizeof(buf));
+    encode_ui_event(w, e);
+    ByteReader r(buf, w.size());
+    UiEvent got;
+    CHECK(decode_ui_event(r, got));
+    CHECK(got.ui_id == 42 && got.widget_id == 9 && got.value == -3);
+}
+
+// The decoder runs on bytes from the network, so every length in the message is
+// a number an attacker picks. Each of these is a way to be handed one.
+static void test_ui_rejects_hostile_input() {
+    std::printf("ui: hostile lengths are refused, not truncated\n");
+
+    // A string longer than the cap. Refused rather than clamped: clamping keeps
+    // the first 128 bytes and leaves the reader mid-field, so everything after
+    // it decodes as garbage that passed.
+    {
+        u8 buf[64];
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1);
+        w.u16v(UI_MAX_TEXT + 1);      // title length
+        ByteReader r(buf, w.size());
+        UiPanel got;
+        CHECK(!decode_ui_open(r, got));
+    }
+    // More widgets than the panel can hold.
+    {
+        u8 buf[64];
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1);
+        w.u16v(0);                     // empty title
+        w.u16v(UI_MAX_WIDGETS + 1);
+        ByteReader r(buf, w.size());
+        UiPanel got;
+        CHECK(!decode_ui_open(r, got));
+    }
+    // A widget kind the client does not know. Refused rather than skipped,
+    // because its fields are not self-describing and there is no way to step
+    // over one and stay aligned.
+    {
+        u8 buf[64];
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1);
+        w.u16v(0);
+        w.u16v(1);
+        w.u8v(200);
+        ByteReader r(buf, w.size());
+        UiPanel got;
+        CHECK(!decode_ui_open(r, got));
+    }
+    // A string whose length runs off the end of the buffer.
+    {
+        u8 buf[16];
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1);
+        w.u16v(64);                    // claims 64 bytes of title, has none
+        ByteReader r(buf, w.size());
+        UiPanel got;
+        CHECK(!decode_ui_open(r, got));
+    }
+    // And a truncated event.
+    {
+        u8 buf[3]{};
+        ByteReader r(buf, sizeof(buf));
+        UiEvent got;
+        CHECK(!decode_ui_event(r, got));
+    }
+}
+
+// Every prefix of a valid panel must be refused rather than accepted as a
+// shorter one. This is the shape of a message cut short in transit, and the
+// version of it that "works" is a decoder reading past what arrived.
+static void test_ui_truncation_at_every_length() {
+    std::printf("ui: every truncation of a valid panel is refused\n");
+
+    UiPanel p;
+    p.ui_id = 3;
+    set_text(p.title, "Shop");
+    p.count = 2;
+    p.widgets[0].kind = UiWidgetKind::Button;
+    set_text(p.widgets[0].label, "Buy");
+    p.widgets[1].kind = UiWidgetKind::Toggle;
+    set_text(p.widgets[1].label, "Noclip");
+
+    u8 buf[1024];
+    ByteWriter w(buf, sizeof(buf));
+    encode_ui_open(w, p);
+    const size_t full = w.size();
+
+    for (size_t n = 0; n < full; ++n) {
+        ByteReader r(buf, n);
+        UiPanel got;
+        CHECK(!decode_ui_open(r, got));
+        if (g_fails) break;
+    }
+    // And the whole thing still decodes, so the loop above is not passing
+    // because the message is unreadable at every length including its own.
+    ByteReader r(buf, full);
+    UiPanel got;
+    CHECK(decode_ui_open(r, got));
+    CHECK(got.count == 2);
+}
+
 int main() {
+    test_ui_panel_round_trip();
+    test_ui_event_round_trip();
+    test_ui_rejects_hostile_input();
+    test_ui_truncation_at_every_length();
     std::printf("== core/proto test suite ==\n");
     test_bytes();
     test_varint();

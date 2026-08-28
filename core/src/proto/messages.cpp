@@ -338,4 +338,96 @@ bool decode_snapshot(ByteReader& r, DecodedSnapshot& out) noexcept {
     return r.ok();
 }
 
+
+// --- UI (docs/protocol.md section 11) ----------------------------------------
+//
+// A panel is not simulation state: it is never hashed, never in a snapshot, and
+// has no bearing on the determinism gate. It is here rather than in the server
+// because the CLIENT has to decode it, and the client's decoder is this one.
+
+static void encode_text(ByteWriter& w, const UiText& t) noexcept {
+    const u16 n = t.len > UI_MAX_TEXT ? static_cast<u16>(UI_MAX_TEXT) : t.len;
+    w.u16v(n);
+    w.bytes(reinterpret_cast<const u8*>(t.text), n);
+}
+
+// Refuses rather than truncates. A length past the cap is not a long string, it
+// is a malformed message, and quietly keeping the first 128 bytes of one would
+// leave the reader mid-field with everything after it misaligned.
+static bool decode_text(ByteReader& r, UiText& out) noexcept {
+    const u16 n = r.u16v();
+    if (!r.ok() || n > UI_MAX_TEXT) return false;
+    const u8* p = r.bytes(n);
+    if (p == nullptr) return false;
+    out.len = n;
+    for (u16 i = 0; i < n; ++i) out.text[i] = static_cast<char>(p[i]);
+    if (n < UI_MAX_TEXT) out.text[n] = '\0';
+    return true;
+}
+
+void encode_ui_open(ByteWriter& w, const UiPanel& p) noexcept {
+    const u16 n = p.count > UI_MAX_WIDGETS ? static_cast<u16>(UI_MAX_WIDGETS) : p.count;
+    w.u32v(p.ui_id);
+    encode_text(w, p.title);
+    w.u16v(n);
+    for (u16 i = 0; i < n; ++i) {
+        const UiWidget& g = p.widgets[i];
+        const u16 opts = g.option_count > UI_MAX_OPTIONS ? static_cast<u16>(UI_MAX_OPTIONS)
+                                                        : g.option_count;
+        w.u8v(static_cast<u8>(g.kind));
+        w.u16v(g.id);
+        encode_text(w, g.label);
+        w.i32v(g.value);
+        w.i32v(g.lo);
+        w.i32v(g.hi);
+        w.u16v(opts);
+        for (u16 k = 0; k < opts; ++k) encode_text(w, g.options[k]);
+    }
+}
+
+bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept {
+    UiPanel p;
+    p.ui_id = r.u32v();
+    if (!decode_text(r, p.title)) return false;
+    const u16 n = r.u16v();
+    if (!r.ok() || n > UI_MAX_WIDGETS) return false;
+    for (u16 i = 0; i < n; ++i) {
+        UiWidget& g = p.widgets[i];
+        const u8 kind = r.u8v();
+        // An unknown kind is refused, not skipped: its fields are not
+        // self-describing, so there is no way to step over one and stay aligned.
+        if (!r.ok() || kind > static_cast<u8>(UiWidgetKind::Toggle)) return false;
+        g.kind = static_cast<UiWidgetKind>(kind);
+        g.id = r.u16v();
+        if (!decode_text(r, g.label)) return false;
+        g.value = r.i32v();
+        g.lo = r.i32v();
+        g.hi = r.i32v();
+        const u16 opts = r.u16v();
+        if (!r.ok() || opts > UI_MAX_OPTIONS) return false;
+        g.option_count = opts;
+        for (u16 k = 0; k < opts; ++k) if (!decode_text(r, g.options[k])) return false;
+    }
+    if (!r.ok()) return false;
+    p.count = n;
+    out = p;
+    return true;
+}
+
+void encode_ui_event(ByteWriter& w, const UiEvent& e) noexcept {
+    w.u32v(e.ui_id);
+    w.u16v(e.widget_id);
+    w.i32v(e.value);
+}
+
+bool decode_ui_event(ByteReader& r, UiEvent& out) noexcept {
+    UiEvent e;
+    e.ui_id = r.u32v();
+    e.widget_id = r.u16v();
+    e.value = r.i32v();
+    if (!r.ok()) return false;
+    out = e;
+    return true;
+}
+
 }  // namespace dnp::proto

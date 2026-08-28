@@ -371,6 +371,8 @@ static const char* const OWNERS_KEY = "dnp.hookowners";
 static const char* const HOOK_NAMES[] = {
     "on_tick", "on_post_tick", "on_interact", "on_cross",
     "on_touch", "on_prop_use", "on_attack", "on_crush",
+    // A player used a panel (docs/protocol.md section 11).
+    "on_ui_event",
 };
 
 // Push the handler list for `fn_name`, creating it if absent. Leaves the table

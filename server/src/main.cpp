@@ -70,6 +70,12 @@ constexpr size_t MAP_CHUNK_BYTES = 8192;
 // DOOM2 is about twenty megabytes and the count is not a thing to ration.
 struct Level {
     std::string      path;
+    // Cached basename, filled by Server::level_name. Mutable state on a const
+    // accessor is a smell; the alternative is either a std::string returned by
+    // value across a C API boundary or a second copy of the parsing.
+    mutable std::string short_name;
+    // Health per agent slot. Server state: see WorldContext::hp.
+    i32              hp[sim::MAX_AGENTS];
     sim::World       world;
     geom::MapStorage map_store;
     nav::NavGraph    nav_graph;
@@ -120,7 +126,7 @@ struct Level {
     u16                 discrete_count = 0;
 };
 
-struct Server : lua::MapChangeSink {
+struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     net::LinkServer      link;
 
     // Which named spawn arriving players land on. Portals supply this per
@@ -147,7 +153,8 @@ struct Server : lua::MapChangeSink {
     PropCatalogue props;
 
     Level& level(u32 i) { return *levels[i]; }
-    u32 level_count() const { return static_cast<u32>(levels.size()); }
+    // Also LevelListSink's, so a script can ask what maps this server loaded.
+    u32 level_count() const override { return static_cast<u32>(levels.size()); }
 
     void collect_discrete_offsets(Level& L) {
         L.discrete_count = 0;
@@ -483,6 +490,11 @@ struct Server : lua::MapChangeSink {
         const u32 agent = L.world.spawn(spawn_pos);
         if (agent >= sim::MAX_AGENTS) return false;
 
+        // Full health on arrival, including on a map change: a slot is reused
+        // as players come and go, and inheriting the last occupant's health
+        // would be a bug that only shows up on a busy server.
+        L.hp[agent] = 100;
+
         // The body the MAP is built for, before anything captures this agent's
         // parameters as its base.
         //
@@ -564,6 +576,9 @@ struct Server : lua::MapChangeSink {
         L.ctx.map_store   = &L.map_store;
         L.ctx.level       = li;
         L.ctx.map_changes = this;
+        L.ctx.ui = this;
+        L.ctx.hp = L.hp;
+        L.ctx.levels = this;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
         // to a client but replayable by the server. Per level, or two maps
@@ -637,6 +652,87 @@ struct Server : lua::MapChangeSink {
         sessions.erase(it);
     }
 
+    // Send a panel to one client (docs/protocol.md §11.1). Reliable channel.
+    void send_ui_open(Session& s, const proto::UiPanel& p) {
+        u8 buf[8192];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_UI_OPEN);
+        proto::encode_ui_open(w, p);
+        if (!w.ok()) {
+            // A panel too large to send is a script error, not a client one.
+            // Named, because the alternative is a shop that silently never
+            // opens and a script author with nothing to go on.
+            std::fprintf(stderr, "[srv] session %u: UI panel %u too large to send\n",
+                         s.id, p.ui_id);
+            return;
+        }
+        const size_t end = w.size();
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(s.id, buf, end);
+    }
+
+    void send_ui_close(Session& s, u32 ui_id) {
+        u8 buf[32];
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1 + 4);
+        w.u8v(proto::MSG_UI_CLOSE);
+        w.u32v(ui_id);
+        if (w.ok()) link.send_control(s.id, buf, w.size());
+    }
+
+    // An event from a client, on its way to a script (docs/protocol.md §11.2).
+    //
+    // Everything here is a refusal. The client picks `ui_id`, `widget_id` and
+    // `value`, so a script must never be handed one it did not offer: a stale
+    // id is a no-op, an unknown widget is dropped, and a value is clamped to
+    // the range the widget itself declared. A script written against a UI is
+    // not written against an adversary, which is why this layer has to be the
+    // thing that makes that true.
+    void on_ui_event(Session& s, const proto::UiEvent& ev) {
+        proto::UiPanel* panel = s.find_ui(ev.ui_id);
+        if (panel == nullptr) return;          // closed, or never opened
+
+        const proto::UiWidget* widget = nullptr;
+        for (u16 i = 0; i < panel->count; ++i) {
+            if (panel->widgets[i].id == ev.widget_id) { widget = &panel->widgets[i]; break; }
+        }
+        if (widget == nullptr) return;
+        // A label sends nothing, so an event naming one is not from a person.
+        if (widget->kind == proto::UiWidgetKind::Label) return;
+
+        i32 value = ev.value;
+        switch (widget->kind) {
+            case proto::UiWidgetKind::Button: value = 1; break;
+            case proto::UiWidgetKind::Toggle: value = value != 0 ? 1 : 0; break;
+            case proto::UiWidgetKind::Select:
+                if (value < 0 || value >= static_cast<i32>(widget->option_count)) return;
+                break;
+            case proto::UiWidgetKind::Slider:
+                if (value < widget->lo) value = widget->lo;
+                if (value > widget->hi) value = widget->hi;
+                break;
+            default: return;
+        }
+
+        if (!s.has_agent) return;
+        Level& L = level(s.level);
+        if (!L.vm.is_open()) return;
+        for (u32 h = 0; h < L.vm.hook_count("on_ui_event"); ++h) {
+            if (!L.vm.begin_hook_at("on_ui_event", h)) continue;
+            lua::push_entity(L.vm.state(), L.ctx, s.agent);
+            lua_pushnumber(L.vm.state(), static_cast<double>(ev.ui_id));
+            lua_pushnumber(L.vm.state(), static_cast<double>(ev.widget_id));
+            lua_pushnumber(L.vm.state(), static_cast<double>(value));
+            L.vm.end_hook("on_ui_event", L.world.tick(), 4);
+        }
+    }
+
     void on_control(u32 id, const u8* data, size_t len) {
         auto it = sessions.find(id);
         if (it == sessions.end()) return;
@@ -648,6 +744,13 @@ struct Server : lua::MapChangeSink {
         const u8  type = r.u8v();
         (void)msg_len;
         if (!r.ok()) return;
+
+        if (type == proto::MSG_UI_EVENT) {
+            proto::UiEvent ev;
+            if (!proto::decode_ui_event(r, ev)) return;
+            on_ui_event(s, ev);
+            return;
+        }
 
         if (type == proto::MSG_HELLO) {
             const u16 version = r.u16v();
@@ -962,6 +1065,66 @@ struct Server : lua::MapChangeSink {
     struct MapChange { u32 from_level; u32 agent; u32 to_level; };
     std::vector<MapChange> pending_changes;
 
+    // --- LevelListSink --------------------------------------------------------
+    //
+    // The basename, not the path: a script offering a map selector wants
+    // "map02", not "/home/someone/build/arm64/map02.dnpm". Computed on demand
+    // rather than stored, because it is asked for once when a panel is built.
+    const char* level_name(u32 i) const override {
+        if (i >= levels.size()) return "";
+        const std::string& p = levels[i]->path;
+        const size_t slash = p.find_last_of("/\\");
+        const size_t start = slash == std::string::npos ? 0 : slash + 1;
+        const size_t dot = p.find_last_of('.');
+        const size_t len = (dot == std::string::npos || dot < start) ? std::string::npos
+                                                                    : dot - start;
+        levels[i]->short_name = p.substr(start, len);
+        return levels[i]->short_name.c_str();
+    }
+
+    // --- UiSink (docs/protocol.md section 11) --------------------------------
+    //
+    // Applied immediately rather than queued, unlike a map change. A panel is
+    // not simulation state: it is not hashed, not replicated in a snapshot, and
+    // cannot make one tick's outcome depend on another's. There is nothing for
+    // a queue to make deterministic.
+    u32 open_ui(u32 level_index, u32 agent, const proto::UiPanel& panel) override {
+        Session* s = session_for(level_index, agent);
+        // No session means nobody is watching this agent -- which is the
+        // ordinary case for a monster, and not an error worth logging.
+        if (s == nullptr) return 0;
+        if (s->open_ui.size() >= Session::MAX_OPEN_UI) {
+            std::fprintf(stderr, "[srv] session %u: %zu panels already open, refusing\n",
+                         s->id, s->open_ui.size());
+            return 0;
+        }
+        proto::UiPanel p = panel;
+        p.ui_id = s->next_ui_id++;
+        s->open_ui.push_back(p);
+        send_ui_open(*s, p);
+        return p.ui_id;
+    }
+
+    void close_ui(u32 level_index, u32 agent, u32 ui_id) override {
+        Session* s = session_for(level_index, agent);
+        if (s == nullptr) return;
+        for (size_t i = 0; i < s->open_ui.size(); ++i) {
+            if (s->open_ui[i].ui_id != ui_id) continue;
+            s->open_ui.erase(s->open_ui.begin() + static_cast<long>(i));
+            send_ui_close(*s, ui_id);
+            return;
+        }
+    }
+
+    // The session watching a given agent in a given level, or null.
+    Session* session_for(u32 level_index, u32 agent) {
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (s.has_agent && s.level == level_index && s.agent == agent) return &s;
+        }
+        return nullptr;
+    }
+
     // Called from the Lua binding. Queued, never applied here -- see tick().
     void request_map_change(u32 from_level, u32 agent, i32 to_level) override {
         if (from_level >= level_count() || agent >= sim::MAX_AGENTS) return;
@@ -1108,7 +1271,7 @@ struct Server : lua::MapChangeSink {
 
             u8 buf[proto::MAX_DATAGRAM_BYTES];
             proto::SnapshotWriter w(buf, sizeof(buf));
-            w.begin(h, sb, 100, L.discrete_offsets, L.discrete_count);
+            w.begin(h, sb, L.hp[s.agent], L.discrete_offsets, L.discrete_count);
 
             SnapshotRecord& record = s.history.begin(world.tick());
 

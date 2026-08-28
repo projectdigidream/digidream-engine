@@ -64,6 +64,8 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_interact.cpp"     -o "
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_props.cpp"        -o "$OUT/test_props"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_bodies.cpp"       -o "$OUT/test_bodies"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sight.cpp"        -o "$OUT/test_sight"
+# A fixture generator, not a test: it prints wire bytes for the JS decoder.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tools/ui_fixture.cpp"        -o "$OUT/ui_fixture"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_turning.cpp"      -o "$OUT/test_turning"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_nav.cpp"          -o "$OUT/test_nav"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_rail.cpp"         -o "$OUT/test_rail"
