@@ -704,14 +704,32 @@ i32 find_interact_side(const MapData& map, i32 sector, fx2 p, brad facing,
     return -1;
 }
 
-// How far past a boundary to sample the sector beyond it. Small enough to stay
-// inside any sector a ray could cross, large enough to be off the edge itself.
-static constexpr fx SIGHT_NUDGE = fx::from_frac(1, 256);
+// How many sector boundaries one cast may cross. Generous, because a long shot
+// across a converted Doom level legitimately crosses a great many, and running
+// out is now a refusal rather than a free pass.
+static constexpr int MAX_RAY_HOPS = 256;
+
+// Minimum progress along the ray per hop, as a fraction of its length. Small
+// enough not to skip a thin sector, large enough to step clear of the boundary
+// just crossed.
+static constexpr fx RAY_EPSILON = fx::from_frac(1, 4096);
 
 RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
                u8 flag, fx z) noexcept {
     RayHit hit;
-    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return hit;
+    // No sector to start from means the ray cannot be resolved, and an
+    // unresolvable ray must FAIL CLOSED.
+    //
+    // This returned a bare `hit` -- blocked false, which every occlusion caller
+    // reads as "nothing in the way". So a monster whose sector was stale or
+    // unset could see, and shoot, through the entire map. Fail-open is the
+    // wrong default for a visibility test: the cost of wrongly blocking is a
+    // monster that does not notice you, and the cost of wrongly allowing is a
+    // monster that shoots you through four walls.
+    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) {
+        hit.blocked = true;
+        return hit;
+    }
 
     const fx2 to = from + dir * max_dist;
     i32 cur = sector;
@@ -719,7 +737,29 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
     // Walk sector to sector. Bounded so a ray that grazes a shared edge and
     // oscillates between two sectors costs a fixed amount rather than hanging
     // the tick.
-    for (int hops = 0; hops < 32; ++hops) {
+    //
+    // 32 was not enough for a real level. A zombieman's range is 2048 Doom
+    // units, which on MAP01 crosses far more than thirty-two sectors -- and the
+    // loop used to fall out of the bottom reporting NOT BLOCKED, so exceeding
+    // the budget granted a clear line through everything beyond it. That is the
+    // same fail-open as an unset sector and it is the one that survived the
+    // first fix.
+    // How far along the ray the walk has already got. Every hop must make
+    // PROGRESS past this.
+    //
+    // `from` is never advanced -- `t` is always measured from the original
+    // origin -- so the "ignore a crossing at the very start" epsilon below only
+    // ever worked on the first hop. On every hop after it, the boundary just
+    // stepped through still sits at its own t, was found again as the nearest
+    // crossing, and the walk bounced between two sectors until it ran out of
+    // hops. Which the old code then reported as NOT BLOCKED, so a ray that
+    // failed to resolve granted a clear line through the rest of the map.
+    //
+    // That is the shoot-through-walls report. The height test added earlier was
+    // real but secondary: most rays never got far enough for it to matter.
+    fx walked = fx::zero();
+
+    for (int hops = 0; hops < MAX_RAY_HOPS; ++hops) {
         const Sector& sec = map.sector(static_cast<u32>(cur));
 
         fx   best_t = fx::one();
@@ -731,9 +771,9 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
             const Side& sd = map.side(si);
             fx t;
             if (!segment_intersect(from, to, map.point(sd.a), map.point(sd.b), t)) continue;
-            // Ignore a crossing at the very start, which is the side just
-            // stepped through on the previous hop.
-            if (t <= fx::from_frac(1, 4096)) continue;
+            // Strictly beyond where the walk has already reached, so the side
+            // just crossed cannot be crossed again.
+            if (t <= walked + RAY_EPSILON) continue;
             if (!found || t < best_t) { best_t = t; best_side = static_cast<i32>(si); found = true; }
         }
 
@@ -753,22 +793,24 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
         // any height at all. Treating every neighbour as transparent is what let
         // a monster see and shoot a player on the far side of several walls.
         if (!solid && z.raw != RAY_NO_HEIGHT.raw) {
-            // A hair PAST the boundary, not on it. The crossing point lies
-            // exactly on the shared edge, which belongs to both sectors, and a
-            // point query there is free to answer with the one already left --
-            // so the test read the near room's own floor and ceiling and
-            // concluded every wall was open.
-            const fx2 cross = from + (to - from) * best_t;
-            const fx2 past{cross.x + dir.x * SIGHT_NUDGE, cross.y + dir.y * SIGHT_NUDGE};
-            const SurfaceQuery beyond =
-                query_surface(map, past, sd.neighbor, z, fx::zero());
+            // The neighbour's own floor and ceiling, read directly.
+            //
+            // The first version asked query_surface where a point just past the
+            // boundary was, which is two mistakes at once. It is a point-in-
+            // polygon search for a sector whose index the side already names --
+            // so it scanned the map to rediscover something known, and that
+            // search is most of what made the monster script cost four
+            // milliseconds a tick. And it is ambiguous: the crossing point lies
+            // exactly on an edge belonging to both sectors, so it could answer
+            // with the one already left, which reported every wall as open.
+            const Sector& beyond = map.sector(static_cast<u32>(sd.neighbor));
 
-            // No gap at all is opaque at every height, which is how Doom stores
-            // a shut door: a sector whose ceiling rests on its floor. Tested
-            // separately because `floor <= z <= ceil` is satisfied by a zero
-            // gap at exactly that height.
-            const bool no_gap = beyond.ceil_z <= beyond.floor_z;
-            if (!beyond.in_map || no_gap || z < beyond.floor_z || z > beyond.ceil_z) {
+            // No gap at all is opaque at every height. That is how Doom stores
+            // a shut door -- a sector whose ceiling rests on its floor -- and it
+            // needs its own test, because `floor <= z <= ceil` is satisfied by a
+            // zero gap at exactly that height.
+            if (beyond.ceil_z <= beyond.floor_z ||
+                z < beyond.floor_z || z > beyond.ceil_z) {
                 solid = true;
             }
         }
@@ -797,7 +839,12 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
         }
 
         cur = sd.neighbor;
+        walked = best_t;
     }
+
+    // Out of hops. The ray is unresolved past this point, so it is blocked --
+    // for the same reason an unset start sector is.
+    hit.blocked = true;
     return hit;
 }
 

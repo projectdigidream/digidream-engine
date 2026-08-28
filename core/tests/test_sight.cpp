@@ -136,6 +136,43 @@ static void test_a_plain_wall_still_blocks() {
     CHECK(north.distance > fx::zero());
 }
 
+// The one that was actually happening on MAP01.
+//
+// The walk re-found the boundary it had just stepped through -- `from` is never
+// advanced, so `t` is measured from the origin and the epsilon meant to skip
+// that side only ever applied on the first hop. The ray bounced between two
+// sectors until it ran out of hops, and running out used to be reported as NOT
+// BLOCKED. So a long shot resolved to a clear line through everything.
+//
+// Asserted as a COUNT rather than as "it works": a ray crossing one boundary
+// must take one hop, and the old code took all of them.
+static void test_the_walk_does_not_bounce_between_two_sectors() {
+    std::printf("sight: the walk crosses a boundary once, not repeatedly\n");
+
+    // Open, same height, so nothing stops the ray and the only thing that can
+    // end the walk is reaching the end of the range.
+    static Pair p(F(0), F(10));
+
+    // Far enough east to cross into the second room and stop inside it. If the
+    // walk bounces, it exhausts its hops and -- with the fix -- reports blocked.
+    const RayHit into_east = look_east(p.view, F(1));
+    CHECK(!into_east.blocked);
+
+    // And a long shot that ends inside the far room is still clear. This is the
+    // shape of the MAP01 case: enough range to cross several boundaries.
+    const RayHit far_shot =
+        raycast(p.view, 0, fx2{F(1), F(20)}, fx2{fx::one(), fx::zero()}, F(38), 0, F(1));
+    CHECK(!far_shot.blocked);
+
+    // The same shot with a wall in the way is blocked, so the assertion above
+    // is the walk working rather than the test never reaching anything.
+    static Pair shut(F(0), F(0));
+    const RayHit stopped =
+        raycast(shut.view, 0, fx2{F(1), F(20)}, fx2{fx::one(), fx::zero()}, F(38), 0, F(1));
+    CHECK(stopped.blocked);
+    CHECK(stopped.distance < F(38));
+}
+
 int main() {
     test_an_open_neighbour_does_not_block();
     test_a_raised_floor_blocks_sight_below_it();
@@ -143,6 +180,7 @@ int main() {
     test_a_shut_door_blocks_at_every_height();
     test_the_flat_cast_is_unchanged();
     test_a_plain_wall_still_blocks();
+    test_the_walk_does_not_bounce_between_two_sectors();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }
