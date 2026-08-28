@@ -565,4 +565,265 @@ int dnp_axis_from_buf(const long long* p) {
     return proto::axis_from_fx(fx::from_raw(p[0]));
 }
 
+
+// --- building a map in memory, for the editor ------------------------------
+//
+// The other direction through the same door. Everything above reads a map the
+// SERVER sent; this writes one the editor is drawing, into the same
+// geom::MapStorage, so what the editor shows is meshed from the same
+// triangulation the server will collide against.
+//
+// Every one of these is a MapStorage method that already existed -- see
+// core/include/dnp/geom/mapstore.hpp. Nothing here decides anything; if a
+// polygon is refused, it is refused by the ear clipper the engine ships, and
+// the editor reports what the engine said rather than a second opinion. That
+// is the entire reason the editor does not carry its own triangulator: an
+// editor whose picture disagrees with the game is worse than no editor.
+//
+// Arguments follow the conventions established above: fx values cross as raw
+// Q32.32 in caller-supplied i64 buffers, never as doubles and never as i64
+// parameters (which -sWASM_BIGINT would otherwise be needed for).
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_clear(geom::MapStorage* m) { m->clear(); }
+
+// pts64 is x,y interleaved; z64 is {floor, ceil}. Returns the sector index, or
+// MAX_MAP_SECTORS when the polygon was rejected or a capacity was hit -- the
+// caller compares against dnp_map_max_sectors() rather than knowing the number.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_add_sector(geom::MapStorage* m, const long long* pts64, unsigned n,
+                            const long long* z64, unsigned tag) {
+    // A fixed scratch rather than an allocation, matching core's rule that a
+    // count chosen elsewhere must never become an allocation size. n is bounded
+    // by the same limit add_sector itself enforces.
+    static fx2 pts[geom::MAX_MAP_POINTS];
+    if (n > geom::MAX_MAP_POINTS) return geom::MAX_MAP_SECTORS;
+    for (unsigned i = 0; i < n; ++i) {
+        pts[i] = fx2{fx::from_raw(pts64[i * 2]), fx::from_raw(pts64[i * 2 + 1])};
+    }
+    return m->add_sector(pts, n, fx::from_raw(z64[0]), fx::from_raw(z64[1]),
+                         static_cast<u16>(tag));
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_max_sectors() { return geom::MAX_MAP_SECTORS; }
+
+// Did sector `i` mesh into the shape it was asked for?
+//
+// mapc asks this of every sector it bakes, and the editor has to ask it too or
+// it will accept outlines the compiler rejects -- which is the disagreement
+// this whole arrangement exists to prevent. "The clipper found an ear every
+// time" is a weaker statement than "it meshed the region I meant": a loop that
+// touches itself gets bridged across the pinch and filled where there is no
+// floor, and nothing downstream notices until somebody walks out over it.
+//
+// The comparison is exact, in 128-bit integers over the same points, and a
+// sector with holes is measured against outer minus holes -- which is the area
+// its floor actually has. Written here rather than in JavaScript for the usual
+// reason: it is the engine's own predicate, and a second approximate copy of an
+// exact test is the kind that agrees until it does not.
+//
+// Returns 1 when they match, 0 when they do not, and 1 for a sector with no
+// triangles at all -- that case is already reported by tri_count and reporting
+// it twice would make the caller decide which message to believe.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_sector_mesh_matches(const geom::MapStorage* m, unsigned i) {
+    const geom::MapData v = m->view();
+    if (i >= v.sector_count) return 0;
+    const geom::Sector& sec = v.sector(i);
+    if (sec.tri_count == 0) return 1;
+
+    i128 mesh = 0;
+    for (u16 t = 0; t < sec.tri_count; ++t) {
+        const u32 base = sec.first_tri + static_cast<u32>(t) * 3;
+        const fx2 a = v.point(v.tris[base + 0]);
+        const fx2 b = v.point(v.tris[base + 1]);
+        const fx2 c = v.point(v.tris[base + 2]);
+        mesh += (static_cast<i128>(b.x.raw) - a.x.raw) * (static_cast<i128>(c.y.raw) - a.y.raw) -
+                (static_cast<i128>(b.y.raw) - a.y.raw) * (static_cast<i128>(c.x.raw) - a.x.raw);
+    }
+
+    i128 poly = geom::polygon_area_2x(&v.points[sec.first_point], sec.point_count);
+    if (poly < 0) poly = -poly;
+    for (u16 h = 0; h < sec.hole_count; ++h) {
+        const geom::PolyLoop& L = v.hole(sec.first_hole + h);
+        i128 ha = geom::polygon_area_2x(&v.points[sec.first_point + L.first], L.count);
+        if (ha < 0) ha = -ha;
+        poly -= ha;
+    }
+    return mesh == poly ? 1 : 0;
+}
+
+// How many triangles a sector meshed into. Zero is how the store reports a
+// polygon it could not triangulate at all -- add_sector returns a valid index
+// and leaves the mesh empty, which mapc checks separately and so must this.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_sector_tri_count(const geom::MapStorage* m, unsigned i) {
+    const geom::MapData v = m->view();
+    return i < v.sector_count ? v.sector(i).tri_count : 0u;
+}
+
+// Must be called before the next dnp_map_add_sector: a hole's points sit
+// immediately after its sector's outer loop so the triangulator can be handed
+// one base pointer. Adding out of order puts another sector's points between
+// them, which is why this is a rule and not a preference.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_hole(geom::MapStorage* m, unsigned sector, const long long* pts64, unsigned n) {
+    static fx2 pts[geom::MAX_MAP_POINTS];
+    if (n > geom::MAX_MAP_POINTS) return 0;
+    for (unsigned i = 0; i < n; ++i) {
+        pts[i] = fx2{fx::from_raw(pts64[i * 2]), fx::from_raw(pts64[i * 2 + 1])};
+    }
+    return m->add_hole(sector, pts, n) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_side(geom::MapStorage* m, unsigned sector, unsigned local_a,
+                     unsigned local_b, int neighbor, unsigned flags) {
+    return m->add_side(sector, static_cast<u16>(local_a), static_cast<u16>(local_b),
+                       neighbor, static_cast<u8>(flags)) ? 1 : 0;
+}
+
+// The rendering half of a sector and of a side, written after the geometry the
+// way mapc writes them. Separate calls because the two halves are separate
+// structures in the store, and the separation is what scripts/check_render_
+// isolation.sh exists to keep -- collapsing them here would be the first step
+// to handing physics a texture id.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_sector_render(geom::MapStorage* m, unsigned i, unsigned floor_tex,
+                               unsigned ceil_tex, unsigned light,
+                               const long long* thickness64) {
+    if (i >= m->sector_count()) return;
+    geom::SectorRender& r = m->sector_render_mut(i);
+    r.floor_tex = static_cast<u16>(floor_tex);
+    r.ceil_tex = static_cast<u16>(ceil_tex);
+    r.light_level = static_cast<u8>(light);
+    // Thickness is GEOMETRY -- what a body stands on, and what the renderer
+    // draws as a slab edge -- so it goes to the Sector, not to SectorRender.
+    // One number, which is what makes the picture and the collision agree.
+    m->sector_mut(i).thickness = fx::from_raw(thickness64[0]);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_side_render(geom::MapStorage* m, unsigned i, unsigned upper,
+                             unsigned middle, unsigned lower, unsigned peg,
+                             const long long* off64) {
+    if (i >= m->view().side_count) return;
+    geom::SideRender& r = m->side_render_mut(i);
+    r.upper = static_cast<u16>(upper);
+    r.middle = static_cast<u16>(middle);
+    r.lower = static_cast<u16>(lower);
+    r.peg_flags = static_cast<u8>(peg);
+    r.x_offset = fx::from_raw(off64[0]);
+    r.y_offset = fx::from_raw(off64[1]);
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_intern_texture(geom::MapStorage* m, const char* name, unsigned len) {
+    return m->intern_texture(name, len);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_spawn(geom::MapStorage* m, const char* tag, unsigned len,
+                      const long long* pos64) {
+    return m->add_spawn(tag, len,
+                        fx3{fx::from_raw(pos64[0]), fx::from_raw(pos64[1]),
+                            fx::from_raw(pos64[2])}) ? 1 : 0;
+}
+
+// in64: x, y, z, radius, intensity.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_light(geom::MapStorage* m, const long long* in64, unsigned r,
+                      unsigned g, unsigned b) {
+    geom::MapLight l;
+    l.pos = fx3{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
+    l.radius = fx::from_raw(in64[3]);
+    l.intensity = fx::from_raw(in64[4]);
+    l.r = static_cast<u8>(r);
+    l.g = static_cast<u8>(g);
+    l.b = static_cast<u8>(b);
+    return m->add_light(l) ? 1 : 0;
+}
+
+// The scripts the map declares. Exposed even though the editor never runs one:
+// they are part of the content hash, so a store built without them hashes
+// differently from the same map baked by mapc -- and that comparison is how the
+// editor proves it is reading the file correctly.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_script(geom::MapStorage* m, const char* name, unsigned len) {
+    return m->add_script(name, len) ? 1 : 0;
+}
+
+// in64: radius, height. Assigns BOTH, as the store's setter does -- a caller
+// changing one passes the other's current value, which is what
+// dnp_map_body reads back.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_body(geom::MapStorage* m, const long long* in64) {
+    m->set_body(fx::from_raw(in64[0]), fx::from_raw(in64[1]));
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_add_rail(geom::MapStorage* m, unsigned tag, unsigned flags) {
+    return m->add_rail(static_cast<u16>(tag), static_cast<u8>(flags));
+}
+
+// `anchor` is the sector the waypoint rides, or -1 for a world-fixed one. The
+// CALLER decides, exactly as it does for mapc: the anchor is settled once, at
+// authoring time, so that a rail's anchor does not change the moment a sector
+// moves under it. An editor that wants the inferred answer asks
+// dnp_map_find_sector for it and passes what it got back.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_waypoint(geom::MapStorage* m, unsigned rail, const long long* pos64,
+                         int anchor) {
+    return m->add_waypoint(rail,
+                           fx3{fx::from_raw(pos64[0]), fx::from_raw(pos64[1]),
+                               fx::from_raw(pos64[2])}, anchor) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_rail_link(geom::MapStorage* m, unsigned rail, unsigned waypoint,
+                          unsigned to_rail, unsigned to_waypoint) {
+    return m->add_rail_link(rail, static_cast<u16>(waypoint), to_rail,
+                            static_cast<u16>(to_waypoint)) ? 1 : 0;
+}
+
+// --- staged shape edits (design 3.1.1) -------------------------------------
+//
+// The drag-a-vertex loop, and the reason the editor does not need a rebuild per
+// frame: stage the moves, commit them together, and the commit is
+// TRANSACTIONAL. An edit that makes a sector unmeshable changes nothing and the
+// previous triangulation still stands, so a bad drag is refused rather than
+// leaving half a map behind.
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_stage_point(geom::MapStorage* m, unsigned sector, unsigned local_index,
+                        const long long* xy64) {
+    return m->stage_point(sector, static_cast<u16>(local_index),
+                          fx2{fx::from_raw(xy64[0]), fx::from_raw(xy64[1])}) ? 1 : 0;
+}
+
+// Returns the CommitStatus: 0 Ok, 1 NoStagedEdits, 2 BadSector,
+// 3 TriangulationFailed, 4 OutOfTriangleSpace.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_commit_shape(geom::MapStorage* m, unsigned sector) {
+    return static_cast<int>(m->commit_shape(sector));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_has_staged_edits(const geom::MapStorage* m, unsigned sector) {
+    return m->has_staged_edits(sector) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_discard_staged_edits(geom::MapStorage* m, unsigned sector) {
+    m->discard_staged_edits(sector);
+}
+
+// Rebuild the broadphase. Needed after a commit before dnp_map_find_sector is
+// worth asking: a moved point marks the grid dirty, and every query falls back
+// to a linear scan until this runs -- correct either way, and much slower on a
+// converted Doom level.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_rebuild_grid(geom::MapStorage* m) { m->rebuild_grid(); }
+
 }  // extern "C"
