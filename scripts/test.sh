@@ -62,6 +62,24 @@ HOST_ARCH="$(uname -m)"
 node tools/mapgen/mapgen.js --cells 16 --seed 1 --out maps/big.map
 "./build/$HOST_ARCH/mapc" maps/big.map    "build/$HOST_ARCH/big.dnpm"
 
+# The level editor's reader, against the maps themselves.
+#
+# Early on purpose. editor/src/mapfmt.js is a SECOND implementation of the .map
+# grammar, whose only definition is tools/mapc/main.cpp -- the trap this project
+# has paid for before -- and the check is that every map in the repository, read
+# and written back out, bakes to a .dnpm with the same content hash. It needs
+# mapc and nothing else, so it runs here rather than behind the stack's
+# preconditions where a missing certificate would silently skip it.
+node editor/test/mapfmt.test.js   | tail -2
+node editor/test/entities.test.js | tail -2
+node editor/test/server.test.js   | tail -2
+# Neighbour inference, against the whole corpus. The assertion is a negative
+# one: OPENING a map must not edit it. The first version of that code re-derived
+# every link after every drag, could not pair a hole's rim with the sector
+# inside it, and sealed a pit in maps/doom/map01.map shut -- which surfaced much
+# later as "sector 51 partially overlaps sector 26".
+node editor/test/topology.test.js | tail -2
+
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
 # before any third-party toolchain is installed.
@@ -130,6 +148,14 @@ else
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2
+  # And the editor's in-memory map against the one mapc bakes: same content
+  # hash, same per-sector triangle counts. Here rather than above because it is
+  # the one editor test that loads the wasm core.
+  node editor/test/build.test.js | tail -2
+  # Rooms, platforms and pits: each must bake, and must bake into what the
+  # format means by that word. A platform whose edges came out `wall` looks
+  # completely correct and plays as a room with a thick floor.
+  node editor/test/shapes.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/noupstream.test.js 2>/dev/null | tail -2 \
