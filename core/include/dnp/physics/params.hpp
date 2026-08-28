@@ -14,6 +14,7 @@
 #include "dnp/math/fixed.hpp"
 #include "dnp/math/trig.hpp"
 #include "dnp/math/vec.hpp"
+#include "dnp/sim/constants.hpp"
 
 namespace dnp::physics {
 
@@ -163,7 +164,12 @@ struct MoveState {
     // and "once per swing" is a property of the swing rather than of the
     // script -- a script deduplicating it would have to know when a swing
     // started, which is exactly what this is.
-    u64  attack_hit_agents = 0;
+    // One bit per agent slot, so it is as wide as the agent space. It was a
+    // single u64, which was exactly MAX_AGENTS bits by coincidence rather than
+    // by construction -- raising the agent count would have silently let a
+    // swing hit everything above slot 63 once per tick instead of once per
+    // swing.
+    u64  attack_hit_agents[sim::MAX_AGENTS / 64]{};
     u64  attack_hit_props[3]{};
 
     fx  dash_timer{};

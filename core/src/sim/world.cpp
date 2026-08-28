@@ -5,9 +5,17 @@
 
 namespace dnp::sim {
 
+// The wire has to be able to carry everything a world can hold. These are two
+// separate constants on purpose -- one is the interoperability contract, the
+// other is this build's capacity -- and this is what stops them drifting apart
+// silently, which would present as entities that exist and are never replicated.
+static_assert(MAX_ENTITIES <= proto::MAX_ENTITIES,
+              "the protocol cannot carry as many entities as the world holds");
+
 using namespace dnp::physics;
 
 void World::reset() noexcept {
+    agent_high_water_ = 0;
     for (u32 i = 0; i < MAX_AGENTS; ++i) {
         agents_[i] = AgentState{};
         params_[i] = MoveParams{};
@@ -40,6 +48,8 @@ u32 World::spawn(fx3 pos) noexcept {
             agents_[i].active = true;
             params_[i] = MoveParams{};
             inputs_[i] = proto::InputFrame{};
+
+            if (i + 1 > agent_high_water_) agent_high_water_ = i + 1;
 
             agents_[i].mv.sector =
                 map_ ? geom::find_sector(*map_, fx2{pos.x, pos.y}) : geom::NO_SECTOR;
@@ -171,7 +181,7 @@ void World::step_agent(u32 i) noexcept {
         // is already running is ignored -- the weapon is busy.
         if (swing && !a.mv.attack_held && a.mv.attack_left == 0) {
             a.mv.attack_left = params_[i].attack_ticks == 0 ? 1 : params_[i].attack_ticks;
-            a.mv.attack_hit_agents = 0;
+            for (u64& w : a.mv.attack_hit_agents) w = 0;
             a.mv.attack_hit_props[0] = 0;
             a.mv.attack_hit_props[1] = 0;
             a.mv.attack_hit_props[2] = 0;
@@ -421,21 +431,18 @@ void World::step() noexcept {
     carry_anchored();
     sweep_moving_sectors();
 
-    // Where every body was before anything moved. Bodies are resolved against
-    // THIS rather than against each other's final positions, which is what
-    // makes the result independent of the order the loop below runs in -- see
-    // resolve_agent_collisions.
-    fx3 was[MAX_AGENTS];
-    for (u32 i = 0; i < MAX_AGENTS; ++i) was[i] = agents_[i].pos;
+    // Where every body was before anything moved. Both resolutions read it --
+    // see the declaration.
+    for (u32 i = 0; i < agent_high_water_; ++i) tick_start_pos_[i] = agents_[i].pos;
 
     // Ascending index order, always. Any order would be deterministic on its
     // own, but it must be the SAME order on client and server, and index order
     // is the one that cannot drift as the agent set changes.
-    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+    for (u32 i = 0; i < agent_high_water_; ++i) {
         if (agents_[i].active) step_agent(i);
     }
 
-    resolve_agent_collisions(was);
+    resolve_agent_collisions();
 
     // Last, on settled positions. Running it before the agents moved would
     // report a crush on an agent that was about to walk out from under the
@@ -709,46 +716,84 @@ void World::keep_in_map(u32 i, fx2 before) noexcept {
     a.mv.sector = after.sector;
 }
 
+// Push one body out of one cylinder, and report nothing -- the caller decides
+// what the cylinder is.
+//
+// ONE rule, used for solid props and for other bodies alike, because a client
+// and a server that resolved the same contact by two different routes disagreed
+// about where it ended. A client mirrors the other players and monsters into its
+// own world as solid props, so its own resolution ran through the prop path
+// while the server's ran through the agent path -- the prop path teleported the
+// body clear, the agent path capped the correction at how far it had travelled,
+// and the two produced different positions from identical inputs. Every tick of
+// contact was a misprediction, and the cause was two implementations of one
+// idea rather than anything about the network.
+//
+// `budget` is how far this body may be moved: its own displacement this tick,
+// plus a small allowance. That is what makes a body block rather than shove --
+// you can be put back where you came from, never pushed past it -- and for a
+// static obstacle it is exactly equivalent to stopping at the surface, because
+// a body that just walked into a crate travelled at least as far as it needs to
+// come back out.
+static void push_out_of_cylinder(fx3& pos, fx3& vel, fx radius, fx height,
+                                 fx2 other_xy, fx other_r, fx other_z0, fx other_z1,
+                                 fx budget, bool tie_positive) noexcept {
+    // Vertically clear: over the top or under the bottom. First, because it
+    // rejects most pairs in two compares -- and because a crate you can stand
+    // on stops being a wall the moment you are above it.
+    if (pos.z >= other_z1) return;
+    if (pos.z + height <= other_z0) return;
+
+    const fx dx = pos.x - other_xy.x;
+    const fx dy = pos.y - other_xy.y;
+    const fx want = radius + other_r;
+    const u128 d_sq = len_sq_raw(fx2{dx, dy});
+    const u128 want_sq = static_cast<u128>(static_cast<i128>(want.raw) * want.raw);
+    if (d_sq >= want_sq) return;
+
+    // Exactly concentric: no separation direction exists, so one is picked
+    // rather than normalizing a zero vector. `tie_positive` lets a caller give
+    // the two halves of a pair OPPOSITE fallbacks -- a single fixed direction
+    // sends both bodies the same way by the same distance and leaves them as
+    // concentric as they started.
+    const fx2 n = (d_sq == 0)
+                      ? fx2{tie_positive ? fx::one() : -fx::one(), fx::zero()}
+                      : normalize(fx2{dx, dy});
+
+    const fx2 target{other_xy.x + n.x * want, other_xy.y + n.y * want};
+    const fx2 correction{target.x - pos.x, target.y - pos.y};
+    const fx need = length(correction);
+    if (need > budget) {
+        pos.x += correction.x * budget / need;
+        pos.y += correction.y * budget / need;
+    } else {
+        pos.x = target.x;
+        pos.y = target.y;
+    }
+
+    // And drop the velocity pointing into it, or the next tick walks straight
+    // back in and the body buzzes against the surface.
+    const fx into = dot(n, fx2{vel.x, vel.y});
+    if (into < fx::zero()) {
+        vel.x -= n.x * into;
+        vel.y -= n.y * into;
+    }
+}
+
 void World::resolve_prop_collisions(u32 agent) noexcept {
     AgentState& a = agents_[agent];
     const fx2 before{a.pos.x, a.pos.y};
-    const fx r_a = params_[agent].radius;
-    const fx h_a = params_[agent].height;
+    const fx2 travelled{a.pos.x - tick_start_pos_[agent].x,
+                        a.pos.y - tick_start_pos_[agent].y};
+    const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
 
     for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
         if ((p.flags & prop_flag::SOLID) == 0) continue;
-
-        // Vertically clear of it: over the top or under the bottom. Checked
-        // first because it rejects most pairs in two compares, and because a
-        // crate you can stand on has to stop being a wall the moment you are
-        // above it.
-        if (a.pos.z >= p.pos.z + p.height) continue;
-        if (a.pos.z + h_a <= p.pos.z) continue;
-
-        const fx dx = a.pos.x - p.pos.x;
-        const fx dy = a.pos.y - p.pos.y;
-        const fx want = r_a + p.radius;
-        const u128 d_sq = len_sq_raw(fx2{dx, dy});
-        const u128 want_sq = static_cast<u128>(static_cast<i128>(want.raw) * want.raw);
-        if (d_sq >= want_sq) continue;
-
-        // Exactly concentric: there is no separation direction to compute, so
-        // pick one. Deterministic and arbitrary beats a normalize of a zero
-        // vector, which has no answer at all.
-        fx2 n = (d_sq == 0) ? fx2{fx::one(), fx::zero()} : normalize(fx2{dx, dy});
-
-        a.pos.x = p.pos.x + n.x * want;
-        a.pos.y = p.pos.y + n.y * want;
-
-        // And drop the velocity pointing into it, or the next tick walks
-        // straight back in and the body buzzes against the surface.
-        const fx into = dot(n, fx2{a.vel.x, a.vel.y});
-        if (into < fx::zero()) {
-            a.vel.x -= n.x * into;
-            a.vel.y -= n.y * into;
-        }
+        push_out_of_cylinder(a.pos, a.vel, params_[agent].radius, params_[agent].height,
+                             fx2{p.pos.x, p.pos.y}, p.radius, p.pos.z, p.pos.z + p.height,
+                             budget, true);
     }
     keep_in_map(agent, before);
 }
@@ -780,84 +825,21 @@ void World::resolve_prop_collisions(u32 agent) noexcept {
 // each stop at where the other WAS, which can leave them fractionally
 // overlapped for a tick before the next pass separates them. That is a frame of
 // softness, which is what §7.1 asked for anyway.
-void World::resolve_agent_collisions(const fx3* was) noexcept {
-    for (u32 j = 0; j < MAX_AGENTS; ++j) {
+void World::resolve_agent_collisions() noexcept {
+    const fx3* was = tick_start_pos_;
+    for (u32 j = 0; j < agent_high_water_; ++j) {
         if (!agents_[j].active) continue;
         AgentState& b = agents_[j];
         const fx2 before{b.pos.x, b.pos.y};
-        const fx r_b = params_[j].radius;
-        const fx h_b = params_[j].height;
+        const fx2 travelled{b.pos.x - was[j].x, b.pos.y - was[j].y};
+        const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
 
-        for (u32 i = 0; i < MAX_AGENTS; ++i) {
+        for (u32 i = 0; i < agent_high_water_; ++i) {
             if (i == j || !agents_[i].active) continue;
             const fx3 a = was[i];
-
-            // Vertically clear: over the top or under the bottom. First,
-            // because it rejects most pairs in two compares -- and because a
-            // monster on a balcony is not standing in your way.
-            if (b.pos.z >= a.z + params_[i].height) continue;
-            if (b.pos.z + h_b <= a.z) continue;
-
-            const fx dx = b.pos.x - a.x;
-            const fx dy = b.pos.y - a.y;
-            const fx want = r_b + params_[i].radius;
-            const u128 d_sq = len_sq_raw(fx2{dx, dy});
-            const u128 want_sq = static_cast<u128>(static_cast<i128>(want.raw) * want.raw);
-            if (d_sq >= want_sq) continue;
-
-            // Exactly concentric: no separation direction exists, so pick one
-            // rather than normalize a zero vector. Two bodies spawned at one
-            // point is not a hypothetical -- it is what a spawn tag with two
-            // takers looks like.
-            //
-            // OPPOSITE directions for the two halves of the pair, chosen by
-            // index. A single fixed fallback -- +x for everybody -- sends both
-            // bodies the same way by the same distance, and they come out of
-            // the pass exactly as concentric as they went in.
-            const fx2 n = (d_sq == 0)
-                              ? fx2{j > i ? fx::one() : -fx::one(), fx::zero()}
-                              : normalize(fx2{dx, dy});
-
-            // How far this body may be moved by the resolution: AS FAR AS IT
-            // TRAVELLED, and no further.
-            //
-            // This is what makes a body block rather than shove, and the
-            // version without it only looked like it did. Resolving against
-            // start-of-tick positions means a standing player is not displaced
-            // on the tick a monster first reaches them -- but on every tick
-            // after, the two genuinely overlap, both resolve, and the player is
-            // walked steadily backwards by whatever is chasing them. Into a
-            // pit, over a ledge, or through a doorway they were standing in.
-            //
-            // Capping the push at the body's own displacement says: you can be
-            // put back where you came from, never pushed past it. A body that
-            // did not move cannot be moved by this at all -- so the monster,
-            // whose own movement created the overlap, is the one that gets
-            // pushed out of it, which is the whole idea.
-            //
-            // Plus a small allowance, or two bodies that are already inside
-            // each other and both standing still would stay that way forever --
-            // a spawn on an occupied tag, or a script placing something on top
-            // of you. A slow unstick rather than a shove.
-            const fx2 travelled{b.pos.x - was[j].x, b.pos.y - was[j].y};
-            const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
-
-            const fx2 target{a.x + n.x * want, a.y + n.y * want};
-            const fx2 correction{target.x - b.pos.x, target.y - b.pos.y};
-            const fx need = length(correction);
-            if (need > budget) {
-                b.pos.x += correction.x * budget / need;
-                b.pos.y += correction.y * budget / need;
-            } else {
-                b.pos.x = target.x;
-                b.pos.y = target.y;
-            }
-
-            const fx into = dot(n, fx2{b.vel.x, b.vel.y});
-            if (into < fx::zero()) {
-                b.vel.x -= n.x * into;
-                b.vel.y -= n.y * into;
-            }
+            push_out_of_cylinder(b.pos, b.vel, params_[j].radius, params_[j].height,
+                                 fx2{a.x, a.y}, params_[i].radius, a.z,
+                                 a.z + params_[i].height, budget, j > i);
         }
         keep_in_map(j, before);
     }
@@ -960,13 +942,13 @@ void World::resolve_attack(u32 agent) noexcept {
 
     for (u32 t = 0; t < MAX_AGENTS; ++t) {
         if (t == agent || !agents_[t].active) continue;
-        if ((a.mv.attack_hit_agents >> t) & 1u) continue;   // already hit this swing
+        if ((a.mv.attack_hit_agents[t / 64] >> (t % 64)) & 1u) continue;   // already hit
         if (a_top + mp.attack_reach < agents_[t].pos.z) continue;
         if (a.pos.z > agents_[t].pos.z + params_[t].height + mp.attack_reach) continue;
         const fx2 toward = fx2{agents_[t].pos.x, agents_[t].pos.y} - from;
         if (!reaches(toward, params_[t].radius)) continue;
         if (!in_arc(toward)) continue;
-        a.mv.attack_hit_agents |= (static_cast<u64>(1) << t);
+        a.mv.attack_hit_agents[t / 64] |= (static_cast<u64>(1) << (t % 64));
         attacks_.push(AttackEvent{agent, t});
     }
 

@@ -319,7 +319,9 @@ export function decodeSnapshot (buf) {
   if (!r.ok) return null
 
   const entityCount = r.u16()
-  if (!r.ok || entityCount > 256) return null
+  // proto::MAX_ENTITIES. A cap rather than a trusted length: this is the size
+  // the decoder will loop to on data from the network.
+  if (!r.ok || entityCount > 768) return null
   for (let i = 0; i < entityCount; i++) {
     const e = { handle: r.u32(), mask: r.varint() }
     if (!r.ok) return null

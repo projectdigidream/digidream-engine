@@ -22,7 +22,8 @@ namespace dnp::sim {
 
 using namespace dnp;
 
-inline constexpr u32 MAX_AGENTS = 64;
+// MAX_AGENTS lives in sim/constants.hpp, because the physics layer needs it for
+// the swing's per-agent hit mask and cannot include this header.
 
 // Everything in the world that is not a player.
 //
@@ -32,7 +33,10 @@ inline constexpr u32 MAX_AGENTS = 64;
 // already keys its entity views by index. A separate handle domain would mean a
 // bit on every handle and a branch at every use of one, to distinguish things
 // the protocol never needed to distinguish.
-inline constexpr u32 MAX_PROPS    = 192;
+// Raised alongside MAX_AGENTS, because the mirror band below is carved out of
+// this range and a band the size of the agent space would otherwise leave
+// nothing to spawn into.
+inline constexpr u32 MAX_PROPS    = 512;
 
 // The top of the prop range, which spawn_prop never allocates from.
 //
@@ -386,13 +390,29 @@ private:
     void step_agent(u32 i) noexcept;
     void detect_prop_events() noexcept;
     void resolve_prop_collisions(u32 agent) noexcept;
-    // `was` is every agent's position at the start of the tick -- see the
-    // definition for why the resolution reads that rather than live positions.
-    void resolve_agent_collisions(const fx3* was) noexcept;
+    void resolve_agent_collisions() noexcept;
 
     // Undo, or resolve, a push that put a body somewhere the map does not
     // allow. `before` is where it was before the push.
     void keep_in_map(u32 i, fx2 before) noexcept;
+
+    // Every agent's position at the START of the current tick, before anything
+    // moved. Two things read it, for two reasons that turn out to be the same
+    // reason: agent-vs-agent resolution reads it so the answer does not depend
+    // on which agent stepped first, and both resolutions read it to know how
+    // far a body has travelled -- which is the budget for how far it may be
+    // pushed. Not hashed; it is scratch, rebuilt every tick.
+    fx3 tick_start_pos_[MAX_AGENTS]{};
+
+    // One past the highest agent slot ever used. Every per-tick sweep over the
+    // agent space runs to this instead of to MAX_AGENTS.
+    //
+    // The agent space is 256 now and the resolution is a pair test, so a fixed
+    // bound is sixty-five thousand iterations a tick to serve a map with two
+    // players on it. Never shrinks on despawn, which keeps it a bound rather
+    // than something whose value depends on despawn order -- and a bound is all
+    // it needs to be.
+    u32 agent_high_water_ = 0;
     i32  find_usable_prop(u32 agent) const noexcept;
     void resolve_attack(u32 agent) noexcept;
     void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;

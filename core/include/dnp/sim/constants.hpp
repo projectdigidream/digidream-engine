@@ -19,6 +19,20 @@ namespace dnp::sim {
 // any frame rate and interpolate; the simulation step is always exactly this.
 inline constexpr u32 TICK_RATE_HZ = 60;
 
+// How many bodies one simulation holds -- players and monsters together, since
+// a monster is an agent and runs the player's mover.
+//
+// Here rather than in world.hpp because the physics layer needs it too: the
+// swing's "already hit" mask is one bit per agent slot, and a mask sized by
+// coincidence rather than by this constant is a bug waiting for the day the
+// number changes.
+//
+// 64 was a placeholder from before anything scripted spawned bodies, and it
+// silently truncated real levels -- the largest converted Doom map places 166
+// monsters, so two thirds of it did not exist and the only sign of that was one
+// line saying "N did not fit".
+inline constexpr u32 MAX_AGENTS = 256;
+
 // Written as an exact rational rather than a decimal literal, so that changing
 // the rate cannot introduce a rounding difference that only shows up as drift.
 inline constexpr fx DT = fx::from_frac(1, TICK_RATE_HZ);

@@ -31,7 +31,12 @@ inline constexpr u8 MSG_PARAM_UPDATE = 0x14;
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
 inline constexpr u32 MAX_INPUT_FRAMES   = 16;
-inline constexpr u32 MAX_ENTITIES       = 256;
+// Must be at least sim::MAX_AGENTS + sim::MAX_PROPS, since every one of those
+// can appear in a snapshot. Kept as its own number because the protocol is the
+// interoperability contract and must not silently follow a simulation constant
+// -- but a static_assert in world.cpp holds the two together, so raising one
+// without the other fails the build rather than truncating a level on the wire.
+inline constexpr u32 MAX_ENTITIES       = 768;
 inline constexpr u32 MAX_VFX            = 64;
 inline constexpr u32 MAX_VISUAL_PARAMS  = 8;
 inline constexpr u32 MAX_SECTOR_OFFSETS = 32;

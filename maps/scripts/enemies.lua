@@ -63,8 +63,30 @@ local KINDS = {
   },
 }
 
--- Live monsters: entity index -> { e, def, cooldown, windup, target }
+-- Live monsters: entity index -> record.
+--
+-- `live` is for identity -- "is this entity one of mine" -- and is never walked
+-- per tick. Iteration goes through `buckets` instead.
 local live = {}
+
+-- How often a monster reconsiders, in ticks.
+--
+-- Doom's own monsters think far more slowly than its frame rate, and so should
+-- these: an input written with set_input PERSISTS until it is changed, so a
+-- monster keeps walking between decisions without anything being called for it.
+-- Staggered by index so twenty-nine of them do not all think on the same tick
+-- and turn a smooth frame into a spike every fourth one.
+local THINK = 4
+
+-- The same records, split THINK ways by spawn order, so each tick walks only
+-- the share of them that is actually going to decide anything. A monster's
+-- input persists between decisions, so the ones not in this tick's bucket carry
+-- on doing what they were last told at no cost whatsoever.
+local buckets = {}
+
+-- Monsters mid-windup. Short, usually empty, and separate because finding them
+-- by scanning every monster is the thing this file is trying to stop doing.
+local firing = {}
 -- Fireballs in flight: prop index -> { p, dir, speed, born }
 local shots = {}
 
@@ -85,6 +107,8 @@ local players_tick = -1
 -- Whether the monsters have already been put down for the night. A flag rather
 -- than doing it every tick: the point of the check is to stop doing work.
 local asleep = false
+-- How many have been placed, for round-robin bucketing.
+local spawned = 0
 
 local function refresh_players(tick)
   if players_tick == tick then return end
@@ -107,27 +131,45 @@ local function refresh_players(tick)
   end
 end
 
+-- Returns the entity, the squared distance, AND the position already read for
+-- it this tick. The caller wanted all three and used to ask the engine for the
+-- third again -- player:pos() allocates a vec3 userdata, and it was doing so
+-- once per monster per decision for a value refresh_players had just read.
+-- Set the animation only if it is CHANGING.
+--
+-- Every one of these is a call into the engine and a replicated field. A
+-- monster standing in a corridor nobody has walked down was being told it was
+-- idle, and pointed where it was already pointing, four times a second forever.
+local function set_state(m, st)
+  if m.state ~= st then
+    m.state = st
+    m.e:set_animation(st)
+  end
+end
+
+-- And the same for input. `aim` may be nil for a monster that has never seen
+-- anybody, which means "keep facing wherever you are facing" -- previously
+-- expressed as a facing() call into the engine to read a value only to hand it
+-- straight back.
+local function set_move(m, mx, my, aim)
+  if m.mx == mx and m.my == my and m.aim_sent == aim then return end
+  m.mx, m.my, m.aim_sent = mx, my, aim
+  m.e:set_input(mx, my, aim or m.e:facing() or 0)
+end
+
 local function nearest_player(from)
-  local best, bestd = nil, nil
+  local best, bestd, bestp = nil, nil, nil
   for i = 1, #players do
     local p = players[i].pos
     if p then
       local dx, dy = p.x - from.x, p.y - from.y
       local d = dx * dx + dy * dy
-      if bestd == nil or d < bestd then best, bestd = players[i].e, d end
+      if bestd == nil or d < bestd then best, bestd, bestp = players[i].e, d, p end
     end
   end
-  return best, bestd
+  return best, bestd, bestp
 end
 
--- How often a monster reconsiders, in ticks.
---
--- Doom's own monsters think far more slowly than its frame rate, and so should
--- these: an input written with set_input PERSISTS until it is changed, so a
--- monster keeps walking between decisions without anything being called for it.
--- Staggered by index so twenty-nine of them do not all think on the same tick
--- and turn a smooth frame into a spike every fourth one.
-local THINK = 4
 
 -- Aim, as the engine's own angle unit. A turn is 2^32 and the engine turns at a
 -- rate, so writing the aim is asking to face something rather than facing it.
@@ -166,8 +208,21 @@ function M.spawn(name, x, y, z, opts)
   end
   local e = dnp.spawn_enemy(name, vec3.new(du(x), du(y), du(z)))
   if e == nil then return nil end
-  live[e:index()] = { e = e, def = def, cooldown = 0, windup = 0,
-                      dormant = opts ~= nil and opts.dormant or false }
+  -- `ready_at` and `fire_at` are absolute ticks rather than counters, so a
+  -- monster nobody is near costs nothing between its own decisions.
+  local m = {
+    e = e, def = def, idx = e:index(),
+    ready_at = 0, fire_at = nil, aim = nil, state = IDLE,
+    dormant = opts ~= nil and opts.dormant or false
+  }
+  live[m.idx] = m
+  -- Round-robin across the think buckets by spawn order, so a level's monsters
+  -- are spread evenly whatever their entity indices turn out to be.
+  local b = spawned % THINK
+  spawned = spawned + 1
+  buckets[b] = buckets[b] or {}
+  local list = buckets[b]
+  list[#list + 1] = m
   e:set_animation(IDLE)
   return e
 end
@@ -287,8 +342,8 @@ function on_tick()
       asleep = true
       for _, m in pairs(live) do
         if m.e:valid() then
-          m.e:set_animation(IDLE)
-          m.e:set_input(ZERO, ZERO, m.e:facing() or 0)
+          set_state(m, IDLE)
+          set_move(m, ZERO, ZERO, m.aim)
         end
       end
     end
@@ -299,61 +354,80 @@ function on_tick()
   end
   asleep = false
 
-  for idx, m in pairs(live) do
+  -- MID-ATTACK monsters, which is normally none of them.
+  --
+  -- Their own short list rather than found by walking every monster: a windup
+  -- lasts eight ticks and at most a couple are ever in one, so scanning
+  -- twenty-nine records to find them is the wrong shape.
+  for i = #firing, 1, -1 do
+    local m = firing[i]
+    if not m.e:valid() or m.fire_at == nil then
+      table.remove(firing, i)
+    elseif tick >= m.fire_at then
+      m.fire_at = nil
+      table.remove(firing, i)
+      local from = m.e:pos()
+      if m.def.attack == "hitscan" then fire_hitscan(m, from, m.aim or 0)
+      else fire_projectile(m, from, m.aim or 0) end
+      m.ready_at = tick + m.def.cooldown
+      set_state(m, WALK)
+    end
+  end
+
+  -- And the monsters whose turn it is to think.
+  --
+  -- One bucket of the THINK-way split, not the whole population. The old loop
+  -- walked every monster every tick to ask `(tick + idx) % THINK == 0` and threw
+  -- away three quarters of the answers -- twenty-nine hash-table steps and
+  -- twenty-nine valid() calls into the engine, sixty times a second, to do
+  -- seven monsters' worth of work.
+  local bucket = buckets[tick % THINK]
+  for i = #bucket, 1, -1 do
+    local m = bucket[i]
     if not m.e:valid() then
-      live[idx] = nil
-    elseif m.dormant then
-      -- Present, replicated, animated, and going nowhere.
-    elseif m.windup > 0 then
-      -- Mid-attack: every tick, because the shot lands at the END of the windup
-      -- and a monster that fired four ticks late would fire at where you were.
-      m.windup = m.windup - 1
-      if m.windup == 0 then
-        local from = m.e:pos()
-        local aim = m.aim or 0
-        if m.def.attack == "hitscan" then fire_hitscan(m, from, aim)
-        else fire_projectile(m, from, aim) end
-        m.cooldown = m.def.cooldown
-        m.e:set_animation(WALK)
-      end
+      live[m.idx] = nil
+      table.remove(bucket, i)
+    elseif m.dormant or m.fire_at ~= nil then
+      -- Present and replicated, or already mid-attack and handled above.
     else
-      if m.cooldown > 0 then m.cooldown = m.cooldown - 1 end
+      local from = m.e:pos()
+      local player, d2, ppos = nearest_player(from)
+      local sight = m.def.sight
 
-      -- Staggered thinking. Between decisions the monster keeps doing whatever
-      -- it was told, because an input persists.
-      if (tick + idx) % THINK == 0 then
-        local from = m.e:pos()
-        local player, d2 = nearest_player(from)
-        local sight = m.def.sight
-
-        if player == nil or d2 >= sight * sight then
-          m.e:set_animation(IDLE)
-          m.e:set_input(ZERO, ZERO, m.e:facing() or 0)
+      if player == nil or d2 >= sight * sight then
+        -- Nothing in range. set_state and set_move do nothing when nothing
+        -- would change, which for a monster nobody has walked near yet is
+        -- every decision it will ever make.
+        set_state(m, IDLE)
+        set_move(m, ZERO, ZERO, m.aim)
+      else
+        local aim = aim_at(from, ppos)
+        m.aim = aim
+        -- CAN IT SEE YOU. Distance alone put monsters through walls, shooting
+        -- at people two rooms away -- "is it close" is not "is it visible", and
+        -- the engine already knows the difference because the mover does.
+        if not dnp.can_see(m.e, player) then
+          set_state(m, IDLE)
+          set_move(m, ZERO, ZERO, aim)
+        elseif tick >= m.ready_at then
+          -- An absolute tick, not a counter ticked down. A countdown has to be
+          -- visited every tick by every monster whether or not anything about
+          -- it is due; a deadline is read only when the monster is already
+          -- being looked at.
+          m.fire_at = tick + m.def.windup
+          firing[#firing + 1] = m
+          set_state(m, ATTACK)
+          set_move(m, ZERO, ZERO, aim)
         else
-          local aim = aim_at(from, player:pos())
-          m.aim = aim
-          -- CAN IT SEE YOU. Distance alone put monsters through walls, shooting
-          -- at people two rooms away -- "is it close" is not "is it visible",
-          -- and the engine already knows the difference because the mover does.
-          if not dnp.can_see(m.e, player) then
-            m.e:set_animation(IDLE)
-            m.e:set_input(ZERO, ZERO, aim)
-          elseif m.cooldown == 0 then
-            m.windup = m.def.windup
-            m.e:set_animation(ATTACK)
-            m.e:set_input(ZERO, ZERO, aim)
-          else
-            -- A WORLD direction, not "forward".
-            --
-            -- move_x/move_y are world axes: the client computes a
-            -- screen-relative direction and sends the world vector, so the
-            -- engine never has to know where a camera is. Sending (0, 1) meant
-            -- "walk north" -- which every monster did, in unison, regardless of
-            -- where the player was.
-            local d = dnp.dir(aim)
-            m.e:set_animation(WALK)
-            m.e:set_input(d.x, d.y, aim)
-          end
+          -- A WORLD direction, not "forward".
+          --
+          -- move_x/move_y are world axes: the client computes a screen-relative
+          -- direction and sends the world vector, so the engine never has to
+          -- know where a camera is. Sending (0, 1) meant "walk north" -- which
+          -- every monster did, in unison, regardless of where the player was.
+          local d = dnp.dir(aim)
+          set_state(m, WALK)
+          set_move(m, d.x, d.y, aim)
         end
       end
     end
