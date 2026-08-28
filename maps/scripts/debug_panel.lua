@@ -28,6 +28,14 @@ local W_FROM   = 11
 local W_TO     = 12
 local W_DUR    = 13
 local W_COOL   = 14
+-- The camera. Client-side (design §4.1), configured from here: the server never
+-- says where the camera IS, only how it should follow.
+local W_CDIST  = 15
+local W_CPITCH = 16
+local W_CSMOOTH= 17
+local W_CACCEL = 18
+local W_CLEAD  = 19
+local W_CLEADS = 20
 
 -- Effect ids, per agent, so a change REPLACES the previous one rather than
 -- stacking on it. Without this, dragging a slider five times leaves five
@@ -41,6 +49,35 @@ local effects = {}   -- agent index -> { speed = id, turn = id }
 -- that snapped back to 20 every time the panel opened would look broken when it
 -- was merely talking to nobody.
 local damage = nil
+
+-- The camera settings this panel is showing, per player.
+--
+-- Held here because nothing reports them back: the camera is the client's and
+-- the server has no copy, so the panel is the authority on what it last sent.
+-- Defaults chosen to match the client's own, so opening the panel does not
+-- silently change the view.
+local cam = {}
+local function cam_of(idx)
+  cam[idx] = cam[idx] or {
+    distance = 45, pitch = 125, smoothing = 8, accel = 0, lead = 0, lead_speed = 4
+  }
+  return cam[idx]
+end
+
+-- Everything the panel knows, sent at once. One message rather than one per
+-- slider: they are read together and a half-applied camera is a worse thing to
+-- look at than either the old one or the new one.
+local function push_camera(e)
+  local c = cam_of(e:index())
+  dnp.camera(e, {
+    distance = c.distance,
+    pitch = c.pitch / 1000,
+    smoothing = c.smoothing,
+    max_accel = c.accel,
+    lead = c.lead,
+    lead_smoothing = c.lead_speed
+  })
+end
 local chosen_map = {}
 local panel_of = {}
 
@@ -79,6 +116,7 @@ end
 local function build(e)
   local maps = level_names()
   local idx = e:index()
+  cam_of(idx)
   return {
     title = "Debug",
     widgets = {
@@ -115,6 +153,23 @@ local function build(e)
         value = (e:param("attack_ticks")).int, lo = 1, hi = 60 },
       { kind = "slider", id = W_COOL,   label = "Cooldown ticks",
         value = (e:param("attack_cooldown")).int, lo = 0, hi = 180 },
+      { kind = "label",  id = 0, label = "Camera" },
+      { kind = "slider", id = W_CDIST,  label = "Distance",
+        value = cam[idx].distance, lo = 5, hi = 120 },
+      -- Milli-turns, like everything angular that has to fit in a slider. An
+      -- eighth of a turn is 125 and is roughly the isometric default.
+      { kind = "slider", id = W_CPITCH, label = "Pitch /1000 turn",
+        value = cam[idx].pitch, lo = 10, hi = 240 },
+      { kind = "slider", id = W_CSMOOTH,label = "Follow speed",
+        value = cam[idx].smoothing, lo = 1, hi = 40 },
+      -- Zero is unlimited, which is the weightless camera. Anything else gives
+      -- it mass: it takes time to get moving and time to stop.
+      { kind = "slider", id = W_CACCEL, label = "Accel (0=off)",
+        value = cam[idx].accel, lo = 0, hi = 400 },
+      { kind = "slider", id = W_CLEAD,  label = "Look ahead",
+        value = cam[idx].lead, lo = 0, hi = 20 },
+      { kind = "slider", id = W_CLEADS, label = "Look-ahead speed",
+        value = cam[idx].lead_speed, lo = 1, hi = 30 },
       { kind = "select", id = W_MAP,    label = "Map",
         value = chosen_map[idx] or 0, options = maps },
       { kind = "button", id = W_GO,     label = "Go to map" },
@@ -226,6 +281,12 @@ function on_ui_event(e, ui_id, widget, value)
     set_param(e, "dur", "attack_ticks", fx.int(value))
   elseif widget == W_COOL then
     set_param(e, "cool", "attack_cooldown", fx.int(value))
+  elseif widget == W_CDIST  then cam_of(idx).distance = value;   push_camera(e)
+  elseif widget == W_CPITCH then cam_of(idx).pitch = value;      push_camera(e)
+  elseif widget == W_CSMOOTH then cam_of(idx).smoothing = value;  push_camera(e)
+  elseif widget == W_CACCEL then cam_of(idx).accel = value;      push_camera(e)
+  elseif widget == W_CLEAD  then cam_of(idx).lead = value;       push_camera(e)
+  elseif widget == W_CLEADS then cam_of(idx).lead_speed = value; push_camera(e)
   elseif widget == W_HP then
     e:set_hp(value)
   elseif widget == W_HEAL then

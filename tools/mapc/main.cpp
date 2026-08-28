@@ -691,6 +691,64 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The mesh must cover the footprint, exactly.
+    //
+    // For a SIMPLE polygon, "triangulate() returned Ok" already means this: the
+    // ear clipper's own tests are exact and core/tests/test_triangulate.cpp
+    // pins the area. The Doom converter is what makes it worth re-asking here.
+    // It emits WEAKLY simple loops -- outlines that touch themselves at a
+    // vertex, which is how Doom expresses a pond meeting the edge of a
+    // courtyard -- and for those, "found an ear every time" is a weaker
+    // statement than "meshed the region I meant". Nothing else downstream would
+    // ever notice the difference: a sector with floor across a gap looks
+    // entirely normal until somebody walks out over it.
+    //
+    // Both sides are 128-bit integer sums over the same points, so this is ==
+    // and not a tolerance. A sector with holes is measured against outer minus
+    // holes, which is the area its floor actually has.
+    //
+    // It has never fired -- not on DOOM2, DOOM1, or 600k fuzzed weakly-simple
+    // polygons, where the clipper either refused outright or got the area
+    // exactly right. That is the result it is here to keep true, cheaply, on
+    // every map baked from here on.
+
+    for (u32 i = 0; i < m.sector_count && g_errors == 0; ++i) {
+        const Sector& sec = m.sector(i);
+        if (sec.tri_count == 0) continue;
+
+        i128 mesh = 0;
+        for (u16 t = 0; t < sec.tri_count; ++t) {
+            // first_tri indexes the flat index array, not the triangle list.
+            const u32 base = sec.first_tri + static_cast<u32>(t) * 3;
+            const fx2 a = m.point(m.tris[base + 0]);
+            const fx2 b = m.point(m.tris[base + 1]);
+            const fx2 c = m.point(m.tris[base + 2]);
+            mesh += (static_cast<i128>(b.x.raw) - a.x.raw) * (static_cast<i128>(c.y.raw) - a.y.raw) -
+                    (static_cast<i128>(b.y.raw) - a.y.raw) * (static_cast<i128>(c.x.raw) - a.x.raw);
+        }
+
+        i128 poly = geom::polygon_area_2x(&m.points[sec.first_point], sec.point_count);
+        if (poly < 0) poly = -poly;
+        for (u16 h = 0; h < sec.hole_count; ++h) {
+            const PolyLoop& L = m.hole(sec.first_hole + h);
+            i128 ha = geom::polygon_area_2x(&m.points[sec.first_point + L.first], L.count);
+            if (ha < 0) ha = -ha;
+            poly -= ha;
+        }
+
+        if (mesh != poly) {
+            const double scale = 4294967296.0 * 4294967296.0;
+            std::fprintf(stderr,
+                "sector %u: its mesh covers %.3f square units but its footprint is %.3f.\n"
+                "The triangulation succeeded and is of the wrong shape, which happens when a\n"
+                "loop touches itself: the clipper bridges the pinch and fills what is not\n"
+                "floor. Split the loop into separate sectors at the point where it touches.\n",
+                i, static_cast<double>(mesh) / (2.0 * scale),
+                static_cast<double>(poly) / (2.0 * scale));
+            ++g_errors;
+        }
+    }
+
     if (g_errors > 0) {
         std::fprintf(stderr, "%d error(s); not writing output\n", g_errors);
         return 1;

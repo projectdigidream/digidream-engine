@@ -1259,6 +1259,45 @@ int l_dnp_ui_set(lua_State* L) {
     return 0;
 }
 
+// dnp.camera(entity, { distance = 40, pitch = 0.14, lead = 3, ... })
+//
+// How the camera behaves for whoever is watching this agent. Design §4.1 puts
+// the camera on the CLIENT and lets Lua configure and trigger it, so nothing
+// here says where the camera is -- only how it should follow.
+//
+// Named fields rather than positional, and only the ones given are sent: a
+// script that wants a longer lead should not have to restate the pitch.
+static const char* const CAMERA_FIELD_NAMES[] = {
+    "distance", "pitch", "smoothing", "max_accel",
+    "lead", "lead_smoothing", "deadzone_x", "deadzone_y"
+};
+
+int l_dnp_camera(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.ui == nullptr) return 0;
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    proto::CameraSet c;
+    for (u8 id = 0; id < static_cast<u8>(sizeof(CAMERA_FIELD_NAMES) / sizeof(char*)); ++id) {
+        lua_getfield(L, 2, CAMERA_FIELD_NAMES[id]);
+        if (!lua_isnil(L, -1)) {
+            // THOUSANDTHS on the wire. A camera is not simulation state, so it
+            // does not need fx -- but it does need a fixed scale, or a script
+            // writing 0.14 and a client reading 0 would look like the setting
+            // doing nothing.
+            const double v = lua_tonumber(L, -1);
+            c.fields[c.count].id = id;
+            c.fields[c.count].milli = static_cast<i32>(v * 1000.0 +
+                                                       (v >= 0 ? 0.5 : -0.5));
+            ++c.count;
+        }
+        lua_pop(L, 1);
+    }
+    if (c.count > 0) ctx.ui->set_camera(ctx.level, static_cast<u32>(a), c);
+    return 0;
+}
+
 // dnp.ui_close(entity, ui_id)
 int l_dnp_ui_close(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -1433,6 +1472,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"vfx", l_dnp_vfx},
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},
+    {"camera", l_dnp_camera},
     {"ui_set", l_dnp_ui_set},
     {"ui_close", l_dnp_ui_close},
     {"prop", l_dnp_prop},

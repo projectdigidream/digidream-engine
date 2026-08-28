@@ -416,6 +416,29 @@ bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept {
     return true;
 }
 
+void encode_camera_set(ByteWriter& w, const CameraSet& c) noexcept {
+    const u16 n = c.count > CAMERA_MAX_FIELDS ? static_cast<u16>(CAMERA_MAX_FIELDS) : c.count;
+    w.u16v(n);
+    for (u16 i = 0; i < n; ++i) {
+        w.u8v(c.fields[i].id);
+        w.i32v(c.fields[i].milli);
+    }
+}
+
+bool decode_camera_set(ByteReader& r, CameraSet& out) noexcept {
+    CameraSet c;
+    const u16 n = r.u16v();
+    if (!r.ok() || n > CAMERA_MAX_FIELDS) return false;
+    for (u16 i = 0; i < n; ++i) {
+        c.fields[i].id = r.u8v();
+        c.fields[i].milli = r.i32v();
+    }
+    if (!r.ok()) return false;
+    c.count = n;
+    out = c;
+    return true;
+}
+
 void encode_ui_event(ByteWriter& w, const UiEvent& e) noexcept {
     w.u32v(e.ui_id);
     w.u16v(e.widget_id);

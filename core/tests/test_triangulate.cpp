@@ -441,6 +441,66 @@ static void test_baked_matches_runtime() {
     }
 }
 
+// -------------------------------------------------- weakly simple outlines
+
+// A loop that touches ITSELF at a vertex.
+//
+// Doom renders through a BSP and never triangulates a sector, so its sector
+// outlines are free to pinch: a pond meeting the edge of a courtyard traces one
+// closed walk that visits the meeting point twice. tools/wad/convert.js hands
+// exactly this shape to the clipper rather than cutting the inward lobe out and
+// re-declaring it as a hole, because bridging a hole PRODUCES this shape -- the
+// cut is a pinch -- so the pinched outline is the bridged form, already built.
+//
+// That is a claim about the clipper, and this is where it is checked: the mesh
+// must cover the outlined region and nothing else. tools/mapc asserts the same
+// equality on every sector of every map it bakes.
+static void test_pinched_outline() {
+    std::printf("triangulate: an outline that touches itself meshes its own area\n");
+
+    // A 40x40 room whose triangular pond touches the south-west corner at that
+    // one point. Walked counter-clockwise from the corner, out around the room,
+    // back to the corner, then clockwise around the pond.
+    //
+    // The pond touches at a VERTEX and nowhere else. A pond that also ran along
+    // the walls would share edge with them, which is a different degeneracy --
+    // overlapping segments, not a pinch -- and the clipper refuses it. Doom's
+    // pinched loops are all of the first kind.
+    const fx2 pts[] = {
+        {F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)},
+        {F(0), F(0)}, {F(4), F(12)}, {F(12), F(4)}
+    };
+    TriangleList t;
+    CHECK(triangulate(pts, 7, t) == TriangulateStatus::Ok);
+
+    // 1600 - 64. If the clipper had bridged across the pinch and filled the
+    // pond, this would read 1600.
+    const i128 want = static_cast<i128>(fx::from_int(1536).raw) * fx::one().raw * 2;
+    CHECK(tri_area_2x(pts, t) == want);
+
+    // The pond is covered by nothing; a point in the room is covered.
+    CHECK(triangles_covering(pts, t, fx2{F(5), F(5)}) == 0);
+    CHECK(triangles_covering(pts, t, fx2{F(30), F(30)}) >= 1);
+
+    // The OTHER pinch -- two lobes wound the same way, a figure eight -- is a
+    // shape the converter must not hand over whole, because the two lobes are
+    // two floors with a gap between them and no single polygon says so. It is
+    // split into separate sectors instead. The clipper's own answer is checked
+    // here only to record which of the two it is: whatever it returns, the
+    // area assertion above is what mapc re-runs, so a mesh across the gap is
+    // caught at bake time rather than under a player's feet.
+    const fx2 eight[] = {
+        {F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)},
+        {F(40), F(20)}, {F(40), F(40)}, {F(20), F(40)},
+        {F(20), F(20)}, {F(0), F(20)}
+    };
+    TriangleList e;
+    if (triangulate(eight, 8, e) == TriangulateStatus::Ok) {
+        const i128 want8 = static_cast<i128>(fx::from_int(800).raw) * fx::one().raw * 2;
+        CHECK(tri_area_2x(eight, e) == want8);
+    }
+}
+
 int main() {
     std::printf("== core/geom triangulation suite ==\n");
     test_convex();
@@ -449,6 +509,7 @@ int main() {
     test_rejects_bad_input();
     test_determinism();
     test_holes();
+    test_pinched_outline();
     test_staged_commit();
     test_rejected_commit_is_inert();
     test_commit_determinism();

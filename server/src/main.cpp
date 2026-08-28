@@ -1148,6 +1148,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
     }
 
+    void set_camera(u32 level_index, u32 agent, const proto::CameraSet& c) override {
+        Session* s = session_for(level_index, agent);
+        if (s == nullptr) return;
+        u8 buf[256];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_CAMERA_SET);
+        proto::encode_camera_set(w, c);
+        if (!w.ok()) return;
+        const size_t end = w.size();
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(s->id, buf, end);
+    }
+
     void close_ui(u32 level_index, u32 agent, u32 ui_id) override {
         Session* s = session_for(level_index, agent);
         if (s == nullptr) return;

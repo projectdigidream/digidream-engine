@@ -17,6 +17,7 @@ export const MSG = {
   UI_EVENT: 0x21,
   UI_CLOSE: 0x22,
   UI_SET: 0x23,
+  CAMERA_SET: 0x24,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -42,6 +43,13 @@ export const BUTTON = {
 }
 
 // docs/protocol.md §11. Reliable control messages, never datagrams.
+// docs/protocol.md §11.1's camera field table. Named here so the client applies
+// by NAME rather than by a number repeated in two files.
+export const CAMERA_FIELD = [
+  'distance', 'pitch', 'smoothing', 'maxAccel',
+  'lead', 'leadSmoothing', 'deadzoneX', 'deadzoneY'
+]
+
 export const UI_KIND = {
   LABEL: 0, BUTTON: 1, SLIDER: 2, SELECT: 3, TOGGLE: 4
 }
@@ -245,6 +253,21 @@ export function decodeControlMessage (buf) {
   if (type === MSG.UI_CLOSE) {
     const uiId = r.u32()
     return r.ok ? { type, uiId } : null
+  }
+
+  // Camera settings for this client (docs/protocol.md §11.1). Values arrive in
+  // thousandths of their unit; converted here so nothing downstream has to
+  // remember the scale.
+  if (type === MSG.CAMERA_SET) {
+    const count = r.u16()
+    if (!r.ok || count > 16) return null
+    const fields = []
+    for (let i = 0; i < count; i++) {
+      const id = r.u8()
+      const milli = r.i32()
+      fields.push({ id, value: milli / 1000 })
+    }
+    return r.ok ? { type, fields } : null
   }
 
   // One widget's value, in a panel already on screen (docs/protocol.md §11.1).

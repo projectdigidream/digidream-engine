@@ -49,7 +49,31 @@ export const DEFAULTS = {
   // every frame by the caller as yaw and zoom change; this is only where it
   // starts. See cameraOffset() for how the direction is fixed and only the
   // distance varies.
-  offset: { x: 24, y: 30, z: 24 }
+  offset: { x: 24, y: 30, z: 24 },
+
+  // How far IN FRONT of the subject the camera aims, in world units.
+  //
+  // Zero keeps the old behaviour -- the camera centres on the body. Non-zero
+  // aims at a point ahead of where the agent is facing, which is what a player
+  // is actually looking at: the ground they are about to walk into rather than
+  // the ground they are standing on. It is a distance rather than a fraction of
+  // velocity so that turning on the spot moves the view, which is how you look
+  // around without moving.
+  lead: 0,
+
+  // How fast the aim point catches up with a change of facing, per second.
+  // Slower than the camera's own follow, deliberately: snapping the lead point
+  // the instant somebody turns makes the whole view lurch on every keypress.
+  leadSmoothing: 4,
+
+  // Maximum change in the camera's velocity, in units per second squared.
+  //
+  // Zero means unlimited, which is the exponential approach on its own. A
+  // finite value gives the camera weight: it takes time to get moving and time
+  // to stop, so a subject that teleports or is knocked back does not drag the
+  // view with it instantly. This is the "acceleration" half of a camera that
+  // has a speed.
+  maxAccel: 0
 }
 
 // The angle the world is viewed from, measured up from the horizontal.
@@ -73,12 +97,18 @@ export class Camera {
     this.target = { x: 0, y: 0, z: 0 }
     this.position = { x: 0, y: 0, z: 0 }
     this.shake = { intensity: 0, remaining: 0, duration: 0, seed: 1, frame: 0 }
+    // The camera's own velocity, for acceleration limiting, and the aim point's
+    // current lead offset, which eases toward where the subject faces.
+    this.velocity = { x: 0, y: 0, z: 0 }
+    this.lead = { x: 0, z: 0 }
     this._started = false
   }
 
   /** Jump straight to the subject, with no smoothing. Used on spawn. */
   snapTo (p) {
     this.target = { ...p }
+    this.velocity = { x: 0, y: 0, z: 0 }
+    this.lead = { x: 0, z: 0 }
     this.position = {
       x: p.x + this.cfg.offset.x,
       y: p.y + this.cfg.offset.y,
@@ -96,22 +126,43 @@ export class Camera {
    * exactly why the smoothing is written to be frame-rate INdependent, so the
    * one thing a player would notice is not.
    */
-  update (subject, dt) {
+  update (subject, dt, facing = null) {
     if (!this._started) { this.snapTo(subject); return this.eye() }
+
+    // THE POINT THE CAMERA AIMS AT is ahead of the subject, not on it.
+    //
+    // `facing` is a unit vector in three-space, or null for the old behaviour.
+    // The offset eases toward its target rather than snapping, because the
+    // subject's facing changes the instant a key is pressed and a view that
+    // followed it exactly would lurch on every turn.
+    if (facing && this.cfg.lead > 0) {
+      const k = 1 - Math.exp(-this.cfg.leadSmoothing * dt)
+      this.lead.x += (facing.x * this.cfg.lead - this.lead.x) * k
+      this.lead.z += (facing.z * this.cfg.lead - this.lead.z) * k
+    } else if (this.cfg.lead <= 0) {
+      const k = 1 - Math.exp(-this.cfg.leadSmoothing * dt)
+      this.lead.x += (0 - this.lead.x) * k
+      this.lead.z += (0 - this.lead.z) * k
+    }
+    const aim = {
+      x: subject.x + this.lead.x,
+      y: subject.y,
+      z: subject.z + this.lead.z
+    }
 
     // Deadzone, on the horizontal plane only. Vertical is separate because a
     // platformer's subject leaves the ground constantly and a camera that
     // chased every jump would never be still.
-    const dx = subject.x - this.target.x
-    const dz = subject.z - this.target.z
-    const dy = subject.y - this.target.y
+    const dx = aim.x - this.target.x
+    const dz = aim.z - this.target.z
+    const dy = aim.y - this.target.y
 
-    if (dx > this.cfg.deadzoneX) this.target.x = subject.x - this.cfg.deadzoneX
-    else if (dx < -this.cfg.deadzoneX) this.target.x = subject.x + this.cfg.deadzoneX
-    if (dz > this.cfg.deadzoneX) this.target.z = subject.z - this.cfg.deadzoneX
-    else if (dz < -this.cfg.deadzoneX) this.target.z = subject.z + this.cfg.deadzoneX
-    if (dy > this.cfg.deadzoneY) this.target.y = subject.y - this.cfg.deadzoneY
-    else if (dy < -this.cfg.deadzoneY) this.target.y = subject.y + this.cfg.deadzoneY
+    if (dx > this.cfg.deadzoneX) this.target.x = aim.x - this.cfg.deadzoneX
+    else if (dx < -this.cfg.deadzoneX) this.target.x = aim.x + this.cfg.deadzoneX
+    if (dz > this.cfg.deadzoneX) this.target.z = aim.z - this.cfg.deadzoneX
+    else if (dz < -this.cfg.deadzoneX) this.target.z = aim.z + this.cfg.deadzoneX
+    if (dy > this.cfg.deadzoneY) this.target.y = aim.y - this.cfg.deadzoneY
+    else if (dy < -this.cfg.deadzoneY) this.target.y = aim.y + this.cfg.deadzoneY
 
     // Frame-rate independent exponential approach.
     const k = 1 - Math.exp(-this.cfg.smoothing * dt)
@@ -120,9 +171,71 @@ export class Camera {
       y: this.target.y + this.cfg.offset.y,
       z: this.target.z + this.cfg.offset.z
     }
-    this.position.x += (want.x - this.position.x) * k
-    this.position.y += (want.y - this.position.y) * k
-    this.position.z += (want.z - this.position.z) * k
+    if (this.cfg.maxAccel > 0 && dt > 0) {
+      // A CRITICALLY DAMPED SPRING, with the acceleration clamped.
+      //
+      // The first version accelerated toward the velocity the exponential
+      // approach implied and clamped the CHANGE. That has no deceleration term:
+      // the clamp limits slowing down exactly as much as speeding up, so the
+      // camera sails past its target and comes back -- 211 units out on a
+      // 100-unit move. A spring decelerates because the restoring force falls
+      // as it closes and the damping term opposes the velocity it has.
+      //
+      // `smoothing` is the spring's frequency here rather than an exponential
+      // rate. The two agree closely for small displacements, which is why the
+      // same number means roughly the same feel either side of the switch.
+      const w = this.cfg.smoothing
+      const damp = 2 * w
+      let ax = (want.x - this.position.x) * w * w - this.velocity.x * damp
+      let ay = (want.y - this.position.y) * w * w - this.velocity.y * damp
+      let az = (want.z - this.position.z) * w * w - this.velocity.z * damp
+      const mag = Math.hypot(ax, ay, az)
+      if (mag > this.cfg.maxAccel && mag > 0) {
+        const s = this.cfg.maxAccel / mag
+        ax *= s; ay *= s; az *= s
+      }
+      this.velocity.x += ax * dt
+      this.velocity.y += ay * dt
+      this.velocity.z += az * dt
+
+      // NEVER GOING FASTER THAN IT CAN STOP FROM.
+      //
+      // A clamped acceleration limits slowing down exactly as much as speeding
+      // up, so a long move builds a speed it then needs the same distance again
+      // to shed -- 209 units out on a 100-unit move, and back, and out again. A
+      // spring does not save it, because the restoring force it would need is
+      // the thing being clamped.
+      //
+      // v = sqrt(2 * a * d) is the speed from which `a` still stops you in `d`,
+      // which is the whole content of the problem. Applied as a ceiling on the
+      // speed rather than as a separate braking mode, so there is one rule
+      // rather than two and no moment where they disagree.
+      const rx = want.x - this.position.x
+      const ry = want.y - this.position.y
+      const rz = want.z - this.position.z
+      const dist = Math.hypot(rx, ry, rz)
+      const speed = Math.hypot(this.velocity.x, this.velocity.y, this.velocity.z)
+      const ceiling = Math.sqrt(2 * this.cfg.maxAccel * dist)
+      if (speed > ceiling && speed > 0) {
+        const s = ceiling / speed
+        this.velocity.x *= s
+        this.velocity.y *= s
+        this.velocity.z *= s
+      }
+
+      this.position.x += this.velocity.x * dt
+      this.position.y += this.velocity.y * dt
+      this.position.z += this.velocity.z * dt
+    } else {
+      this.position.x += (want.x - this.position.x) * k
+      this.position.y += (want.y - this.position.y) * k
+      this.position.z += (want.z - this.position.z) * k
+      // Kept current even when unused, so switching the limit on mid-session
+      // does not start from a stale velocity.
+      this.velocity.x = dt > 0 ? (want.x - this.position.x) * k / dt : 0
+      this.velocity.y = dt > 0 ? (want.y - this.position.y) * k / dt : 0
+      this.velocity.z = dt > 0 ? (want.z - this.position.z) * k / dt : 0
+    }
 
     if (this.shake.remaining > 0) {
       this.shake.remaining = Math.max(0, this.shake.remaining - dt)
@@ -198,11 +311,11 @@ export class Camera {
  * framing and a perspective one does not, which is exactly the difference
  * between them and the only difference there should be.
  */
-export function cameraOffset (yaw, distance = DEFAULT_DISTANCE) {
-  const horizontal = Math.cos(ISO_ELEVATION) * distance
+export function cameraOffset (yaw, distance = DEFAULT_DISTANCE, elevation = ISO_ELEVATION) {
+  const horizontal = Math.cos(elevation) * distance
   return {
     x: Math.cos(yaw) * horizontal,
-    y: Math.sin(ISO_ELEVATION) * distance,
+    y: Math.sin(elevation) * distance,
     z: Math.sin(yaw) * horizontal
   }
 }

@@ -38,7 +38,7 @@ import { UiView } from './render/ui.js'
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
 import { MapAccumulator } from './maploader.js'
-import { MSG, encodeUiEvent } from './proto.js'
+import { MSG, encodeUiEvent, CAMERA_FIELD } from './proto.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -136,6 +136,19 @@ if (LIVE) {
       else if (m.type === MSG.UI_OPEN) ui.open(m)
       else if (m.type === MSG.UI_CLOSE) ui.close(m.uiId)
       else if (m.type === MSG.UI_SET) ui.set(m.uiId, m.widgetId, m.value)
+      // How the camera should follow (design §4.1). The server never says where
+      // the camera IS -- only how it behaves -- so this is applied to the
+      // client's own camera and nothing about it is predicted or replicated
+      // back.
+      else if (m.type === MSG.CAMERA_SET) {
+        for (const f of m.fields) {
+          const name = CAMERA_FIELD[f.id]
+          if (!name) continue          // a setting this client does not know
+          if (name === 'distance') camOverrideDistance = f.value
+          else if (name === 'pitch') camOverridePitch = f.value
+          else camera.cfg[name] = f.value
+        }
+      }
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
     },
     onSnapshot (s) { pendingSnapshots.push(s) },
@@ -647,7 +660,14 @@ const camera = new Camera()
 // Under perspective, zooming MOVES the camera; under orthographic it reshapes
 // the frustum and the position is irrelevant to framing. One number drives
 // both.
-const camDistance = () => distanceFor(cam3, viewHeight, DEFAULT_DISTANCE)
+// Set by CAMERA_SET, or null for "whatever the zoom implies". Kept apart from
+// camera.cfg because distance and pitch describe where the camera sits rather
+// than how it follows, and the offset is recomputed from them every frame as
+// yaw and zoom change.
+let camOverrideDistance = null
+let camOverridePitch = null
+const camDistance = () =>
+  camOverrideDistance ?? distanceFor(cam3, viewHeight, DEFAULT_DISTANCE)
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight)
@@ -946,8 +966,15 @@ function frame (now) {
 
   // The camera follows the PREDICTED position -- here, whichever of the two
   // modes produced it. Never a snapshot: see camera.js.
-  camera.cfg.offset = cameraOffset(yaw, camDistance())
-  const eye = camera.update(subject, dt)
+  // Pitch arrives in TURNS, which is the engine's angle unit everywhere else;
+  // cameraOffset wants radians.
+  camera.cfg.offset = cameraOffset(
+    yaw, camDistance(),
+    camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2)
+  // The agent's facing, so the camera can aim AHEAD of it rather than at it.
+  // facingDirection already returns three-space -- it is the same vector the
+  // debug arrow is drawn along -- so converting again would negate z twice.
+  const eye = camera.update(subject, dt, facingDirection(a.facing))
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
 

@@ -357,5 +357,113 @@ console.log('\n--- billboarding ---')
   check(wrong === 5, `CONTROL: the wrong sign fails at all 5 off-axis angles (${wrong})`)
 }
 
+
+// --- looking ahead -----------------------------------------------------------
+//
+// A camera centred on the body shows you the ground you are standing on. What
+// you want to see is the ground you are about to walk into, so the aim point
+// sits AHEAD of the subject along its facing. A distance rather than a fraction
+// of velocity, so that turning on the spot moves the view -- which is how you
+// look around without moving.
+
+{
+  const east = { x: 1, z: 0 }
+  const north = { x: 0, z: -1 }
+
+  // With no lead the camera centres on the subject, whatever it faces. This is
+  // the default, and it has to stay the default or every existing map changes
+  // how it feels.
+  const plain = new Camera({ lead: 0, deadzoneX: 0, deadzoneY: 0, smoothing: 1000 })
+  plain.snapTo({ x: 0, y: 0, z: 0 })
+  for (let i = 0; i < 200; i++) plain.update({ x: 0, y: 0, z: 0 }, 1 / 60, east)
+  check(Math.abs(plain.target.x) < 0.01,
+        `lead 0 aims at the subject (${plain.target.x.toFixed(3)})`)
+
+  // With a lead the aim point settles that far ahead, along the facing.
+  const ahead = new Camera({ lead: 4, deadzoneX: 0, deadzoneY: 0, smoothing: 1000,
+                             leadSmoothing: 20 })
+  ahead.snapTo({ x: 0, y: 0, z: 0 })
+  for (let i = 0; i < 300; i++) ahead.update({ x: 0, y: 0, z: 0 }, 1 / 60, east)
+  check(Math.abs(ahead.target.x - 4) < 0.05,
+        `facing east it aims 4 units east (${ahead.target.x.toFixed(2)})`)
+  check(Math.abs(ahead.target.z) < 0.05, 'and nowhere north or south')
+
+  // TURNING ON THE SPOT moves the view. The subject does not move at all here,
+  // which is the whole point: the camera answers where you are looking.
+  for (let i = 0; i < 300; i++) ahead.update({ x: 0, y: 0, z: 0 }, 1 / 60, north)
+  check(Math.abs(ahead.target.z + 4) < 0.05,
+        `turning north swings the aim north (${ahead.target.z.toFixed(2)})`)
+  check(Math.abs(ahead.target.x) < 0.05, 'and back off the east axis')
+
+  // And it EASES rather than snapping, or the view lurches on every keypress.
+  const easing = new Camera({ lead: 4, deadzoneX: 0, deadzoneY: 0, smoothing: 1000,
+                              leadSmoothing: 3 })
+  easing.snapTo({ x: 0, y: 0, z: 0 })
+  easing.update({ x: 0, y: 0, z: 0 }, 1 / 60, east)
+  check(easing.lead.x > 0 && easing.lead.x < 4,
+        `one frame of a turn moves the aim partway (${easing.lead.x.toFixed(3)})`)
+}
+
+// --- weight ------------------------------------------------------------------
+//
+// maxAccel is the difference between a camera that has weight and one that does
+// not. Without it the approach is instant in velocity terms: a subject that
+// teleports drags the view across the map at whatever speed the smoothing
+// implies, starting on the very first frame.
+
+{
+  const free = new Camera({ maxAccel: 0, deadzoneX: 0, deadzoneY: 0, smoothing: 8 })
+  const heavy = new Camera({ maxAccel: 5, deadzoneX: 0, deadzoneY: 0, smoothing: 8 })
+  free.snapTo({ x: 0, y: 0, z: 0 })
+  heavy.snapTo({ x: 0, y: 0, z: 0 })
+
+  // A subject 100 units away, one frame.
+  const far = { x: 100, y: 0, z: 0 }
+  free.update(far, 1 / 60)
+  heavy.update(far, 1 / 60)
+  check(free.position.x > heavy.position.x,
+        `a limited camera starts slower (${heavy.position.x.toFixed(3)} vs ` +
+        `${free.position.x.toFixed(3)})`)
+  // The limit is on ACCELERATION, so speed builds rather than being capped:
+  // the second second of a long move covers more ground than the first.
+  const a0 = heavy.position.x
+  for (let i = 0; i < 60; i++) heavy.update(far, 1 / 60)
+  const a1 = heavy.position.x
+  for (let i = 0; i < 60; i++) heavy.update(far, 1 / 60)
+  const a2 = heavy.position.x
+  check((a2 - a1) > (a1 - a0),
+        `speed builds (${(a1 - a0).toFixed(2)} then ${(a2 - a1).toFixed(2)} units)`)
+
+  // It ARRIVES, and does not sail past. The first version clamped the change in
+  // velocity, which limits slowing down as much as speeding up -- so it
+  // overshot a 100-unit move by 111 units and came back. A spring decelerates
+  // because the restoring force falls as it closes.
+  let worst = 0
+  for (let i = 0; i < 1200; i++) {
+    heavy.update(far, 1 / 60)
+    worst = Math.max(worst, heavy.position.x)
+  }
+  const home = 100 + heavy.cfg.offset.x
+  check(Math.abs(heavy.position.x - home) < 1,
+        `and settles at its target (${heavy.position.x.toFixed(1)} vs ${home})`)
+  check(worst < home + 5,
+        `without sailing past it (peak ${worst.toFixed(1)})`)
+}
+
+// The pitch is settable, and it is the ELEVATION rather than the yaw: at a
+// higher angle the camera is further above and less far out.
+{
+  const low = cameraOffset(0, 40, 0.2)
+  const high = cameraOffset(0, 40, 1.2)
+  check(high.y > low.y, `a steeper pitch sits higher (${high.y.toFixed(1)} vs ${low.y.toFixed(1)})`)
+  check(Math.hypot(high.x, high.z) < Math.hypot(low.x, low.z),
+        'and closer in plan')
+  // The DISTANCE is unchanged by the angle: pitch decides where on the sphere,
+  // distance decides which sphere.
+  check(Math.abs(Math.hypot(high.x, high.y, high.z) - 40) < 0.01 &&
+        Math.abs(Math.hypot(low.x, low.y, low.z) - 40) < 0.01,
+        'and both are the distance asked for')
+}
+
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

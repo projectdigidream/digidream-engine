@@ -38,6 +38,10 @@ inline constexpr u8 MSG_UI_CLOSE = 0x22;
 // which allocates a new id and, from the player's side, is a window that
 // flickers every time their health does.
 inline constexpr u8 MSG_UI_SET   = 0x23;
+// Camera settings for one client (docs/protocol.md §11.1, design §4.1). The
+// camera lives on the client and the server never says where it IS -- only how
+// it should behave.
+inline constexpr u8 MSG_CAMERA_SET = 0x24;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -289,6 +293,25 @@ struct UiPanel {
     u16      count = 0;
     UiWidget widgets[UI_MAX_WIDGETS]{};
 };
+
+// Camera settings. Values are THOUSANDTHS of their unit -- see the table in
+// docs/protocol.md §11.1. Not fx: a camera is never hashed and never predicted,
+// so it does not need the simulation's number type, and a thousandth of a unit
+// is finer than a pixel at any sane zoom.
+inline constexpr u32 CAMERA_MAX_FIELDS = 16;
+
+struct CameraField {
+    u8  id = 0;
+    i32 milli = 0;
+};
+
+struct CameraSet {
+    u16 count = 0;
+    CameraField fields[CAMERA_MAX_FIELDS]{};
+};
+
+void encode_camera_set(ByteWriter& w, const CameraSet& c) noexcept;
+bool decode_camera_set(ByteReader& r, CameraSet& out) noexcept;
 
 struct UiEvent {
     u32 ui_id = 0;

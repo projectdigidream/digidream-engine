@@ -104,6 +104,9 @@ struct UiSink {
     // One widget's value, in a panel already open. A no-op for a panel that is
     // not, or a widget it does not contain.
     virtual void set_ui(u32 level, u32 agent, u32 ui_id, u16 widget_id, i32 value) = 0;
+    // Camera settings for whoever is watching this agent (design §4.1: the
+    // camera is the client's, and Lua configures and triggers it).
+    virtual void set_camera(u32 level, u32 agent, const proto::CameraSet& c) = 0;
 };
 
 struct WorldContext {

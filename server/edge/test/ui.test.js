@@ -17,7 +17,8 @@ import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
 import { decodeControlMessage, encodeHello, encodeUiEvent, encodeInputBundle,
-         decodeSnapshot, axisFromNumber, MSG, UI_KIND } from '../../../client/src/proto.js'
+         decodeSnapshot, axisFromNumber, MSG, UI_KIND, CAMERA_FIELD }
+  from '../../../client/src/proto.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -103,6 +104,8 @@ let panel = null
 let paramUpdates = 0
 // Widget updates pushed by the server into an already-open panel.
 let uiSets = []
+// Camera settings pushed by a script (design §4.1).
+let cameraSets = []
 // The panel currently open. Read through a function because a map change
 // replaces it, and a captured id is one that has already been closed.
 const uiIdNow = () => panel?.uiId ?? 0
@@ -125,6 +128,7 @@ let closed = []
         else if (m?.type === MSG.UI_CLOSE) closed.push(m.uiId)
         else if (m?.type === MSG.PARAM_UPDATE) paramUpdates++
         else if (m?.type === MSG.UI_SET) uiSets.push(m)
+        else if (m?.type === MSG.CAMERA_SET) cameraSets.push(m)
       }
     }
   } catch {}
@@ -337,6 +341,45 @@ check(panel !== null && panel.uiId !== wasId,
   await step(30)
   const again = panel?.widgets.find((w) => w.label === 'Reach /100')
   check(again?.value === 550, `and the engine now reports 5.50 (${again?.value / 100})`)
+}
+
+// --- the camera is configured from Lua ---------------------------------------
+//
+// Design §4.1 puts the camera on the CLIENT and lets Lua configure and trigger
+// it: the server never says where the camera is, only how it should follow. So
+// the proof is a CAMERA_SET arriving with the value a slider was moved to --
+// and the panel is the only thing that knows those values, because nothing
+// reports them back.
+{
+  const names = ['Distance', 'Pitch /1000 turn', 'Follow speed', 'Accel (0=off)',
+                 'Look ahead', 'Look-ahead speed']
+  const found = names.filter((n) => panel.widgets.some((w) => w.label === n))
+  check(found.length === names.length,
+        `the panel offers every camera setting (${found.length}/${names.length})`)
+
+  cameraSets = []
+  const lead = panel.widgets.find((w) => w.label === 'Look ahead')
+  await cw.write(encodeUiEvent(panel.uiId, lead.id, 7))
+  await step(20)
+  check(cameraSets.length > 0, `moving one sends a CAMERA_SET (${cameraSets.length})`)
+
+  // EVERY setting, not just the one moved: they are read together and a
+  // half-applied camera is worse to look at than either the old or the new one.
+  const last = cameraSets.at(-1)
+  check(last?.fields.length === 6,
+        `carrying all six settings (${last?.fields.length})`)
+  const byName = Object.fromEntries(last.fields.map((f) => [CAMERA_FIELD[f.id], f.value]))
+  check(byName.lead === 7, `with the value that was set (lead ${byName.lead})`)
+  // Thousandths on the wire, so an angle survives as a fraction rather than
+  // arriving as zero.
+  check(Math.abs(byName.pitch - 0.125) < 1e-6,
+        `and an angle as a turn fraction (pitch ${byName.pitch})`)
+
+  // A field this client did not know would be skipped rather than refusing the
+  // message -- so every id sent must be one it can name, or the setting is
+  // silently dropped.
+  check(last.fields.every((f) => CAMERA_FIELD[f.id] !== undefined),
+        'and every field named by a client that knows it')
 }
 
 // --- a panel survives a map change -------------------------------------------
