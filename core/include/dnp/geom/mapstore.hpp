@@ -181,6 +181,22 @@ public:
     // existed means exactly what it meant before.
     fx body_radius() const noexcept { return body_radius_; }
     fx body_height() const noexcept { return body_height_; }
+
+    // How many texture pixels cover one world unit.
+    //
+    // A fact about the geometry, like the body, and stated for the same reason:
+    // a converted Doom map is at 1/48 and Doom's textures are one pixel per map
+    // unit, so its walls want 48 pixels to the unit. The renderer defaulted to
+    // 32 and drew every texture on every converted level half again too large.
+    // That is not something a viewer can be expected to notice as a scale
+    // error -- it reads as "the textures are placed wrong".
+    //
+    // Part of the map hash, like the body: a client drawing at a different
+    // scale from the one the map was built for is looking at a different map.
+    fx texture_scale() const noexcept { return texture_scale_; }
+    void set_texture_scale(fx pixels_per_unit) noexcept {
+        if (pixels_per_unit > fx::zero()) texture_scale_ = pixels_per_unit;
+    }
     // Assigns BOTH, unconditionally. An earlier version skipped non-positive
     // values as a convenience for the map compiler, which meant a flipped bit
     // in the file's body field read back as "the default" and matched the hash
@@ -270,6 +286,9 @@ private:
     ScriptName   scripts_[MAX_MAP_SCRIPTS]{};
     u32          script_count_ = 0;
 
+    // 32 is what the renderer used before maps could say, so a map that says
+    // nothing is unchanged.
+    fx texture_scale_ = fx::from_int(32);
     fx body_radius_ = fx::from_frac(1, 2);
     fx body_height_ = fx::from_int(2);
 

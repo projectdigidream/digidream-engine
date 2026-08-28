@@ -140,7 +140,7 @@ if (LIVE) {
       // switch DID travels as sector motion, exactly as it did before.
       else if (m.type === MSG.SIDE_TEXTURE) {
         const sector = view.setSideTexture(m.side, m.field, m.name.toUpperCase(),
-                                           { pxPerUnit: Number(params.get('texpx') ?? 32) })
+                                           { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
         if (sector >= 0) {
           mapData.sides[m.side] = view.map.sides[m.side]
           view.setDynamicSectors([...new Set([...movers, sector])])
@@ -384,7 +384,10 @@ if (movers.length) view.setDynamicSectors(movers)
 // between: the frames after the first appear in no map's texture list.
 async function loadMapTextures () {
   const extra = animCatalogue.groups.flatMap((g) => g.frames)
-  await view.loadTextures({ pxPerUnit: Number(params.get('texpx') ?? 32), extra })
+  // The map's own scale unless a flag overrides it. ?texpx= stays for
+  // experimenting; what it no longer does is decide the answer.
+  const pxPerUnit = params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32)
+  await view.loadTextures({ pxPerUnit, extra })
   animator = new TextureAnimator({
     groups: animCatalogue.groups,
     names: mapData.textures,

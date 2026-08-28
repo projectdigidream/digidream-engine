@@ -448,6 +448,17 @@ int main(int argc, char** argv) {
                 continue;
             }
             store.set_body(radius, height);
+        } else if (tok[0] == "texscale") {
+            // How many texture pixels cover one world unit. A fact about the
+            // geometry, like `body`: a map converted at 1/48 from a game whose
+            // textures are one pixel per map unit wants 48, and saying nothing
+            // keeps the renderer's own 32.
+            fx px{};
+            if (tok.size() < 2 || !parse_fx(tok[1], px) || px <= fx::zero()) {
+                err(lineno, "texscale needs a positive number of pixels per unit");
+            } else {
+                store.set_texture_scale(px);
+            }
         } else if (tok[0] == "light") {
             // light <x> <y> <z> [color R G B] [radius N] [intensity N]
             if (in_sector || in_rail) { err(lineno, "light inside a sector or rail"); continue; }

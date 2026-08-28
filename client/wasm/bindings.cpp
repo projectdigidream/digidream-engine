@@ -147,6 +147,12 @@ unsigned dnp_map_sector_count(const geom::MapStorage* m) { return m->view().sect
 // the window at the start of a session where the client is predicting with a
 // body the server has not corrected yet.
 EMSCRIPTEN_KEEPALIVE
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_texture_scale(const geom::MapStorage* m, long long* out64) {
+    out64[0] = m->texture_scale().raw;
+}
+
+EMSCRIPTEN_KEEPALIVE
 void dnp_map_body(const geom::MapStorage* m, long long* out64) {
     out64[0] = m->body_radius().raw;
     out64[1] = m->body_height().raw;
@@ -760,6 +766,16 @@ int dnp_map_add_script(geom::MapStorage* m, const char* name, unsigned len) {
 // in64: radius, height. Assigns BOTH, as the store's setter does -- a caller
 // changing one passes the other's current value, which is what
 // dnp_map_body reads back.
+EMSCRIPTEN_KEEPALIVE
+// The scale the map's textures are drawn at, for the editor's builder. The
+// getter beside dnp_map_body reads it; a map built without it would hash
+// differently from the same map baked by mapc, which is what the editor's
+// build test asserts and what caught this being one-way.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_texture_scale(geom::MapStorage* m, const long long* in64) {
+    m->set_texture_scale(fx::from_raw(in64[0]));
+}
+
 EMSCRIPTEN_KEEPALIVE
 void dnp_map_set_body(geom::MapStorage* m, const long long* in64) {
     m->set_body(fx::from_raw(in64[0]), fx::from_raw(in64[1]));

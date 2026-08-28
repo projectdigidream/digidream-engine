@@ -38,6 +38,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     // 2.0 body" and "this map is old".
     w.fxraw(store.body_radius());
     w.fxraw(store.body_height());
+    w.fxraw(store.texture_scale());
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -182,6 +183,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 script_count = r.u32v();
     const fx body_radius = r.fxraw();
     const fx body_height = r.fxraw();
+    const fx texture_scale = r.fxraw();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
 
     // Structural, like the counts below: a body with no size is not a body, and
@@ -190,6 +192,13 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     // the map is a way to make collision do arbitrary work.
     if (body_radius <= fx::zero() || body_height <= fx::zero() ||
         body_radius > fx::from_int(64) || body_height > fx::from_int(64)) {
+        store.clear();
+        return MapLoadStatus::BadIndex;
+    }
+    // Same reasoning: an attacker-chosen number that divides a UV. Zero would
+    // make every texture infinitely large, and the upper bound is generous --
+    // Doom's own is 48 and a 4K wall texture on a one-unit wall is 4096.
+    if (texture_scale <= fx::zero() || texture_scale > fx::from_int(8192)) {
         store.clear();
         return MapLoadStatus::BadIndex;
     }
@@ -596,6 +605,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     // written with the map's own, and every converted map is rejected as
     // corrupt.
     store.set_body(body_radius, body_height);
+    store.set_texture_scale(texture_scale);
 
     // Finally, the rebuilt map is hashed and compared against the file's own.
     if (store.hash() != want_hash) { store.clear(); return MapLoadStatus::HashMismatch; }

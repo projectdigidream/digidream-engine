@@ -19,7 +19,7 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 9;   // 9 added the scripts a map asks for
+inline constexpr u16 MAP_VERSION = 10;  // 10 added the texture scale a map is drawn at
                                         // (8 added its body proportions;
                                         //  7 added sector holes)
 

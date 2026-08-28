@@ -148,6 +148,20 @@ export class WasmMap {
     return { radius: this.core.views.i64[b], height: this.core.views.i64[b + 1] }
   }
 
+  /**
+   * Texture pixels per world unit, as a number.
+   *
+   * From the MAP, not from a flag. A level converted at 1/48 from a game whose
+   * textures are one pixel per map unit wants 48; the renderer's own default is
+   * 32, and drawing a converted map at 32 makes every texture half again too
+   * large -- which reads as textures being placed wrong rather than as a scale
+   * error, and is why it went unnoticed.
+   */
+  get textureScale () {
+    this.core.M._dnp_map_texture_scale(this.ptr, this.core.buf64)
+    return Number(this.core.views.i64[this.core.buf64 / 8]) / 4294967296
+  }
+
   /** Content hash, as BigInt. Must equal WELCOME.map_hash. */
   get hash () {
     this.core.M._dnp_map_hash(this.ptr, this.core.buf64)

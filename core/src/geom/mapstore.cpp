@@ -542,6 +542,12 @@ u64 MapStorage::hash() const noexcept {
     // file -- one that would mispredict every wall it slid along.
     h.fxv(body_radius_);
     h.fxv(body_height_);
+    // Hashed like the body, and for the same reason: a client drawing at a
+    // different texture scale from the one the map was built for is looking at
+    // a different map. Also because the file format's fuzz test asserts there
+    // are no don't-care bytes -- a field written and not hashed is a bit that
+    // can be flipped without anything noticing, which is what it caught.
+    h.fxv(texture_scale_);
 
     h.u32v(rail_count_);
     h.u32v(waypoint_count_);
