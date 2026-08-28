@@ -80,8 +80,7 @@ const core = await Core.load()
 
 const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
                      ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start',
-                      '--props', join(ROOT, 'assets', 'props.txt'),
-                      '--script', '/tmp/dbg3.lua'],
+                      '--props', join(ROOT, 'assets', 'props.txt')],
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })

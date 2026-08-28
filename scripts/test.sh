@@ -129,6 +129,7 @@ else
   node client/test/mapmesh.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
+     && node test/noupstream.test.js 2>/dev/null | tail -2 \
      && node test/e2e.test.js 2>/dev/null | tail -2 \
      && node test/delta.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/mapdata.test.js 2>/dev/null | tail -2 \

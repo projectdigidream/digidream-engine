@@ -92,6 +92,24 @@ export class Edge {
     }
     this.sessions.set(id, entry)
     this.log(`session ${id} open`)
+
+    // NO SERVER BEHIND US: say so, and close.
+    //
+    // The edge is its own process, so it stays up and accepts WebTransport
+    // sessions perfectly happily when the C++ server is down or has exited --
+    // and the client, which has genuinely connected, sits on "connected;
+    // waiting for WELCOME..." until it times out. That is an accurate message
+    // about entirely the wrong thing, and it has now cost a debugging session:
+    // the server had refused to start over a missing script and nothing
+    // downstream said so.
+    //
+    // sessionOpen is a fire-and-forget send that silently returns false with no
+    // link, so without this the failure has no observer anywhere.
+    if (!this.upstream.connected) {
+      this.log(`session ${id} rejected: no upstream link`)
+      this._closeSession(id, 1, 'no upstream: the game server is not running')
+      return
+    }
     this.upstream.sessionOpen(id, { path: this.opts.path })
 
     session.closed
@@ -174,13 +192,18 @@ export class Edge {
     }
   }
 
-  _closeSession (id, reason) {
+  // `why`, when given, is closed WITH the session so the browser can print
+  // something better than a timeout. A WebTransport close reason is the only
+  // channel left once the control stream is not going to carry anything.
+  _closeSession (id, reason, why = null) {
     const entry = this.sessions.get(id)
     if (!entry) return
     this.sessions.delete(id)
-    this.log(`session ${id} closed (reason ${reason})`)
+    this.log(`session ${id} closed (reason ${reason}${why ? `: ${why}` : ''})`)
     this.upstream.sessionClose(id, reason)
-    try { entry.session.close() } catch {}
+    try {
+      entry.session.close(why ? { closeCode: reason, reason: why } : undefined)
+    } catch {}
   }
 
   netsimReport () { return { up: this.up.report(), down: this.down.report() } }

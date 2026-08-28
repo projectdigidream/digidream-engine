@@ -126,7 +126,14 @@ if (LIVE) {
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
     },
     onSnapshot (s) { pendingSnapshots.push(s) },
-    onClose (e) { say(`disconnected${e ? `: ${e.message ?? e}` : ''}`) }
+    // A WebTransport close carries { closeCode, reason }, not an Error, so
+    // `e.message` is undefined and the object stringifies to [object Object].
+    // The reason is the whole point of the close -- it is how the edge says
+    // "the game server is not running" -- so it is read explicitly.
+    onClose (e) {
+      const why = e?.reason || e?.message || (e ? String(e) : '')
+      say(`disconnected${why ? `: ${why}` : ''}`)
+    }
   })
   await conn.open()
   say('connected; waiting for WELCOME...')
@@ -143,7 +150,14 @@ if (LIVE) {
       ? `receiving map... ${acc.received}/${acc.total} bytes`
       : 'connected; waiting for WELCOME...')
   }
-  if (!welcome) throw new Error('no WELCOME from the server')
+  // Named separately from "the server said no". Reaching here means the
+  // transport came up and nothing answered -- which most often means the edge
+  // is running and the game server behind it is not, so say that rather than
+  // leaving the reader to guess which of the two processes to look at.
+  if (!welcome) {
+    throw new Error('no WELCOME: the edge accepted the connection but the game ' +
+                    'server behind it never replied -- check that dnp-server is running')
+  }
   if (!acc.complete) throw new Error('map transfer did not complete')
   mapBytes = acc.bytes()
 } else {
