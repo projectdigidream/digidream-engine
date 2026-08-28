@@ -81,6 +81,9 @@ const core = await Core.load()
 let mapBytes
 let conn = null
 let welcome = null
+// Why the transport closed, if it has. Read by the handshake loop, which must
+// stop waiting for a reply that a closed connection can never deliver.
+let closedWhy = null
 // A map change in flight: the new WELCOME, and the map arriving behind it.
 let pendingWelcome = null
 let movingMap = null
@@ -131,8 +134,8 @@ if (LIVE) {
     // The reason is the whole point of the close -- it is how the edge says
     // "the game server is not running" -- so it is read explicitly.
     onClose (e) {
-      const why = e?.reason || e?.message || (e ? String(e) : '')
-      say(`disconnected${why ? `: ${why}` : ''}`)
+      closedWhy = e?.reason || e?.message || (e ? String(e) : 'connection closed')
+      say(`disconnected: ${closedWhy}`)
     }
   })
   await conn.open()
@@ -146,10 +149,18 @@ if (LIVE) {
   while ((!welcome || !acc.complete) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 20))
     if (acc.failed) throw new Error(`map transfer failed: ${acc.failed}`)
+    // A close during the handshake is the ANSWER, not something to keep
+    // waiting through. The edge closes with a reason when it has no game
+    // server behind it, and this loop was overwriting that reason with its own
+    // progress message twenty times a second and then reporting a timeout --
+    // so the one line that said what was actually wrong never survived long
+    // enough to be read.
+    if (closedWhy) throw new Error(closedWhy)
     say(welcome
       ? `receiving map... ${acc.received}/${acc.total} bytes`
       : 'connected; waiting for WELCOME...')
   }
+  if (closedWhy) throw new Error(closedWhy)
   // Named separately from "the server said no". Reaching here means the
   // transport came up and nothing answered -- which most often means the edge
   // is running and the game server behind it is not, so say that rather than
