@@ -1,0 +1,19 @@
+sector floor 27 ceil 32 floortex ROCKFLOOR1 skirt 20
+  vertex -4 -7 open tex ROCKWALL1
+  vertex -1 6 open tex ROCKWALL1
+  vertex -18.5208 3.7292 neighbor 1 lower ROCKWALL1 upper ROCKWALL1
+  vertex -16.0000 -7.3125 open tex ROCKWALL1
+end
+sector floor 30 ceil 50 skirt 30 floortex ROCKFLOOR1
+  vertex -21.5000 7.1667 open tex ROCKWALL1
+  vertex -23.4375 9.4583 open tex ROCKWALL1
+  vertex -26.3542 10.0625 open tex ROCKWALL1
+  vertex -29.7917 3.8333 open tex ROCKWALL1
+  vertex -30.0833 1.7083 open tex ROCKWALL1
+  vertex -31.8125 -3.3125 open tex ROCKWALL1
+  vertex -34.5417 -9.5417 open tex ROCKWALL1
+  vertex -33.3958 -11.3333 open tex ROCKWALL1
+  vertex -27.7500 -12.9792 open tex ROCKWALL1
+  vertex -16 -7.3125 neighbor 0 tex ROCKWALL1
+  vertex -18.5208 3.7292 open tex ROCKWALL1
+end

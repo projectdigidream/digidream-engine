@@ -83,6 +83,16 @@ node editor/test/topology.test.js | tail -2
 # the corpus above proves, and this adds the case that one does not have: the
 # shapes the EDITOR draws, whose numbers no author ever typed.
 node editor/test/history.test.js  | tail -2
+# Which way round a sector goes. The renderer takes counter-clockwise as fact
+# and derives both the outward normal and the direction u runs from it, so a
+# sector drawn the other way has its walls facing into the void with mirrored
+# textures. Physics does not care, which is why it is invisible until you look
+# at the wall from the other side.
+node editor/test/winding.test.js  | tail -2
+# Deleting sectors, corners and pits. A sector is named by its POSITION in the
+# file, so removing one renumbers every reference after it -- and a pit is two
+# things, a hole and the sector standing in it, which have to go together.
+node editor/test/edit.test.js     | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run

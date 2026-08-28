@@ -282,6 +282,31 @@ const routes = {
     }
   },
 
+  /**
+   * The texture names the client can actually draw.
+   *
+   * From assets/textures/index.json -- the same file loadRealTextures() reads
+   * to decide which names resolve to an image and how big it is. Listing the
+   * directory instead would offer names the renderer has no size for, which
+   * draw as the missing-texture wireframe: an editor that lets you pick
+   * something that cannot be drawn is worse than one that offers less.
+   */
+  'GET /api/textures': async () => {
+    const raw = await readFile(join(ROOT, 'assets', 'textures', 'index.json'), 'utf8')
+      .catch(() => null)
+    if (raw === null) return { code: 200, body: { textures: [], note: 'no assets/textures/index.json' } }
+    try {
+      const index = JSON.parse(raw)
+      const sizes = index.sizes ?? {}
+      return {
+        code: 200,
+        body: { textures: Object.keys(sizes).sort().map((name) => ({ name, size: sizes[name] })) }
+      }
+    } catch (e) {
+      return { code: 200, body: { textures: [], note: `index.json is not valid JSON: ${e.message}` } }
+    }
+  },
+
   'GET /api/props': async () => {
     const text = await readFile(join(ROOT, 'assets', 'props.txt'), 'utf8').catch(() => null)
     if (text === null) return { code: 404, body: { error: 'no assets/props.txt' } }
