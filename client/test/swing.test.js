@@ -12,7 +12,8 @@
 // and checks the drawn angle against the engine's own formula at every tick.
 //
 import { Core } from '../src/core.js'
-import { sweepOffset, swingYaw, sameSwingShape, makeSwingMesh } from '../src/render/swing.js'
+import { sweepOffset, swingYaw, sameSwingShape, makeSwingMesh, SwingTrail, fadeTrail }
+  from '../src/render/swing.js'
 import { facingDirection } from '../src/camera.js'
 
 let checks = 0
@@ -184,7 +185,13 @@ function fakeThree () {
     },
     MeshBasicMaterial: class { constructor (o) { Object.assign(this, o) } },
     Mesh: class {
-      constructor (g, m) { this.geometry = g; this.material = m; this.visible = false }
+      constructor (g, m) {
+        this.geometry = g
+        this.material = m
+        this.visible = false
+        this.rotation = { x: 0, y: 0, z: 0 }
+        this.position = { x: 0, y: 0, z: 0, set (x, y, z) { this.x = x; this.y = y; this.z = z } }
+      }
     }
   }
 }
@@ -230,6 +237,59 @@ function fakeThree () {
         Math.abs(far(ring.geometry.points) - 4) < 0.01,
         'and both still reach as far as the weapon does')
 }
+
+
+// --- the trail ---------------------------------------------------------------
+//
+// The moving collider crosses and is gone inside a sixth of a second, which is
+// "appears for a brief moment and then disappears" -- and makes the sweep
+// impossible to read, because you cannot see where it has been. Each trail
+// segment is the collider at ONE TICK, so the trail is the set of regions that
+// were actually tested rather than a decoration approximating them.
+
+{
+  const THREE = fakeThree()
+  const scene = { children: [], add (o) { this.children.push(o) }, remove (o) {} }
+  const trail = new SwingTrail({ THREE, scene, life: 0.5, poolSize: 8 })
+  const shape = { reach: 3, inner: 0, halfArc: 0.1, from: -0.2, to: 0.2, ticks: 4 }
+  const at = { shape, facingTurns: 0, x: 0, y: 0, z: 0 }
+
+  // ONE SEGMENT PER TICK, however many frames each tick is on screen for. The
+  // collider moves once per tick and the display runs at whatever rate it runs
+  // at; pushing per frame would draw the same tick several times at 144 Hz and
+  // skip ticks at 30, and the segment count would stop meaning "how long".
+  let added = 0
+  for (const left of [4, 4, 4, 3, 3, 2, 1, 1, 1]) {
+    if (trail.offer({ ...at, left, offsetTurns: left * 0.05, now: 100 })) added++
+  }
+  check(added === 4, `four ticks leave four segments, not nine frames (${added})`)
+  check(trail.count === 4, `and all four are live (${trail.count})`)
+
+  // A segment sits where the collider was, not where the body is now.
+  const angles = scene.children.filter((m) => m.visible).map((m) => m.rotation?.y)
+  check(new Set(angles).size === 4, `each at its own angle (${new Set(angles).size} distinct)`)
+
+  // No swing means no trail, and it must not carry over into the next one: a
+  // countdown that starts again at 4 has to read as a new tick.
+  trail.offer({ ...at, left: 0, offsetTurns: null, now: 100 })
+  check(trail.offer({ ...at, left: 4, offsetTurns: 0, now: 100 }) === true,
+        'a new swing starts a new trail rather than being swallowed as a repeat')
+
+  // It fades and is recycled, or a minute of fighting leaves the screen solid.
+  trail.update(100 + 0.25)
+  check(trail.count === 5, 'mid-life the segments are still there')
+  trail.update(100 + 0.6)
+  check(trail.count === 0, 'past their life they are gone')
+  check(trail.pool.length === 8, `and back in the pool (${trail.pool.length})`)
+}
+
+// Not-yet-born is fully visible, not expired. The same guard the tracers needed
+// -- a segment pushed later in a frame than the timestamp used to fade it has a
+// negative age, and treating that as expired destroys it on creation.
+check(fadeTrail(-0.01, 0.5) === 1, 'a segment not yet born is visible')
+check(fadeTrail(0, 0.5) === 1, 'a new one is fully visible')
+check(fadeTrail(0.25, 0.5) === 0.5, 'half way through it is half faded')
+check(fadeTrail(0.5, 0.5) === 0, 'and at its life it is gone')
 
 console.log(`\nswing: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

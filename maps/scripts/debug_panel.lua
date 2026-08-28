@@ -135,6 +135,11 @@ local function show(e)
   -- is a legitimate thing to want.
   local old = panel_of[idx]
   if old then dnp.ui_close(e, old) end
+  -- Cleared BEFORE the open, so a failed open leaves no id behind. It used to
+  -- keep the old one on failure, which is an id naming a panel that has already
+  -- been closed -- so every later ui_set went to a window that was not there,
+  -- and the panel was simply gone with nothing pointing at the reason.
+  panel_of[idx] = nil
 
   local id = dnp.ui_open(e, build(e))
   if id ~= 0 then panel_of[idx] = id end
@@ -146,6 +151,28 @@ local seen = {}
 local shown_hp = {}
 
 function on_tick()
+  -- FORGET PLAYERS WHO ARE NOT HERE.
+  --
+  -- Every level runs its own copy of this script with its own `seen`, and a
+  -- player who leaves for another map leaves their entry behind as true. Come
+  -- back later -- to the same map, or into the same agent slot as somebody else
+  -- -- and this script believes it has already opened a panel for them, so it
+  -- never opens one. Which is a debug panel that disappears and does not come
+  -- back.
+  --
+  -- Rebuilt from who is actually here rather than hooked to a departure: there
+  -- is no "player left" event, and inventing one to serve a bookkeeping table
+  -- would be the wrong shape.
+  local here = {}
+  for _, e in ipairs(dnp.players()) do here[e:index()] = true end
+  for idx in pairs(seen) do
+    if not here[idx] then
+      seen[idx] = nil
+      panel_of[idx] = nil
+      shown_hp[idx] = nil
+    end
+  end
+
   for _, e in ipairs(dnp.players()) do
     local idx = e:index()
     if not seen[idx] then

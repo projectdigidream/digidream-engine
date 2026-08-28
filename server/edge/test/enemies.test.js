@@ -167,7 +167,14 @@ const drain = () => {
         continue
       }
       if (e.displayId) {
-        if (!seen.has(i)) seen.set(i, { kind: e.displayId, anim: 0 })
+        if (!seen.has(i)) {
+          // Whether the FIRST block that introduced this entity carried its
+          // animation state. That block is what any client with no history
+          // receives -- a late joiner, a reconnect -- so if the state is
+          // missing from it, a dead monster arrives standing in its idle pose.
+          seen.set(i, { kind: e.displayId, anim: 0,
+                        firstHadAnim: (e.mask & ENT_FIELD.ANIMATION_STATE) !== 0 })
+        }
       }
       const rec = seen.get(i)
       if (!rec) continue
@@ -290,6 +297,15 @@ if (!IDLE_ONLY && !process.env.DNP_MAP_NAME) {
   const alive = [...seen.values()].filter((r) => r.anim !== 4 && r.kind)
   check(alive.every((r) => r.solid !== false),
         `and the living still are (${alive.length} alive)`)
+
+  // What a client with NO HISTORY is told. The first block that introduces an
+  // entity is what a late joiner or a reconnect receives, so anything missing
+  // from it is something they never learn -- and an animation state that never
+  // arrives leaves a dead monster standing in its idle pose.
+  const introduced = [...seen.values()].filter((r) => r.kind)
+  check(introduced.every((r) => r.firstHadAnim),
+        `an entity's first block carries its animation state ` +
+        `(${introduced.filter((r) => r.firstHadAnim).length}/${introduced.length})`)
 }
 
 

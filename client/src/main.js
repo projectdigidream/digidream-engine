@@ -30,7 +30,8 @@ import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
-import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape } from './render/swing.js'
+import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
+         SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { UiView } from './render/ui.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
@@ -417,6 +418,10 @@ function rebuildSwing (shape) {
   swingShape = shape
 }
 rebuildSwing(readSwingShape(world, agent))
+// The path the swing swept, one segment per tick. See SwingTrail: the moving
+// collider alone crosses and is gone inside a sixth of a second, so where it
+// has BEEN is the part you can actually look at.
+const swingTrail = SHOW_SWING ? new SwingTrail({ THREE, scene }) : null
 
 // Which way the agent is looking, and how far it can reach to work a door.
 // On by default because it is the only way to see either; ?arrow=0 hides it.
@@ -880,6 +885,15 @@ function frame (now) {
       swing.position.set(subject.x, at, subject.z)
       swing.rotation.y = swingYaw(facingTurns, off)
     }
+
+    // One segment per TICK of the swing, at the angle the collider held then.
+    // Offered every frame and added only when the countdown moves, so the trail
+    // has as many segments as the swing had ticks whatever the display rate is.
+    swingTrail.offer({
+      shape: swingShape, left: a.attackLeft, offsetTurns: off, facingTurns,
+      x: subject.x, y: at - 0.01, z: subject.z, now: performance.now() / 1000
+    })
+    swingTrail.update(performance.now() / 1000)
   }
   if (arrow) {
     // From the body's middle, which is roughly where a reach comes from and is

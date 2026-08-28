@@ -95,6 +95,7 @@ const cw = control.writable.getWriter()
 const dw = wt.datagrams.createWritable().getWriter()
 
 let welcome = null
+let welcomes = 0
 let panel = null
 // PARAM_UPDATEs seen. A replicated parameter changing is the client's own copy
 // of the rules changing, which is what makes an attack slider a physics change
@@ -102,6 +103,9 @@ let panel = null
 let paramUpdates = 0
 // Widget updates pushed by the server into an already-open panel.
 let uiSets = []
+// The panel currently open. Read through a function because a map change
+// replaces it, and a captured id is one that has already been closed.
+const uiIdNow = () => panel?.uiId ?? 0
 let closed = []
 ;(async () => {
   const r = control.readable.getReader()
@@ -116,7 +120,7 @@ let closed = []
         if (buf.length < 4 + len) break
         const m = decodeControlMessage(buf.subarray(0, 4 + len))
         buf = buf.subarray(4 + len)
-        if (m?.type === MSG.WELCOME) welcome = m
+        if (m?.type === MSG.WELCOME) { welcome = m; welcomes++ }
         else if (m?.type === MSG.UI_OPEN) panel = m
         else if (m?.type === MSG.UI_CLOSE) closed.push(m.uiId)
         else if (m?.type === MSG.PARAM_UPDATE) paramUpdates++
@@ -333,6 +337,44 @@ check(panel !== null && panel.uiId !== wasId,
   await step(30)
   const again = panel?.widgets.find((w) => w.label === 'Reach /100')
   check(again?.value === 550, `and the engine now reports 5.50 (${again?.value / 100})`)
+}
+
+// --- a panel survives a map change -------------------------------------------
+//
+// Every level runs its own VM with its own copy of the script, so the panel a
+// player had is closed when they leave and a new one is opened by the level
+// they arrive in. That round trip is what this asserts.
+//
+// It does NOT prove the fix that went in beside it. The script used to keep "I
+// have already opened a panel for this player" as true forever, which would
+// deny a panel to somebody returning into the same agent slot -- and a return
+// here happens to get a different slot, so this passes either way. The stale
+// bookkeeping is wrong regardless and is cleared; the case that would catch it
+// is not built.
+{
+  const mapWidget = panel.widgets.find((w) => w.kind === UI_KIND.SELECT)
+  const goWidget = panel.widgets.find((w) => w.label === 'Go to map')
+  const startTitle = panel.title
+
+  // To the second map, then back to the first.
+  for (const target of [1, 0]) {
+    // Captured BEFORE clearing `panel`: the events below address the panel that
+    // is open now, and nulling it first makes uiIdNow() report 0 -- which the
+    // script correctly ignores, so nothing happens and the test blames the
+    // engine for its own mistake.
+    const openId = panel.uiId
+    panel = null
+    await cw.write(encodeUiEvent(openId, mapWidget.id, target))
+    await step(5)
+    await cw.write(encodeUiEvent(openId, goWidget.id, 1))
+    // Long enough for the change, the new level's first tick, and the panel.
+    for (let i = 0; i < 90 && panel === null; i++) await step(1)
+    check(panel !== null,
+          `a panel opens in the level moved to (map index ${target}, ` +
+          `${welcomes} welcomes)`)
+    if (panel === null) break
+    check(panel.title === startTitle, 'and it is the same panel, rebuilt there')
+  }
 }
 
 console.log(`\nui: ${checks} checks, ${fails} failures`)

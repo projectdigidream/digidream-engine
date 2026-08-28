@@ -172,3 +172,123 @@ export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, innerUnits = 0
   mesh.visible = false
   return mesh
 }
+
+
+/**
+ * The path a swing actually swept, one segment per tick.
+ *
+ * The moving collider alone is a wedge that appears, crosses, and is gone in a
+ * sixth of a second -- which is what "appears for a brief moment and then
+ * disappears" describes, and it makes the sweep impossible to read: you cannot
+ * see where it has BEEN, so you cannot tell a wide arc from a narrow one, or a
+ * fast swing from a slow one, without watching the same frame repeatedly.
+ *
+ * Each segment is the collider at ONE TICK -- the same wedge, at the angle it
+ * occupied then, with the same inner and outer radius. So the trail is not a
+ * decoration approximating the swing: it is the set of regions that were
+ * actually tested, drawn where they were tested, and a target inside a segment
+ * was inside the collider at that moment.
+ *
+ * Pushed on TICK boundaries, not on frames. The collider moves once per tick
+ * and the display runs at whatever rate it runs at, so pushing per frame would
+ * draw the same tick several times at 144 Hz and skip ticks at 30 -- and the
+ * count of segments would stop meaning "how long the swing lasted".
+ */
+export class SwingTrail {
+  /**
+   * `life` is how long a segment stays visible, in seconds. Long enough to see
+   * the whole sweep after it has finished -- the point is to look at it once it
+   * has happened -- and short enough that two swings do not overlap into one
+   * unreadable smear.
+   */
+  constructor ({ THREE, scene, life = 0.5, poolSize = 48 }) {
+    this.THREE = THREE
+    this.scene = scene
+    this.life = life
+    this.pool = []
+    this.live = []
+    this.shape = null
+    this.poolSize = poolSize
+    this.lastLeft = null
+  }
+
+  /** Discard and rebuild every mesh, because the collider's shape changed. */
+  #rebuild (shape) {
+    for (const m of [...this.pool, ...this.live.map((l) => l.mesh)]) {
+      this.scene.remove(m)
+      m.geometry.dispose()
+    }
+    this.pool = []
+    this.live = []
+    for (let i = 0; i < this.poolSize; i++) {
+      const m = makeSwingMesh(this.THREE, {
+        reachUnits: shape.reach, innerUnits: shape.inner, halfArcTurns: shape.halfArc
+      })
+      // Dimmer than the live collider and drawn under it, so the current
+      // position stays legible against its own history.
+      m.material.opacity = 0.16
+      m.renderOrder = 997
+      this.scene.add(m)
+      this.pool.push(m)
+    }
+    this.shape = shape
+  }
+
+  /**
+   * Offer this frame's state. Adds a segment only when the tick has changed.
+   *
+   * `left` is the engine's countdown, which is what identifies a tick -- the
+   * renderer has no tick of its own to compare against, and the frame clock is
+   * not one.
+   */
+  offer ({ shape, left, offsetTurns, facingTurns, x, y, z, now }) {
+    if (!sameSwingShape(shape, this.shape)) this.#rebuild(shape)
+    if (!left || left <= 0 || offsetTurns === null) { this.lastLeft = null; return false }
+    if (left === this.lastLeft) return false
+    this.lastLeft = left
+
+    const mesh = this.pool.pop()
+    // Out of pool: drop it rather than stealing the oldest live segment. A
+    // trail missing its tail is a trail; one that flickers as it is recycled is
+    // worse than a short one.
+    if (!mesh) return false
+    mesh.position.set(x, y, z)
+    mesh.rotation.y = swingYaw(facingTurns, offsetTurns)
+    mesh.visible = true
+    mesh.material.opacity = 0.16
+    this.live.push({ mesh, born: now })
+    return true
+  }
+
+  /** Fade what is live, and return what has expired. */
+  update (now) {
+    for (let i = this.live.length - 1; i >= 0; i--) {
+      const e = this.live[i]
+      const f = fadeTrail(now - e.born, this.life)
+      if (f <= 0) {
+        e.mesh.visible = false
+        this.pool.push(e.mesh)
+        this.live.splice(i, 1)
+        continue
+      }
+      e.mesh.material.opacity = 0.16 * f
+    }
+  }
+
+  get count () { return this.live.length }
+}
+
+/**
+ * How visible a trail segment is, `age` seconds in.
+ *
+ * Not yet born reads as fully visible rather than expired -- the same guard the
+ * tracers needed, and for the same reason: a segment pushed later in a frame
+ * than the timestamp used to fade it has a negative age, and treating that as
+ * expired destroys it on the frame it was created.
+ */
+export function fadeTrail (age, life) {
+  if (!(life > 0)) return 0
+  if (age < 0) return 1
+  const f = 1 - age / life
+  return f > 0 ? f : 0
+}
