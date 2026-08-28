@@ -310,7 +310,7 @@ const routes = {
   'GET /api/props': async () => {
     const text = await readFile(join(ROOT, 'assets', 'props.txt'), 'utf8').catch(() => null)
     if (text === null) return { code: 404, body: { error: 'no assets/props.txt' } }
-    return { code: 200, body: { text } }
+    return { code: 200, body: { text, hash: textHash(text) } }
   },
 
   'GET /api/stack': async () => ({
@@ -357,6 +357,35 @@ const routes = {
       written.lua = true
     }
     return { code: 200, body: written }
+  },
+
+  /**
+   * Write the prop catalogue.
+   *
+   * A named route for ONE file, not a path from the page. assets/props.txt is
+   * outside maps/, so underMaps() refuses it -- correctly, and the answer is a
+   * route that can only ever mean this file rather than a second, looser gate.
+   *
+   * Guarded on the text the page opened, like a map: this file is read by both
+   * binaries, so overwriting a change nobody saw is a change to every level at
+   * once.
+   */
+  'POST /api/props': async (url, body) => {
+    const req = JSON.parse(body)
+    if (typeof req.text !== 'string') return { code: 400, body: { error: 'no text' } }
+    if (req.text.length > (1 << 20)) return { code: 400, body: { error: 'implausibly large' } }
+    const p = join(ROOT, 'assets', 'props.txt')
+    if (!req.force && typeof req.baseHash === 'string') {
+      const current = await readFile(p, 'utf8').catch(() => null)
+      if (current !== null && textHash(current) !== req.baseHash) {
+        return {
+          code: 409,
+          body: { error: 'assets/props.txt has changed since it was opened', current }
+        }
+      }
+    }
+    await writeFile(p, req.text)
+    return { code: 200, body: { hash: textHash(req.text) } }
   },
 
   'POST /api/compile': async (url, body) => {

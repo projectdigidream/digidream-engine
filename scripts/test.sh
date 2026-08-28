@@ -93,6 +93,10 @@ node editor/test/winding.test.js  | tail -2
 # file, so removing one renumbers every reference after it -- and a pit is two
 # things, a hole and the sector standing in it, which have to go together.
 node editor/test/edit.test.js     | tail -2
+# The prop catalogue. assets/props.txt is one file that two programs read, so
+# the check is that after a round trip through the editor the CLIENT's own
+# parser sees exactly the same catalogue -- not that the text looks similar.
+node editor/test/props.test.js    | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
@@ -170,6 +174,11 @@ else
   # format means by that word. A platform whose edges came out `wall` looks
   # completely correct and plays as a room with a thick floor.
   node editor/test/shapes.test.js | tail -2
+  # The page itself, in a real browser. Opt-in: three headless launches with
+  # software rasterisation is minutes of CPU for a check the pure tests mostly
+  # cover, and a suite everybody waits four minutes for is one people stop
+  # running. DNP_EDITOR_PAGE_TEST=1 includes it.
+  node editor/test/page.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/noupstream.test.js 2>/dev/null | tail -2 \
