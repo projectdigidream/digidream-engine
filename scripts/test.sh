@@ -79,6 +79,10 @@ node editor/test/server.test.js   | tail -2
 # inside it, and sealed a pit in maps/doom/map01.map shut -- which surfaced much
 # later as "sector 51 partially overlaps sector 26".
 node editor/test/topology.test.js | tail -2
+# Undo, which here is parse(emit(doc)) -- so it rides on the same fixed point
+# the corpus above proves, and this adds the case that one does not have: the
+# shapes the EDITOR draws, whose numbers no author ever typed.
+node editor/test/history.test.js  | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
