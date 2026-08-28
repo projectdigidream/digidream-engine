@@ -53,6 +53,27 @@ export function readSwingShape (world, agent) {
   }
 }
 
+/**
+ * The region the collider actually sweeps through, as {mid, half} in turns.
+ *
+ * NOT from the raw parameters. `attack_sweep_from`/`to` are the angles at phase
+ * 0 and 1, and the collider never occupies either: the countdown a client can
+ * observe runs from ticks-1 down to 1, so the first and last offsets sit one
+ * step inside the declared range. Drawing the region from the parameters makes
+ * a wedge the swing can never fill -- 180 degrees against the 168.8 it reaches
+ * -- and the gap is exactly the "the red does not cover the grey arc" that gets
+ * reported. Derived from sweepOffset so the two cannot disagree by
+ * construction.
+ */
+export function sweptSpan (shape) {
+  const ticks = shape.ticks > 0 ? shape.ticks : 1
+  const first = sweepOffset({ ...shape, left: Math.max(1, ticks - 1) })
+  const last = sweepOffset({ ...shape, left: 1 })
+  const lo = Math.min(first, last) - shape.halfArc
+  const hi = Math.max(first, last) + shape.halfArc
+  return { mid: (lo + hi) / 2, half: (hi - lo) / 2 }
+}
+
 /** Whether two shapes would draw differently. */
 export function sameSwingShape (a, b) {
   if (!a || !b) return false
@@ -194,6 +215,11 @@ export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, innerUnits = 0
  * draw the same tick several times at 144 Hz and skip ticks at 30 -- and the
  * count of segments would stop meaning "how long the swing lasted".
  */
+// How solid a trail segment is. Sixteen of them overlap across a swing, so this
+// is per-segment rather than per-trail: too high and the union is a flat slab
+// with no sense of where the collider was recently.
+const TRAIL_OPACITY = 0.3
+
 export class SwingTrail {
   /**
    * `life` is how long a segment stays visible, in seconds. Long enough to see
@@ -201,7 +227,11 @@ export class SwingTrail {
    * has happened -- and short enough that two swings do not overlap into one
    * unreadable smear.
    */
-  constructor ({ THREE, scene, life = 0.5, poolSize = 48 }) {
+  // `life` outlasts the swing itself, deliberately. A swing is sixteen ticks --
+  // a quarter of a second -- and a trail that expired with it would be gone
+  // before anyone finished looking at it. The point is to see the shape AFTER
+  // it happened.
+  constructor ({ THREE, scene, life = 1.2, poolSize = 48 }) {
     this.THREE = THREE
     this.scene = scene
     this.life = life
@@ -226,7 +256,7 @@ export class SwingTrail {
       })
       // Dimmer than the live collider and drawn under it, so the current
       // position stays legible against its own history.
-      m.material.opacity = 0.16
+      m.material.opacity = TRAIL_OPACITY
       m.renderOrder = 997
       this.scene.add(m)
       this.pool.push(m)
@@ -255,7 +285,7 @@ export class SwingTrail {
     mesh.position.set(x, y, z)
     mesh.rotation.y = swingYaw(facingTurns, offsetTurns)
     mesh.visible = true
-    mesh.material.opacity = 0.16
+    mesh.material.opacity = TRAIL_OPACITY
     this.live.push({ mesh, born: now })
     return true
   }
@@ -271,7 +301,7 @@ export class SwingTrail {
         this.live.splice(i, 1)
         continue
       }
-      e.mesh.material.opacity = 0.16 * f
+      e.mesh.material.opacity = TRAIL_OPACITY * f
     }
   }
 

@@ -12,8 +12,8 @@
 // and checks the drawn angle against the engine's own formula at every tick.
 //
 import { Core } from '../src/core.js'
-import { sweepOffset, swingYaw, sameSwingShape, makeSwingMesh, SwingTrail, fadeTrail }
-  from '../src/render/swing.js'
+import { sweepOffset, swingYaw, sameSwingShape, makeSwingMesh, SwingTrail, fadeTrail,
+         sweptSpan } from '../src/render/swing.js'
 import { facingDirection } from '../src/camera.js'
 
 let checks = 0
@@ -290,6 +290,53 @@ check(fadeTrail(-0.01, 0.5) === 1, 'a segment not yet born is visible')
 check(fadeTrail(0, 0.5) === 1, 'a new one is fully visible')
 check(fadeTrail(0.25, 0.5) === 0.5, 'half way through it is half faded')
 check(fadeTrail(0.5, 0.5) === 0, 'and at its life it is gone')
+
+
+// --- the drawn region is the region the collider reaches ---------------------
+//
+// attack_sweep_from/to are the angles at phase 0 and 1, and the collider never
+// occupies either: the observable countdown runs from ticks-1 down to 1, so the
+// first and last offsets sit one step inside the declared range. A region drawn
+// from the raw parameters is therefore a wedge the swing can never fill, and
+// the gap is exactly "the red does not cover the grey arc".
+
+{
+  const shape = { from: -0.125, to: 0.125, halfArc: 0.125, ticks: 16 }
+  const span = sweptSpan(shape)
+
+  // Every angle the collider occupies is inside the drawn region.
+  let lo = 1
+  let hi = -1
+  for (let left = shape.ticks - 1; left >= 1; left--) {
+    const o = sweepOffset({ ...shape, left })
+    lo = Math.min(lo, o - shape.halfArc)
+    hi = Math.max(hi, o + shape.halfArc)
+  }
+  check(span.mid - span.half <= lo + 1e-9 && span.mid + span.half >= hi - 1e-9,
+        'the drawn region contains every angle the collider reaches')
+
+  // And is not LARGER than it: the region is a claim about what the swing hits,
+  // so slack in it is a lie in the direction that matters.
+  check(Math.abs((span.half * 2) - (hi - lo)) < 1e-9,
+        `and is exactly that wide (${(span.half * 2 * 360).toFixed(1)} deg)`)
+
+  // The CONTROL: the naive region, straight from the parameters, is wider --
+  // which is the version that shipped, and the reason a swing appeared not to
+  // cover its own arc.
+  const naive = Math.abs(shape.to - shape.from) / 2 + shape.halfArc
+  check(naive > span.half,
+        `the parameters alone describe a wider one (${(naive * 2 * 360).toFixed(1)} deg)`)
+
+  // A thrust -- no sweep at all -- is a wedge of exactly the arc, centred.
+  const thrust = sweptSpan({ from: 0.1, to: 0.1, halfArc: 0.05, ticks: 8 })
+  check(Math.abs(thrust.half - 0.05) < 1e-9 && Math.abs(thrust.mid - 0.1) < 1e-9,
+        'a thrust draws its arc and nothing more')
+
+  // And a one-tick swing does not divide by zero or collapse.
+  const single = sweptSpan({ from: -0.1, to: 0.1, halfArc: 0.05, ticks: 1 })
+  check(Number.isFinite(single.mid) && single.half >= 0.05,
+        'a one-tick swing still has a region')
+}
 
 console.log(`\nswing: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

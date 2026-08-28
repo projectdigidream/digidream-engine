@@ -433,10 +433,185 @@ static void test_a_parametric_anchor_is_still_hashed_absolutely() {
     std::printf("  400 ticks, no divergence of any kind\n");
 }
 
+
+// --------------------------------------------------- horizontal platforms
+
+// Does this engine actually support a platform that moves SIDEWAYS?
+//
+// Worth asking separately from a lift, because the two are not the same problem.
+// A lift changes a sector's floor height and nothing else: its footprint is
+// where it always was, so find_sector, the broadphase grid and the sector
+// partition are all undisturbed. A horizontally moving sector changes its
+// FOOTPRINT -- it stops being where the map says it is -- and everything that
+// answers "which sector is this point in" was written against a partition of
+// the plane that no longer holds.
+//
+// SectorMotion::from/to are fx3 and floor_delta() carries x and y
+// unconditionally, so the intent is clearly there. Nothing tested it.
+
+// A platform sector with open space on either side, so it can travel without
+// having to overlap a neighbour. Overlap is a separate question and is asked
+// last, on its own.
+struct Slider {
+    MapStorage store;
+    MapData    view{};
+
+    Slider() {
+        // Sector 0: the platform, 10 wide, starting at x 20..30.
+        const fx2 plat[] = {{F(20), F(0)}, {F(30), F(0)}, {F(30), F(20)}, {F(20), F(20)}};
+        store.add_sector(plat, 4, F(0), F(60), 1);
+        for (u16 i = 0; i < 4; ++i) {
+            store.add_side(0, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+        }
+        view = store.view();
+    }
+    void attach(World& w) {
+        w.set_map_storage(&store);
+        view = store.view();
+        w.set_map(&view);
+    }
+};
+
+static void test_a_horizontal_platform_carries_its_rider() {
+    std::printf("motion: a sideways-moving sector carries what stands on it\n");
+
+    // static: a World is 385 KB and these are inlined into main's frame under
+    // the sanitizers, where four of them together overflow an 8 MB stack. The
+    // same reason test_props.cpp and test_bodies.cpp do it.
+    static Slider stage;
+    static World w;
+    stage.attach(w);
+
+    const u32 a = w.spawn(fx3{F(25), F(10), F(1)});
+    w.motions().add(stage.store, 0);
+    // Ten units east over five seconds -- slow enough that the measurement
+    // window below sits inside the motion rather than after it.
+    w.motions().start_parametric(0, fx3::zero(), fx3{F(10), fx::zero(), fx::zero()},
+                                 0, 300, LoopMode::Once);
+
+    // Land and anchor first. A body still falling is not riding anything.
+    for (int i = 0; i < 30; ++i) { w.set_input(a, proto::InputFrame{}); w.step(); }
+    CHECK(w.agent(a).mv.grounded);
+    CHECK(w.agent(a).mv.anchored);
+
+    const fx x0 = w.agent(a).pos.x;
+    for (int i = 0; i < 60; ++i) { w.set_input(a, proto::InputFrame{}); w.step(); }
+    const fx x1 = w.agent(a).pos.x;
+
+    // 60 ticks of a 300-tick, 10-unit journey is 2 units.
+    std::printf("       carried from x=%.2f to x=%.2f\n", D(x0), D(x1));
+    CHECK(x1 > x0 + fx::from_frac(18, 10));
+    CHECK(x1 < x0 + fx::from_frac(22, 10));
+
+    // AND IT IS STILL ABOARD. Being moved is not the same as being carried: a
+    // body that is displaced but loses its anchor has stepped off the far edge,
+    // and the next tick it is falling.
+    CHECK(w.agent(a).mv.grounded);
+    CHECK(w.agent(a).mv.anchored);
+    CHECK(w.agent(a).mv.anchor == 0);
+}
+
+// The control the one above needs: with the platform still, the same body does
+// not drift. Otherwise "it moved 2 units east" is satisfied by anything.
+static void test_a_still_platform_carries_nobody() {
+    std::printf("motion: and a still one does not\n");
+
+    // static: a World is 385 KB and these are inlined into main's frame under
+    // the sanitizers, where four of them together overflow an 8 MB stack. The
+    // same reason test_props.cpp and test_bodies.cpp do it.
+    static Slider stage;
+    static World w;
+    stage.attach(w);
+
+    const u32 a = w.spawn(fx3{F(25), F(10), F(1)});
+    w.motions().add(stage.store, 0);
+
+    for (int i = 0; i < 30; ++i) { w.set_input(a, proto::InputFrame{}); w.step(); }
+    const fx x0 = w.agent(a).pos.x;
+    for (int i = 0; i < 60; ++i) { w.set_input(a, proto::InputFrame{}); w.step(); }
+    CHECK(w.agent(a).pos.x == x0);
+}
+
+// Stepping off a moving walkway should throw you, the same way stepping off a
+// rising lift does. §3.2.5 says a detaching entity inherits the surface's
+// velocity once, and nothing about that says vertical.
+static void test_detaching_inherits_horizontal_momentum() {
+    std::printf("motion: leaving a sideways platform inherits its velocity\n");
+
+    // static: a World is 385 KB and these are inlined into main's frame under
+    // the sanitizers, where four of them together overflow an 8 MB stack. The
+    // same reason test_props.cpp and test_bodies.cpp do it.
+    static Slider stage;
+    static World w;
+    stage.attach(w);
+
+    const u32 a = w.spawn(fx3{F(25), F(10), F(1)});
+    w.motions().add(stage.store, 0);
+    // Exactly 12 units per second east: 12 units over 60 ticks.
+    w.motions().start_parametric(0, fx3::zero(), fx3{F(12), fx::zero(), fx::zero()},
+                                 0, 60, LoopMode::Loop);
+
+    for (int i = 0; i < 30; ++i) { w.set_input(a, proto::InputFrame{}); w.step(); }
+    CHECK(w.agent(a).mv.anchored);
+
+    proto::InputFrame jump;
+    jump.buttons = proto::button::JUMP;
+    w.set_input(a, jump);
+    w.step();
+
+    const fx vx = w.agent(a).vel.x;
+    std::printf("       jumped off at vx=%.2f (platform 12.00)\n", D(vx));
+    // Most of the platform's speed, not a fraction of it and not zero.
+    CHECK(vx > F(10));
+    CHECK(vx < F(14));
+}
+
+// The case the geometry cannot answer cleanly, asked deliberately.
+//
+// A sector that moves sideways stops being where the map says it is, so a
+// platform travelling INTO its neighbour overlaps it -- and "which sector is
+// this point in" no longer has one answer. mapc refuses overlapping sectors at
+// bake time precisely because point_in_sector has to be a function.
+//
+// This does not assert that the overlap works. It asserts the engine stays
+// COHERENT: the body keeps a valid sector, stays inside the world, and does not
+// end up at a position no rule put it at. What it does NOT do is promise that a
+// platform may be authored to drive through a neighbouring floor.
+static void test_a_platform_moving_into_its_neighbour_stays_coherent() {
+    std::printf("motion: a platform overrunning its neighbour leaves a sane world\n");
+
+    Stage stage;                       // two sectors, sharing x = 20
+    World w;
+    stage.attach(w);
+
+    const u32 a = w.spawn(fx3{F(10), F(10), F(1)});   // standing in sector 0
+    w.motions().add(stage.store, 1);
+    // Sector 1 (x 20..40) drives WEST, straight over sector 0.
+    w.motions().start_parametric(1, fx3::zero(), fx3{-F(15), fx::zero(), fx::zero()},
+                                 0, 120, LoopMode::Once);
+
+    for (int i = 0; i < 200; ++i) {
+        w.set_input(a, proto::InputFrame{});
+        w.step();
+        const AgentState& s = w.agent(a);
+        // Never off the map, never underground, never at a position with no
+        // sector -- any of which is the engine losing track of where it is.
+        CHECK(s.pos.z > -F(50));
+        CHECK(s.pos.x > -F(100) && s.pos.x < F(100));
+        if (g_fails) break;
+    }
+    std::printf("       ended at x=%.2f z=%.2f sector %d\n",
+                D(w.agent(a).pos.x), D(w.agent(a).pos.z), w.agent(a).mv.sector);
+}
+
 int main() {
     std::printf("== core/sim sector motion suite ==\n");
     test_parametric_is_a_pure_function();
     test_riding_a_lift();
+    test_a_horizontal_platform_carries_its_rider();
+    test_a_still_platform_carries_nobody();
+    test_detaching_inherits_horizontal_momentum();
+    test_a_platform_moving_into_its_neighbour_stays_coherent();
     test_detach_inherits_momentum();
     test_discrete_motion();
     test_determinism();

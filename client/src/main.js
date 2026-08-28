@@ -31,7 +31,7 @@ import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
-         SwingTrail } from './render/swing.js'
+         sweptSpan, SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { UiView } from './render/ui.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
@@ -409,16 +409,19 @@ let swingSpan = 0
 let swingMid = 0
 let swingWhole = null
 let swing = null
+// The offset most recently drawn, for the HUD. Null when nothing is swinging.
+let swingLastOff = null
 
 function rebuildSwing (shape) {
   if (!SHOW_SWING) return
   if (swingWhole) { scene.remove(swingWhole); swingWhole.geometry.dispose() }
   if (swing) { scene.remove(swing); swing.geometry.dispose() }
-  // The whole region the swing travels through: from the start of the sweep
-  // less its half-arc, to the end plus it. Fixed to the body, so the moving
-  // collider can be seen crossing it.
-  swingSpan = Math.abs(shape.to - shape.from) / 2 + shape.halfArc
-  swingMid = (shape.from + shape.to) / 2
+  // The region the collider ACTUALLY sweeps, not the one the parameters
+  // describe. See sweptSpan: the declared endpoints are angles the swing never
+  // occupies, so a region drawn from them is a wedge the red can never fill.
+  const swept = sweptSpan(shape)
+  swingSpan = swept.half
+  swingMid = swept.mid
   swingWhole = makeSwingMesh(THREE, {
     reachUnits: shape.reach, innerUnits: shape.inner,
     halfArcTurns: swingSpan, segments: 24, faint: true
@@ -883,6 +886,7 @@ function frame (now) {
     // The engine's own numbers, run through the engine's own formula. See
     // render/swing.js: the offset is a turn fraction from the aim.
     const off = sweepOffset({ ...swingShape, left: a.attackLeft })
+    swingLastOff = off
     const facingTurns = (a.facing >>> 0) / 4294967296
     // Drawn at the middle of the body rather than at its feet: a collider
     // hugging the floor reads as unrelated to the thing it is about to hit.
@@ -1001,6 +1005,12 @@ function frame (now) {
     `draw ${cost.draw.toFixed(2)}ms\n` +
     `vfx  seen ${vfxSeen}   live ${vfx ? vfx.live.length : 0}   ` +
     `pool ${vfx ? vfx.pool.length : 'NO VIEW'}\n` +
+    // The swing as the renderer sees it. Three numbers rather than a
+    // description, because "the arc does not move much" and "the arc is drawn
+    // once and never updated" look identical from a chair and are told apart
+    // by whether `left` counts down and `off` changes with it.
+    `swing left ${a.attackLeft}   off ${swingLastOff === null ? '-' : swingLastOff.toFixed(3)}` +
+    `   trail ${swingTrail ? swingTrail.count : '-'}\n` +
     // The weapon, in numbers. The wedge shows the shape; these show what it is
     // made of, which is what you read while dragging a slider to see whether
     // the value you set is the value the engine took.
