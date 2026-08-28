@@ -12,7 +12,7 @@
 // and checks the drawn angle against the engine's own formula at every tick.
 //
 import { Core } from '../src/core.js'
-import { sweepOffset, swingYaw } from '../src/render/swing.js'
+import { sweepOffset, swingYaw, sameSwingShape, makeSwingMesh } from '../src/render/swing.js'
 import { facingDirection } from '../src/camera.js'
 
 let checks = 0
@@ -164,6 +164,71 @@ console.log('\n--- the drawn wedge points where the engine is aiming ---')
   const a1 = swingYaw(0, 0)
   const a2 = swingYaw(0, 0.125)
   check(a0 < a1 && a1 < a2, 'the offset rotates the wedge monotonically')
+}
+
+
+
+// Enough of three.js to inspect a Shape. What is under test is the geometry the
+// builder produces, which needs no GPU and no library.
+function fakeThree () {
+  return {
+    Shape: class {
+      constructor () { this.points = [] }
+      moveTo (x, y) { this.points.push({ x, y }) }
+      lineTo (x, y) { this.points.push({ x, y }) }
+    },
+    ShapeGeometry: class {
+      constructor (shape) { this.points = shape.points }
+      rotateX () { return this }
+      dispose () {}
+    },
+    MeshBasicMaterial: class { constructor (o) { Object.assign(this, o) } },
+    Mesh: class {
+      constructor (g, m) { this.geometry = g; this.material = m; this.visible = false }
+    }
+  }
+}
+
+// --- the shape follows the parameters ----------------------------------------
+//
+// These were read once at startup and baked into geometry, so every attack
+// parameter looked inert: the wedge on screen was the weapon the session began
+// with, whatever the sliders said. Reported as "the attack graphics seemingly
+// do not change".
+
+{
+  const a = { reach: 2, inner: 0, halfArc: 0.125, from: -0.125, to: 0.125 }
+  check(sameSwingShape(a, { ...a }), 'an identical shape needs no rebuild')
+  for (const k of ['reach', 'inner', 'halfArc', 'from', 'to']) {
+    check(!sameSwingShape(a, { ...a, [k]: a[k] + 1 }),
+          `a change to ${k} is a rebuild`)
+  }
+  check(sameSwingShape(a, { ...a, ticks: 99 }),
+        'but duration is not: it changes WHEN, not what shape')
+}
+
+// A minimum reach makes a ring segment, not a wedge -- and the difference has
+// to be visible, because it is the parameter that changes what the weapon can
+// hit rather than how far.
+{
+  const THREE = fakeThree()
+  const wedge = makeSwingMesh(THREE, { reachUnits: 4, halfArcTurns: 0.125 })
+  const ring = makeSwingMesh(THREE, { reachUnits: 4, halfArcTurns: 0.125, innerUnits: 2 })
+
+  // A wedge touches the origin -- it is drawn from the body outward. A ring
+  // does not: its near edge is the minimum reach, which is exactly the region
+  // the collider cannot hit.
+  const near = (pts) => Math.min(...pts.map((p) => Math.hypot(p.x, p.y)))
+  check(near(wedge.geometry.points) < 0.01,
+        `a wedge reaches the body (${near(wedge.geometry.points).toFixed(2)})`)
+  check(Math.abs(near(ring.geometry.points) - 2) < 0.01,
+        `a ring starts at its minimum reach (${near(ring.geometry.points).toFixed(2)})`)
+  // And both reach the same distance, so the inner edge has not been drawn by
+  // shrinking the whole thing.
+  const far = (pts) => Math.max(...pts.map((p) => Math.hypot(p.x, p.y)))
+  check(Math.abs(far(wedge.geometry.points) - 4) < 0.01 &&
+        Math.abs(far(ring.geometry.points) - 4) < 0.01,
+        'and both still reach as far as the weapon does')
 }
 
 console.log(`\nswing: ${checks} checks, ${fails} failures`)

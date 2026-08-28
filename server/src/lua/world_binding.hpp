@@ -101,6 +101,9 @@ struct UiSink {
     // which is the ordinary case for a monster, and is not an error.
     virtual u32  open_ui(u32 level, u32 agent, const proto::UiPanel& panel) = 0;
     virtual void close_ui(u32 level, u32 agent, u32 ui_id) = 0;
+    // One widget's value, in a panel already open. A no-op for a panel that is
+    // not, or a widget it does not contain.
+    virtual void set_ui(u32 level, u32 agent, u32 ui_id, u16 widget_id, i32 value) = 0;
 };
 
 struct WorldContext {

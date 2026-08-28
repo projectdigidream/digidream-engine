@@ -45,6 +45,14 @@ export function mirrorEntities (world, snap, {
 
     if (isBody) {
       if (index === selfIndex) continue
+      // Solid is delta-encoded: it arrives on the tick it changes and never
+      // again, so the remembered value is what counts. A corpse is drawn and
+      // not walked into.
+      if (e.mask & ENT_FIELD.SOLID) kinds.set(`solid:${index}`, e.solid !== 0)
+      if (kinds.get(`solid:${index}`) === false) {
+        world.removeProp(mirrorBase + index)
+        continue
+      }
       // A monster's size is its catalogue entry; a player's is the map's
       // declared body. Kind 0 is a player.
       const kind = kinds.get(index)

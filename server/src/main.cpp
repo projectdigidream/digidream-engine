@@ -688,6 +688,18 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         link.send_control(s.id, buf, end);
     }
 
+    // One widget's value, in a panel already open (docs/protocol.md §11.1).
+    void send_ui_set(Session& s, u32 ui_id, u16 widget_id, i32 value) {
+        u8 buf[32];
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1 + 10);
+        w.u8v(proto::MSG_UI_SET);
+        w.u32v(ui_id);
+        w.u16v(widget_id);
+        w.i32v(value);
+        if (w.ok()) link.send_control(s.id, buf, w.size());
+    }
+
     void send_ui_close(Session& s, u32 ui_id) {
         u8 buf[32];
         ByteWriter w(buf, sizeof(buf));
@@ -1116,6 +1128,21 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         return p.ui_id;
     }
 
+    void set_ui(u32 level_index, u32 agent, u32 ui_id, u16 widget_id, i32 value) override {
+        Session* s = session_for(level_index, agent);
+        if (s == nullptr) return;
+        proto::UiPanel* p = s->find_ui(ui_id);
+        if (p == nullptr) return;
+        // The server's own copy is updated too, so a panel it later reasons
+        // about matches what the player is looking at.
+        for (u16 i = 0; i < p->count; ++i) {
+            if (p->widgets[i].id != widget_id) continue;
+            p->widgets[i].value = value;
+            send_ui_set(*s, ui_id, widget_id, value);
+            return;
+        }
+    }
+
     void close_ui(u32 level_index, u32 agent, u32 ui_id) override {
         Session* s = session_for(level_index, agent);
         if (s == nullptr) return;
@@ -1325,6 +1352,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                     // exactly the records a prop is. Zero stays "a player".
                     now.animation_state = a.animation_state;
                     now.display_id      = a.kind;
+                    now.solid           = a.solid;
                 }
 
                 if (!now.present) {
@@ -1360,6 +1388,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                 e.facing           = now.facing;
                 e.animation_state  = now.animation_state;
                 e.display_id       = now.display_id;
+                e.solid            = now.solid ? 1 : 0;
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;

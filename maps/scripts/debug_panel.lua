@@ -143,12 +143,30 @@ end
 -- Opened when somebody arrives, and not before: dnp.ui_open needs a session to
 -- send to, and on_tick is the first place this script can know there is one.
 local seen = {}
+local shown_hp = {}
+
 function on_tick()
   for _, e in ipairs(dnp.players()) do
     local idx = e:index()
     if not seen[idx] then
       seen[idx] = true
       show(e)
+      shown_hp[idx] = nil
+    end
+
+    -- HEALTH FOLLOWS. A panel is built from state at the moment it opens and
+    -- nothing pushes changes into one, so a health slider sat at whatever it
+    -- was when the panel appeared while monsters shot the number down behind
+    -- it. dnp.ui_set changes the widget in place -- no reopen, no new id, no
+    -- window flickering every time somebody is hit.
+    --
+    -- Only when it CHANGES: this runs sixty times a second, and a reliable
+    -- control message per tick per player to say the same number again is a
+    -- waste of the channel that carries map data.
+    local hp = e:hp()
+    if hp ~= nil and hp ~= shown_hp[idx] and panel_of[idx] ~= nil then
+      shown_hp[idx] = hp
+      dnp.ui_set(e, panel_of[idx], W_HP, hp)
     end
   end
 end

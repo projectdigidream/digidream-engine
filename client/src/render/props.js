@@ -182,8 +182,13 @@ export function frameName (def, state, index, rotation) {
 export function frameAt (state, seconds) {
   const n = state.frames?.length ?? 0
   if (n <= 1 || !state.fps) return 0
-  const i = Math.floor(seconds * state.fps) % n
-  return i < 0 ? i + n : i
+  const i = Math.floor(seconds * state.fps)
+  // `once` HOLDS the last frame instead of wrapping. That is what leaves a
+  // corpse on the floor rather than a monster dying over and over, and what
+  // stops a barrel re-exploding for as long as it exists.
+  if (state.once) return i <= 0 ? 0 : (i >= n ? n - 1 : i)
+  const w = i % n
+  return w < 0 ? w + n : w
 }
 
 /**

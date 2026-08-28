@@ -31,6 +31,36 @@
 //
 
 /**
+ * The swing's shape, read from the engine's own parameter table.
+ *
+ * Read EVERY FRAME rather than once at startup. These are replicated
+ * parameters: a script can change any of them mid-session -- the debug panel
+ * exists to do exactly that -- and a mesh built once at load shows the shape the
+ * weapon had when the page opened. Which looks like the parameters doing
+ * nothing, and was reported as exactly that.
+ */
+export function readSwingShape (world, agent) {
+  const par = (n) => Number(world.getParamRaw(agent, world.paramId(n))) / 4294967296
+  return {
+    reach: par('attack_reach'),
+    inner: par('attack_min_reach'),
+    halfArc: par('attack_half_arc'),
+    from: par('attack_sweep_from'),
+    to: par('attack_sweep_to'),
+    // U8 parameters are stored as integers, not fixed-point fractions.
+    ticks: Number(world.getParamRaw(agent, world.paramId('attack_ticks'))),
+    cooldown: Number(world.getParamRaw(agent, world.paramId('attack_cooldown')))
+  }
+}
+
+/** Whether two shapes would draw differently. */
+export function sameSwingShape (a, b) {
+  if (!a || !b) return false
+  return a.reach === b.reach && a.inner === b.inner && a.halfArc === b.halfArc &&
+         a.from === b.from && a.to === b.to
+}
+
+/**
  * Where the collider is centred, as a TURN FRACTION offset from the aim.
  *
  * Mirrors World::resolve_attack exactly: the swing runs from `from` to `to`
@@ -86,15 +116,35 @@ export function swingYaw (facingTurns, offsetTurns) {
  * SHAPE does not, so rotating a mesh costs nothing while rebuilding one would
  * allocate a buffer per frame for the duration of every swing.
  */
-export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, segments = 12, faint = false }) {
+export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, innerUnits = 0,
+                                        segments = 12, faint = false }) {
   const half = halfArcTurns * Math.PI * 2
   const shape = new THREE.Shape()
-  shape.moveTo(0, 0)
-  for (let i = 0; i <= segments; i++) {
-    const a = -half + (2 * half * i) / segments
-    shape.lineTo(Math.cos(a) * reachUnits, Math.sin(a) * reachUnits)
+  if (innerUnits > 0) {
+    // A RING SEGMENT, not a wedge. attack_min_reach is the parameter that
+    // changes the collider's shape rather than its size, and drawing it as a
+    // full wedge would show a weapon hitting exactly what it cannot: the thing
+    // pressed against you, which is the whole point of the parameter.
+    for (let i = 0; i <= segments; i++) {
+      const a = -half + (2 * half * i) / segments
+      const x = Math.cos(a) * innerUnits
+      const y = Math.sin(a) * innerUnits
+      if (i === 0) shape.moveTo(x, y)
+      else shape.lineTo(x, y)
+    }
+    for (let i = segments; i >= 0; i--) {
+      const a = -half + (2 * half * i) / segments
+      shape.lineTo(Math.cos(a) * reachUnits, Math.sin(a) * reachUnits)
+    }
+    shape.lineTo(Math.cos(-half) * innerUnits, Math.sin(-half) * innerUnits)
+  } else {
+    shape.moveTo(0, 0)
+    for (let i = 0; i <= segments; i++) {
+      const a = -half + (2 * half * i) / segments
+      shape.lineTo(Math.cos(a) * reachUnits, Math.sin(a) * reachUnits)
+    }
+    shape.lineTo(0, 0)
   }
-  shape.lineTo(0, 0)
 
   const geo = new THREE.ShapeGeometry(shape)
   // The shape is authored in XY and the world's ground plane is XZ, so it is

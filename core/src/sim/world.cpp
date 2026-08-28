@@ -949,6 +949,30 @@ void World::resolve_attack(u32 agent) noexcept {
         const u32 diff = to.raw - centre.raw;   // wraps, deliberately
         return diff <= half || diff >= (0u - half);
     };
+    // IS THERE A WALL IN THE WAY?
+    //
+    // The tests above are distance and angle, which describe a shape and say
+    // nothing about the level -- so a swing reached through walls, and a player
+    // standing on the far side of a door could kill what was behind it. That is
+    // the same mistake sight made: "is it close and in front" is not "can I
+    // touch it".
+    //
+    // At the swinger's eye height, and against the same raycast the mover and
+    // line of sight use, so what stops a bullet stops a sword. Only asked of
+    // things that already passed the cheap tests, because it walks sectors.
+    const fx eye = a.pos.z + mp.height / 2;
+    const auto clear_path = [&](fx2 toward) {
+        if (map_ == nullptr) return true;
+        const fx dist = length(toward);
+        if (dist <= fx::zero()) return true;
+        const fx2 dir{toward.x / dist, toward.y / dist};
+        const physics::RayHit hit =
+            physics::raycast(*map_, a.mv.sector, from, dir, dist, 0, eye);
+        // Blocked BEFORE the target is a wall between them. Blocked at or past
+        // it is the wall behind it, which is not in the way of anything.
+        return !hit.blocked || hit.distance >= dist;
+    };
+
     const auto reaches = [&](fx2 toward, fx surface_radius) {
         const u128 d_sq = len_sq_raw(toward);
         const fx limit = mp.attack_reach + surface_radius;
@@ -972,6 +996,7 @@ void World::resolve_attack(u32 agent) noexcept {
         const fx2 toward = fx2{agents_[t].pos.x, agents_[t].pos.y} - from;
         if (!reaches(toward, params_[t].radius)) continue;
         if (!in_arc(toward)) continue;
+        if (!clear_path(toward)) continue;
         a.mv.attack_hit_agents[t / 64] |= (static_cast<u64>(1) << (t % 64));
         attacks_.push(AttackEvent{agent, t});
     }
@@ -985,6 +1010,7 @@ void World::resolve_attack(u32 agent) noexcept {
         const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
         if (!reaches(toward, p.radius)) continue;
         if (!in_arc(toward)) continue;
+        if (!clear_path(toward)) continue;
         a.mv.attack_hit_props[pi / 64] |= (static_cast<u64>(1) << (pi % 64));
         attacks_.push(AttackEvent{agent, MAX_AGENTS + pi});
     }

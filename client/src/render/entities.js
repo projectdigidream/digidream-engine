@@ -109,7 +109,11 @@ export class EntityView {
       // The KIND, not a size: how big a thing is comes from the catalogue for
       // a monster and from the map for a player, and neither is this view's
       // business to know.
-      if (this.onBody) this.onBody(index, ent.kind, e.pos)
+      // `solid` is delta-encoded like everything else: it arrives on the tick
+      // it CHANGES and never again, so the last value has to be remembered
+      // rather than read from this message.
+      if (e.mask & ENT_FIELD.SOLID) ent.solid = e.solid !== 0
+      if (this.onBody) this.onBody(index, ent.kind, e.pos, ent.solid !== false)
 
       const last = ent.samples.at(-1)
       const p = toThree(fxToFloat(e.pos.x), fxToFloat(e.pos.y), fxToFloat(e.pos.z))

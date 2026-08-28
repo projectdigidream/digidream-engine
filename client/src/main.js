@@ -30,7 +30,7 @@ import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
-import { sweepOffset, makeSwingMesh, swingYaw } from './render/swing.js'
+import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { UiView } from './render/ui.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
@@ -134,6 +134,7 @@ if (LIVE) {
       // must not be missed.
       else if (m.type === MSG.UI_OPEN) ui.open(m)
       else if (m.type === MSG.UI_CLOSE) ui.close(m.uiId)
+      else if (m.type === MSG.UI_SET) ui.set(m.uiId, m.widgetId, m.value)
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
     },
     onSnapshot (s) { pendingSnapshots.push(s) },
@@ -380,29 +381,42 @@ scene.add(body)
 // Resolved by NAME through the engine's own table. Hardcoding the numbers put
 // this five ids short the moment MoveParams grew a field, which is the same
 // two-programs-one-number trap the prop catalogue exists to avoid.
-const par = (name) => Number(world.getParamRaw(agent, world.paramId(name))) / 4294967296
-const swingShape = {
-  reach: par('attack_reach'),
-  halfArc: par('attack_half_arc'),
-  from: par('attack_sweep_from'),
-  to: par('attack_sweep_to'),
-  // A U8 parameter is stored as an integer, not a fixed-point fraction.
-  ticks: Number(world.getParamRaw(agent, world.paramId('attack_ticks')))
-}
 const SHOW_SWING = params.get('swing') !== '0'
-// The whole region the swing travels through: from the start of the sweep less
-// its half-arc, to the end plus it. Fixed to the body, so the moving collider
-// can be seen crossing it.
-const swingSpan = Math.abs(swingShape.to - swingShape.from) / 2 + swingShape.halfArc
-const swingMid = (swingShape.from + swingShape.to) / 2
-const swingWhole = SHOW_SWING
-  ? makeSwingMesh(THREE, { reachUnits: swingShape.reach, halfArcTurns: swingSpan, segments: 24, faint: true })
-  : null
-const swing = SHOW_SWING
-  ? makeSwingMesh(THREE, { reachUnits: swingShape.reach, halfArcTurns: swingShape.halfArc })
-  : null
-if (swingWhole) scene.add(swingWhole)
-if (swing) scene.add(swing)
+
+// The two wedges, REBUILT whenever the shape changes.
+//
+// Built once at startup they showed the weapon the session began with, so every
+// attack parameter looked inert -- which is what a debug panel full of sliders
+// that appear to do nothing feels like. These are replicated parameters and a
+// script may change any of them at any moment, so the shape is re-read each
+// frame and the geometry replaced when it actually differs.
+let swingShape = null
+let swingSpan = 0
+let swingMid = 0
+let swingWhole = null
+let swing = null
+
+function rebuildSwing (shape) {
+  if (!SHOW_SWING) return
+  if (swingWhole) { scene.remove(swingWhole); swingWhole.geometry.dispose() }
+  if (swing) { scene.remove(swing); swing.geometry.dispose() }
+  // The whole region the swing travels through: from the start of the sweep
+  // less its half-arc, to the end plus it. Fixed to the body, so the moving
+  // collider can be seen crossing it.
+  swingSpan = Math.abs(shape.to - shape.from) / 2 + shape.halfArc
+  swingMid = (shape.from + shape.to) / 2
+  swingWhole = makeSwingMesh(THREE, {
+    reachUnits: shape.reach, innerUnits: shape.inner,
+    halfArcTurns: swingSpan, segments: 24, faint: true
+  })
+  swing = makeSwingMesh(THREE, {
+    reachUnits: shape.reach, innerUnits: shape.inner, halfArcTurns: shape.halfArc
+  })
+  scene.add(swingWhole)
+  scene.add(swing)
+  swingShape = shape
+}
+rebuildSwing(readSwingShape(world, agent))
 
 // Which way the agent is looking, and how far it can reach to work a door.
 // On by default because it is the only way to see either; ?arrow=0 hides it.
@@ -529,8 +543,13 @@ const others = new EntityView({
   // Placed in prop slots rather than agent slots: what this world needs from
   // them is a cylinder to stop at, and it must NOT simulate them -- remote
   // bodies are interpolated, never predicted.
-  onBody: (index, kind, pos) => {
+  onBody: (index, kind, pos, solid) => {
     if (myAgentIndex !== null && index === myAgentIndex) return
+    // A corpse is drawn and not walked into. Without this the client keeps
+    // colliding with something the server walks straight through, every tick
+    // it is standing there -- which is a misprediction that looks exactly like
+    // an invisible wall where a monster died.
+    if (!solid) { world.removeProp(MIRROR_BASE + index); return }
     // A monster's size is its catalogue entry; a player's is the map's declared
     // body. Kind 0 is a player.
     const def = kind ? props?.kinds.get(kind) : { radius: bodyRadius, height: bodyHeight }
@@ -827,7 +846,15 @@ function frame (now) {
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
-  if (swing) {
+  if (SHOW_SWING) {
+    // The shape as it is NOW, and a rebuild BEFORE anything is drawn with it.
+    // A parameter change arrives as a PARAM_UPDATE and is applied to the
+    // client's own world, so this is where the debug panel's sliders become
+    // visible -- and doing it after setting `visible` would leave the freshly
+    // built mesh hidden for a frame.
+    const nowShape = readSwingShape(world, agent)
+    if (!sameSwingShape(nowShape, swingShape)) rebuildSwing(nowShape)
+
     // The engine's own numbers, run through the engine's own formula. See
     // render/swing.js: the offset is a turn fraction from the aim.
     const off = sweepOffset({ ...swingShape, left: a.attackLeft })
@@ -835,13 +862,23 @@ function frame (now) {
     // Drawn at the middle of the body rather than at its feet: a collider
     // hugging the floor reads as unrelated to the thing it is about to hit.
     const at = subject.y + bodyHeight / 2
+
+    // The faint region is drawn ALWAYS, not only mid-swing.
+    //
+    // It is the shape of the weapon, and the shape is what the parameters
+    // change -- so showing it only during the 16 ticks of an actual swing means
+    // dragging a reach slider does nothing observable unless you happen to be
+    // attacking at that moment. Which is what "very hard to test for a human"
+    // is. The bright collider still appears only while the swing is live,
+    // because that one is about WHEN rather than about shape.
+    swingWhole.visible = true
+    swingWhole.position.set(subject.x, at - 0.02, subject.z)
+    swingWhole.rotation.y = swingYaw(facingTurns, swingMid)
+
     swing.visible = off !== null
-    swingWhole.visible = off !== null
     if (off !== null) {
       swing.position.set(subject.x, at, subject.z)
       swing.rotation.y = swingYaw(facingTurns, off)
-      swingWhole.position.set(subject.x, at - 0.02, subject.z)
-      swingWhole.rotation.y = swingYaw(facingTurns, swingMid)
     }
   }
   if (arrow) {
@@ -922,7 +959,17 @@ function frame (now) {
     `sim ${cost.sim.toFixed(2)}ms   mesh ${cost.mesh.toFixed(2)}ms   ` +
     `draw ${cost.draw.toFixed(2)}ms\n` +
     `vfx  seen ${vfxSeen}   live ${vfx ? vfx.live.length : 0}   ` +
-    `pool ${vfx ? vfx.pool.length : 'NO VIEW'}` +
+    `pool ${vfx ? vfx.pool.length : 'NO VIEW'}\n` +
+    // The weapon, in numbers. The wedge shows the shape; these show what it is
+    // made of, which is what you read while dragging a slider to see whether
+    // the value you set is the value the engine took.
+    (swingShape
+      ? `atk  reach ${swingShape.reach.toFixed(2)}` +
+        (swingShape.inner > 0 ? `-${swingShape.inner.toFixed(2)}` : '') +
+        `   arc ${(swingShape.halfArc * 2).toFixed(3)}t` +
+        `   sweep ${swingShape.from.toFixed(3)}..${swingShape.to.toFixed(3)}` +
+        `   ${swingShape.ticks}t/${swingShape.cooldown}cd`
+      : '') +
     (vfxNoView ? `   dropped-no-view ${vfxNoView}` : '') +
     (falls ? `   falls ${falls}` : '') +
     (LIVE

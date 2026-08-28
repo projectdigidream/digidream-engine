@@ -211,5 +211,33 @@ check(((left - 1) + (right - 1)) % 8 === 0,
   check(rotationFor(0.3, 0.3) === 1, 'the angle is RELATIVE, not either one alone')
 }
 
+
+// --- play once, and hold -----------------------------------------------------
+//
+// A death or an explosion is an EVENT, not a loop. Without this the only
+// options are to cycle it forever or to remove the entity the moment it ends --
+// and a corpse is neither. The first version of this edit did not apply at all
+// and nothing noticed, because a looping death animation looks like an
+// animation.
+{
+  const cat = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+  const die = cat.kinds.get(20).states.get(4)
+  const walk = cat.kinds.get(20).states.get(1)
+  check(die.once === true, 'the death state is declared play-once')
+  check(!walk.once, 'and the walk cycle is not')
+
+  const last = die.frames.length - 1
+  check(frameAt(die, 0) === 0, 'a death starts at its first frame')
+  check(frameAt(die, last / die.fps) === last, 'reaches its last')
+  check(frameAt(die, 100) === last, 'and STAYS there rather than wrapping to the start')
+  // The control: the walk cycle at the same times does wrap, so the assertion
+  // above is `once` working rather than frameAt having stopped advancing.
+  check(frameAt(walk, 100) !== undefined && frameAt(walk, 0) === 0, 'a loop still loops')
+  const seen = new Set()
+  for (let t = 0; t < 4; t += 0.05) seen.add(frameAt(walk, t))
+  check(seen.size === walk.frames.length,
+        `and visits every one of its frames (${seen.size}/${walk.frames.length})`)
+}
+
 console.log(`\nprops: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

@@ -73,8 +73,12 @@ export class UiView {
   constructor ({ onEvent, doc = globalThis.document }) {
     this.onEvent = onEvent
     this.doc = doc
-    this.panels = new Map()          // uiId -> { root, widgets }
+    this.panels = new Map()          // uiId -> { root, inputs }
     this.layer = null
+    // Widgets of the panel currently being built, and the control the player
+    // has hold of. See set().
+    this.pendingInputs = new Map()
+    this.dragging = null
   }
 
   #layer () {
@@ -116,11 +120,14 @@ export class UiView {
 
     const body = doc.createElement('div')
     body.className = 'dnp-ui-body'
+    // Collected as the widgets are built, so UI_SET can find one by id later.
+    this.pendingInputs = new Map()
     for (const wgt of msg.widgets) body.appendChild(this.#widget(msg.uiId, wgt))
 
     root.append(title, body)
     this.#layer().appendChild(root)
-    this.panels.set(msg.uiId, { root })
+    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs })
+    this.pendingInputs = new Map()
   }
 
   #widget (uiId, wgt) {
@@ -152,6 +159,11 @@ export class UiView {
       const out = doc.createElement('span')
       out.className = 'dnp-ui-val'
       out.textContent = i.value
+      i.dnpOut = out
+      this.pendingInputs.set(wgt.id, i)
+      // While a thumb is down, the server does not get to move it.
+      i.onpointerdown = () => { this.dragging = i }
+      i.onpointerup = () => { if (this.dragging === i) this.dragging = null }
       i.oninput = () => { out.textContent = i.value }
       // On CHANGE, not on input: a drag across a range emits one event per
       // pixel, and each one is a reliable control message and a script
@@ -166,6 +178,7 @@ export class UiView {
       const i = doc.createElement('input')
       i.type = 'checkbox'
       i.checked = wgt.value !== 0
+      this.pendingInputs.set(wgt.id, i)
       i.onchange = () => send(i.checked ? 1 : 0)
       row.append(l, i)
       return row
@@ -181,6 +194,7 @@ export class UiView {
         sel.appendChild(o)
       })
       sel.value = String(clampValue(wgt, wgt.value))
+      this.pendingInputs.set(wgt.id, sel)
       sel.onchange = () => send(Number(sel.value))
       row.append(l, sel)
       return row
@@ -190,6 +204,26 @@ export class UiView {
     // nothing would be the wrong way to find that out.
     row.textContent = `${wgt.label} (unsupported widget ${wgt.kind})`
     return row
+  }
+
+  /**
+   * Change one widget's value in a panel that is already open.
+   *
+   * Updates what is SHOWN and nothing else -- it does not send an event back,
+   * because the server is the one that just said this. A slider the player is
+   * currently dragging is left alone: having a number jump out from under a
+   * thumb is worse than being briefly out of date, and the server's value will
+   * arrive again.
+   */
+  set (uiId, widgetId, value) {
+    const p = this.panels.get(uiId)
+    const el = p?.inputs.get(widgetId)
+    if (!el) return false
+    if (el === this.dragging) return false
+    if (el.type === 'checkbox') el.checked = value !== 0
+    else el.value = String(value)
+    if (el.dnpOut) el.dnpOut.textContent = String(value)
+    return true
   }
 
   close (uiId) {

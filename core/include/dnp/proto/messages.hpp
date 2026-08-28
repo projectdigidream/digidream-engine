@@ -33,6 +33,11 @@ inline constexpr u8 MSG_PARAM_UPDATE = 0x14;
 inline constexpr u8 MSG_UI_OPEN  = 0x20;
 inline constexpr u8 MSG_UI_EVENT = 0x21;
 inline constexpr u8 MSG_UI_CLOSE = 0x22;
+// One widget's value, in a panel that is already open. Without it a panel that
+// merely SHOWS something changing has to be closed and reopened to refresh --
+// which allocates a new id and, from the player's side, is a window that
+// flickers every time their health does.
+inline constexpr u8 MSG_UI_SET   = 0x23;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -141,6 +146,12 @@ inline constexpr u32 ANCHOR          = 1u << 4;
 inline constexpr u32 CONTROLLER_MODE = 1u << 5;
 inline constexpr u32 DISPLAY_ID      = 1u << 6;
 inline constexpr u32 DESTROYED       = 1u << 7;
+// Whether other bodies collide with this one. Replicated because a client
+// PREDICTS against it: it mirrors the bodies around it into its own world as
+// colliders, and one that thought a corpse was still solid would be stopped by
+// something the server walks straight through -- every tick, for as long as the
+// body is there.
+inline constexpr u32 SOLID           = 1u << 8;
 }  // namespace ent_field
 
 namespace state_flag {
@@ -325,6 +336,7 @@ struct EntityBlock {
     Handle anchor{};
     u8     controller_mode = 0;
     u32    display_id      = 0;   // dropped items only; never an item_hash (R7)
+    u8     solid           = 1;
 };
 
 // A scripted-discrete sector's current offset. Parametric movers are absent by

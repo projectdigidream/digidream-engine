@@ -100,6 +100,8 @@ let panel = null
 // of the rules changing, which is what makes an attack slider a physics change
 // rather than a number in a script.
 let paramUpdates = 0
+// Widget updates pushed by the server into an already-open panel.
+let uiSets = []
 let closed = []
 ;(async () => {
   const r = control.readable.getReader()
@@ -118,6 +120,7 @@ let closed = []
         else if (m?.type === MSG.UI_OPEN) panel = m
         else if (m?.type === MSG.UI_CLOSE) closed.push(m.uiId)
         else if (m?.type === MSG.PARAM_UPDATE) paramUpdates++
+        else if (m?.type === MSG.UI_SET) uiSets.push(m)
       }
     }
   } catch {}
@@ -267,6 +270,35 @@ check(panel !== null && panel.uiId !== wasId,
   const again = panel?.widgets.find((w) => w.label === 'Damage')
   check(again?.value === 77,
         `and the monster script now reads 77 from it (${again?.value})`)
+}
+
+// --- a panel follows state it did not cause ----------------------------------
+//
+// A panel is built from state at the moment it opens and nothing pushes changes
+// into one, so a health slider sat at whatever it was when the window appeared
+// while monsters shot the number down behind it. Reported as "health does not
+// update when hit on the debug", and the fix is UI_SET rather than reopening:
+// reopening allocates a new id, and from the player's side is a window that
+// flickers every time they are hit.
+{
+  uiSets = []
+  // Change health WITHOUT touching the health widget, so what is observed is
+  // the panel following state rather than echoing an input.
+  await cw.write(encodeUiEvent(panel.uiId, heal.id, 1))
+  await step(10)
+  const hpWidget = panel.widgets.find((w) => w.label === 'Health')
+  await cw.write(encodeUiEvent(panel.uiId, hpWidget.id, 55))
+  await step(20)
+  const forHp = uiSets.filter((u) => u.widgetId === hpWidget.id)
+  check(forHp.some((u) => u.value === 55),
+        `health changes push a UI_SET to the open panel (${forHp.map((u) => u.value).join(',')})`)
+
+  // And ONLY when it changes. Sixty reliable control messages a second saying
+  // the same number is a waste of the channel that carries map data.
+  const before = uiSets.length
+  await step(60)
+  check(uiSets.length === before,
+        `a steady value sends nothing (${uiSets.length - before} in 60 ticks)`)
 }
 
 // --- the attack sliders reach the physics ------------------------------------

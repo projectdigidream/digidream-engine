@@ -172,6 +172,8 @@ const drain = () => {
       const rec = seen.get(i)
       if (!rec) continue
       if (e.mask & ENT_FIELD.ANIMATION_STATE) rec.anim = e.animationState
+      // Delta-encoded: it arrives on the tick it changes and never again.
+      if (e.mask & ENT_FIELD.SOLID) rec.solid = e.solid !== 0
       if (e.mask & ENT_FIELD.POS) {
         const p = { x: fxToNumber(e.pos.x), y: fxToNumber(e.pos.y) }
         rec.first ??= p
@@ -274,6 +276,20 @@ if (!IDLE_ONLY && !process.env.DNP_MAP_NAME) {
   const dying = [...seen.entries()].filter(([, r]) => r.anim === 4).length
   console.log(`  ${dead} destroyed, ${dying} showing the death animation`)
   check(dead + dying > 0, `swinging at a monster kills it (${dead} gone, ${dying} dying)`)
+
+  // A CORPSE IS NOT A WALL. The client mirrors bodies into its own world as
+  // colliders, so if the server stops treating one as solid and does not say
+  // so, the client goes on being stopped by something the server walks through
+  // -- an invisible wall exactly where a monster died.
+  const corpses = [...seen.values()].filter((r) => r.anim === 4)
+  check(corpses.length > 0 && corpses.every((r) => r.solid === false),
+        `a corpse is replicated as not solid (${corpses.length} corpses, ` +
+        `solid: ${corpses.map((r) => r.solid).join(',')})`)
+  // The control: the ones still alive are still solid, so the assertion above
+  // is death doing it rather than nothing ever being solid.
+  const alive = [...seen.values()].filter((r) => r.anim !== 4 && r.kind)
+  check(alive.every((r) => r.solid !== false),
+        `and the living still are (${alive.length} alive)`)
 }
 
 

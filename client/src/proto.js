@@ -16,6 +16,7 @@ export const MSG = {
   UI_OPEN: 0x20,
   UI_EVENT: 0x21,
   UI_CLOSE: 0x22,
+  UI_SET: 0x23,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -56,7 +57,9 @@ export const ENT_FIELD = {
   ANCHOR: 1 << 4,
   CONTROLLER_MODE: 1 << 5,
   DISPLAY_ID: 1 << 6,
-  DESTROYED: 1 << 7
+  DESTROYED: 1 << 7,
+  // Whether other bodies collide with this one -- a corpse stops being solid.
+  SOLID: 1 << 8
 }
 
 // Snapshot header flags (docs/protocol.md §5).
@@ -244,6 +247,14 @@ export function decodeControlMessage (buf) {
     return r.ok ? { type, uiId } : null
   }
 
+  // One widget's value, in a panel already on screen (docs/protocol.md §11.1).
+  if (type === MSG.UI_SET) {
+    const uiId = r.u32()
+    const widgetId = r.u16()
+    const value = r.i32()
+    return r.ok ? { type, uiId, widgetId, value } : null
+  }
+
   if (type === MSG.WELCOME) {
     const msg = {
       type,
@@ -410,6 +421,7 @@ export function decodeSnapshot (buf) {
     if (e.mask & ENT_FIELD.ANCHOR) e.anchor = r.u32()
     if (e.mask & ENT_FIELD.CONTROLLER_MODE) e.controllerMode = r.u8()
     if (e.mask & ENT_FIELD.DISPLAY_ID) e.displayId = r.u32()
+    if (e.mask & ENT_FIELD.SOLID) e.solid = r.u8()
     if (!r.ok) return null
     snap.entities.push(e)
   }

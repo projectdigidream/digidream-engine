@@ -26,6 +26,7 @@
 #include "dnp/geom/map.hpp"
 #include "dnp/geom/mapstore.hpp"
 #include "dnp/physics/collide.hpp"
+#include "dnp/sim/world.hpp"
 
 using namespace dnp;
 using namespace dnp::geom;
@@ -173,6 +174,80 @@ static void test_the_walk_does_not_bounce_between_two_sectors() {
     CHECK(stopped.distance < F(38));
 }
 
+// Two rooms that are NOT connected: each declares the shared line as its own
+// wall, so it is solid from both sides and both rooms are standable.
+//
+// Distinct from Pair above, where the two sectors are neighbours and the
+// question is what is behind the boundary. Here there is nothing behind it --
+// which is the ordinary case for a wall in a real level, and the one a swing
+// has to respect.
+struct Split {
+    MapStorage store;
+    MapData    view{};
+
+    Split() {
+        const fx2 west[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(40)}, {F(0), F(40)}};
+        const fx2 east[] = {{F(20), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(20), F(40)}};
+        store.add_sector(west, 4, F(0), F(10), 1);
+        store.add_sector(east, 4, F(0), F(10), 1);
+        for (u16 i = 0; i < 4; ++i) store.add_side(0, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+        view = store.view();
+    }
+};
+
+// A swing does not reach through a wall either.
+//
+// The distance and angle tests describe a SHAPE and say nothing about the
+// level, so without this a player on the far side of a door kills what is
+// behind it. Here rather than in test_props because it is the same question
+// line of sight asks, answered by the same raycast: what stops a bullet stops
+// a sword.
+static void test_a_swing_does_not_reach_through_a_wall() {
+    std::printf("sight: a swing is stopped by a wall like everything else\n");
+
+    static Split r;
+    static sim::World w;
+    w.reset();
+    w.set_map(&r.view);
+    w.set_map_storage(&r.store);
+
+    // Either side of the shared wall at x = 20, well inside a generous reach.
+    const u32 swinger = w.spawn(fx3{F(19), F(20), F(0)});
+    const u32 victim  = w.spawn(fx3{F(21), F(20), F(0)});
+    w.params_mut(swinger).attack_reach = F(6);
+
+    proto::InputFrame f;
+    f.buttons = proto::button::ATTACK_PRIMARY;
+    f.aim = brad(0u);                 // east, straight at them
+    w.set_input(swinger, f);
+    w.step();
+
+    bool hit = false;
+    for (u32 i = 0; i < w.attacks().count(); ++i) {
+        if (w.attacks().at(i).target == victim) hit = true;
+    }
+    CHECK(!hit);
+
+    // The control: the same pair on the SAME side of the wall, the same
+    // distance apart, is hit. Without it "nothing was hit" is satisfied by a
+    // swing that never worked.
+    static sim::World w2;
+    w2.reset();
+    w2.set_map(&r.view);
+    w2.set_map_storage(&r.store);
+    const u32 s2 = w2.spawn(fx3{F(10), F(20), F(0)});
+    const u32 v2 = w2.spawn(fx3{F(12), F(20), F(0)});
+    w2.params_mut(s2).attack_reach = F(6);
+    w2.set_input(s2, f);
+    w2.step();
+    bool hit2 = false;
+    for (u32 i = 0; i < w2.attacks().count(); ++i) {
+        if (w2.attacks().at(i).target == v2) hit2 = true;
+    }
+    CHECK(hit2);
+}
+
 int main() {
     test_an_open_neighbour_does_not_block();
     test_a_raised_floor_blocks_sight_below_it();
@@ -181,6 +256,7 @@ int main() {
     test_the_flat_cast_is_unchanged();
     test_a_plain_wall_still_blocks();
     test_the_walk_does_not_bounce_between_two_sectors();
+    test_a_swing_does_not_reach_through_a_wall();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

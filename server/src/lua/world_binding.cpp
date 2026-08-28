@@ -1242,6 +1242,23 @@ int l_dnp_ui_open(lua_State* L) {
     return 1;
 }
 
+// dnp.ui_set(entity, ui_id, widget_id, value)
+//
+// Change one widget in a panel that is already open. Without it a script that
+// merely SHOWS something changing has to close and reopen the panel, which
+// allocates a new id and, from the player's side, is a window that flickers
+// every time their health does.
+int l_dnp_ui_set(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.ui == nullptr) return 0;
+    ctx.ui->set_ui(ctx.level, static_cast<u32>(a),
+                   static_cast<u32>(luaL_checknumber(L, 2)),
+                   static_cast<u16>(luaL_checknumber(L, 3)),
+                   static_cast<i32>(luaL_checknumber(L, 4)));
+    return 0;
+}
+
 // dnp.ui_close(entity, ui_id)
 int l_dnp_ui_close(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -1416,6 +1433,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"vfx", l_dnp_vfx},
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},
+    {"ui_set", l_dnp_ui_set},
     {"ui_close", l_dnp_ui_close},
     {"prop", l_dnp_prop},
     {"props", l_dnp_props},
