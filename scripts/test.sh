@@ -105,6 +105,11 @@ node editor/test/edit.test.js     | tail -2
 # the check is that after a round trip through the editor the CLIENT's own
 # parser sees exactly the same catalogue -- not that the text looks similar.
 node editor/test/props.test.js    | tail -2
+# What a map says about itself: scripts, body, spawns, lamps. Each has a way of
+# being wrong that the map still compiles with -- a script mapc cannot find is
+# printed and then baked anyway -- so the checks are about what the records
+# MEAN, and each ends at mapc.
+node editor/test/globals.test.js  | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run

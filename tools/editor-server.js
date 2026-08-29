@@ -276,9 +276,28 @@ const routes = {
     }
     const luaPath = p.replace(/\.map$/, '.lua')
     const lua = await readFile(luaPath, 'utf8').catch(() => null)
+
+    // Which declared scripts actually resolve, from where the .map is.
+    //
+    // Worth answering here because mapc does NOT stop for one that does not:
+    // it prints "cannot open script ..." and then writes the output and exits
+    // 0, despite its own comment calling that an error. So a map can bake
+    // cleanly, load, and have none of its doors work -- and the one place that
+    // can be caught before Test is the editor, which knows the paths and can
+    // stat them.
+    const scripts = []
+    for (const m of text.matchAll(/^\s*script\s+(\S+)/gm)) {
+      const rel = m[1]
+      const full = normalize(join(dirname(p), rel))
+      scripts.push({ path: rel, name: rel.split(/[/\\]/).pop(), found: await exists(full) })
+    }
+
     return {
       code: 200,
-      body: { path: url.searchParams.get('path'), text, sidecar, sidecarStale: stale, lua, hash: textHash(text) }
+      body: {
+        path: url.searchParams.get('path'),
+        text, sidecar, sidecarStale: stale, lua, scripts, hash: textHash(text)
+      }
     }
   },
 
@@ -305,6 +324,22 @@ const routes = {
     } catch (e) {
       return { code: 200, body: { textures: [], note: `index.json is not valid JSON: ${e.message}` } }
     }
+  },
+
+  /**
+   * The monster names that have behaviour, from maps/scripts/enemies.lua.
+   *
+   * Served as the FILE, so the editor extracts them with one function that is
+   * tested against the real Lua. Sending a parsed list from here would put the
+   * extraction in the process that cannot be unit-tested against it.
+   */
+  'GET /api/enemies': async () => {
+    const text = await readFile(join(ROOT, 'maps', 'scripts', 'enemies.lua'), 'utf8')
+      .catch(() => null)
+    if (text === null) {
+      return { code: 200, body: { text: '', note: 'no maps/scripts/enemies.lua' } }
+    }
+    return { code: 200, body: { text } }
   },
 
   'GET /api/props': async () => {
