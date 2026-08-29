@@ -80,6 +80,23 @@ function scan (src) {
   let line = 1
   let i = 0
 
+  // Function bodies, and where each function is CALLED from module scope. Used
+  // for the one-level-deep check at the end.
+  const functions = new Map()      // name -> [{ name, line }]
+  const topLevelCalls = new Map()  // name -> line of the call
+  let fnName = null
+  let fnBraceDepth = -1      // brace depth OUTSIDE the body; -1 = body not open
+  let fnBody = null
+  // Braces only, tracked apart from the general bracket depth. A function's
+  // body is delimited by braces, and its parameter list is not: counting all
+  // brackets together closed the function on the `)` of its own parameters,
+  // before the body had opened, and every body came out empty. Which is a check
+  // that silently passes everything.
+  let braceDepth = 0
+  // The previous identifier seen at module scope, to tell `function name (`
+  // from a call to `name (`.
+  let prevWord = null
+
   // Identifiers reached through a dot are PROPERTIES, not bindings: the `body`
   // in `document.body` has nothing to do with a module-level `let body`. Object
   // literal keys are the same kind of false positive and are not handled --
@@ -89,8 +106,29 @@ function scan (src) {
   while (i < text.length) {
     const c = text[i]
     if (c === '\n') { line++; i++; continue }
-    if (c === '{' || c === '(' || c === '[') { depth++; i++; continue }
-    if (c === '}' || c === ')' || c === ']') { depth = Math.max(0, depth - 1); i++; continue }
+    if (c === '{' || c === '(' || c === '[') {
+      depth++
+      if (c === '{') {
+        // The first brace after `function NAME` opens its body.
+        if (fnName !== null && fnBraceDepth < 0) fnBraceDepth = braceDepth
+        braceDepth++
+      }
+      i++
+      continue
+    }
+    if (c === '}' || c === ')' || c === ']') {
+      depth = Math.max(0, depth - 1)
+      if (c === '}') {
+        braceDepth = Math.max(0, braceDepth - 1)
+        if (fnName !== null && fnBraceDepth >= 0 && braceDepth <= fnBraceDepth) {
+          functions.set(fnName, fnBody)
+          fnName = null
+          fnBraceDepth = -1
+        }
+      }
+      i++
+      continue
+    }
     if (!/[A-Za-z_$]/.test(c)) { i++; continue }
 
     let j = i
@@ -102,7 +140,35 @@ function scan (src) {
     while (k >= 0 && (text[k] === ' ' || text[k] === '\t')) k--
     const isProperty = k >= 0 && text[k] === '.' && text[k - 1] !== '.'
 
+    // Inside a module-scope function body: collect what it reads.
+    if (fnName !== null && !isProperty && word !== 'function') {
+      fnBody.push({ name: word, line })
+    }
+
     if (depth === 0 && !isProperty) {
+      // `function NAME` at module scope opens a body worth collecting.
+      if (word === 'function') {
+        let m = j
+        while (m < text.length && /[\s*]/.test(text[m])) m++
+        let n = m
+        while (isIdent(text[n])) n++
+        if (n > m) { fnName = text.slice(m, n); fnBraceDepth = -1; fnBody = [] }
+      }
+      // NAME( at module scope is a call. Recorded even before the function is
+      // seen, because a call may precede its declaration -- hoisting is exactly
+      // what makes this bug possible.
+      // NAME( at module scope is a call -- unless the NAME is the one being
+      // declared, whose parameter list looks exactly the same. Without that
+      // exclusion a function is recorded as called on the line it is DEFINED,
+      // and every binding it reads below that line is reported as a dead-zone
+      // use. Which is legal code, and a false positive is worse here than a
+      // miss: it makes the check something people turn off.
+      let k2 = j
+      while (k2 < text.length && (text[k2] === ' ' || text[k2] === '\t')) k2++
+      if (text[k2] === '(' && prevWord !== 'function' && !topLevelCalls.has(word)) {
+        topLevelCalls.set(word, line)
+      }
+
       if (word === 'let' || word === 'const') {
         // Every name up to the initialiser is being declared here. Destructuring
         // and `let a, b` both land in this branch.
@@ -122,6 +188,7 @@ function scan (src) {
         mentions.push({ name: word, line })
       }
     }
+    if (depth === 0) prevWord = word
     i = j
   }
 
@@ -129,6 +196,32 @@ function scan (src) {
   for (const { name, line: at } of mentions) {
     const decl = declaredAt.get(name)
     if (decl !== undefined && at < decl) bad.push({ name, line: at, at: decl })
+  }
+
+  // THE SAME BUG ONE CALL DEEP.
+  //
+  // A module-scope CALL to a function whose body reads a `let` declared below
+  // the call is the same temporal dead zone, and the check above cannot see it:
+  // the reference is inside a function body, at brace depth greater than zero,
+  // where this deliberately does not look.
+  //
+  // It is not hypothetical. loadMapTextures() was invoked two hundred lines
+  // above the `let animCatalogue` it reads, threw a ReferenceError before it
+  // reached the loader, and the entire map rendered untextured -- with one
+  // unhandled rejection in a console nobody was reading as the only sign.
+  //
+  // Deliberately shallow: one level, and only for functions declared in this
+  // file. Chasing the call graph would need a real parser, and a check that
+  // guesses is worse than one with a stated limit.
+  for (const [fname, body] of functions) {
+    const calledAt = topLevelCalls.get(fname)
+    if (calledAt === undefined) continue
+    for (const { name, line } of body) {
+      const decl = declaredAt.get(name)
+      if (decl !== undefined && calledAt < decl) {
+        bad.push({ name, line, at: decl, via: `${fname}() called at line ${calledAt}` })
+      }
+    }
   }
   return bad
 }
@@ -160,6 +253,46 @@ const alsoFine = 3
 const planted = scan(PLANTED)
 check(planted.length === 1 && planted[0].name === 'later',
       `CONTROL: the scanner finds a planted use-before-declaration (${planted.length} found)`)
+
+// And the same bug ONE CALL DEEP, which the depth-zero rule cannot see and
+// which cost a session: loadMapTextures() was invoked two hundred lines above
+// the `let` it reads, threw before it reached the loader, and the whole map
+// rendered untextured with one unhandled rejection as the only sign.
+{
+  const deep = scan(`
+async function loadStuff () {
+  const g = catalogue.groups
+  return g
+}
+loadStuff()
+let catalogue = { groups: [] }
+`)
+  check(deep.length === 1 && deep[0].name === 'catalogue',
+        `CONTROL: and finds it through a call (${deep.length} found)`)
+
+  // The three shapes that are LEGAL and must stay quiet. A false positive here
+  // is worse than a miss: it is what makes a check something people turn off.
+  const clean = [
+    ['declared above the function', `
+let catalogue = { groups: [] }
+async function loadStuff () { return catalogue.groups }
+loadStuff()
+`],
+    ['called after the declaration', `
+async function loadStuff () { return catalogue.groups }
+let catalogue = { groups: [] }
+loadStuff()
+`],
+    ['never called at module scope', `
+async function loadStuff () { return catalogue.groups }
+let catalogue = { groups: [] }
+`]
+  ]
+  for (const [what, src] of clean) {
+    const r = scan(src)
+    check(r.length === 0, `and stays quiet when ${what} (${r.length} reported)`)
+  }
+}
 
 console.log(`\ntdz: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

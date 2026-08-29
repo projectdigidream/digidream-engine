@@ -382,12 +382,32 @@ if (movers.length) view.setDynamicSectors(movers)
 // it arrives.
 // Every frame of every sequence, so the animator has something to swap
 // between: the frames after the first appear in no map's texture list.
+// Animated textures -- nukage, water, lava (render/animtex.js). Client only:
+// which picture is on a wall changes nothing the simulation can observe.
+//
+// DECLARED AND FETCHED HERE, above the texture load that reads it. It sat two
+// hundred lines below, which is a temporal dead zone by way of a function call:
+// loadMapTextures() is invoked at module scope and reads animCatalogue, so the
+// `let` had not been initialised and the call threw before it ever reached
+// view.loadTextures. The whole map rendered untextured, and the only sign was
+// one unhandled rejection in the console.
+let animCatalogue = { groups: [], warnings: [] }
+let animator = null
+try {
+  animCatalogue = parseAnimations(await (await fetch('/animations.txt')).text())
+  for (const w of animCatalogue.warnings) console.warn(`[anim] ${w}`)
+} catch (e) {
+  // Not fatal, and the failure is the right one: everything draws its first
+  // frame and nothing moves.
+  console.warn(`[anim] no animation catalogue (${e.message}); textures will be still`)
+}
+
 async function loadMapTextures () {
   const extra = animCatalogue.groups.flatMap((g) => g.frames)
   // The map's own scale unless a flag overrides it. ?texpx= stays for
   // experimenting; what it no longer does is decide the answer.
   const pxPerUnit = params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32)
-  await view.loadTextures({ pxPerUnit, extra })
+  const res = await view.loadTextures({ pxPerUnit, extra })
   animator = new TextureAnimator({
     groups: animCatalogue.groups,
     names: mapData.textures,
@@ -395,11 +415,16 @@ async function loadMapTextures () {
     frameTexture: (n) => view.frameTextures?.get(n) ?? null
   })
   if (animator.count > 0) console.log(`[anim] ${animator.count} animated textures`)
+  return res
 }
 loadMapTextures()
-  .then(({ loaded, total }) => {
-    if (loaded) console.log(`[render] ${loaded}/${total} textures loaded from /textures`)
+  .then((r) => {
+    if (r?.loaded) console.log(`[render] ${r.loaded}/${r.total} textures loaded from /textures`)
   })
+  // Reported, not swallowed. This threw for two hundred lines' worth of
+  // declaration order and the map simply had no textures on it; an unhandled
+  // rejection in a console nobody was reading is not a report.
+  .catch((e) => say(`textures failed to load: ${e.message}`))
 
 // Drawn at the size the agent ACTUALLY is, read back from the world rather
 // than assumed. The map declares its own body (a converted Doom map is a third
@@ -497,24 +522,9 @@ const onGround = (x, z) => map.findSector(x, -z) >= 0
 // and says so once.
 let props = null
 let vfx = null
-// Animated textures -- nukage, water, lava (render/animtex.js). Client only:
-// which picture is on a wall changes nothing the simulation can observe.
-let animCatalogue = { groups: [], warnings: [] }
-let animator = null
 // Tracer accounting, for the HUD. See the counting site in drainSnapshots.
 let vfxSeen = 0
 let vfxNoView = 0
-// The animation catalogue, before the first texture load: the loader needs to
-// know which extra frames to fetch, and a map's textures are loaded once.
-try {
-  animCatalogue = parseAnimations(await (await fetch('/animations.txt')).text())
-  for (const w of animCatalogue.warnings) console.warn(`[anim] ${w}`)
-} catch (e) {
-  // Not fatal, and the failure is the right one: everything draws its first
-  // frame and nothing moves.
-  console.warn(`[anim] no animation catalogue (${e.message}); textures will be still`)
-}
-
 try {
   const text = await (await fetch('/props.txt')).text()
   const catalogue = parseProps(text)
