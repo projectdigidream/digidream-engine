@@ -110,6 +110,11 @@ node editor/test/props.test.js    | tail -2
 # printed and then baked anyway -- so the checks are about what the records
 # MEAN, and each ends at mapc.
 node editor/test/globals.test.js  | tail -2
+# Which panel the inspector shows. A state machine rather than a DOM: the two
+# menus could once only be left by pressing the button that opened them, so
+# picking a tool did the thing and left the menu up, and the editor looked stuck
+# when one variable was.
+node editor/test/mode.test.js     | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
