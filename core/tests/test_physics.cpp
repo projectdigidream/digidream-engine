@@ -1183,6 +1183,48 @@ static void test_bridge_over_a_path() {
         under.vel.z -= F(16) * dt;
     }
     CHECK(ticks_under_bridge > 20);
+
+    // QUERY_SURFACE ANSWERS FROM THE POSITION, NOT FROM WHERE THE BODY WAS.
+    //
+    // It used to take last tick's sector as a hint and accept it on the
+    // footprint test alone. With stacked sectors both contain the point in
+    // plan, so a wrong sector was believed forever. Every assertion above
+    // tests find_sector_at, which was right the whole time; nothing tested the
+    // function the mover actually calls. These pass a deliberately wrong hint
+    // and require the answer not to depend on it.
+    {
+        // Feet on the bridge, hint says the path.
+        const SurfaceQuery wrong = query_surface(m, fx2{F(30), F(6)}, 0, F(10), F(2));
+        CHECK(wrong.sector == 1);
+        CHECK(wrong.floor_z == F(10));
+
+        // Feet on the path, hint says the bridge.
+        const SurfaceQuery below = query_surface(m, fx2{F(30), F(6)}, 1, F(0), F(2));
+        CHECK(below.sector == 0);
+        CHECK(below.floor_z == fx::zero());
+
+        // Rising out of the path towards the bridge, hint still says the path.
+        // The bridge's floor is 10 and STEP_HEIGHT is half a unit, so at 9.75
+        // the bridge is within reach and is the answer -- this is the second
+        // report from maps/mylevel.map, where jumping out of the lava was
+        // handed the lava's floor the whole way up.
+        const SurfaceQuery rising = query_surface(m, fx2{F(30), F(6)}, 0,
+                                                  F(10) - Ff(1, 4), F(2));
+        CHECK(rising.sector == 1);
+        CHECK(rising.floor_z == F(10));
+
+        // A correct hint changes nothing, which is the point: same position,
+        // same answer, whichever sector you came from.
+        CHECK(query_surface(m, fx2{F(30), F(6)}, 1, F(10), F(2)).sector == 1);
+        CHECK(query_surface(m, fx2{F(30), F(6)}, geom::NO_SECTOR, F(10), F(2)).sector == 1);
+
+        // BETWEEN the two -- above the path's ceiling of 8, below the bridge's
+        // floor at 10 minus a step. Not reachable from either, and the answer
+        // is the path: that is where it is going to land. Both hints agree,
+        // which is what makes it a property of the position.
+        CHECK(query_surface(m, fx2{F(30), F(6)}, 0, F(9), F(2)).sector == 0);
+        CHECK(query_surface(m, fx2{F(30), F(6)}, 1, F(9), F(2)).sector == 0);
+    }
     // 4 + 10 * (240/60) = 44, which is past the bridge's far edge at 36 and
     // still on the path, which ends at 60. Computed, not guessed: the first
     // version asserted x > 50 and the body could not have got there.

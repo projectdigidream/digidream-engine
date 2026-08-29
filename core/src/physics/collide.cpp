@@ -17,17 +17,34 @@ SurfaceQuery query_surface(const MapData& map, fx2 p, i32 hint,
                            fx feet_z, fx body_height) noexcept {
     SurfaceQuery q;
 
-    // Try the hint first. An agent usually stays in the sector it was in, so
-    // this turns the common case into one polygon test instead of a scan.
-    if (hint >= 0 && static_cast<u32>(hint) < map.sector_count &&
-        point_in_sector(map, static_cast<u32>(hint), p)) {
-        q.sector = hint;
-    } else {
-        // The height-aware query. `hint` is only accepted above because a body
-        // that is still inside the sector it was in last tick is on the same
-        // floor it was on -- the cheap case and the common one.
-        q.sector = find_sector_at(map, p, feet_z, body_height);
-    }
+    // THE SECTOR A BODY IS IN IS A FUNCTION OF WHERE IT IS, AND OF NOTHING
+    // ELSE -- not of where it came from.
+    //
+    // This used to try `hint`, the sector the body was in last tick, on the
+    // theory that a body usually stays put and one polygon test beats a scan.
+    // The footprint test alone accepted it, and with stacked sectors both
+    // contain the point in plan, so the hint was believed forever. That was
+    // reported twice from maps/mylevel.map, whose lava plane is one polygon
+    // containing every platform on the level: first as "jumping on the sector
+    // on top transfers you to the lower sector", then as "trying to jump back
+    // to the start platform teleports me back to lava".
+    //
+    // Requiring the hint's floor to be within stepping reach and its ceiling
+    // above the feet fixed the first report and not the second: the lava's
+    // floor is -3 and its ceiling is 55, so a body jumping out of it satisfies
+    // both conditions the whole way up, keeps the hint, and is handed the
+    // lava's floor while standing over a platform.
+    //
+    // Any condition that keeps the hint has to be "the hint is what
+    // find_sector_at would answer" -- and once it is that, it is not saving
+    // the scan, it is duplicating it. So there is no hint. find_sector_at goes
+    // through the broadphase grid, so the common case is a bucket of one or
+    // two sectors, which is what the hint was worth in the first place.
+    //
+    // `hint` stays in the signature: every caller passes it, and the parameter
+    // is where the next person will look for this reasoning.
+    (void)hint;
+    q.sector = find_sector_at(map, p, feet_z, body_height);
 
     if (q.sector == NO_SECTOR) return q;
     q.in_map = true;

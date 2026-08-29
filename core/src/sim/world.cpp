@@ -52,8 +52,14 @@ u32 World::spawn(fx3 pos) noexcept {
 
             if (i + 1 > agent_high_water_) agent_high_water_ = i + 1;
 
+            // HEIGHT-AWARE. find_sector picks by footprint alone, and with
+            // stacked sectors -- a bridge over a path -- both contain the point:
+            // it returned whichever was smaller, so a body spawned on the bridge
+            // was placed in the path underneath and fell through it.
             agents_[i].mv.sector =
-                map_ ? geom::find_sector(*map_, fx2{pos.x, pos.y}) : geom::NO_SECTOR;
+                map_ ? geom::find_sector_at(*map_, fx2{pos.x, pos.y}, pos.z,
+                                            params_[i].height)
+                     : geom::NO_SECTOR;
             agents_[i].mv.hover_fuel = params_[i].hover_fuel_max;
             agents_[i].mv.flight_fuel = params_[i].flight_fuel_max;
             return i;
@@ -395,7 +401,11 @@ void World::teleport(u32 index, fx3 pos) noexcept {
     // Re-derive the sector. Without this the next tick tests the new position
     // against the old sector's walls, which is how a teleported entity ends up
     // inside geometry or falling through a floor that is not there.
-    a.mv.sector = map_ ? geom::find_sector(*map_, fx2{pos.x, pos.y}) : geom::NO_SECTOR;
+    // Height-aware, for the same reason spawn is: a teleport onto a bridge
+    // must not land in the path beneath it.
+    a.mv.sector = map_ ? geom::find_sector_at(*map_, fx2{pos.x, pos.y}, pos.z,
+                                              params_[index].height)
+                       : geom::NO_SECTOR;
 
     // And drop the anchor. An entity moved off a platform is no longer riding
     // it, and leaving the anchor set would have the next tick carry it by that

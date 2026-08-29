@@ -404,6 +404,268 @@ static void test_the_push_is_hashed() {
     CHECK(run(true) != run(false));
 }
 
+// A bridge over a path, both sharing a footprint in plan.
+//
+//   path    x 0..40, y 0..40,  floor 0,  ceiling 8
+//   bridge  x 10..30, y 0..40, floor 10, thickness 2 (slab 8..10)
+//
+// This is maps/mylevel.map's shape, reduced: sectors stacked over each other,
+// which is what `skirt` in the .map format is FOR.
+struct Bridge {
+    MapStorage store;
+    MapData    view{};
+
+    Bridge() {
+        const fx2 path[]   = {{F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}};
+        const fx2 bridge[] = {{F(10), F(0)}, {F(30), F(0)}, {F(30), F(40)}, {F(10), F(40)}};
+        store.add_sector(path, 4, F(0), F(8), 1);
+        store.add_sector(bridge, 4, F(10), F(60), 2);
+        store.sector_mut(1).thickness = F(2);
+        for (u16 s = 0; s < 2; ++s) {
+            for (u16 i = 0; i < 4; ++i) {
+                store.add_side(s, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+            }
+        }
+    }
+    void attach(World& w) {
+        view = store.view();
+        w.set_map(&view);
+        w.set_map_storage(&store);
+    }
+};
+
+// You can stand on the upper of two stacked sectors, and jumping does not drop
+// you into the lower one.
+//
+// Reported from maps/mylevel.map: jumping on a sector that had another one
+// under it put the player in the one underneath. Two causes, and each alone
+// was enough:
+//
+//   World::spawn and World::teleport used the height-BLIND find_sector, which
+//   picks by footprint and breaks the tie by smallest area. A body placed on
+//   the bridge was recorded as being in the path.
+//
+//   query_surface took last tick's sector as a hint to avoid a scan, and
+//   tested only whether the point was inside it. With stacked sectors that is
+//   true of both, so once the wrong one was in hand it was believed forever --
+//   and the answer it gave was the path's floor, so the body fell through the
+//   bridge and could not get back onto it. There is no hint any more; see the
+//   comment in core/src/physics/collide.cpp for why it could not be repaired.
+//
+// core/tests/test_physics.cpp has tested this geometry since Phase 3, and
+// missed both: it asserts find_sector_at, which was correct all along, and
+// walks a body UNDER the bridge. Nothing walked on top of one.
+//
+// HONESTLY: run against either broken version, THIS test still passes. The
+// old find_sector broke the tie by smallest area, and here the bridge is the
+// smaller sector, so it guessed right for the case that was reported. What
+// has teeth is the control below it -- the same geometry approached from
+// underneath, where smallest-area guesses wrong -- and, for the hint, the
+// query_surface block in test_physics.cpp's bridge test, which drives the
+// wrong hint in directly instead of waiting for something to produce one.
+// Kept anyway because it is the user's report, walked end to end.
+static void test_you_can_stand_on_a_stacked_sector() {
+    std::printf("bodies: a sector above another is a floor, not a trapdoor\n");
+
+    static Bridge b;
+    static World w;
+    w.reset();
+    b.attach(w);
+
+    // Spawned on the bridge, in the overlap. The path is directly underneath.
+    const u32 a = w.spawn(fx3{F(20), F(20), F(10)});
+    CHECK(w.agent(a).mv.sector == 1);
+
+    proto::InputFrame nothing;
+    for (u32 t = 0; t < 60; ++t) { w.set_input(a, nothing); w.step(); }
+
+    // Settled ON the bridge, not on the path eight units below it.
+    CHECK(w.agent(a).pos.z == F(10));
+    CHECK(w.agent(a).mv.sector == 1);
+    CHECK(w.agent(a).mv.grounded);
+
+    // Now jump. Landing must return the body to the bridge -- the whole report
+    // was that the jump was what moved you down.
+    proto::InputFrame jump;
+    jump.buttons = proto::button::JUMP;
+    w.set_input(a, jump);
+    w.step();
+    CHECK(w.agent(a).pos.z > F(10));   // it really left the ground
+    CHECK(!w.agent(a).mv.grounded);
+
+    fx apex = w.agent(a).pos.z;
+    for (u32 t = 0; t < 120; ++t) {
+        w.set_input(a, nothing);
+        w.step();
+        if (w.agent(a).pos.z > apex) apex = w.agent(a).pos.z;
+        // At no point in the arc is the body reported as being in the path.
+        // Passing only at the end would let a one-tick excursion through, and
+        // one tick in the wrong sector is one tick of the wrong floor.
+        CHECK(w.agent(a).pos.z >= F(10));
+        CHECK(w.agent(a).mv.sector == 1);
+        if (g_fails) break;
+    }
+    CHECK(apex > F(10));
+    CHECK(w.agent(a).pos.z == F(10));
+    CHECK(w.agent(a).mv.grounded);
+}
+
+// The control: the same body, same map, spawned UNDER the bridge stays under
+// it. Without this the test above passes for a trivial reason -- an
+// implementation that always answered "the higher sector" would satisfy every
+// assertion in it, and would break walking under a bridge instead.
+static void test_you_are_still_under_a_bridge_when_you_are_under_it() {
+    std::printf("bodies: standing under the bridge is still standing under it\n");
+
+    static Bridge b;
+    static World w;
+    w.reset();
+    b.attach(w);
+
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    CHECK(w.agent(a).mv.sector == 0);
+
+    proto::InputFrame jump;
+    jump.buttons = proto::button::JUMP;
+    proto::InputFrame nothing;
+    w.set_input(a, jump);
+    w.step();
+
+    for (u32 t = 0; t < 120; ++t) {
+        w.set_input(a, nothing);
+        w.step();
+        // The path's ceiling is 8 and the body is 2 tall, so it cannot reach
+        // the bridge's floor at 10 by jumping -- it stays underneath.
+        CHECK(w.agent(a).mv.sector == 0);
+        CHECK(w.agent(a).pos.z < F(8));
+        if (g_fails) break;
+    }
+    CHECK(w.agent(a).pos.z == fx::zero());
+}
+
+// maps/mylevel.map's actual shape: one big low plane -- lava, floor -3 --
+// whose polygon CONTAINS a small raised platform. Not a bridge over a path
+// but a platform in a pool, which is how a hand-drawn outdoor level comes out
+// and is the arrangement `skirt` exists for.
+struct LavaPool {
+    MapStorage store;
+    MapData    view{};
+
+    LavaPool() {
+        const fx2 lava[]     = {{-F(40), -F(40)}, {F(40), -F(40)}, {F(40), F(40)}, {-F(40), F(40)}};
+        const fx2 platform[] = {{-F(6), -F(6)}, {F(6), -F(6)}, {F(6), F(6)}, {-F(6), F(6)}};
+        store.add_sector(lava, 4, -F(3), F(56), 1);
+        store.add_sector(platform, 4, -F(1), F(32), 2);
+        store.sector_mut(0).thickness = F(2);
+        store.sector_mut(1).thickness = F(2);
+        for (u16 sec = 0; sec < 2; ++sec) {
+            for (u16 i = 0; i < 4; ++i) {
+                store.add_side(sec, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+            }
+        }
+    }
+    void attach(World& w) {
+        view = store.view();
+        w.set_map(&view);
+        w.set_map_storage(&store);
+    }
+};
+
+// You can jump out of the lava back onto the platform standing in it.
+//
+// The second report from maps/mylevel.map: "trying to jump back to the start
+// platform teleports me back to lava". The same cause as standing on a
+// stacked sector, from the other side, and it survived the first fix.
+//
+// query_surface took the sector the body was in last tick as a hint and
+// accepted it whenever its floor was within a step below the feet and its
+// ceiling above them. The lava's floor is -3 and its ceiling 55: a body
+// jumping out of it satisfies both for the entire arc, keeps the hint, and is
+// handed the LAVA's floor while standing over the platform -- so the landing
+// snapped it back down. There is no hint any more, which is why this passes.
+static void test_you_can_jump_out_of_a_pit_onto_a_platform_inside_it() {
+    std::printf("bodies: jumping out of the lava lands you on the platform\n");
+
+    static LavaPool r;
+    static World w;
+    w.reset();
+    r.attach(w);
+
+    // In the lava, outside the platform's footprint, with room for a run-up.
+    // Air control is almost nothing in this engine, so the jump has to carry
+    // ground speed -- standing still and jumping goes straight up.
+    const u32 a = w.spawn(fx3{F(16), fx::zero(), -F(3)});
+    proto::InputFrame run;
+    run.move_x = -32767;                       // due west, towards the platform
+    for (u32 t = 0; t < 40; ++t) { w.set_input(a, run); w.step(); }
+    CHECK(w.agent(a).mv.sector == 0);
+    CHECK(w.agent(a).pos.z == -F(3));
+    CHECK(w.agent(a).pos.x > F(6));            // not on the platform yet
+
+    // Jump. The platform's floor is two units up -- four times STEP_HEIGHT, so
+    // this has to be a jump and cannot be a step.
+    proto::InputFrame jump = run;
+    jump.buttons = proto::button::JUMP;
+    w.set_input(a, jump);
+    w.step();
+    CHECK(!w.agent(a).mv.grounded);
+
+    bool reached_platform = false;
+    for (u32 t = 0; t < 240; ++t) {
+        w.set_input(a, run);
+        w.step();
+        if (w.agent(a).mv.sector == 1) reached_platform = true;
+        if (w.agent(a).mv.grounded && reached_platform) break;
+    }
+
+    CHECK(reached_platform);
+    // Landed ON it and stayed. The report was that the landing put you back in
+    // the lava, so "grounded at 0 in sector 1" is the whole claim.
+    CHECK(w.agent(a).mv.grounded);
+    CHECK(w.agent(a).mv.sector == 1);
+    CHECK(w.agent(a).pos.z == -F(1));
+
+    // And it stays there rather than sinking a tick later.
+    proto::InputFrame nothing;
+    for (u32 t = 0; t < 60; ++t) { w.set_input(a, nothing); w.step(); }
+    CHECK(w.agent(a).mv.sector == 1);
+    CHECK(w.agent(a).pos.z == -F(1));
+}
+
+// The control: a body that jumps in the lava WITHOUT moving over the platform
+// comes back down in the lava. Without it, an implementation that always
+// preferred the higher sector anywhere in the pool would pass the test above
+// and would leave nobody able to stand in the lava at all.
+static void test_jumping_in_the_lava_lands_in_the_lava() {
+    std::printf("bodies: jumping in the lava lands in the lava\n");
+
+    static LavaPool r;
+    static World w;
+    w.reset();
+    r.attach(w);
+
+    const u32 a = w.spawn(fx3{F(10), fx::zero(), -F(3)});
+    proto::InputFrame jump;
+    jump.buttons = proto::button::JUMP;
+    proto::InputFrame nothing;
+    w.set_input(a, jump);
+    w.step();
+
+    // Against the count at ENTRY, not against g_fails. A control whose loop
+    // exits early because some earlier test failed reports whatever that other
+    // failure left behind, and a control that fails alongside the thing it is
+    // controlling for is telling you nothing.
+    const int before = g_fails;
+    for (u32 t = 0; t < 240; ++t) {
+        w.set_input(a, nothing);
+        w.step();
+        CHECK(w.agent(a).mv.sector == 0);
+        if (g_fails != before) break;
+    }
+    CHECK(w.agent(a).pos.z == -F(3));
+    CHECK(w.agent(a).mv.grounded);
+}
+
 int main() {
     test_overlapping_bodies_separate();
     test_separation_follows_the_line_between_centres();
@@ -414,6 +676,10 @@ int main() {
     test_a_push_cannot_shove_you_out_of_the_world();
     test_a_push_cannot_cross_a_wall();
     test_the_push_is_hashed();
+    test_you_can_stand_on_a_stacked_sector();
+    test_you_are_still_under_a_bridge_when_you_are_under_it();
+    test_you_can_jump_out_of_a_pit_onto_a_platform_inside_it();
+    test_jumping_in_the_lava_lands_in_the_lava();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }
