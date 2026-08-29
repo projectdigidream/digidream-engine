@@ -1,10 +1,14 @@
-sector floor 27 ceil 32 floortex ROCKFLOOR1 skirt 20
+script scripts/doom.lua
+script scripts/enemies.lua
+script mylevel.lua
+body radius 0.3333 height 1.1667
+sector floor 3 ceil 32 floortex ROCKFLOOR1 skirt 20
   vertex -4 -7 open tex ROCKWALL1
   vertex -1 6 open tex ROCKWALL1
-  vertex -18.5208 3.7292 neighbor 1 lower ROCKWALL1 upper ROCKWALL1
+  vertex -18.5208 3.7292 open tex ROCKWALL1
   vertex -16.0000 -7.3125 open tex ROCKWALL1
 end
-sector floor 30 ceil 50 skirt 30 floortex ROCKFLOOR1
+sector floor 5 ceil 50 skirt 30 floortex ROCKFLOOR1 light 128
   vertex -21.5000 7.1667 open tex ROCKWALL1
   vertex -23.4375 9.4583 open tex ROCKWALL1
   vertex -26.3542 10.0625 open tex ROCKWALL1
@@ -14,6 +18,45 @@ sector floor 30 ceil 50 skirt 30 floortex ROCKFLOOR1
   vertex -34.5417 -9.5417 open tex ROCKWALL1
   vertex -33.3958 -11.3333 open tex ROCKWALL1
   vertex -27.7500 -12.9792 open tex ROCKWALL1
-  vertex -16 -7.3125 neighbor 0 tex ROCKWALL1
+  vertex -16 -7.3125 tex ROCKWALL1 open
   vertex -18.5208 3.7292 open tex ROCKWALL1
 end
+sector floor 0 ceil 32 skirt 2 floortex ROCKFLOOR1
+  vertex 14.4167 -12.6042 open
+  vertex 14.1458 5.4167 open
+  vertex 1.2917 7.7500 open
+  vertex -4.3125 -11.3958 open
+end
+sector floor 7 ceil 50 skirt 20 floortex ROCKFLOOR1
+  vertex -16 -7.3125 tex ROCKWALL1 open
+  vertex -27.75 -12.9792 tex ROCKWALL1 open
+  vertex -33.3958 -11.3333 tex ROCKWALL1 open
+  vertex -34.5417 -9.5417 tex ROCKWALL1 open
+  vertex -31.8125 -3.3125 tex ROCKWALL1 open
+  vertex -30.0833 1.7083 tex ROCKWALL1 open
+  vertex -29.7917 3.8333 tex ROCKWALL1 open
+  vertex -26.3542 10.0625 open tex ROCKWALL1
+  vertex -23.4375 9.5000 open tex ROCKWALL1
+  vertex -21.5 7.1667 tex ROCKWALL1 open
+  vertex -18.5208 3.7292 open tex ROCKWALL1
+  vertex -20.6042 13.3125 open tex ROCKWALL1
+  vertex -25.6250 13.4583 open tex ROCKWALL1
+  vertex -34.4792 3.2083 open tex ROCKWALL1
+  vertex -36.8333 -1.2083 open tex ROCKWALL1
+  vertex -39.1042 -11.1250 open tex ROCKWALL1
+  vertex -34.1875 -15.8958 open tex ROCKWALL1
+  vertex -26.7917 -18.6042 open tex ROCKWALL1
+  vertex -19.8958 -16.5417 open tex ROCKWALL1
+  vertex -14.1458 -10.7917 open tex ROCKWALL1
+end
+sector floor -3 ceil 55.63 skirt 2 floortex LAVA1
+  vertex 21.9792 27.7083 open
+  vertex 1.6875 35.0625 open
+  vertex -15.5417 29.1250 open
+  vertex -47.6875 11.2917 open
+  vertex -41.9792 -21.4583 open
+  vertex -5.7500 -28.5417 open
+  vertex 14.6458 -17.9375 open
+  vertex 25.7083 -5.4375 open
+end
+light -27.431375 -4.721373 8 color 255 230 200 radius 16 intensity 1.4
