@@ -28,7 +28,6 @@ import { arch } from 'node:os'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
-const MAPS = join(ROOT, 'maps')
 const PORT = Number(process.env.DNP_EDITOR_PORT ?? 8081)
 const ARCH = arch() === 'arm64' ? 'arm64' : 'x86_64'
 const MAPC = join(ROOT, 'build', ARCH, 'mapc')
@@ -93,6 +92,78 @@ function resolveStatic (urlPath) {
   return null
 }
 
+// --- modules ---------------------------------------------------------------
+//
+// A module is one project on this engine -- its maps, its scripts, its assets,
+// in one directory (docs/MODULES.md). For the editor it is a ROOT: which maps
+// the list shows, which props.txt is edited, and which --module Test passes.
+//
+// The engine's own maps/ and assets/ are not a module and are not pretending to
+// be one. They are what the engine did before modules existed, they are what
+// every test uses, and `null` means them throughout.
+
+const MODULES = join(ROOT, 'modules')
+
+/**
+ * The directory a module id names, or null.
+ *
+ * The id is an ALLOWLIST and not a sanitisation: it may only be letters,
+ * digits, dash and underscore, so there is no separator, no leading dot and no
+ * `..` to reason about. Everything else about module paths is built from this
+ * one answer, which is the same argument underMaps() makes -- one place to be
+ * wrong rather than one per route.
+ *
+ * `null` is the engine itself, and is a legitimate answer rather than a
+ * failure: a bare map with its scripts is not a lesser case.
+ */
+function moduleRoot (id) {
+  if (id === null || id === undefined || id === '') return ROOT
+  if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) return null
+  if (id.length > 64) return null
+  return join(MODULES, id)
+}
+
+/** module.txt, which is read for display and for nothing else. */
+async function readModuleInfo (id) {
+  const root = moduleRoot(id)
+  if (!root || root === ROOT) return null
+  const text = await readFile(join(root, 'module.txt'), 'utf8').catch(() => null)
+  const info = { id, name: id, about: '' }
+  if (text === null) return info
+  for (const line of text.split('\n')) {
+    const m = /^\s*(\w+)\s+(.*)$/.exec(line)
+    if (!m) continue
+    const [, key, value] = m
+    // `about` repeats, one line per line. Joined rather than last-wins, because
+    // the file uses it as a paragraph.
+    if (key === 'about') info.about = info.about ? `${info.about} ${value.trim()}` : value.trim()
+    else if (key === 'name') info.name = value.trim()
+    else if (key === 'id' && value.trim() !== id) {
+      // Reported, not honoured. The directory is what --module names, so an id
+      // field that disagrees with it is a file describing a module nobody can
+      // load by that name.
+      info.warning = `module.txt says id '${value.trim()}' but the directory is '${id}'`
+    }
+  }
+  return info
+}
+
+/**
+ * Where a module's assets live, falling back per FILE to the engine's.
+ *
+ * The same rule the server and the web server use: a module that adds three
+ * sprites does not have to copy the other two thousand. For the editor it
+ * decides which props.txt is shown -- the module's if it has one, the engine's
+ * if it does not -- and `writable` is where a change would go, which is always
+ * the module's own copy.
+ */
+function moduleAsset (id, rel) {
+  const root = moduleRoot(id)
+  if (!root) return null
+  const own = root === ROOT ? join(ROOT, 'assets', rel) : join(root, 'assets', rel)
+  return { own, fallback: join(ROOT, 'assets', rel) }
+}
+
 // --- the one gate on every path that arrives from the page -----------------
 
 /**
@@ -110,19 +181,30 @@ function resolveStatic (urlPath) {
  * anything else under maps/ (a .dnpm, a stray shell script) it has no business
  * writing.
  */
-function underMaps (p, { extensions = ['.map', '.lua', '.json'] } = {}) {
+function underMaps (p, { extensions = ['.map', '.lua', '.json'], module = null } = {}) {
   if (typeof p !== 'string' || p.length === 0 || p.length > 512) return null
   if (p.includes('\0')) return null
-  const full = normalize(join(MAPS, p.replace(/^\/+/, '')))
-  const rel = relative(MAPS, full)
+  const root = moduleRoot(module)
+  if (!root) return null
+  const maps = join(root, 'maps')
+  const full = normalize(join(maps, p.replace(/^\/+/, '')))
+  const rel = relative(maps, full)
   if (rel === '' || rel.startsWith('..') || rel.startsWith(sep) || rel.includes('..')) return null
   if (!extensions.includes(extname(full))) return null
   return full
 }
 
+/** Where a module's maps are, for listing. */
+const mapsRootOf = (module) => {
+  const root = moduleRoot(module)
+  return root ? join(root, 'maps') : null
+}
+
 // --- the map list ----------------------------------------------------------
 
-async function listMaps () {
+async function listMaps (module = null) {
+  const MAPS = mapsRootOf(module)
+  if (!MAPS) return []
   const out = []
   const scan = async (dir, prefix) => {
     let names = []
@@ -151,6 +233,45 @@ async function listMaps () {
 }
 
 const exists = (p) => stat(p).then(() => true, () => false)
+
+/**
+ * The Lua files under a module's maps/ or scripts/ that define mobs.
+ *
+ * Found by looking for the call rather than by a naming convention: a module
+ * may call its file anything, and `doom_monsters.lua` and `mobs.lua` are two
+ * names for the same job already. The mob NAMES are the keys of the table
+ * handed to mobs.load, extracted for a list.
+ *
+ * A regex over Lua, and it is display-only for that reason -- see the /api/mobs
+ * route. Enough to answer "what does this module define"; not enough, and not
+ * meant, to edit one.
+ */
+async function mobFilesOf (module) {
+  const root = moduleRoot(module)
+  if (!root) return []
+  const out = []
+  for (const dir of ['maps', 'scripts']) {
+    let names = []
+    try { names = await readdir(join(root, dir)) } catch { continue }
+    for (const n of names.sort()) {
+      if (!n.endsWith('.lua')) continue
+      const full = join(root, dir, n)
+      const text = await readFile(full, 'utf8').catch(() => null)
+      if (text === null || !/\bmobs\.load\s*\{/.test(text)) continue
+
+      const body = text.slice(text.search(/\bmobs\.load\s*\{/))
+      // Two spaces of indent is the shape every one of these files uses. A
+      // deeper match would pick up the fields inside a mob.
+      const mobs = [...body.matchAll(/^\s{4}([A-Za-z_]\w*)\s*=/gm)].map((m) => m[1])
+      out.push({
+        path: `${dir}/${n}`,
+        bytes: text.length,
+        mobs: [...new Set(mobs)]
+      })
+    }
+  }
+  return out
+}
 
 // --- compiling and running -------------------------------------------------
 
@@ -183,10 +304,11 @@ function stopStack () {
   return true
 }
 
-function startStack (mapRelPath) {
+function startStack (mapRelPath, module = null) {
   stopStack()
   stack.log = []
-  const child = spawn(join(ROOT, 'scripts', 'run_stack.sh'), ['--map', mapRelPath], {
+  const args = module ? ['--module', module, '--map', mapRelPath] : ['--map', mapRelPath]
+  const child = spawn(join(ROOT, 'scripts', 'run_stack.sh'), args, {
     cwd: ROOT,
     detached: true,          // its own process group, so stopStack can take it all
     stdio: ['ignore', 'pipe', 'pipe']
@@ -245,10 +367,51 @@ async function readBody (req, limit = 8 << 20) {
 const routes = {
   // --- reading ---
 
-  'GET /api/maps': async () => ({ code: 200, body: { maps: await listMaps() } }),
+  /**
+   * Every module, for the picker.
+   *
+   * Discovered from the filesystem rather than from a list: a manifest that has
+   * to be kept in step with the directory is a second source of truth that goes
+   * stale the first time somebody adds one. docs/MODULES.md makes the same
+   * argument about module.txt not listing its own contents.
+   */
+  'GET /api/modules': async () => {
+    let names = []
+    try { names = await readdir(MODULES) } catch { return { code: 200, body: { modules: [] } } }
+    const modules = []
+    for (const n of names.sort()) {
+      if (n.startsWith('.')) continue
+      const st = await stat(join(MODULES, n)).catch(() => null)
+      if (!st?.isDirectory()) continue
+      const info = await readModuleInfo(n)
+      if (!info) continue
+      const maps = await listMaps(n)
+      const assets = moduleAsset(n, 'props.txt')
+      modules.push({
+        ...info,
+        maps: maps.length,
+        // Whether the module carries its OWN catalogue. When it does not, the
+        // editor shows the engine's and says that editing creates one.
+        ownProps: await exists(assets.own)
+      })
+      // NOT the mob files. Finding them means reading every .lua in the module
+      // looking for a mobs.load call -- thirty files of twenty kilobytes for
+      // doom2 alone -- and this route is on the page's critical path. The mobs
+      // panel asks for them when it is opened, which is the only time they are
+      // wanted.
+    }
+    return { code: 200, body: { modules } }
+  },
+
+  'GET /api/maps': async (url) => {
+    const module = url.searchParams.get('module') || null
+    if (!moduleRoot(module)) return { code: 400, body: { error: 'no such module' } }
+    return { code: 200, body: { module, maps: await listMaps(module) } }
+  },
 
   'GET /api/map': async (url) => {
-    const p = underMaps(url.searchParams.get('path'), { extensions: ['.map'] })
+    const module = url.searchParams.get('module') || null
+    const p = underMaps(url.searchParams.get('path'), { extensions: ['.map'], module })
     if (!p) return { code: 400, body: { error: 'not a map path' } }
     const text = await readFile(p, 'utf8').catch(() => null)
     if (text === null) return { code: 404, body: { error: 'no such map' } }
@@ -310,6 +473,39 @@ const routes = {
    * draw as the missing-texture wireframe: an editor that lets you pick
    * something that cannot be drawn is worse than one that offers less.
    */
+  /**
+   * The trigger vocabulary, for the panel that is generated from it.
+   *
+   * A FIXED path rather than a new mount under maps/. The vocabulary is one
+   * file the page needs and mounting the directory it lives in would open every
+   * map script to the browser to deliver it -- and the comment above MOUNTS is
+   * specifically about the containment check getting weaker the moment somebody
+   * adds one. There is no user input on this path at all.
+   *
+   * It is GENERATED from maps/scripts/trigger_vocab.lua by
+   * build/lua/trigger_vocab_json, so a missing file means the build step has
+   * not been run, and saying so beats a panel that is mysteriously empty.
+   */
+  'GET /api/triggervocab': async () => {
+    const raw = await readFile(join(ROOT, 'maps', 'scripts', 'trigger_vocab.json'), 'utf8')
+      .catch(() => null)
+    if (raw === null) {
+      return {
+        code: 200,
+        body: {
+          error: 'maps/scripts/trigger_vocab.json is missing -- run ' +
+                 './scripts/build_lua_tests.sh && ./build/lua/trigger_vocab_json . ' +
+                 '> maps/scripts/trigger_vocab.json'
+        }
+      }
+    }
+    try {
+      return { code: 200, body: JSON.parse(raw) }
+    } catch (e) {
+      return { code: 200, body: { error: `trigger_vocab.json is not valid JSON: ${e.message}` } }
+    }
+  },
+
   'GET /api/textures': async () => {
     const raw = await readFile(join(ROOT, 'assets', 'textures', 'index.json'), 'utf8')
       .catch(() => null)
@@ -342,10 +538,48 @@ const routes = {
     return { code: 200, body: { text } }
   },
 
-  'GET /api/props': async () => {
-    const text = await readFile(join(ROOT, 'assets', 'props.txt'), 'utf8').catch(() => null)
-    if (text === null) return { code: 404, body: { error: 'no assets/props.txt' } }
-    return { code: 200, body: { text, hash: textHash(text) } }
+  /**
+   * The Lua files a module carries that define mobs, and which mobs each names.
+   *
+   * DISPLAY ONLY, and the reason is worth stating because it looks like a
+   * missing feature. A mob data file is Lua WITH FUNCTIONS -- `humanoid{...}`,
+   * `du(2048)`, `tics(16)` -- evaluated at load time, so its values do not
+   * exist until the real interpreter has run it. Reading that from JavaScript
+   * would be a second implementation of a grammar whose only definition is the
+   * Lua runtime, which is the trap the .map parser already pays a hash control
+   * for and which no equivalent oracle exists for here.
+   *
+   * So the names are extracted for a LIST and nothing is offered for editing.
+   * What a real mob editor needs is written down in the panel and in
+   * docs/EDITOR.md.
+   */
+  'GET /api/mobs': async (url) => {
+    const module = url.searchParams.get('module') || null
+    if (!moduleRoot(module)) return { code: 400, body: { error: 'no such module' } }
+    return { code: 200, body: { module, files: await mobFilesOf(module) } }
+  },
+
+  'GET /api/props': async (url) => {
+    const module = url.searchParams.get('module') || null
+    const where = moduleAsset(module, 'props.txt')
+    if (!where) return { code: 400, body: { error: 'no such module' } }
+
+    // The module's own if it has one, the engine's otherwise -- the same
+    // per-file fallback the server and the web server use. `own` says whether
+    // what is being shown belongs to this module, because editing the engine's
+    // catalogue from inside a module is a change to every module at once and
+    // the author should be told which they are doing.
+    const own = await exists(where.own)
+    const from = own ? where.own : where.fallback
+    const text = await readFile(from, 'utf8').catch(() => null)
+    if (text === null) return { code: 404, body: { error: `no ${relative(ROOT, from)}` } }
+    return {
+      code: 200,
+      body: {
+        text, hash: textHash(text), module,
+        own, path: relative(ROOT, from), writesTo: relative(ROOT, where.own)
+      }
+    }
   },
 
   'GET /api/stack': async () => ({
@@ -357,7 +591,7 @@ const routes = {
 
   'POST /api/map': async (url, body) => {
     const req = JSON.parse(body)
-    const p = underMaps(req.path, { extensions: ['.map'] })
+    const p = underMaps(req.path, { extensions: ['.map'], module: req.module ?? null })
     if (!p) return { code: 400, body: { error: 'not a map path' } }
     if (typeof req.text !== 'string') return { code: 400, body: { error: 'no text' } }
 
@@ -409,7 +643,14 @@ const routes = {
     const req = JSON.parse(body)
     if (typeof req.text !== 'string') return { code: 400, body: { error: 'no text' } }
     if (req.text.length > (1 << 20)) return { code: 400, body: { error: 'implausibly large' } }
-    const p = join(ROOT, 'assets', 'props.txt')
+
+    // Written to the MODULE's own copy, always -- creating it if the module was
+    // reading the engine's. A module that edits the engine's catalogue is
+    // editing every other module's too, and the fallback exists so it does not
+    // have to.
+    const where = moduleAsset(req.module ?? null, 'props.txt')
+    if (!where) return { code: 400, body: { error: 'no such module' } }
+    const p = where.own
     if (!req.force && typeof req.baseHash === 'string') {
       const current = await readFile(p, 'utf8').catch(() => null)
       if (current !== null && textHash(current) !== req.baseHash) {
@@ -419,13 +660,14 @@ const routes = {
         }
       }
     }
+    await mkdir(dirname(p), { recursive: true })
     await writeFile(p, req.text)
-    return { code: 200, body: { hash: textHash(req.text) } }
+    return { code: 200, body: { hash: textHash(req.text), path: relative(ROOT, p) } }
   },
 
   'POST /api/compile': async (url, body) => {
     const req = JSON.parse(body)
-    const p = underMaps(req.path, { extensions: ['.map'] })
+    const p = underMaps(req.path, { extensions: ['.map'], module: req.module ?? null })
     if (!p) return { code: 400, body: { error: 'not a map path' } }
     await mkdir(BUILD, { recursive: true })
     const out = join(BUILD, `${req.path.replace(/[/\\]/g, '_').replace(/\.map$/, '')}.dnpm`)
@@ -453,8 +695,13 @@ const routes = {
       return { code: 400, body: { error: 'not a compiled map in this build directory' } }
     }
     if (!await exists(dnpm)) return { code: 400, body: { error: 'that map has not been compiled' } }
-    startStack(relative(ROOT, dnpm))
-    return { code: 200, body: { started: true, map: relative(ROOT, dnpm) } }
+    // --module, so the stack loads the module's assets: its props.txt, its
+    // sprites, its textures. Without it a module's map runs against the
+    // engine's catalogue and every prop the module added is unknown.
+    const module = req.module ?? null
+    if (!moduleRoot(module)) return { code: 400, body: { error: 'no such module' } }
+    startStack(relative(ROOT, dnpm), module)
+    return { code: 200, body: { started: true, map: relative(ROOT, dnpm), module } }
   },
 
   'POST /api/stop': async () => ({ code: 200, body: { stopped: stopStack() } })
@@ -523,10 +770,10 @@ const server = createServer(async (req, res) => {
 if (IS_MAIN) {
   server.listen(PORT, () => {
     console.log(`[editor] http://localhost:${PORT}/`)
-    console.log(`[editor] maps under ${MAPS}`)
+    console.log(`[editor] engine maps under ${join(ROOT, 'maps')}, modules under ${MODULES}`)
     console.log(`[editor] mapc      ${MAPC}`)
     console.log('[editor] Test mode runs scripts/run_stack.sh, which serves the GAME on 8080')
   })
 }
 
-export { underMaps, textHash, listMaps, resolveStatic, MOUNTS }
+export { underMaps, textHash, listMaps, resolveStatic, MOUNTS, moduleRoot, moduleAsset }
