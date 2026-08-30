@@ -115,6 +115,11 @@ node editor/test/globals.test.js  | tail -2
 # picking a tool did the thing and left the menu up, and the editor looked stuck
 # when one variable was.
 node editor/test/mode.test.js     | tail -2
+# The mob window's file surgery. A mob file is Lua with helper functions, so the
+# editor substitutes characters at a known offset rather than reading it -- and
+# the control is that a write which lands one character out is refused, which
+# comparing field NAMES cannot see and comparing the VALUE can.
+node editor/test/mobfile.test.js  | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run

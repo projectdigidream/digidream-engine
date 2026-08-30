@@ -57,6 +57,10 @@ const MOUNTS = [
   ['/vendor/three/', join(ROOT, 'client', 'node_modules', 'three', 'build')],
   ['/src/', join(ROOT, 'editor', 'src')],
   ['/client/', join(ROOT, 'client')],
+  // The engine's own, which after the assets moved into modules is very
+  // little -- kept so a map outside any module still finds whatever remains.
+  // The module-scoped form is /asset/<module>/textures/NAME.png, resolved per
+  // file below.
   ['/textures/', join(ROOT, 'assets', 'textures')],
   ['/sprites/', join(ROOT, 'assets', 'sprites')],
   ['/', join(ROOT, 'editor')]
@@ -191,6 +195,26 @@ function underMaps (p, { extensions = ['.map', '.lua', '.json'], module = null }
   const rel = relative(maps, full)
   if (rel === '' || rel.startsWith('..') || rel.startsWith(sep) || rel.includes('..')) return null
   if (!extensions.includes(extname(full))) return null
+  return full
+}
+
+/**
+ * A Lua file inside a module, in maps/ or scripts/.
+ *
+ * A second gate rather than a widened underMaps(): that one answers "a map and
+ * the files that travel with it", and this answers "a module's own source". A
+ * gate that answered both would have to be read twice to see what it allows.
+ */
+function underModuleLua (module, rel) {
+  const root = moduleRoot(module)
+  if (!root || typeof rel !== 'string' || rel.length === 0 || rel.length > 512) return null
+  if (rel.includes('\0')) return null
+  const dir = rel.split('/')[0]
+  if (dir !== 'maps' && dir !== 'scripts') return null
+  const full = normalize(join(root, rel))
+  const back = relative(root, full)
+  if (back.startsWith('..') || back.includes('..') || back.startsWith(sep)) return null
+  if (extname(full) !== '.lua') return null
   return full
 }
 
@@ -506,19 +530,41 @@ const routes = {
     }
   },
 
-  'GET /api/textures': async () => {
-    const raw = await readFile(join(ROOT, 'assets', 'textures', 'index.json'), 'utf8')
-      .catch(() => null)
-    if (raw === null) return { code: 200, body: { textures: [], note: 'no assets/textures/index.json' } }
+  'GET /api/textures': async (url) => {
+    // The module's index first, the engine's second -- the same per-file
+    // fallback everything else uses. It matters more than it did: the engine's
+    // assets/ now carries only props.txt, so a module IS where the textures
+    // are, and a route that only looked at assets/textures/index.json would
+    // offer an empty dropdown to everybody.
+    const module = url.searchParams.get('module') || null
+    const where = moduleAsset(module, join('textures', 'index.json'))
+    if (!where) return { code: 400, body: { error: 'no such module' } }
+
+    const from = (await exists(where.own)) ? where.own : where.fallback
+    const raw = await readFile(from, 'utf8').catch(() => null)
+    if (raw === null) {
+      return {
+        code: 200,
+        body: {
+          textures: [],
+          note: `no ${relative(ROOT, where.own)}` +
+                (module ? ` and no ${relative(ROOT, where.fallback)}` : '')
+        }
+      }
+    }
     try {
       const index = JSON.parse(raw)
       const sizes = index.sizes ?? {}
       return {
         code: 200,
-        body: { textures: Object.keys(sizes).sort().map((name) => ({ name, size: sizes[name] })) }
+        body: {
+          module,
+          path: relative(ROOT, from),
+          textures: Object.keys(sizes).sort().map((name) => ({ name, size: sizes[name] }))
+        }
       }
     } catch (e) {
-      return { code: 200, body: { textures: [], note: `index.json is not valid JSON: ${e.message}` } }
+      return { code: 200, body: { textures: [], note: `${relative(ROOT, from)} is not valid JSON: ${e.message}` } }
     }
   },
 
@@ -557,6 +603,39 @@ const routes = {
     const module = url.searchParams.get('module') || null
     if (!moduleRoot(module)) return { code: 400, body: { error: 'no such module' } }
     return { code: 200, body: { module, files: await mobFilesOf(module) } }
+  },
+
+  /** One mob file's source, for the mob window. */
+  'GET /api/mobfile': async (url) => {
+    const module = url.searchParams.get('module') || null
+    const p = underModuleLua(module, url.searchParams.get('path'))
+    if (!p) return { code: 400, body: { error: 'not a Lua file in that module' } }
+    const text = await readFile(p, 'utf8').catch(() => null)
+    if (text === null) return { code: 404, body: { error: 'no such file' } }
+    return { code: 200, body: { module, path: relative(ROOT, p), text, hash: textHash(text) } }
+  },
+
+  /**
+   * Write one back.
+   *
+   * Guarded on the text that was opened, like every other write here. This file
+   * is loaded by the SERVER at map load, and a mob whose numbers changed under
+   * somebody is a level that plays differently with nothing to point at.
+   */
+  'POST /api/mobfile': async (url, body) => {
+    const req = JSON.parse(body)
+    const p = underModuleLua(req.module ?? null, req.path)
+    if (!p) return { code: 400, body: { error: 'not a Lua file in that module' } }
+    if (typeof req.text !== 'string') return { code: 400, body: { error: 'no text' } }
+    if (req.text.length > (4 << 20)) return { code: 400, body: { error: 'implausibly large' } }
+    if (!req.force && typeof req.baseHash === 'string') {
+      const current = await readFile(p, 'utf8').catch(() => null)
+      if (current !== null && textHash(current) !== req.baseHash) {
+        return { code: 409, body: { error: 'that file has changed since it was opened', current } }
+      }
+    }
+    await writeFile(p, req.text)
+    return { code: 200, body: { hash: textHash(req.text), path: relative(ROOT, p) } }
   },
 
   'GET /api/props': async (url) => {
@@ -749,6 +828,36 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 404, { error: 'no such route' })
     }
 
+    // An asset in a module, falling back to the engine's PER FILE.
+    //
+    // The module is in the URL rather than in the server, because the server
+    // has no session: two tabs on two modules would otherwise fight over one
+    // variable. `-` is the engine, so the shape is the same either way and the
+    // page builds one kind of URL.
+    if (url.pathname.startsWith('/asset/')) {
+      const parts = url.pathname.slice('/asset/'.length).split('/')
+      const id = parts.shift()
+      const rel = parts.join('/')
+      const module = id === '-' ? null : id
+      if (!moduleRoot(module) || rel.includes('..') || rel.includes('\0') || !rel) {
+        log(404, req.url)
+        res.writeHead(404).end('not found')
+        return
+      }
+      const where = moduleAsset(module, rel)
+      const from = (await exists(where.own)) ? where.own : where.fallback
+      const data = await readFile(from).catch(() => null)
+      log(data ? 200 : 404, req.url)
+      if (!data) { res.writeHead(404).end('not found'); return }
+      res.writeHead(200, {
+        'content-type': TYPES[extname(from)] ?? 'application/octet-stream',
+        'cache-control': 'no-store',
+        'cross-origin-opener-policy': 'same-origin',
+        'cross-origin-embedder-policy': 'require-corp'
+      }).end(data)
+      return
+    }
+
     const file = resolveStatic(url.pathname)
     if (!file) { log(404, req.url); res.writeHead(404).end('not found'); return }
     const data = await readFile(file)
@@ -776,4 +885,7 @@ if (IS_MAIN) {
   })
 }
 
-export { underMaps, textHash, listMaps, resolveStatic, MOUNTS, moduleRoot, moduleAsset }
+export {
+  underMaps, underModuleLua, textHash, listMaps, resolveStatic, MOUNTS,
+  moduleRoot, moduleAsset
+}
