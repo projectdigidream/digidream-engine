@@ -1,0 +1,699 @@
+{
+  "actions": [
+    {
+      "args": [
+        {
+          "name": "damage",
+          "type": "int"
+        },
+        {
+          "name": "range",
+          "type": "fx"
+        },
+        {
+          "doc": "Bullets in one pull. Default 1. A shotgunner is 3.",
+          "name": "count",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Degrees of random cone, per bullet.",
+          "name": "spread",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Tracer style to draw, or absent for none.",
+          "name": "tracer",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "An instant shot. The engine answers where the ray ended and what was there; what that COSTS is this action.",
+      "name": "hitscan"
+    },
+    {
+      "args": [
+        {
+          "name": "kind",
+          "type": "missile"
+        },
+        {
+          "name": "count",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Degrees between shots when `count` > 1. A mancubus volley.",
+          "name": "arc",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How far in front of the body it appears. Launched clear or it is touching its owner on the tick it exists.",
+          "name": "offset",
+          "optional": true,
+          "type": "fx"
+        }
+      ],
+      "doc": "Launch one of the `missiles` defined in the same file.",
+      "name": "missile"
+    },
+    {
+      "args": [
+        {
+          "name": "amount",
+          "type": "int"
+        }
+      ],
+      "doc": "Hurt the current target, with no range test. For a missile's `on_hit`, where contact has ALREADY been established by the flight -- `melee` measures from the actor, and a missile's actor is the mob that fired it, which by then is somewhere else entirely. That was a real bug: a fireball burst on the player and did nothing, because the range was being tested from twelve units back where the imp was standing.",
+      "name": "damage"
+    },
+    {
+      "args": [
+        {
+          "name": "damage",
+          "type": "int"
+        },
+        {
+          "name": "range",
+          "type": "fx"
+        }
+      ],
+      "doc": "Damage if the target is inside `range` right now. Separate from `hitscan` because a monster with only a ranged attack is harmless the moment you stand inside it -- a missile spawned inside somebody bursts on its owner or sails past.",
+      "name": "melee"
+    },
+    {
+      "args": [
+        {
+          "name": "speed",
+          "type": "fx"
+        },
+        {
+          "name": "towards",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "target",
+            "facing",
+            "away"
+          ]
+        },
+        {
+          "name": "vertical",
+          "optional": true,
+          "type": "fx"
+        }
+      ],
+      "doc": "A shove, in world units per second. A lost soul's charge, a leap.",
+      "name": "impulse"
+    },
+    {
+      "args": [
+        {
+          "name": "mob",
+          "type": "mob"
+        },
+        {
+          "name": "count",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Refuse if this many of that kind are already alive and owned by this one. A pain elemental without a budget fills the entity table.",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "offset",
+          "optional": true,
+          "type": "fx"
+        }
+      ],
+      "name": "spawn"
+    },
+    {
+      "args": [
+        {
+          "name": "radius",
+          "type": "fx"
+        },
+        {
+          "doc": "Only this kind. Absent means any.",
+          "name": "mob",
+          "optional": true,
+          "type": "mob"
+        }
+      ],
+      "doc": "Put a corpse in reach back on its feet. Costs no engine support: corpses are already a script-side list.",
+      "name": "revive"
+    },
+    {
+      "args": [
+        {
+          "name": "damage",
+          "type": "int"
+        },
+        {
+          "name": "radius",
+          "type": "fx"
+        },
+        {
+          "name": "falloff",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "name": "hurts_owner",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "doc": "A blast. `hurts_owner` false is a rocket that does not kill the cyberdemon that fired it.",
+      "name": "damage_area"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "name": "set_var"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "by",
+          "type": "int"
+        }
+      ],
+      "name": "add_var"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "ticks",
+          "type": "int"
+        }
+      ],
+      "doc": "Writes tick + ticks into the var, for `cooldown_ready` to read.",
+      "name": "set_cooldown"
+    },
+    {
+      "args": [
+        {
+          "name": "state",
+          "type": "state"
+        }
+      ],
+      "doc": "Leave now, mid-sequence. The rest of the sequence does not run.",
+      "name": "goto"
+    },
+    {
+      "args": [
+        {
+          "name": "towards",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "target",
+            "movement"
+          ]
+        }
+      ],
+      "doc": "Turn to face, once, at this instant. Doom's A_FaceTarget, and the reason a monster's shot goes where you are rather than where you were when it started winding up.",
+      "name": "face"
+    },
+    {
+      "args": [
+        {
+          "name": "param",
+          "type": "string"
+        },
+        {
+          "name": "value",
+          "type": "fx"
+        }
+      ],
+      "doc": "A replicated movement parameter, by the name in core/include/dnp/physics/params_table.hpp. This is how a mob changes its own speed -- and because the parameter replicates, every client agrees without this file knowing the wire exists.",
+      "name": "set_param"
+    },
+    {
+      "args": [
+        {
+          "name": "param",
+          "type": "string"
+        },
+        {
+          "name": "mul",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "add",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "ticks",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "doc": "A temporary modifier through the effect stack, which recomputes from base every tick and so cannot drift.",
+      "name": "effect"
+    },
+    {
+      "args": [
+        {
+          "name": "kind",
+          "type": "int"
+        },
+        {
+          "name": "at",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "self",
+            "target",
+            "impact"
+          ]
+        }
+      ],
+      "name": "vfx"
+    },
+    {
+      "args": [
+        {
+          "name": "anim",
+          "type": "int"
+        }
+      ],
+      "doc": "Override the state's own `anim` mid-sequence.",
+      "name": "set_anim"
+    },
+    {
+      "args": [],
+      "name": "despawn"
+    },
+    {
+      "args": [
+        {
+          "name": "code",
+          "one_of": "body",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "name": "fn",
+          "one_of": "body",
+          "optional": true,
+          "type": "function"
+        }
+      ],
+      "doc": "The escape hatch. `mob` is in scope, and so is everything in dnp.*. Anything this vocabulary cannot say goes here, and that is what it is for -- a framework whose only extension point is adding to the framework is one nobody can build on.",
+      "name": "lua"
+    }
+  ],
+  "conditions": [
+    {
+      "args": [],
+      "doc": "Something is being hunted at all.",
+      "name": "has_target"
+    },
+    {
+      "args": [
+        {
+          "name": "distance",
+          "type": "fx"
+        }
+      ],
+      "doc": "Plan distance, not 3D: a cacodemon above you is still near you.",
+      "name": "target_within"
+    },
+    {
+      "args": [],
+      "doc": "A ray reaches it. NOT the same question as `target_within`, and conflating them is what had monsters shooting through two walls at somebody across the map. Costs a raycast -- put a `target_within` before it.",
+      "name": "target_visible"
+    },
+    {
+      "args": [
+        {
+          "doc": "Degrees either side of facing. Default 90.",
+          "name": "arc",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "Whether the target is within the arc the mob is facing.",
+      "name": "target_in_front"
+    },
+    {
+      "args": [
+        {
+          "name": "percent",
+          "type": "int"
+        }
+      ],
+      "doc": "Of its own starting hp.",
+      "name": "hp_below"
+    },
+    {
+      "args": [
+        {
+          "name": "ticks",
+          "type": "int"
+        }
+      ],
+      "doc": "How long it has been in the current state.",
+      "name": "state_elapsed"
+    },
+    {
+      "args": [
+        {
+          "name": "percent",
+          "type": "int"
+        }
+      ],
+      "doc": "Rolls dnp.random, which is seeded per world and replays identically. The ONLY condition that is not a pure read; it is here rather than in `lua` because refire, wander and pain all want it and none of them should have to compile a chunk.",
+      "name": "chance"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "doc": "A per-mob counter.",
+      "name": "var_at_least"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "name": "var_is"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        }
+      ],
+      "doc": "The named var holds an absolute tick; true once it has passed. A deadline rather than a counter, so a mob nobody is near is not paying to tick one down.",
+      "name": "cooldown_ready"
+    },
+    {
+      "args": [
+        {
+          "doc": "Ticks. Default 1 -- this tick.",
+          "name": "within",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "Something damaged it recently. The pain-state edge.",
+      "name": "was_hurt"
+    },
+    {
+      "args": [],
+      "name": "grounded"
+    },
+    {
+      "args": [],
+      "doc": "What hurt it was another mob, not a player. The infighting edge.",
+      "name": "hurt_by_mob"
+    },
+    {
+      "args": [
+        {
+          "doc": "An expression over `mob`, returning truthy.",
+          "name": "code",
+          "one_of": "body",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "A Lua function taking `mob`. Needs no compiler at run time, so it works under Trust::Strict where `code` does not.",
+          "name": "fn",
+          "one_of": "body",
+          "optional": true,
+          "type": "function"
+        }
+      ],
+      "doc": "The escape hatch. Anything the vocabulary cannot say.",
+      "name": "lua"
+    }
+  ],
+  "missile_fields": [
+    {
+      "doc": "The catalogue name. Its radius is what it hits with.",
+      "name": "prop",
+      "type": "string"
+    },
+    {
+      "doc": "World units per second.",
+      "name": "speed",
+      "type": "fx"
+    },
+    {
+      "name": "damage",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "What it collides with, as a radius. Absent means the `prop`'s own radius from assets/props.txt, which is usually right -- a missile that hits with a different size than it is drawn is a missile players learn to distrust.",
+      "name": "radius",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How far above the shooter's feet it appears. Doom launches from mid-body; a missile born at ankle height clips the first step it crosses.",
+      "name": "z_offset",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "Zero for a Doom fireball, which flies flat. Nonzero for a grenade.",
+      "name": "gravity",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "Ticks before it expires on its own. A missile with no ceiling on its life leaks a prop slot per shot.",
+      "name": "life",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Degrees per tick it may turn towards its target. A revenant's missile. Absent means it flies straight.\nAn INT, not an fx: angles here are brad -- a turn is 2^32 -- and brad is a plain Lua number, because 2^32 is exact in a double. Declaring it `fx` made it an fx userdata that then met plain arithmetic and raised.",
+      "name": "homing",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "name": "anim_fly",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "name": "anim_burst",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "name": "burst_ticks",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Runs when it reaches something, with the thing it reached as the target. This is where the damage and the splash go -- so a rocket is a missile whose on_hit is a damage_area, and nothing in the runtime knows what a rocket is.",
+      "name": "on_hit",
+      "optional": true,
+      "type": "actions"
+    },
+    {
+      "name": "on_expire",
+      "optional": true,
+      "type": "actions"
+    }
+  ],
+  "mob_fields": [
+    {
+      "doc": "The catalogue name in assets/props.txt. That file owns the body -- radius, height, speed, solid -- and the sprites, because the client reads it too. NOTHING in this file crosses the wire: a client that needed a pain chance to draw a monster would be a protocol leak.",
+      "name": "prop",
+      "type": "string"
+    },
+    {
+      "doc": "The engine has no notion of health. This is the script's.",
+      "name": "hp",
+      "type": "int"
+    },
+    {
+      "doc": "Which state a freshly spawned mob enters. Defaults to the first state in declaration order.",
+      "name": "initial",
+      "optional": true,
+      "type": "state"
+    },
+    {
+      "doc": "Per-mob counters, by name, with their starting values. Each mob gets its own copy at spawn. This is where a refire count, a spawn budget or a grudge lives.",
+      "name": "vars",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "The graph, by state name.",
+      "name": "states",
+      "type": "table"
+    },
+    {
+      "doc": "How far this mob notices a target at all. A cheap distance gate checked before anything expensive -- `target_visible` casts a ray, and a ray for every monster on a Doom level every tick is the cost this exists to avoid.",
+      "name": "sight",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "0-255, rolled when the mob is hurt: the chance it flinches at all. Doom's number, because it is a good one -- a monster that ALWAYS flinches can be stun-locked, and one that never does gives no feedback that a hit landed.",
+      "name": "pain_chance",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Turns per second the body may rotate. The engine's default is 4, which is a quarter of a second to come ninety degrees -- and a monster fires along the direction its BODY is pointing, not the one it is aiming at, so a body that lags its target wastes shots into the nearest wall. In a corridor a few degrees off is a wall a metre away, which is what a tracer that renders as a stub is showing you.",
+      "name": "turn_speed",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How much MORE than a step this mob can gain by hopping. Absent or zero is design §3.2.2's rule -- enemies do not jump -- and routes exactly as it always did.\nIt is a ROUTING capability and a promise: the nav graph will plan through rises up to this, and the runtime then presses jump where the route says to. Setting it higher than the mob's `jump_impulse` can actually reach gives routes it cannot walk, and the symptom is a monster pressed into a ledge forever.",
+      "name": "jump_height",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "Sets gravity_scale to zero at spawn and lets `move` drive Z. Costs no engine support: gravity_scale is a replicated parameter, so a flying monster is flying on every client without a word of it crossing the wire.",
+      "name": "flying",
+      "optional": true,
+      "type": "bool"
+    },
+    {
+      "doc": "For a flyer: how far above its target's feet it tries to sit.",
+      "name": "hover_z",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "Whether being hurt by another mob makes that mob the target. Doom's monsters do this and it is most of what makes a crowded room interesting.",
+      "name": "infighting",
+      "optional": true,
+      "type": "bool"
+    },
+    {
+      "doc": "Whether the body stays after the death state's sequence ends. Corpses are capped and recycled oldest-first by the runtime.",
+      "name": "corpse",
+      "optional": true,
+      "type": "bool"
+    }
+  ],
+  "state_fields": [
+    {
+      "doc": "The animation state number the client already understands -- the `state <n>` on a sprite line in assets/props.txt. The server declares it and the client owns the timing (design §4), so this is a number, not a frame list.",
+      "name": "anim",
+      "type": "int"
+    },
+    {
+      "doc": "How the body is driven while in this state. `free` means the state's own actions drive it and the runtime keeps its hands off -- what a scripted leap or a custom controller wants.",
+      "name": "move",
+      "optional": true,
+      "type": "enum",
+      "values": [
+        "stop",
+        "chase",
+        "flee",
+        "wander",
+        "strafe",
+        "charge",
+        "free"
+      ]
+    },
+    {
+      "doc": "Where it looks. Separate from `move` because a monster backing away from you while still facing you is a different thing from one turning its back, and Doom's flee does the first.",
+      "name": "face",
+      "optional": true,
+      "type": "enum",
+      "values": [
+        "target",
+        "movement",
+        "hold"
+      ]
+    },
+    {
+      "doc": "How long the state lasts. Absent means until a transition fires -- which is what `chase` wants and what an attack does not.",
+      "name": "ticks",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Where it goes when `ticks` runs out. Absent with `ticks` set is a state that ends and stays, which the loader refuses.",
+      "name": "next",
+      "optional": true,
+      "type": "state"
+    },
+    {
+      "doc": "Ordered {at = <ticks after entry>, ...action}. `at` is relative to entering the state and is a DEADLINE, not a countdown: a mob nobody is near costs nothing between its own decisions.",
+      "name": "sequence",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "Ordered { to = <state>, when = {conditions} }. FIRST MATCH WINS, and order is the priority -- there is no scoring and no backtracking, because a graph whose behaviour depends on a weighting nobody can see is not one an editor can show you.",
+      "name": "transitions",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "Whether pain and death may cut this state short. Death ignores it; nothing interrupts dying.",
+      "name": "interruptible",
+      "optional": true,
+      "type": "bool"
+    },
+    {
+      "doc": "Collision while in this state. A corpse sets it false, which is why you can walk over one.",
+      "name": "solid",
+      "optional": true,
+      "type": "bool"
+    }
+  ],
+  "version": 1
+}

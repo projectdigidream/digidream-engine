@@ -31,6 +31,7 @@ const ROOT = join(HERE, '..')
 const PORT = Number(process.env.DNP_EDITOR_PORT ?? 8081)
 const ARCH = arch() === 'arm64' ? 'arm64' : 'x86_64'
 const MAPC = join(ROOT, 'build', ARCH, 'mapc')
+const LUAJIT = join(ROOT, 'third_party', 'luajit', 'src', 'luajit')
 const BUILD = join(ROOT, 'build', ARCH)
 
 const TYPES = {
@@ -603,6 +604,123 @@ const routes = {
     const module = url.searchParams.get('module') || null
     if (!moduleRoot(module)) return { code: 400, body: { error: 'no such module' } }
     return { code: 200, body: { module, files: await mobFilesOf(module) } }
+  },
+
+  /**
+   * The mob vocabulary, as JSON.
+   *
+   * Generated from maps/scripts/mob_vocab.lua by the real interpreter
+   * (tools/vocabjson) and checked in, exactly as the trigger one is. The
+   * editor's mob UI is generated from it -- which is what mob_vocab.lua's own
+   * header asks for -- so a missing file means the build step has not been run
+   * and the window says so rather than rendering an empty form.
+   */
+  'GET /api/mobvocab': async () => {
+    const raw = await readFile(join(ROOT, 'maps', 'scripts', 'mob_vocab.json'), 'utf8')
+      .catch(() => null)
+    if (raw === null) {
+      return {
+        code: 200,
+        body: {
+          error: 'maps/scripts/mob_vocab.json is missing -- run ' +
+                 './scripts/build_lua_tests.sh && ./build/lua/trigger_vocab_json . ' +
+                 'maps/scripts/mob_vocab.lua mob_vocab > maps/scripts/mob_vocab.json'
+        }
+      }
+    }
+    try {
+      return { code: 200, body: { vocab: JSON.parse(raw) } }
+    } catch (e) {
+      return { code: 200, body: { error: `mob_vocab.json is not valid JSON: ${e.message}` } }
+    }
+  },
+
+  /**
+   * The mobs the EDITOR owns, and the Lua generated from them.
+   *
+   * The sidecar is the source and the .lua is its output -- docs/TRIGGERS.md's
+   * arrangement, for its reason: generated source cannot be round-tripped once
+   * a person has touched it. Hand-authored mob files are somebody else's and
+   * are not read here.
+   */
+  'GET /api/mobdoc': async (url) => {
+    const module = url.searchParams.get('module') || null
+    const root = moduleRoot(module)
+    if (!root) return { code: 400, body: { error: 'no such module' } }
+    const p = join(root, 'mobs.editor.json')
+    const raw = await readFile(p, 'utf8').catch(() => null)
+    if (raw === null) return { code: 200, body: { module, doc: null, path: relative(ROOT, p) } }
+    try {
+      return { code: 200, body: { module, doc: JSON.parse(raw), path: relative(ROOT, p), hash: textHash(raw) } }
+    } catch (e) {
+      // Reported, never discarded on the author's behalf: it is the only copy
+      // of their mobs.
+      return { code: 200, body: { module, doc: null, error: `${relative(ROOT, p)} is not valid JSON: ${e.message}` } }
+    }
+  },
+
+  /**
+   * Write the sidecar AND the Lua it generates, and check the Lua LOADS.
+   *
+   * The check is tools/mobcheck/check.lua under LuaJIT -- the real loader, the
+   * one the server uses. Nothing is written unless it passes, because a mob
+   * file the server refuses stops the whole map from loading, and finding that
+   * out by pressing Test is a worse way to learn it than being told here.
+   */
+  'POST /api/mobdoc': async (url, body) => {
+    const req = JSON.parse(body)
+    const module = req.module ?? null
+    const root = moduleRoot(module)
+    if (!root) return { code: 400, body: { error: 'no such module' } }
+    if (typeof req.lua !== 'string' || typeof req.doc !== 'object') {
+      return { code: 400, body: { error: 'need both the document and its Lua' } }
+    }
+
+    const sidecar = join(root, 'mobs.editor.json')
+    const luaPath = join(root, 'maps', 'editor_mobs.lua')
+
+    if (!req.force && typeof req.baseHash === 'string') {
+      const current = await readFile(sidecar, 'utf8').catch(() => null)
+      if (current !== null && textHash(current) !== req.baseHash) {
+        return { code: 409, body: { error: 'the mob sidecar has changed since it was opened', current } }
+      }
+    }
+
+    // Checked BEFORE either file is written, against a temporary copy. Writing
+    // first and checking after would leave a module whose maps do not load
+    // while the editor reported the problem.
+    const probe = join(BUILD, `mobcheck-${Date.now()}.lua`)
+    await mkdir(BUILD, { recursive: true })
+    await writeFile(probe, req.lua)
+    const checked = await run(LUAJIT, [join(ROOT, 'tools', 'mobcheck', 'check.lua'), probe])
+    await unlink(probe).catch(() => {})
+
+    if (!checked.ok && await exists(LUAJIT)) {
+      return {
+        code: 200,
+        body: {
+          ok: false,
+          problems: (checked.stdout + checked.stderr).trim().split('\n').filter(Boolean)
+        }
+      }
+    }
+
+    const text = JSON.stringify(req.doc, null, 2) + '\n'
+    await mkdir(dirname(luaPath), { recursive: true })
+    await writeFile(sidecar, text)
+    await writeFile(luaPath, req.lua)
+    return {
+      code: 200,
+      body: {
+        ok: true,
+        hash: textHash(text),
+        sidecar: relative(ROOT, sidecar),
+        lua: relative(ROOT, luaPath),
+        // What the loader said it found, so "saved" is a fact rather than a
+        // hope: 3 mobs, 0 problems.
+        loaded: checked.stdout.trim().split('\n').pop() ?? ''
+      }
+    }
   },
 
   /** One mob file's source, for the mob window. */

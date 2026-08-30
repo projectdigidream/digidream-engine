@@ -120,6 +120,12 @@ node editor/test/mode.test.js     | tail -2
 # the control is that a write which lands one character out is refused, which
 # comparing field NAMES cannot see and comparing the VALUE can.
 node editor/test/mobfile.test.js  | tail -2
+# Mobs AUTHORED in the editor, checked by the loader that will read them. The
+# emitter has an ORACLE -- tools/mobcheck/check.lua under LuaJIT, the real one
+# -- so the claim is "the loader accepts it", not "the Lua looks right". It
+# caught a default graph the editor called clean and the loader refused, and an
+# argument name the vocabulary does not have. Skips loudly without LuaJIT.
+node editor/test/mobgraph.test.js | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
