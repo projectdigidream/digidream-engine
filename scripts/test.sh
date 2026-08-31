@@ -137,6 +137,15 @@ node editor/test/mobfile.test.js  | tail -2
 # caught a default graph the editor called clean and the loader refused, and an
 # argument name the vocabulary does not have. Skips loudly without LuaJIT.
 node editor/test/mobgraph.test.js | tail -2
+# Where the boxes go in the AI graph. Pure arithmetic, which is the half of a
+# visual editor that can be checked at all -- the claims are that the picture is
+# deterministic, that it draws every edge the RUNTIME follows, and that it
+# accuses exactly the states the loader would.
+#
+# Its oracle is maps/scripts/mobs.lua's own reachability walk, which counts
+# `goto` actions and exempts pain and death. Without that the first version
+# called both halves of a correct monster broken and drew no goto arrow at all.
+node editor/test/graphlayout.test.js | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
