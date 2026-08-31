@@ -146,6 +146,25 @@ node editor/test/mobgraph.test.js | tail -2
 # `goto` actions and exempts pain and death. Without that the first version
 # called both halves of a correct monster broken and drew no goto arrow at all.
 node editor/test/graphlayout.test.js | tail -2
+# Walking round a monster in the 3D preview. A rot8 sprite names only a BASE
+# and the renderer picks one of eight views from the angle, so the check is that
+# a full orbit reaches all eight -- if it did not, the preview would show some of
+# a monster's art and silently hide the rest.
+#
+# It calls the CLIENT's rotationFor() and asserts they agree at every angle.
+# props.js says this renderer "has now shipped two mirrored angle conventions";
+# a preview with one of its own would be the third.
+node editor/test/orbit.test.js | tail -2
+# The URLs the editor fetches art at, against a server that has to serve them.
+# The art lives in modules now, and the viewport was still using
+# loadRealTextures's default of /textures -- the ENGINE's directory -- so every
+# wall of every DOOM II level drew as a placeholder. Nothing reported it:
+# loadRealTextures returns { loaded: 0 } instead of throwing, so the .catch()
+# around that call could never fire.
+#
+# It starts the real server and fetches what editor/src/assets.js builds, with
+# the control that the old path still 404s.
+node editor/test/assets.test.js | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
