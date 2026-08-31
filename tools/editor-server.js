@@ -260,6 +260,22 @@ async function listMaps (module = null) {
 const exists = (p) => stat(p).then(() => true, () => false)
 
 /**
+ * The engine's own copy of a script name, if there is one.
+ *
+ * maps/mobs/ and maps/scripts/ are where the shared libraries live and what
+ * every module's map declares by a relative path. A file of the same name
+ * inside a module's maps/ is mapc's copy of it unless the module genuinely
+ * carries its own.
+ */
+async function findSource (name) {
+  for (const dir of ['mobs', 'scripts']) {
+    const p = join(ROOT, 'maps', dir, name)
+    if (await exists(p)) return p
+  }
+  return null
+}
+
+/**
  * The Lua files under a module's maps/ or scripts/ that define mobs.
  *
  * Found by looking for the call rather than by a naming convention: a module
@@ -275,7 +291,10 @@ async function mobFilesOf (module) {
   const root = moduleRoot(module)
   if (!root) return []
   const out = []
-  for (const dir of ['maps', 'scripts']) {
+  // maps/mobs is in this list because the sources live there. Without it the
+  // window listed only copies -- it would tell you to go and edit
+  // maps/mobs/doom_monsters.lua and then offer no way to open it.
+  for (const dir of ['maps', 'maps/mobs', 'scripts']) {
     let names = []
     try { names = await readdir(join(root, dir)) } catch { continue }
     for (const n of names.sort()) {
@@ -288,10 +307,25 @@ async function mobFilesOf (module) {
       // Two spaces of indent is the shape every one of these files uses. A
       // deeper match would pick up the fields inside a mob.
       const mobs = [...body.matchAll(/^\s{4}([A-Za-z_]\w*)\s*=/gm)].map((m) => m[1])
+      // Is this the SOURCE, or the copy mapc left beside a baked map?
+      //
+      // mapc copies every script a map declares next to its .dnpm -- that is
+      // what makes a baked map a complete deliverable -- so a module's maps/
+      // is full of copies of files that live elsewhere. Editing one is editing
+      // a build artefact: it works until the next bake and then silently does
+      // not, which is the worst shape a bug can have.
+      //
+      // Detected by finding the same name under the engine's maps/, which is
+      // where the shared libraries live and where every DOOM II map's `script`
+      // line points.
+      const source = await findSource(n)
       out.push({
         path: `${dir}/${n}`,
         bytes: text.length,
-        mobs: [...new Set(mobs)]
+        mobs: [...new Set(mobs)],
+        // Where to edit it instead, when this is a copy. Null when this IS the
+        // source, which is the ordinary case for a module's own file.
+        copyOf: source && source !== join(root, dir, n) ? relative(ROOT, source) : null
       })
     }
   }
