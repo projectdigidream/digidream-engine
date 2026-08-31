@@ -604,6 +604,65 @@ const routes = {
   },
 
   /**
+   * The sprite frames that were actually extracted.
+   *
+   * The reason the editor can offer animation editing at all. props.js set
+   * itself a limit -- it would not let you TYPE a frame name, because one that
+   * does not exist draws as nothing with no way to tell why -- and this is what
+   * replaces typing with choosing.
+   *
+   * The names are whole frame names, rotation digit included: BKEYA0 for a
+   * thing with one view, POSSA1..POSSA8 for one with eight. A `rot8` sprite
+   * line names the BASE (POSSA) and the renderer appends the digit, so the
+   * bases are reported separately -- the editor needs the list a rot8 state can
+   * choose from, and deriving it in the browser would be a second copy of the
+   * naming rule that client/src/render/props.js owns.
+   */
+  'GET /api/sprites': async (url) => {
+    const module = url.searchParams.get('module') || null
+    const where = moduleAsset(module, join('sprites', 'index.json'))
+    if (!where) return { code: 400, body: { error: 'no such module' } }
+
+    const from = (await exists(where.own)) ? where.own : where.fallback
+    const raw = await readFile(from, 'utf8').catch(() => null)
+    if (raw === null) {
+      return {
+        code: 200,
+        body: {
+          frames: [],
+          bases: [],
+          note: `no ${relative(ROOT, where.own)}` +
+                (module ? ` and no ${relative(ROOT, where.fallback)}` : '')
+        }
+      }
+    }
+    try {
+      const sizes = JSON.parse(raw).sizes ?? {}
+      const frames = Object.keys(sizes).sort()
+
+      // A base is rot8-able when every one of its eight rotations is present.
+      // All eight rather than just the first: a base missing rotation 5 is a
+      // monster that vanishes when you walk round it, and offering it as a
+      // choice would put that in the catalogue on purpose.
+      const seen = new Map()
+      for (const f of frames) {
+        const base = f.slice(0, -1)
+        const digit = f.slice(-1)
+        if (!/^[1-8]$/.test(digit)) continue
+        seen.set(base, (seen.get(base) ?? 0) | (1 << (Number(digit) - 1)))
+      }
+      const bases = [...seen].filter(([, mask]) => mask === 0xff).map(([b]) => b).sort()
+
+      return { code: 200, body: { module, path: relative(ROOT, from), frames, bases } }
+    } catch (e) {
+      return {
+        code: 200,
+        body: { frames: [], bases: [], note: `${relative(ROOT, from)} is not valid JSON: ${e.message}` }
+      }
+    }
+  },
+
+  /**
    * The monster names that have behaviour, from maps/scripts/enemies.lua.
    *
    * Served as the FILE, so the editor extracts them with one function that is

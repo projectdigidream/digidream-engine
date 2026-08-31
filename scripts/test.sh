@@ -105,6 +105,17 @@ node editor/test/edit.test.js     | tail -2
 # the check is that after a round trip through the editor the CLIENT's own
 # parser sees exactly the same catalogue -- not that the text looks similar.
 node editor/test/props.test.js    | tail -2
+# Its VISUAL half: the sprite lines, and the frames they name. Regenerated from
+# parsed fields now rather than carried as text, so every catalogue in the repo
+# has to come back byte-identical -- column alignment included, or one edit
+# becomes a diff across the whole file.
+#
+# The frame checker has an ORACLE: the loop client/src/main.js actually runs to
+# build its preload set. Reading `rot8` off the LINE instead of the KIND made it
+# report 128 problems on a catalogue that works, and the oracle is what says
+# which of the two is wrong. What survives is real -- three projectiles whose
+# impact bursts have never drawn.
+node editor/test/propart.test.js  | tail -2
 # What a map says about itself: scripts, body, spawns, lamps. Each has a way of
 # being wrong that the map still compiles with -- a script mapc cannot find is
 # printed and then baked anyway -- so the checks are about what the records
