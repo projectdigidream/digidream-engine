@@ -106,6 +106,47 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
   check(bad.ok === false, `CONTROL: a corrupted track is refused (${bad.ok})`)
 }
 
+// --- CHANGING MAP MUST NOT STOP THE MUSIC ------------------------------------
+//
+// The second map of a progression had no music at all. The client asked the
+// synth to CROSSFADE to the next track, and the synth's crossfade takes an SMF:
+// handing it a baked .mstk reports "not an SMF file (missing MThd)" and leaves
+// the transport STOPPED -- so the swap did not merely fail to fade, it ended
+// the soundtrack for the rest of the session.
+//
+// This is the transition the client performs now: load the next track and play
+// it. The volume dip around it is a master-volume ramp and cannot affect
+// whether the transport is running, which is what this asserts.
+{
+  const next = readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'music', 'd_stalks.mstk'))
+  const rep = load(next)
+  synth.setLoop(true)
+  synth.play()
+  let peak2 = 0
+  for (let block = 0; block < 400; block++) {
+    const p = synth.render(128)
+    const heap = mod.HEAP16
+    const base = p >> 1
+    for (let i = 0; i < 256; i++) {
+      const v = Math.abs(heap[base + i])
+      if (v > peak2) peak2 = v
+    }
+  }
+  check(rep.ok === true, 'the next map\'s track loads')
+  check(synth.playing() === true, 'and the transport is still running after the swap')
+  check(peak2 > 100, `and it is audible (peak ${peak2})`)
+
+  // THE CONTROL, and it is the actual bug: the crossfade path refuses a baked
+  // track and stops the transport. If this ever starts succeeding, the synth
+  // has grown a track-aware crossfade and music.js should go back to using it.
+  const b2 = readFileSync(TRACK)
+  const ptr = synth.songBufferPrepare(b2.length)
+  mod.HEAPU8.set(b2, ptr)
+  const xf = JSON.parse(synth.crossfadeFromBuffer(1200))
+  check(xf.ok === false,
+        `CONTROL: crossfadeFromBuffer still refuses a .mstk (${xf.errors?.[0] ?? 'accepted!'})`)
+}
+
 // --- the map-to-track manifest -----------------------------------------------
 //
 // The client looks a track up by the map's CONTENT HASH, which is the only

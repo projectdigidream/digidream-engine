@@ -167,15 +167,38 @@ export class Music {
     if (this.current === url) return
 
     const bytes = await fetch(url).then((r) => r.arrayBuffer())
-    const fading = fadeMs > 0 && this.current !== null
-    this.node.port.postMessage(
-      { type: fading ? 'crossfade' : 'loadTrack', bytes, fadeMs }, [bytes])
-    if (!fading) {
-      this.node.port.postMessage({ type: 'setLoop', on: loop })
-      this.node.port.postMessage({ type: 'play' })
+    const swapping = fadeMs > 0 && this.current !== null
+
+    // A DIP, NOT AN OVERLAP -- and that is a limitation, not a preference.
+    //
+    // The synth's crossfade takes an SMF: `crossfadeFromBuffer` parallels
+    // `loadSongFromBuffer`, and a baked .mstk only goes in through
+    // `loadTrackFromBuffer`. Handing a .mstk to the crossfade does not merely
+    // fail to fade -- it reports "not an SMF file (missing MThd)" and leaves
+    // the synth STOPPED, which is how the second map of a progression came to
+    // have no music at all.
+    //
+    // So this fades the master down, swaps the track, and fades back up. The
+    // two songs never overlap, which is audibly not the same thing; it is what
+    // can be done with the API as it stands. Give the synth a
+    // crossfadeTrackFromBuffer and this becomes one message again.
+    if (swapping) {
+      const half = Math.max(1, Math.floor(fadeMs / 2))
+      this.node.port.postMessage({ type: 'duck', milli: 0, rampMs: half })
+      await new Promise((r) => setTimeout(r, half))
     }
+
+    this.node.port.postMessage({ type: 'loadTrack', bytes }, [bytes])
+    this.node.port.postMessage({ type: 'setLoop', on: loop })
+    this.node.port.postMessage({ type: 'play' })
+
+    if (swapping) {
+      const half = Math.max(1, Math.floor(fadeMs / 2))
+      this.node.port.postMessage({ type: 'duck', milli: 1000, rampMs: half })
+    }
+
     this.current = url
-    this.log(`[music] ${fading ? 'crossfading to' : 'playing'} ${url}`)
+    this.log(`[music] ${swapping ? 'swapping to' : 'playing'} ${url}`)
   }
 
   /**
