@@ -136,15 +136,30 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
   check(synth.playing() === true, 'and the transport is still running after the swap')
   check(peak2 > 100, `and it is audible (peak ${peak2})`)
 
-  // THE CONTROL, and it is the actual bug: the crossfade path refuses a baked
-  // track and stops the transport. If this ever starts succeeding, the synth
-  // has grown a track-aware crossfade and music.js should go back to using it.
+  // The crossfade now takes a baked track -- the synth grew
+  // crossfadeTrackFromBuffer, and crossfadeFromBuffer delegates to it. This
+  // check used to assert the opposite, and failing was how the workaround was
+  // noticed as expired rather than somebody having to remember.
   const b2 = readFileSync(TRACK)
   const ptr = synth.songBufferPrepare(b2.length)
   mod.HEAPU8.set(b2, ptr)
-  const xf = JSON.parse(synth.crossfadeFromBuffer(1200))
-  check(xf.ok === false,
-        `CONTROL: crossfadeFromBuffer still refuses a .mstk (${xf.errors?.[0] ?? 'accepted!'})`)
+  const xf = JSON.parse(synth.crossfadeTrackFromBuffer(1200))
+  check(xf.ok === true, `a baked track can be crossfaded (${xf.errors?.[0] ?? 'ok'})`)
+
+  // AND THE REASON A MAP CHANGE STILL SWAPS RATHER THAN CROSSFADING.
+  //
+  // A .mstk is tree-shaken: it carries only the instruments its own song uses,
+  // and the crossfade keeps the content already loaded because slices of one
+  // parent share it. Two independently baked tracks do not, so the incoming
+  // score plays through the outgoing track's instruments -- and the synth says
+  // so rather than failing, which is the kind of wrong that ships.
+  //
+  // This is what makes swap-vs-crossfade a property of how the tracks were
+  // BAKED rather than a preference. If this warning ever stops appearing,
+  // independently baked tracks have become interchangeable and music.js can
+  // crossfade everything.
+  check((xf.warnings ?? []).some((w) => /different content/.test(w)),
+        `crossfading a differently-baked track warns (${xf.warnings?.length ?? 0} warnings)`)
 }
 
 // --- the map-to-track manifest -----------------------------------------------

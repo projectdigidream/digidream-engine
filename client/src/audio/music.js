@@ -54,6 +54,9 @@ export class Music {
     this.failed = null
     // name -> url, for the map currently loaded. See setCues.
     this.cues = {}
+    // Is what is playing a sibling of the cues in `this.cues`? Only then may a
+    // cue change crossfade rather than swap. See play().
+    this.sameContent = false
   }
 
   /**
@@ -162,28 +165,40 @@ export class Music {
    * them. `fadeMs` of 0 is a hard cut, which is what starting from silence
    * wants.
    */
-  async play (url, { loop = true, fadeMs = 0 } = {}) {
-    if (!this.ready) { this.pending = { url, opts: { loop, fadeMs } }; return }
+  async play (url, { loop = true, fadeMs = 0, crossfade = false } = {}) {
+    if (!this.ready) { this.pending = { url, opts: { loop, fadeMs, crossfade } }; return }
     if (this.current === url) return
 
     const bytes = await fetch(url).then((r) => r.arrayBuffer())
-    const swapping = fadeMs > 0 && this.current !== null
 
-    // A DIP, NOT AN OVERLAP -- and that is a limitation, not a preference.
+    // TWO WAYS TO CHANGE TRACK, and they are not interchangeable.
     //
-    // The synth's crossfade takes an SMF: `crossfadeFromBuffer` parallels
-    // `loadSongFromBuffer`, and a baked .mstk only goes in through
-    // `loadTrackFromBuffer`. Handing a .mstk to the crossfade does not merely
-    // fail to fade -- it reports "not an SMF file (missing MThd)" and leaves
-    // the synth STOPPED, which is how the second map of a progression came to
-    // have no music at all.
+    // CROSSFADE is for cues baked from the SAME parent content. A .mstk is
+    // tree-shaken -- it carries only the instruments its own song uses -- and
+    // the synth's crossfade keeps the content already loaded, because slices of
+    // one parent share it. Crossfading between two INDEPENDENTLY baked tracks
+    // therefore plays the incoming score through the outgoing track's
+    // instruments: the synth warns, and the result is a song rendered with the
+    // wrong instruments rather than an error anybody would notice.
     //
-    // So this fades the master down, swaps the track, and fades back up. The
-    // two songs never overlap, which is audibly not the same thing; it is what
-    // can be done with the API as it stands. Give the synth a
-    // crossfadeTrackFromBuffer and this becomes one message again.
-    if (swapping) {
-      const half = Math.max(1, Math.floor(fadeMs / 2))
+    // SWAP is for everything else: fade the master down, load the track --
+    // which brings its own instruments with it -- and fade back up. The two
+    // songs never overlap, which is the price of them being unrelated pieces
+    // of music.
+    //
+    // So a map change swaps and a cue change within one map crossfades. That is
+    // a property of how the tracks were BAKED, not a preference, which is why
+    // cue() decides it rather than the caller.
+    if (crossfade && this.current !== null) {
+      this.node.port.postMessage({ type: 'crossfadeTrack', bytes, fadeMs }, [bytes])
+      this.current = url
+      this.log(`[music] crossfading to ${url}`)
+      return
+    }
+
+    const dipping = fadeMs > 0 && this.current !== null
+    const half = Math.max(1, Math.floor(fadeMs / 2))
+    if (dipping) {
       this.node.port.postMessage({ type: 'duck', milli: 0, rampMs: half })
       await new Promise((r) => setTimeout(r, half))
     }
@@ -192,13 +207,10 @@ export class Music {
     this.node.port.postMessage({ type: 'setLoop', on: loop })
     this.node.port.postMessage({ type: 'play' })
 
-    if (swapping) {
-      const half = Math.max(1, Math.floor(fadeMs / 2))
-      this.node.port.postMessage({ type: 'duck', milli: 1000, rampMs: half })
-    }
+    if (dipping) this.node.port.postMessage({ type: 'duck', milli: 1000, rampMs: half })
 
     this.current = url
-    this.log(`[music] ${swapping ? 'swapping to' : 'playing'} ${url}`)
+    this.log(`[music] ${dipping ? 'swapping to' : 'playing'} ${url}`)
   }
 
   /**
@@ -211,19 +223,22 @@ export class Music {
    */
   setCues (cues) {
     this.cues = cues ?? {}
+    // A NEW TABLE IS NEW CONTENT. The next track to play was baked
+    // independently of whatever is sounding, so it must be swapped in with its
+    // own instruments rather than crossfaded onto the old ones. Cue changes
+    // after that stay inside one map's set and may crossfade.
+    this.sameContent = false
   }
 
   /**
-   * Play a named cue from the current map, crossfading.
+   * Play a named cue from the current map.
    *
-   * SEPARATE TRACKS, crossfaded -- not layers of one song muted in and out. The
-   * synth can do either; this way two cues need not share a tempo or a key,
-   * which is what lets a map's quiet loop and its fight loop be unrelated
-   * pieces of music.
+   * Crossfades between cues of one map and swaps when the map changed -- see
+   * play() for why those are different operations rather than a preference.
    *
    * This is the seam the server will drive. When a script can say
    * `dnp.music("combat", 800)` the handler for that message is one call to
-   * here -- the resolution from a NAME to a url stays on the client, where the
+   * here: the resolution from a NAME to a url stays on the client, where the
    * manifest already lives, so the wire only ever carries the name.
    */
   async cue (name, fadeMs = 800) {
@@ -234,7 +249,9 @@ export class Music {
       this.log(`[music] no cue '${name}' in this map (have: ${Object.keys(this.cues ?? {}).join(', ') || 'none'})`)
       return
     }
-    await this.play(url, { loop: true, fadeMs })
+    await this.play(url, { loop: true, fadeMs, crossfade: this.sameContent })
+    // From here on, the cues in this table are siblings of what is playing.
+    this.sameContent = true
   }
 
   /** Master volume, 0..1000 (the synth works in milli). */
