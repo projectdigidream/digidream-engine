@@ -38,6 +38,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_interact"
 "./build/$HOST_ARCH/test_props"
 "./build/$HOST_ARCH/test_bodies"
+"./build/$HOST_ARCH/test_sweep"
 "./build/$HOST_ARCH/test_sight"
 "./build/$HOST_ARCH/test_turning"
 "./build/$HOST_ARCH/test_nav"
@@ -50,6 +51,11 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
 ./scripts/check_map_scripts.sh
+
+# Every mob table loads clean, and every deliberately broken one is refused.
+# The second half is the point: a loader that accepts everything passes the
+# first half perfectly.
+./scripts/check_mobs.sh
 "./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
 # The same map, its behaviour written as triggers instead of as Doom line
 # actions. Both are baked and both are driven, so the two implementations are
@@ -179,12 +185,27 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # a syntax error in maps/scripts/triggers.lua is caught without standing up a
   # server, and it is where docs/TRIGGERS.md is checked against the vocabulary
   # it is written from.
-  "./build/lua/test_lua_triggers" .
+  "./build/lua/test_lua_triggers"
+  # The shooting range: a room with a player in the middle and hitscan monsters
+  # all round it, asserting every one of them lands a shot. The ONLY test that
+  # drives the real world bindings -- every other Lua test stubs `dnp` with a
+  # table, and four bugs this phase came from a stub being more generous than
+  # the engine and one from a parameter setter that never existed.
+  "./build/lua/test_lua_shootrange"
   # The editor's trigger-table WRITER, checked by the runtime that has to read
   # it. It runs here rather than beside the other editor tests because its
   # oracle is build/lua/triggercheck, which is built one line above -- and a
   # test whose oracle is missing skips loudly rather than passing.
   node editor/test/triggerlua.test.js | tail -2
+  # And where a map's triggers live: the sidecar is the source, the map's .lua
+  # holds a generated block. Same oracle -- what it splices into that file has
+  # to load in the real runtime, not merely look like Lua.
+  node editor/test/triggerstore.test.js | tail -2
+  # The trigger panel's operations. The panel itself is DOM and is covered by
+  # the browser smoke test; this is everything its buttons DO -- and the last
+  # assertion runs the resulting graph through the runtime, so "the editor can
+  # build it" means the engine takes it.
+  node editor/test/triggeredit.test.js | tail -2
 else
   echo "  skip lua tests (run: scripts/setup_luajit.sh)"
 fi
@@ -214,6 +235,17 @@ else
     echo "  dev certificate has EXPIRED -- regenerating"
     (cd server/edge && npm run --silent certs >/dev/null)
   fi
+  # ITS OWN BINARY, not the one a stack might be running.
+  #
+  # build_server.sh writes build/server/dnp-server by default, which is what
+  # scripts/run_stack.sh executes -- and relinking a file while a process is
+  # running it replaces the image underneath and kills it. Running the tests
+  # while playing therefore dropped the session, and the symptom was an edge
+  # logging "upstream lost" over and over, which reads as a networking fault.
+  #
+  # The tests find it through DNP_SERVER_BIN (server/edge/test/serverbin.js).
+  export DNP_SERVER_OUT="$PWD/build/test-server"
+  export DNP_SERVER_BIN="$DNP_SERVER_OUT/dnp-server"
   ./scripts/build_server.sh >/dev/null
 
   # The wasm core, BEFORE the tests that load a map through it.
@@ -244,6 +276,9 @@ else
   node client/test/ui.test.js | tail -2
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | tail -2
+  # The synth: instruments, a baked track, and audio that is not silence.
+  # Skips itself when midisynth's wasm has not been built.
+  node client/test/music.test.js | tail -2
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2
@@ -260,6 +295,27 @@ else
   # cover, and a suite everybody waits four minutes for is one people stop
   # running. DNP_EDITOR_PAGE_TEST=1 includes it.
   node editor/test/page.test.js | tail -2
+
+  # --- the desktop build ------------------------------------------------------
+  #
+  # Staging a module into a standalone app, and the app's own transport.
+  #
+  # The staging test carries the control that keeps the engine clean: an app
+  # built from a module with no assets of its own must contain no images at all.
+  # If Doom art ever finds its way back into assets/, that is where it is caught
+  # -- nowhere else would notice, because a contaminated build looks perfect.
+  #
+  # The transport test runs the STAGED tree against a real server: the same
+  # relay, framing and client modules the packaged game uses, with only
+  # Electron's IPC pipe stubbed. See app/test/local_transport.test.js for why
+  # that is the right seam.
+  node app/test/stage.test.js | tail -2
+  node app/test/local_transport.test.js 2>/dev/null | tail -2
+  # And the app under a REAL Electron. Opt-in (DNP_APP_LAUNCH_TEST=1): it is a
+  # window, a GPU process and a ~150 MB dependency. Worth having anyway --
+  # nothing else in the suite ever loads app/main.js under Electron, and the
+  # first time anybody did, it failed on its first line.
+  node app/test/launch.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/noupstream.test.js 2>/dev/null | tail -2 \

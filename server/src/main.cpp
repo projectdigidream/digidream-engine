@@ -14,6 +14,9 @@
 #include <cstring>
 #include <map>
 #include <thread>
+#include <string>
+#include <algorithm>
+#include <dirent.h>
 
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapfile.hpp"
@@ -68,6 +71,11 @@ constexpr size_t MAP_CHUNK_BYTES = 8192;
 //
 // Heap-allocated by the server (roughly 700 KB each), so hosting the whole of
 // DOOM2 is about twenty megabytes and the count is not a thing to ration.
+// How often the nav graph may be rebuilt while sectors are moving. 15 ticks is
+// a quarter of a second: faster than a monster can walk to a door it has just
+// noticed, and a twentieth of the rebuilds that doing it every tick would cost.
+inline constexpr u32 NAV_REBUILD_TICKS = 15;
+
 struct Level {
     std::string      path;
     // Side textures a script has changed, in the order it changed them.
@@ -88,6 +96,23 @@ struct Level {
     nav::NavGraph    nav_graph;
     std::vector<u8>  map_bytes;   // exactly what clients receive
     u64              map_hash = 0;
+
+    // THE NAV GRAPH GOES STALE THE MOMENT A DOOR MOVES.
+    //
+    // It is built once from the geometry at load, when every door in a Doom map
+    // is shut -- and a shut door is a sector whose ceiling rests on its floor,
+    // which nav correctly reads as impassable. So the graph describes a map
+    // that is mostly disconnected, and it kept describing that after the doors
+    // opened: monsters could never path through one, for the rest of the
+    // session.
+    //
+    // Rebuilt when the moving sectors' heights actually change. `nav_heights`
+    // is a fingerprint over exactly those sectors -- there are at most
+    // MAX_MOVING_SECTORS of them, so checking costs nothing against a nav
+    // rebuild -- and `nav_built_tick` throttles it, because a lift travelling
+    // for a second would otherwise rebuild sixty times on its way.
+    u64              nav_heights = 0;
+    u32              nav_built_tick = 0;
 
     // The view the world reads geometry through. A member, not a
     // function-local static: one static was correct while there was exactly one
@@ -377,6 +402,34 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                      level_count(), path, L.view.sector_count, L.view.side_count,
                      static_cast<unsigned long long>(L.map_hash));
 
+        // THE BROADPHASE, reported because its absence is invisible and
+        // expensive. Without the sector grid every point query scans every
+        // sector, which on a 180-sector Doom level is the difference between a
+        // playable tick and one that misses its deadline -- and the only
+        // symptom is "the server keeps falling behind", which names nothing.
+        // Bucket occupancy, which is what the grid is actually worth. A grid
+        // that exists but puts forty sectors in the cell you are standing in
+        // saves nothing, and reports itself as working.
+        if (L.view.grid.usable) {
+            u32 worst = 0, total = 0, cells = 0;
+            const u32 n = static_cast<u32>(L.view.grid.cols) * L.view.grid.rows;
+            for (u32 c = 0; c < n; ++c) {
+                const u32 k = L.view.grid.start[c + 1] - L.view.grid.start[c];
+                total += k;
+                if (k > 0) { ++cells; if (k > worst) worst = k; }
+            }
+            std::fprintf(stderr,
+                "[srv]   grid: %ux%u, %u items, %.1f avg per occupied cell, %u worst\n",
+                L.view.grid.cols, L.view.grid.rows, total,
+                cells ? static_cast<double>(total) / cells : 0.0, worst);
+        }
+        if (!L.view.grid.usable) {
+            std::fprintf(stderr,
+                "[srv]   NO SECTOR GRID: point queries will scan all %u sectors. "
+                "The map is too large or too sprawling for the grid's fixed "
+                "capacity (geom::MAX_GRID_ITEMS).\n", L.view.sector_count);
+        }
+
         // Nav graph, plus a reachability report from the default spawn. This is
         // a map-authoring signal, not a runtime one: "17 of 40 sectors are
         // reachable" is something the author wants to hear at load, and is
@@ -465,6 +518,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
     }
     std::map<u32, Session> sessions;   // ordered: iteration order must not vary
+
+    // How many level-ticks were skipped because nobody was in them. A counter
+    // rather than silence: "the server is fast now" and "the server stopped
+    // simulating most of the game" look identical from outside, and only one of
+    // them is what was intended.
+    u64  idle_levels_skipped_ = 0;
+    bool idle_skip_reported_ = false;
     u32                  snapshot_divisor = 2;   // 60 Hz sim, 30 Hz snapshots
 
     // Put a session into a level: spawn it, tell it where it is, hand it the
@@ -600,6 +660,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         L.ctx.commands    = &L.commands;
         L.ctx.effects     = &L.effects;
         L.ctx.map_store   = &L.map_store;
+        // Borrowed. The level owns its graph and rebuilds it on a shape
+        // commit; a copy here would path over a map that no longer exists.
+        L.ctx.nav         = &L.nav_graph;
         L.ctx.level       = li;
         L.ctx.map_changes = this;
         L.ctx.ui = this;
@@ -833,7 +896,18 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // from the next snapshot.
             return;
         }
-        it->second.ingest(b);
+        // The world tick this session's level is at, so ingest can tell input
+        // meant for THIS world from input still in flight from the last one.
+        //
+        // BOUNDS-CHECKED, because level() is not: it is `*levels[i]` with no
+        // range test, and every other use compares `s.level` rather than
+        // indexing with it. A datagram arriving for a session whose level is
+        // out of range -- during teardown, or from a client talking to a server
+        // that has since dropped a level -- would be an out-of-bounds read on
+        // the network path, which is the worst place to have one.
+        Session& sess = it->second;
+        if (sess.level >= level_count()) return;
+        sess.ingest(b, level(sess.level).world.tick());
     }
 
     // Crush and pin events from the tick just run (design §3.1).
@@ -1031,6 +1105,68 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
     }
 
+    /**
+     * Rebuild the nav graph when the geometry it describes has moved.
+     *
+     * WHAT WAS WRONG. nav_graph.build() ran once, at load. Every Doom door is
+     * shut at that moment -- stored, as Doom stores them, as a sector whose
+     * ceiling rests on its floor -- so the graph said the map was a handful of
+     * rooms with no way between them, and went on saying it after every door in
+     * the level had been opened. A monster could not path through a door it was
+     * standing in.
+     *
+     * WHAT IS CHECKED. Only the sectors that can move: a fingerprint over the
+     * floor and ceiling of each entry in the motion set, which is at most
+     * MAX_MOVING_SECTORS values. Geometry that cannot move cannot invalidate
+     * the graph, so there is nothing else to look at.
+     *
+     * THE THROTTLE is not an optimisation detail, it is the whole cost story: a
+     * lift travels for about a second, and rebuilding on every tick of that is
+     * sixty rebuilds to describe one journey whose only interesting states are
+     * the two ends. At this interval a monster notices an opened door within a
+     * quarter of a second, which is faster than it can walk to one.
+     */
+    void refresh_nav_if_stale(Level& L) {
+        const sim::SectorMotionSet& ms = L.world.motions();
+        if (ms.count() == 0) return;
+
+        // FNV-1a over the moving sectors' heights, in motion-set order. Order is
+        // stable because the set is only appended to.
+        u64 fp = 1469598103934665603ull;
+        const auto mix = [&fp](i64 v) {
+            for (int b = 0; b < 8; ++b) {
+                fp ^= static_cast<u64>((v >> (b * 8)) & 0xFF);
+                fp *= 1099511628211ull;
+            }
+        };
+        for (u32 i = 0; i < ms.count(); ++i) {
+            const u32 si = ms.at(i).sector;
+            if (si >= L.view.sector_count) continue;
+            mix(L.view.sector(si).floor_z.raw);
+            mix(L.view.sector(si).ceil_z.raw);
+        }
+
+        if (fp == L.nav_heights) return;
+
+        const u32 now = L.world.tick();
+        if (L.nav_built_tick != 0 && now - L.nav_built_tick < NAV_REBUILD_TICKS) return;
+
+        // Said once per level. A Doom map has lifts running all through it, so
+        // a line per rebuild would be a log nobody reads -- but "the nav graph
+        // is not what it was at load" is worth knowing once, because for a long
+        // time it silently never was.
+        if (L.nav_heights == 0) {
+            std::fprintf(stderr, "[srv] %s: nav rebuilt -- geometry moved (tick %u)\n",
+                         L.path.c_str(), now);
+        }
+        L.nav_heights = fp;
+        L.nav_built_tick = now;
+        // A failure here leaves the previous graph in place, which is the older
+        // answer rather than no answer -- and nav already reports at load when a
+        // map has more sectors than it holds.
+        L.nav_graph.build(L.view);
+    }
+
     // One level's tick. Every level runs every tick, in load order.
     //
     // In load order and not, say, "only levels with players in them", because a
@@ -1066,6 +1202,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         flush_lua_commands(L);
 
         L.world.step();
+        refresh_nav_if_stale(L);
         report_crushes(L);
         dispatch_events(L);
 
@@ -1289,8 +1426,72 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         pending_changes.clear();
     }
 
+    /**
+     * Is anybody in this level?
+     *
+     * By SESSION and not by agent: a session that has arrived but has not been
+     * given an agent yet is still somebody waiting for this level to run, and
+     * skipping it would be a level that never spawns them.
+     */
+    bool level_occupied(u32 li) const {
+        for (const auto& [id, s] : sessions) if (s.level == li) return true;
+        return false;
+    }
+
     void tick() {
-        for (u32 li = 0; li < level_count(); ++li) tick_level(li);
+        // EMPTY LEVELS DO NOT TICK.
+        //
+        // This reverses what the comment on tick_level argued for, and the
+        // reason is a measurement rather than a preference. `--module doom2`
+        // hosts thirty-two levels and about 3,800 monsters; running every one
+        // of them every tick while a player stands in exactly one cost the
+        // server its deadline -- repeated "fell 250 ms behind" and a game that
+        // was not playable. The comment predicted this ("the moment it is not
+        // [cheap]"), and preferred making an idle level cheap to making time
+        // conditional. But nearly all of an idle level's cost IS its monsters'
+        // AI and physics, so "cheap" and "not ticking" differ only in whether
+        // the lifts keep moving -- which nobody is there to see.
+        //
+        // WHAT THIS CHANGES, stated plainly: a level's clock stops while it is
+        // empty, so a lift left mid-travel is still mid-travel when somebody
+        // arrives, rather than wherever it would have got to. That is coherent
+        // because every clock here is already per-level -- there is no global
+        // tick, and parametric sector motion is a function of the LEVEL's tick
+        // (docs/protocol.md), so a client joining computes exactly the position
+        // the server has. It is also what Doom itself does with a level you are
+        // not in.
+        //
+        // Arrivals are safe: apply_map_changes() runs AFTER this loop, so a
+        // player transferred into an empty level is already in `sessions` when
+        // the next tick asks who is where.
+        u32 ran = 0;
+        for (u32 li = 0; li < level_count(); ++li) {
+            if (!level_occupied(li)) {
+                // The clock and the map, and nothing else. NOT a skipped tick:
+                // every level keeps the same count, because a level whose clock
+                // stops is thousands of ticks behind by the time somebody walks
+                // into it, and a client crossing that gap jumps its clock
+                // backwards far enough that the server's input ring seeds
+                // itself from a straggler and discards everything real after
+                // it. That was reported as "player inputs stop working after
+                // transitioning to a map", and it is why this is step_idle()
+                // rather than `continue`.
+                level(li).world.step_idle();
+                ++idle_levels_skipped_;
+                continue;
+            }
+            tick_level(li);
+            ++ran;
+        }
+        // Said once, the first time it happens, because it is a real change in
+        // what the server is doing and it should not be folklore.
+        if (!idle_skip_reported_ && ran < level_count()) {
+            idle_skip_reported_ = true;
+            std::fprintf(stderr,
+                "[srv] %u of %u levels are empty and are not being ticked; "
+                "their clocks resume when somebody arrives\n",
+                level_count() - ran, level_count());
+        }
         // AFTER every level has stepped, never during one.
         //
         // A map change despawns from one world and spawns in another, and doing
@@ -1394,7 +1595,53 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // message, no handle domain bit, and no second delta path -- from
             // the wire's point of view a key and a player differ by what they
             // are called and how often they move.
-            for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) {
+            // WHAT GETS DROPPED WHEN THE DATAGRAM IS FULL.
+            //
+            // This used to sweep 0..MAX_ENTITIES and omit everything after the
+            // index it ran out of room on. Agents hold the low indices and
+            // props the high ones, so a level with two hundred monsters spent
+            // the entire budget on agents and never sent a single prop -- the
+            // keys did not appear, and nothing was wrong with them: they exist
+            // on the server and no client was ever told.
+            //
+            // Order the sweep instead. NEAR entities first, every tick, so
+            // whatever the player can actually see is current; then the rest
+            // from a per-session cursor that advances, so the far field takes
+            // turns instead of the same tail starving forever.
+            //
+            // Ordering, not filtering: nothing is excluded, and an entity that
+            // does not fit this tick is still recorded as "the client has the
+            // old value" so the next delta is computed against what arrived.
+            u32 order[sim::MAX_ENTITIES];
+            u32 order_n = 0;
+            {
+                const fx3 eye = world.agent(s.agent).pos;
+                // A generous radius -- this is about SPENDING the budget well,
+                // not about hiding things. Anything inside it is sent every
+                // tick; outside it, turns.
+                const fx near_r = fx::from_int(64);
+                const auto near_enough = [&](fx3 p) {
+                    const fx2 d{p.x - eye.x, p.y - eye.y};
+                    return len_sq_raw(d) <=
+                           static_cast<u128>(static_cast<i128>(near_r.raw) * near_r.raw);
+                };
+                const auto pos_of = [&](u32 i) {
+                    return sim::World::is_prop(i) ? world.prop(i).pos
+                                                  : world.agent(i).pos;
+                };
+                for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) {
+                    if (near_enough(pos_of(i))) order[order_n++] = i;
+                }
+                for (u32 k = 0; k < sim::MAX_ENTITIES; ++k) {
+                    const u32 i = (s.snapshot_cursor + k) % sim::MAX_ENTITIES;
+                    if (!near_enough(pos_of(i))) order[order_n++] = i;
+                }
+                // Advance by a slice, so successive ticks start further along.
+                s.snapshot_cursor = (s.snapshot_cursor + 64) % sim::MAX_ENTITIES;
+            }
+
+            for (u32 oi = 0; oi < order_n; ++oi) {
+                const u32 i = order[oi];
                 // The observer's own agent is in SelfBlock at full precision.
                 // Sending it again here would let the client reconcile against
                 // the quantised copy of itself.
@@ -1537,7 +1784,10 @@ int main(int argc, char** argv) {
     u32 script_count = 0;
     bool strict_scripts = false;
     bool no_scripts = false;
-    const char* props_path = "assets/props.txt";
+    const char* props_path = nullptr;      // --props wins over any module
+    constexpr u32 MAX_MODULES = 16;
+    const char* module_dirs[MAX_MODULES]{};
+    u32 module_count = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             port = static_cast<u16>(std::atoi(argv[++i]));
@@ -1557,6 +1807,13 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
         } else if (std::strcmp(argv[i], "--props") == 0 && i + 1 < argc) {
             props_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--module") == 0 && i + 1 < argc) {
+            // A project's own maps, scripts and assets in one directory (see
+            // docs/MODULES.md). REPEATABLE: several modules load together, and
+            // their catalogues are concatenated rather than renumbered, so an
+            // id means the same thing to the server and to the client.
+            if (module_count < MAX_MODULES) module_dirs[module_count++] = argv[++i];
+            else { std::fprintf(stderr, "[srv] too many --module arguments\n"); return 2; }
         } else if (std::strcmp(argv[i], "--no-scripts") == 0) {
             // Refuse to run any Lua at all, including what the maps ask for.
             // The operator's veto, and the control every "the map is driving
@@ -1573,8 +1830,81 @@ int main(int argc, char** argv) {
         srv.spawn_tag = spawn_tag_arg;
         srv.spawn_tag_len = static_cast<u32>(std::strlen(spawn_tag_arg));
     }
+    // A MODULE BRINGS ITS OWN MAPS.
+    //
+    // `--module doom2` with no --map loads everything in modules/doom2/maps,
+    // in name order, as a progression -- which for a converted game is exactly
+    // map01 through map32 and an exit that advances. Naming thirty-two files on
+    // a command line to play a game that ships thirty-two of them is a chore
+    // the module already knows the answer to.
+    //
+    // DISCOVERED, not declared. module.txt deliberately does not list contents:
+    // a manifest that has to be kept in step with the filesystem is a second
+    // source of truth, and it goes stale the first time somebody adds a map.
+    //
+    // An explicit --map still wins. Order matters and a module whose maps do
+    // not sort into the order they should be played in has to say so, which is
+    // what naming them does.
+    // A MODULE MAY BE NAMED OR SPELLED OUT.
+    //
+    // `--module doom2` and `--module modules/doom2` both work: the first is
+    // what a person types, the second is what a script that already knows the
+    // layout passes. Resolved here, once, so the server and the web server
+    // accept the same thing -- they did not, and `run_stack.sh --module doom2`
+    // handed the web server a name it resolved and the server a path it could
+    // not find, which presented as "no module has any maps".
+    const auto has_dir = [](const std::string& p) {
+        DIR* d = opendir(p.c_str());
+        if (d == nullptr) return false;
+        closedir(d);
+        return true;
+    };
+    static std::vector<std::string> module_resolved;
+    for (u32 mi = 0; mi < module_count; ++mi) {
+        std::string given = module_dirs[mi];
+        if (!has_dir(given + "/maps") && has_dir("modules/" + given + "/maps")) {
+            given = "modules/" + given;
+        }
+        module_resolved.push_back(given);
+    }
+    for (u32 mi = 0; mi < module_count; ++mi) {
+        module_dirs[mi] = module_resolved[mi].c_str();
+    }
+
+    static std::vector<std::string> discovered;
+    if (map_count == 0 && module_count > 0) {
+        for (u32 mi = 0; mi < module_count; ++mi) {
+            std::string dir = std::string(module_dirs[mi]) + "/maps";
+            DIR* d = opendir(dir.c_str());
+            if (d == nullptr) continue;
+            std::vector<std::string> found;
+            while (dirent* e = readdir(d)) {
+                const std::string n = e->d_name;
+                if (n.size() > 5 && n.compare(n.size() - 5, 5, ".dnpm") == 0) {
+                    found.push_back(dir + "/" + n);
+                }
+            }
+            closedir(d);
+            std::sort(found.begin(), found.end());
+            for (const std::string& f : found) discovered.push_back(f);
+        }
+        for (const std::string& f : discovered) {
+            if (map_count < MAX_LEVELS) map_paths[map_count++] = f.c_str();
+        }
+        if (map_count > 0) {
+            std::fprintf(stderr, "[srv] %u map(s) from the module(s), in name order\n",
+                         map_count);
+        }
+        if (discovered.size() > map_count) {
+            std::fprintf(stderr,
+                "[srv] the module has %zu maps and only %u fit; name the ones you "
+                "want with --map\n", discovered.size(), map_count);
+        }
+    }
+
     if (map_count == 0) {
-        std::fprintf(stderr, "[srv] no --map given; nothing to host\n");
+        std::fprintf(stderr, "[srv] no --map given and no module has any; "
+                             "nothing to host\n");
         return 1;
     }
     for (u32 k = 0; k < map_count; ++k) {
@@ -1585,12 +1915,39 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "[srv] %u level(s); an exit advances to the next\n", srv.level_count());
 
-    // The prop catalogue. Missing is not fatal -- a map that spawns nothing does
-    // not need one -- but a map that DOES will fail loudly at the spawn rather
-    // than quietly produce a key nobody can see.
-    if (!srv.props.load(props_path)) {
+    // The prop catalogue.
+    //
+    // --props names one outright. Otherwise a module's own is tried first and
+    // the engine's is the fallback -- per FILE, so a module that ships no
+    // catalogue gets the engine's rather than none. Missing is not fatal: a map
+    // that spawns nothing does not need one, and a map that DOES fails loudly
+    // at the spawn rather than quietly producing a key nobody can see.
+    if (!srv.props.load(props_path == nullptr ? "assets/props.txt" : props_path)) {
         std::fprintf(stderr, "[srv] no prop catalogue at %s; scripts cannot spawn props\n",
-                     props_path);
+                     props_path == nullptr ? "assets/props.txt" : props_path);
+    }
+
+    // Then every module's, ADDED rather than replacing. Ids are absolute and
+    // are not renumbered, so a collision is a real conflict between two
+    // projects and the server refuses to start: serving a level where some of
+    // the barrels are drawn as keys is worse than not serving it.
+    u32 module_collisions = 0;
+    for (u32 mi = 0; mi < module_count; ++mi) {
+        char path[512];
+        std::snprintf(path, sizeof(path), "%s/assets/props.txt", module_dirs[mi]);
+        if (std::FILE* f = std::fopen(path, "rb")) {
+            std::fclose(f);
+            srv.props.add(path);
+            module_collisions += srv.props.collisions();
+        }
+        std::fprintf(stderr, "[srv] module %s\n", module_dirs[mi]);
+    }
+    if (module_collisions > 0) {
+        std::fprintf(stderr,
+            "[srv] %u prop id collision(s) between modules -- see the lines above. "
+            "An id is the WIRE id, so two modules cannot share one; give each "
+            "module its own range (docs/MODULES.md).\n", module_collisions);
+        return 1;
     }
 
     // A level gets a VM if the operator supplied scripts OR the map declared

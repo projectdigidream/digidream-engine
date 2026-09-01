@@ -21,14 +21,36 @@ const check = (ok, label) => {
   if (!ok) fails++
 }
 
+// WHERE THE SHIPPED CATALOGUE LIVES NOW.
+//
+// The engine's own assets/props.txt is deliberately almost empty: the keys, the
+// barrel, the lever and every monster are DOOM II art, and they moved to the
+// module that owns that art (docs/MODULES.md). So the file with entries in it
+// is the module's, and that is the one a parser is worth testing against.
+//
+// The engine's own file is still parsed below -- it must stay well-formed, and
+// an empty catalogue is exactly the case a parser is least likely to have been
+// tried on.
+const ENGINE_CATALOGUE = join(ROOT, 'assets', 'props.txt')
+const CATALOGUE = join(ROOT, 'modules', 'doom2', 'assets', 'props.txt')
+
 console.log('--- the shipped catalogue ---')
 {
   // The real file, not a fixture: a parser that only works on the examples in
   // its own test is a parser nobody can trust with the file that matters.
-  const text = readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8')
+  const text = readFileSync(CATALOGUE, 'utf8')
   const { kinds, warnings } = parseProps(text)
   check(warnings.length === 0, `parses clean (${warnings.length} warnings)`)
   check(kinds.size >= 6, `${kinds.size} kinds`)
+
+  // The engine's own catalogue: no props at all, and it must still parse
+  // without complaint. A catalogue with nothing in it is what a new project
+  // starts from, so "the parser copes with empty" is not a corner case here --
+  // it is the first thing anybody will hit.
+  const eng = parseProps(readFileSync(ENGINE_CATALOGUE, 'utf8'))
+  check(eng.warnings.length === 0,
+        `the engine's own catalogue parses clean (${eng.warnings.length} warnings)`)
+  check(eng.kinds.size === 0, `and carries no Doom art (${eng.kinds.size} kinds)`)
 
   const blue = kinds.get(1)
   check(blue?.type === 'sprite', 'kind 1 is a sprite')
@@ -172,7 +194,7 @@ sprite 10 state 1 fps 10 frames BOOM1,BOOM2,BOOM3
 // is checked at the cardinal points rather than reasoned about.
 
 {
-  const cat = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+  const cat = parseProps(readFileSync(CATALOGUE, 'utf8'))
   const poss = cat.kinds.get(20)
   check(poss?.rot8 === true, 'the zombieman declares eight rotations')
   check(poss?.states.get(1)?.frames?.[0] === 'POSSA',
@@ -220,7 +242,7 @@ check(((left - 1) + (right - 1)) % 8 === 0,
 // and nothing noticed, because a looping death animation looks like an
 // animation.
 {
-  const cat = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+  const cat = parseProps(readFileSync(CATALOGUE, 'utf8'))
   const die = cat.kinds.get(20).states.get(4)
   const walk = cat.kinds.get(20).states.get(1)
   check(die.once === true, 'the death state is declared play-once')

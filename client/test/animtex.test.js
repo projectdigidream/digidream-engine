@@ -25,7 +25,12 @@ const check = (ok, label) => {
 
 console.log('anim: textures that move')
 
-const cat = parseAnimations(readFileSync(join(ROOT, 'assets', 'animations.txt'), 'utf8'))
+// The animated flats are DOOM's -- NUKAGE, LAVA, the rest -- and their names
+// are WAD lumps, so the catalogue lives in the module that owns that art rather
+// than in the engine's assets/ (docs/MODULES.md). The engine ships no animated
+// textures of its own yet, which is why this reads the module's file.
+const cat = parseAnimations(
+  readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'animations.txt'), 'utf8'))
 check(cat.groups.length > 0, `the catalogue describes ${cat.groups.length} sequences`)
 check(cat.warnings.length === 0, `and parses clean (${cat.warnings.length} warnings)`)
 
@@ -100,7 +105,7 @@ const fakeMaterial = () => ({ uniforms: { map: { value: null } } })
 // extracted. This is the check that would have caught FWATER shipping with
 // frames 1 and 4 and nothing in between.
 {
-  const dir = join(ROOT, 'assets', 'textures')
+  const dir = join(ROOT, 'modules', 'doom2', 'assets', 'textures')
   let complete = 0
   let partial = []
   for (const g of cat.groups) {

@@ -31,7 +31,7 @@ inline constexpr u32 TICK_RATE_HZ = 60;
 // silently truncated real levels -- the largest converted Doom map places 166
 // monsters, so two thirds of it did not exist and the only sign of that was one
 // line saying "N did not fit".
-inline constexpr u32 MAX_AGENTS = 256;
+inline constexpr u32 MAX_AGENTS = 384;
 
 // Written as an exact rational rather than a decimal literal, so that changing
 // the rate cannot introduce a rounding difference that only shows up as drift.

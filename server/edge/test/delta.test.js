@@ -24,6 +24,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, handleIndex, handleGeneration, MSG
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -48,7 +49,7 @@ const waitFor = async (fn, ms, l) => {
   throw new Error(`timeout: ${l}`)
 }
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      [...['--port', String(LINK_PORT)],
                       ...(bakedMapPath(ROOT) ? ['--map', bakedMapPath(ROOT)] : [])],
                      { stdio: ['ignore', 'inherit', 'pipe'] })

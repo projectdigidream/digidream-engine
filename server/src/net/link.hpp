@@ -75,6 +75,9 @@ private:
 
     int listen_fd_ = -1;
     int edge_fd_   = -1;
+    // How many second-edge connections have been refused. Counted so the log
+    // can be rate-limited without losing the fact that it is still happening.
+    u64 rejected_edges_ = 0;
 
     std::vector<u8> in_;
     std::vector<u8> out_;

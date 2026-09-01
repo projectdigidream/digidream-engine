@@ -101,7 +101,12 @@ export function paintPlaceholder (ctx, name, { pixels = PIXELS } = {}) {
  * a 64-pixel Doom texture covers 64 Doom units and therefore 64/48 of ours.
  */
 export async function loadRealTextures (THREE, names, materials, {
-  baseUrl = '/textures', pxPerUnit = 32, extra = []
+  baseUrl = '/textures', pxPerUnit = 32, extra = [],
+  // Called as each picture arrives, with (done, total). Optional, and a
+  // counter rather than bytes: a texture is one request whose size nobody knows
+  // until it lands, so counting requests is the honest measure and is the one
+  // the loading bar can show without lying about how far along it is.
+  onProgress = null
 } = {}) {
   let index = null
   try {
@@ -137,16 +142,24 @@ export async function loadRealTextures (THREE, names, materials, {
   // appear in no texture list and so have no material of their own. Loaded into
   // a by-name table instead, for the animator to swap between.
   const frames = new Map()
+  // Both passes count toward the same total: the animation frames below are
+  // downloads like any other, and a bar that ignored them would sit still at
+  // the start of every Doom map while thirty of them came in.
+  const totalRequests = extra.length + names.length
+  let done = 0
+  const tick = () => { if (onProgress) onProgress(++done, totalRequests) }
+
   await Promise.all(extra.map((name) => new Promise((resolve) => {
-    if (!sizes[name] || names.includes(name)) { resolve(); return }
+    if (!sizes[name] || names.includes(name)) { tick(); resolve(); return }
     loader.load(`${baseUrl}/${name}.png`, (tex) => {
       frames.set(name, configure(tex))
+      tick()
       resolve()
-    }, undefined, () => resolve())
+    }, undefined, () => { tick(); resolve() })
   })))
   await Promise.all(names.map((name, i) => new Promise((resolve) => {
     const dim = sizes[name]
-    if (!dim || !materials[i]) { resolve(); return }
+    if (!dim || !materials[i]) { tick(); resolve(); return }
     loader.load(`${baseUrl}/${name}.png`, (tex) => {
       configure(tex)
       frames.set(name, tex)
@@ -159,8 +172,9 @@ export async function loadRealTextures (THREE, names, materials, {
       if (cutout[name]) materials[i].defines = { ...(materials[i].defines ?? {}), CUTOUT: '' }
       materials[i].needsUpdate = true
       loaded++
+      tick()
       resolve()
-    }, undefined, () => resolve())
+    }, undefined, () => { tick(); resolve() })
   })))
   return { loaded, total: names.length, frames }
 }

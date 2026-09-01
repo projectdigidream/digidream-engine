@@ -28,6 +28,7 @@ import {
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
+import { LocalConnection, hasLocalTransport } from './net_local.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
@@ -39,6 +40,7 @@ import { parseAnimations, TextureAnimator } from './render/animtex.js'
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
 import { MapAccumulator } from './maploader.js'
+import { Music } from './audio/music.js'
 import { MSG, encodeUiEvent, CAMERA_FIELD } from './proto.js'
 
 const TICK_HZ = 60
@@ -47,8 +49,14 @@ const DT = 1 / TICK_HZ
 const params = new URLSearchParams(location.search)
 
 // Live if a server is named; solo otherwise.
+//
+// THE DESKTOP SHELL IS A THIRD WAY IN, and it is live without a URL. When the
+// packaged app is what loaded this page it exposes a bridge to a server it
+// started itself, so there is nothing to name -- and no ?server= to type. The
+// transport differs; nothing after this line does (see net_local.js).
+const DESKTOP = hasLocalTransport()
 const SERVER = params.get('server')
-const LIVE = SERVER !== null
+const LIVE = SERVER !== null || DESKTOP
 const SERVER_URL = SERVER || 'https://127.0.0.1:34433/dnp'
 
 const MAP_URL = params.get('map') ?? '/maps/test.dnpm'
@@ -68,11 +76,116 @@ const hud = document.getElementById('hud')
 const status = document.getElementById('status')
 const say = (m) => { status.textContent = m }
 
+// --- the loading bar --------------------------------------------------------
+//
+// WHY A BAR AND NOT JUST THE STATUS LINE. Loading a Doom map fetches the
+// simulation core, a map over the control channel, several hundred wall
+// textures and a few thousand sprite frames. The status line said which step it
+// was on and nothing about how far through it was, so a slow texture pass and a
+// hung one looked identical -- and the wait is long enough that the difference
+// matters to whoever is staring at it.
+//
+// WEIGHTED, not one bar per step. The phases take wildly different times, so a
+// bar that gave each an equal share would crawl through textures and then jump.
+// The weights are rough measurements, not guesses at importance.
+//
+// MONOTONIC by construction: each phase reports its own 0..1 and the total is
+// the weighted sum, so nothing can go backwards even if a later phase reports
+// before an earlier one finishes.
+const loadingBox = document.getElementById('loading')
+const loadingFill = loadingBox?.querySelector('.fill')
+const loadingDetail = loadingBox?.querySelector('.detail')
+
+const PHASES = [
+  ['core', 1],       // the wasm module
+  ['connect', 1],    // transport up, WELCOME received
+  ['map', 2],        // the map, over the control channel
+  ['geometry', 2],   // triangulation into meshes
+  ['textures', 6],   // walls and flats -- the long one
+  ['sprites', 3]     // prop and monster frames
+]
+const phaseDone = new Map(PHASES.map(([k]) => [k, 0]))
+const phaseTotal = PHASES.reduce((n, [, w]) => n + w, 0)
+
+/** Report a phase's completion, 0..1, and optionally what it is doing. */
+function stage (key, frac, detail = null) {
+  if (!loadingBox) return
+  const clamped = Math.max(0, Math.min(1, frac))
+  // Never backwards: a phase that reports 0.4 after 0.6 is a rounding artefact
+  // of counting requests, not the load actually undoing itself.
+  phaseDone.set(key, Math.max(phaseDone.get(key) ?? 0, clamped))
+
+  // NOT `acc`: there is a module-scope `acc` (the frame accumulator) declared
+  // hundreds of lines below, and shadowing it here reads as a temporal-dead-zone
+  // bug to anyone scanning the file -- and to client/test/tdz.test.js, which
+  // reported it.
+  let weighted = 0
+  for (const [k, w] of PHASES) weighted += (phaseDone.get(k) ?? 0) * w
+  const pct = Math.round(100 * weighted / phaseTotal)
+  loadingBox.style.display = 'block'
+  loadingFill.style.width = `${pct}%`
+  if (detail !== null) loadingDetail.textContent = detail
+}
+
+/**
+ * Start a fresh load -- a map change is one.
+ *
+ * Without this the phases are still at 1 from the last map, so the bar opens at
+ * 100% and never moves. `stage()` is deliberately monotonic, which is right
+ * within one load and wrong across two.
+ */
+function stageReset (keys) {
+  for (const k of keys) phaseDone.set(k, 0)
+}
+
+// --- the health bar ---------------------------------------------------------
+//
+// The snapshot has carried `hp` since Phase 4 (proto.js reads it into
+// snap.hp) and nothing on the client had ever looked at it: the only way to
+// see your own health was the debug panel's slider, which is a development
+// tool and shows the value it last SET rather than the value the server has.
+//
+// LIVE ONLY. Solo runs the core with no server and no Lua, so there is nothing
+// keeping hp -- a bar sitting at whatever the field defaults to would be a
+// number that means nothing.
+const healthBox = document.getElementById('health')
+const healthNum = healthBox?.querySelector('.num')
+const healthFill = healthBox?.querySelector('.fill')
+// The most health seen this session, which is what the bar is drawn against.
+// The server does not send a maximum -- hp is one integer -- and a script can
+// raise it, so the alternative is hardcoding 100 here and having the bar sit
+// at a third full for anything that grants more.
+let healthMax = 0
+
+function showHealth (hp) {
+  if (!healthBox || hp === undefined || hp === null) return
+  if (hp > healthMax) healthMax = hp
+  if (healthMax <= 0) return
+  healthBox.style.display = 'block'
+  healthNum.textContent = String(Math.max(0, hp))
+  const frac = Math.max(0, Math.min(1, hp / healthMax))
+  healthFill.style.width = `${(frac * 100).toFixed(1)}%`
+  // Green, amber, red. Thresholds rather than a gradient: the point is to be
+  // readable at a glance while something is shooting at you, and a continuous
+  // hue ramp reads as "some colour" at every value.
+  healthFill.style.background = frac > 0.6 ? '#5fbf6a' : frac > 0.25 ? '#d6a13a' : '#d65b5b'
+}
+
+/** Everything is in; put the bar away. */
+function stageDone () {
+  if (!loadingBox) return
+  for (const [k] of PHASES) phaseDone.set(k, 1)
+  loadingFill.style.width = '100%'
+  loadingBox.style.display = 'none'
+}
+
 const LOAD_STATUS = ['Ok', 'BadMagic', 'BadVersion', 'Truncated', 'TooLarge',
                      'BadIndex', 'HashMismatch', 'TriangleMismatch']
 
 say('loading simulation core...')
+stage('core', 0, 'simulation core')
 const core = await Core.load()
+stage('core', 1)
 
 // --- getting a map ---------------------------------------------------------
 //
@@ -102,13 +215,16 @@ const pendingSnapshots = []
 const paramUpdates = []
 
 if (LIVE) {
-  say(`connecting to ${SERVER_URL}...`)
+  say(DESKTOP ? 'starting...' : `connecting to ${SERVER_URL}...`)
   // A development edge presents a self-signed certificate. Its hash is public
   // -- the server sends the certificate itself -- so serving the hash is not a
   // secret being leaked; the private key is never within reach of the dev
   // server's mounts.
   let certHash = null
+  // The desktop shell serves no /certhash and needs none: its transport is an
+  // IPC bridge with no TLS anywhere in it.
   try {
+    if (DESKTOP) throw new Error('desktop: no certificate involved')
     const j = await (await fetch('/certhash')).json()
     certHash = Uint8Array.from(atob(j.sha256_base64), (c) => c.charCodeAt(0))
   } catch {
@@ -117,7 +233,11 @@ if (LIVE) {
   }
 
   const acc = new MapAccumulator()
-  conn = new Connection({
+  // One of two transports, chosen here and nowhere else. Both present the
+  // same four methods and three callbacks, so everything below is written
+  // once. LocalConnection ignores `url` and `certHash`.
+  const Transport = DESKTOP ? LocalConnection : Connection
+  conn = new Transport({
     url: SERVER_URL,
     certHash,
     onControl (m) {
@@ -181,6 +301,7 @@ if (LIVE) {
   })
 
   await conn.open()
+  stage('connect', 0.5, 'connected; waiting for the server')
   say('connected; waiting for WELCOME...')
 
   // Progress reported at each step of the handshake, because "connecting..."
@@ -198,6 +319,14 @@ if (LIVE) {
     // so the one line that said what was actually wrong never survived long
     // enough to be read.
     if (closedWhy) throw new Error(closedWhy)
+    if (welcome) {
+      stage('connect', 1)
+      // Byte-accurate, because the accumulator knows both numbers. This is the
+      // one phase whose progress is a real measurement rather than a count of
+      // requests.
+      stage('map', acc.total ? acc.received / acc.total : 0,
+            `map ${acc.received} / ${acc.total} bytes`)
+    }
     say(welcome
       ? `receiving map... ${acc.received}/${acc.total} bytes`
       : 'connected; waiting for WELCOME...')
@@ -372,7 +501,9 @@ renderer.setClearColor(0x0b0d12)
 document.body.appendChild(renderer.domElement)
 
 const scene = new THREE.Scene()
+stage('geometry', 0, 'building geometry')
 let view = new MapView(mapData)
+stage('geometry', 1)
 scene.add(view.root)
 // Only these sectors are rebuilt per frame; everything else is built once.
 if (movers.length) view.setDynamicSectors(movers)
@@ -407,7 +538,12 @@ async function loadMapTextures () {
   // The map's own scale unless a flag overrides it. ?texpx= stays for
   // experimenting; what it no longer does is decide the answer.
   const pxPerUnit = params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32)
-  const res = await view.loadTextures({ pxPerUnit, extra })
+  const res = await view.loadTextures({
+    pxPerUnit,
+    extra,
+    onProgress: (done, total) => stage('textures', total ? done / total : 1,
+                                       `textures ${done} / ${total}`)
+  })
   animator = new TextureAnimator({
     groups: animCatalogue.groups,
     names: mapData.textures,
@@ -417,14 +553,23 @@ async function loadMapTextures () {
   if (animator.count > 0) console.log(`[anim] ${animator.count} animated textures`)
   return res
 }
-loadMapTextures()
+// KEPT, and awaited before play begins.
+//
+// This used to be fired and forgotten, deliberately: the map was already on
+// screen with generated placeholders and each real texture replaced one as it
+// arrived. That is the right trade when there is no loading screen -- something
+// to look at beats a blank page -- and the wrong one when there is, because
+// "loaded" then means "the pictures are actually here" rather than "they are on
+// their way".
+const texturesReady = loadMapTextures()
   .then((r) => {
     if (r?.loaded) console.log(`[render] ${r.loaded}/${r.total} textures loaded from /textures`)
+    return r
   })
   // Reported, not swallowed. This threw for two hundred lines' worth of
   // declaration order and the map simply had no textures on it; an unhandled
   // rejection in a console nobody was reading is not a report.
-  .catch((e) => say(`textures failed to load: ${e.message}`))
+  .catch((e) => { say(`textures failed to load: ${e.message}`); return null })
 
 // Drawn at the size the agent ACTUALLY is, read back from the world rather
 // than assumed. The map declares its own body (a converted Doom map is a third
@@ -566,7 +711,15 @@ try {
         () => { console.warn(`[props] missing sprite ${name}`); resolve() }
       )
     })
-    await Promise.all([...wanted].map(load))
+    // Counted, so the bar keeps moving through the longest phase on a Doom
+    // map: a few thousand sprite frames, each its own request.
+    let spritesDone = 0
+    const spritesTotal = wanted.size ?? [...wanted].length
+    stage('sprites', 0, `sprites 0 / ${spritesTotal}`)
+    await Promise.all([...wanted].map((n) => load(n).then(() => {
+      stage('sprites', spritesTotal ? ++spritesDone / spritesTotal : 1,
+            `sprites ${spritesDone} / ${spritesTotal}`)
+    })))
   }
   props = new PropRegistry({ THREE, textures, catalogue })
   // Transients read the same file. A tracer's colour, width and lifetime are
@@ -680,7 +833,27 @@ function adoptMap (bytes, w) {
   scene.remove(view.root)
   view = new MapView(mapData)
   scene.add(view.root)
+  // A MAP CHANGE IS A LOAD, and it has to end the way the first one does.
+  //
+  // stageDone() ran once at startup and nothing closed the bar afterwards, so
+  // walking through an exit reopened it -- loadMapTextures calls stage() -- and
+  // left it on screen for the rest of the session. Reported exactly that way.
+  //
+  // Only the phases a map change actually redoes are reset: the core and the
+  // connection are not reloaded, and resetting them would show the bar
+  // rewinding through work nobody is waiting for.
+  // A NEW MAP IS A NEW TRACK, crossfaded rather than cut: an exit should not
+  // punch a hole in the soundtrack, and the synth can hold both songs long
+  // enough to blend them. music.play() is a no-op when the track is the same,
+  // so two maps sharing one song do not restart it at the door.
+  playMapMusic(map.hash, 1200)
+
+  stageReset(['map', 'geometry', 'textures'])
+  stage('map', 1)
+  stage('geometry', 1)
   loadMapTextures()
+    .catch((e) => say(`textures failed to load: ${e.message}`))
+    .finally(() => stageDone())
 
   movers = []
 
@@ -809,9 +982,14 @@ let newestServerTick = 0
 const cost = { sim: 0, mesh: 0, draw: 0 }
 const blend = (k, v) => { cost[k] += (v - cost[k]) * 0.1 }
 
+// The newest health the server has told us. Kept here rather than read from a
+// retained snapshot object, because drainSnapshots consumes them.
+let latestHp = null
+
 function drainSnapshots () {
   while (pendingSnapshots.length) {
     const s = pendingSnapshots.shift()
+    if (s.hp !== undefined) latestHp = s.hp
     newestServerTick = Math.max(newestServerTick, s.serverTick)
 
     // Transient effects, drawn once and forgotten. The event carries where the
@@ -1048,6 +1226,12 @@ function frame (now) {
   // What the frame actually costs, from the renderer rather than from a guess.
   const ri = renderer.info.render
 
+  // Health, from the newest snapshot the server sent. Not predicted: damage is
+  // a Lua decision and the client has no way to run it, so this is the server's
+  // number and lags by exactly one snapshot -- which is the honest thing to
+  // show.
+  if (LIVE) showHealth(latestHp)
+
   const st = predictor?.stats
   hud.textContent =
     `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps\n` +
@@ -1095,6 +1279,77 @@ function liveSector (i) {
   const b = core.buf64 / 8
   return { floorZ: fxToFloat(i64[b]), ceilZ: fxToFloat(i64[b + 1]) }
 }
+
+// EVERYTHING IN, THEN PLAY.
+//
+// The last thing waited on is the textures, which is the only asset load that
+// is not already awaited above. A failure here is not fatal -- the map renders
+// with placeholders and said so -- so this waits for the promise to settle
+// rather than for it to succeed.
+await texturesReady
+stageDone()
+
+// --- music -------------------------------------------------------------------
+//
+// Armed, not started. A browser refuses to open an AudioContext until the
+// player has interacted with the page, so this waits for the first key or
+// click; the track chosen below is remembered until then rather than dropped.
+//
+// Deliberately after the loading bar has gone: the synth's first act is to
+// fetch a megabyte of baked track, and doing that while the textures are still
+// arriving would slow down the thing the player is actually waiting for.
+const music = new Music({ log: (m) => console.log(m) })
+// Exposed for the page smoke test, which has no other way to ask whether the
+// synth came up -- the same reason the editor's page test reaches into its app.
+window.__music = music
+music.arm()
+
+// WHICH TRACK BELONGS TO THIS MAP, by content hash.
+//
+// The only identity the client has for a map is its hash: WELCOME carries one
+// and this client computes the same number and compares them a few hundred
+// lines up. There is no level NAME on the wire, and adding one would be a
+// protocol change to answer a question already answerable.
+//
+// The manifest is generated by tools/wad/music_all.js beside the tracks, so a
+// module ships its soundtrack and its map-to-track table together. A REBAKE
+// CHANGES EVERY HASH, so a map with no entry is the normal way this goes stale
+// -- it plays nothing and says which hash was missing, rather than failing.
+let musicIndex = null
+async function musicFor (hash) {
+  if (musicIndex === null) {
+    musicIndex = await fetch('/music/index.json').then((r) => r.json()).catch(() => ({}))
+  }
+  const key = hash.toString(16)
+  const cues = musicIndex[key]
+  if (!cues) {
+    console.log(`[music] no track for map ${key} (re-run tools/wad/music_all.js after a rebake)`)
+    return null
+  }
+  // A map's entry is a TABLE OF NAMED CUES, and `default` is where it starts.
+  // Every DOOM II map has exactly one; a map with a quiet loop and a fight loop
+  // has several and switches between them while you are in it.
+  const out = {}
+  for (const [name, file] of Object.entries(cues)) out[name] = `/music/${file}`
+  return out
+}
+
+async function playMapMusic (hash, fadeMs = 0) {
+  try {
+    const cues = await musicFor(hash)
+    if (!cues) return
+    music.setCues(cues)
+    // Only the starting cue is chosen here. Anything that changes it later is
+    // the map's decision, which reaches the client over the wire -- and when
+    // that message exists its handler is one call to music.cue().
+    await music.cue('default', fadeMs)
+  } catch (e) {
+    // Not fatal, and said once. A game with no music is a game; a game that
+    // fails to start because a track is missing is not.
+    console.warn(`[music] ${e.message}`)
+  }
+}
+playMapMusic(map.hash)
 
 say('')
 document.getElementById('help').style.display = 'block'

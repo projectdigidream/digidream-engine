@@ -26,6 +26,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, handleIndex, MSG, BUTTON, STATE_FLAG, TICK_RATE_HZ
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -59,7 +60,6 @@ const waitFor = async (fn, ms, label) => {
 
 // ------------------------------------------------------------- C++ server
 
-const serverBin = join(ROOT, 'build', 'server', 'dnp-server')
 const server = spawn(serverBin, [...['--port', String(LINK_PORT)],
                       ...(bakedMapPath(ROOT) ? ['--map', bakedMapPath(ROOT)] : [])],
                      { stdio: ['ignore', 'inherit', 'pipe'] })

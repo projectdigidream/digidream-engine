@@ -29,6 +29,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG, BUTTON
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -75,7 +76,7 @@ const core = await Core.load()
 const args = ['--port', String(LINK_PORT), '--map', A]
 if (!ONE_LEVEL) args.push('--map', B)
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
+const server = spawn(serverBin, args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })
@@ -211,6 +212,26 @@ if (ONE_LEVEL) {
   const sx = fxToNumber(stayerAfter.self.pos.x)
   check(sx > 16, `still at the east wall of level A (x=${sx.toFixed(2)})`)
 
+  // (2b) AND EVERY LEVEL IS ON THE SAME CLOCK.
+  //
+  // Empty levels are not simulated -- hosting a 32-level module meant stepping
+  // 3,800 monsters nobody was near -- but they DO keep counting ticks
+  // (World::step_idle). An earlier attempt skipped the tick entirely and was
+  // reverted: a level whose clock stops is thousands of ticks behind by the
+  // time somebody arrives, and a client crossing that gap jumps its clock
+  // backwards far enough that the server's input ring seeds itself from a
+  // straggler and discards every real frame after it. Reported as "player
+  // inputs stop working after transitioning to a map".
+  //
+  // So the level being entered must be at roughly the tick of the one being
+  // left, not at zero.
+  if (mover.welcomes.length === 2) {
+    const aTick = stayerAfter?.serverTick ?? 0
+    const bTick = mover.welcomes[1].serverTick
+    check(bTick > aTick * 0.5,
+          `the level entered is on the same clock as the one left (${bTick} vs ${aTick})`)
+  }
+
   // (3) the mover is a working client again: snapshots keep arriving, and their
   // ticks belong to the new level's world.
   const after = mover.snapshots.filter((s) => s.serverTick > 0).length
@@ -247,6 +268,25 @@ if (ONE_LEVEL) {
   const driftX = selfX(mover) - startX
   check(Math.abs(driftX) < 0.25,
         `and does not drift when no input is sent (moved ${driftX.toFixed(2)})`)
+
+  // THE STRAGGLERS, and this test passed for a long time without them.
+  //
+  // A real client sends sixty frames a second and cannot know it has changed
+  // level until the WELCOME arrives, so a handful of frames stamped on the OLD
+  // world's clock are always in flight behind it. send() only ever raises its
+  // tick to lead the newest snapshot, never lowers it, so these still carry
+  // level A's clock -- which is exactly what a browser puts on the wire.
+  //
+  // Without them the change is unnaturally clean: the ring is empty, the first
+  // frame to arrive is already on the new clock, and it re-seeds correctly. One
+  // straggler is enough to re-seed it a whole level's worth of ticks into the
+  // future instead, after which every real frame is discarded as too old and
+  // the player is deaf while their last pre-exit input repeats for ever.
+  //
+  // That was reported as "player inputs stop working after transitioning to a
+  // map", and it only became reliable once empty levels stopped ticking -- the
+  // two clocks used to be close enough that the buffer absorbed the jump.
+  for (let i = 0; i < 4; i++) { await send(mover, 0, 1); await sleep(12) }
 
   // The control, and the one that actually caught this: it CAN still move.
   //

@@ -72,10 +72,36 @@ public:
     // reported and skipped: a catalogue is edited by hand and by artists, and
     // refusing to start a server because one entry has a typo would make the
     // whole file feel dangerous to touch.
-    bool load(const char* path) {
+    bool load(const char* path) { return read(path, /*merge=*/false); }
+
+    // ADD a catalogue to the one already loaded, for a module (docs/MODULES.md).
+    //
+    // Several modules can be loaded at once, so several catalogues are in play,
+    // and an `id` is the WIRE id -- the server sends it as display_id and the
+    // client turns it back into a sprite. Two modules using the same number
+    // would be two programs disagreeing about what a thing is, which is the
+    // failure this repository has paid for more than once.
+    //
+    // So ids are NOT renumbered on load. A module states absolute ids, they are
+    // concatenated, and a collision is refused by name and by file. Renumbering
+    // would mean the server and the client each computing an assignment, and
+    // two programs computing the same number is the thing being avoided.
+    bool add(const char* path) { return read(path, /*merge=*/true); }
+
+    // How many collisions the last add() refused. Non-zero is fatal to the
+    // caller's satisfaction, not to this class: reporting them all beats
+    // stopping at the first, because an operator fixing module ids wants the
+    // whole list.
+    u32 collisions() const { return collisions_; }
+
+    bool read(const char* path, bool merge) {
         std::FILE* f = std::fopen(path, "rb");
         if (!f) return false;
-        defs_.clear();
+        // `merge` keeps what is already loaded: several modules contribute to
+        // one catalogue (docs/MODULES.md), and clearing here would leave only
+        // the last one's props.
+        if (!merge) defs_.clear();
+        collisions_ = 0;
 
         char line[512];
         int lineno = 0;
@@ -137,9 +163,16 @@ public:
                 continue;
             }
             if (find(d.kind) != nullptr) {
+                // A COLLISION, and with several modules loaded it is the one
+                // that matters: an id is the wire id, so two modules claiming
+                // the same number is two programs disagreeing about what a
+                // thing is. Reported by name and by file, and counted, so the
+                // caller can refuse to start rather than serve a level where
+                // some of the barrels are keys.
                 std::fprintf(stderr, "[props] %s:%d: id %u is already '%s'\n",
                              path, lineno, d.kind, find(d.kind)->name.c_str());
                 ++bad;
+                ++collisions_;
                 continue;
             }
             defs_.push_back(d);
@@ -195,6 +228,8 @@ private:
     }
 
     std::vector<PropDef> defs_;
+    std::vector<std::string> origin_;   // which file each catalogue came from
+    u32 collisions_ = 0;
 };
 
 }  // namespace dnp::server

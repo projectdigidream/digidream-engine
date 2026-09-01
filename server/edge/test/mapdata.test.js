@@ -20,6 +20,7 @@ import { Edge } from '../src/edge.js'
 import { Core } from '../../../client/src/core.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
 import { decodeControlMessage, encodeHello, MSG } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -73,7 +74,7 @@ const waitFor = async (fn, ms, l) => {
 
 // --- end to end --------------------------------------------------------------
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      ['--port', String(LINK_PORT), '--map', MAP_PATH],
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''

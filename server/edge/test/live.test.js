@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
+import { serverBin, doomProps } from './serverbin.js'
 
 // net.js reaches for the global, exactly as a browser provides it. Installed
 // here rather than parameterised: a constructor argument would be a seam that
@@ -56,7 +57,7 @@ const waitFor = async (fn, ms, l) => {
 const MAP_PATH = bakedMapPath(ROOT)
 if (!MAP_PATH) { console.error('no baked map; run mapc first'); process.exit(2) }
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      ['--port', String(LINK_PORT), '--map', MAP_PATH],
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
@@ -147,7 +148,7 @@ const CONV = { fxToFloat: (v) => Number(v) / 4294967296, toThree: (x, y, z) => (
 // the other one predicts straight through it and is corrected for as long as
 // they overlap. Exactly what main.js does; a harness that skipped it would be
 // measuring a client simpler than the real one.
-const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+const catalogue = parseProps(readFileSync(doomProps, 'utf8'))
 const mirrorBase = core.M._dnp_mirror_base()
 
 function drive (c, moveX, feedEntities = false) {

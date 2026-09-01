@@ -31,6 +31,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -81,7 +82,7 @@ const certHash = Buffer.from(
 const core = await Core.load()
 
 async function ride ({ spawnTag, ticks, wtPort, linkPort }) {
-  const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+  const server = spawn(serverBin,
                        ['--port', String(linkPort), '--map', MAP_PATH, '--spawn', spawnTag,
                       ...(NO_SCRIPT ? [] : ['--script', join(ROOT, 'maps', 'scripts', 'init.lua')])],
                        { stdio: ['ignore', 'inherit', 'pipe'] })

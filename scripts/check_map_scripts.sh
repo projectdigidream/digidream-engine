@@ -19,7 +19,7 @@ cd "$ROOT"
 
 missing=0
 checked=0
-for map in maps/*.map maps/doom/*.map; do
+for map in maps/*.map modules/*/maps/*.map; do
   [[ -f "$map" ]] || continue
   baked="${map%.map}.dnpm"
   # Only maps that have actually been baked in place. Maps built into build/

@@ -39,7 +39,27 @@ public:
     // be scoped to changes this observer has not yet been told about
     // (docs/protocol.md §10.1.3).
     u32  last_snapshot_sent  = 0;
+
+    // Where the FAR half of the entity sweep resumes next tick.
+    //
+    // A snapshot cannot always carry every entity, and what it drops used to be
+    // "everything after the index the datagram filled up on". Agents hold the
+    // low indices and props the high ones, so a level with two hundred monsters
+    // spent the whole budget on them and the props -- the keys -- were never
+    // sent at all. Reported as "the keys stop appearing", and it is not a
+    // spawning failure: they exist on the server and no client is ever told.
+    //
+    // Near entities are sent first and every tick; the rest resume from here
+    // and wrap, so the far field takes turns rather than the same tail being
+    // dropped forever.
+    u32  snapshot_cursor     = 0;
     u32  newest_input_tick   = 0;
+    // Bundles discarded as belonging to the world this session just left.
+    // Counted rather than dropped in silence: "input stopped working after a
+    // map change" is the report this exists to prevent, and a number is what
+    // distinguishes "the guard is working" from "the guard is eating input".
+    u32  stale_world_bundles = 0;
+    u32  stale_world_frames  = 0;
 
     // Statistics worth watching: a client that starves regularly is either
     // badly connected or has a broken clock-sync loop, and the two look
@@ -98,6 +118,7 @@ public:
         last_applied_tick = 0;
         ack_snapshot_tick = 0;
         last_snapshot_sent = 0;
+        snapshot_cursor = 0;
         newest_input_tick = 0;
         next_tick_ = 0;
         started_ = false;
@@ -113,6 +134,7 @@ public:
         last_applied_tick = 0;
         ack_snapshot_tick = 0;
         last_snapshot_sent = 0;
+        snapshot_cursor = 0;
         newest_input_tick = 0;
         next_tick_ = 0;
         started_ = false;
@@ -150,7 +172,7 @@ public:
         last_applied_tick = 0;
     }
 
-    void ingest(const proto::InputBundle& b) noexcept {
+    void ingest(const proto::InputBundle& b, u32 world_tick) noexcept {
         ack_snapshot_tick = b.ack_snapshot_tick > ack_snapshot_tick ? b.ack_snapshot_tick
                                                                     : ack_snapshot_tick;
         // INPUT ADDRESSED TO THE WORLD THEY JUST LEFT.
@@ -164,13 +186,33 @@ public:
         // touching the exit. Which is a character walking off on its own.
         //
         // A bundle acknowledges the newest snapshot the client has SEEN, so
-        // that is the honest test of which world it was talking about.
-
+        // that is the honest test of which world it was talking about: a
+        // snapshot tick THIS world has not reached cannot have come from it.
+        //
+        // This paragraph described the check for a long time without the check
+        // existing, and it went unnoticed because the two worlds' clocks used
+        // to run in step -- an old-world frame re-seeded the ring a few ticks
+        // off and the buffer absorbed it. Once empty levels stopped ticking,
+        // the level being entered was frozen near zero while the one being left
+        // was in the thousands, so ONE stale frame re-seeded next_tick_ a
+        // thousand ticks ahead and every real frame after it was discarded as
+        // too old. The player stopped responding and walked east for ever,
+        // which is the exact pair of symptoms the two comments above predict.
+        if (b.ack_snapshot_tick > world_tick) { ++stale_world_bundles; return; }
 
         for (u8 i = 0; i < b.frame_count; ++i) {
             // frames[] is newest first, so frame i is for tick (client_tick - i).
             if (b.client_tick < i) break;
             const u32 t = b.client_tick - i;
+
+            // A client's clock leads the world's by its own latency and a
+            // little -- never by a whole buffer. A frame stamped further ahead
+            // than the ring is deep is not input for this world, and letting
+            // one re-seed the ring after a map change is what makes a player go
+            // deaf. Kept as a floor even though levels now share a clock: it
+            // costs one compare and it is the difference between a bad frame
+            // and a stuck session.
+            if (t > world_tick + INPUT_RING) { ++stale_world_frames; continue; }
 
             if (!started_) { next_tick_ = t; started_ = true; }
             // Too old to matter, or so far ahead it would wrap the ring and

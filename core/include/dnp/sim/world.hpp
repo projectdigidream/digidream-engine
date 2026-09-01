@@ -36,7 +36,7 @@ using namespace dnp;
 // Raised alongside MAX_AGENTS, because the mirror band below is carved out of
 // this range and a band the size of the agent space would otherwise leave
 // nothing to spawn into.
-inline constexpr u32 MAX_PROPS    = 512;
+inline constexpr u32 MAX_PROPS    = 768;
 
 // The top of the prop range, which spawn_prop never allocates from.
 //
@@ -321,6 +321,26 @@ public:
 
     void step() noexcept;
 
+    /**
+     * Advance the clock and the map, and nothing else.
+     *
+     * For a level nobody is in. Sector motion still runs -- it is what keeps a
+     * lift where the arriving player's client will compute it to be -- but no
+     * agent thinks, moves or collides, which is where essentially all of an
+     * idle level's cost is.
+     *
+     * THE CLOCK STILL ADVANCES, and that is the point. Skipping the tick
+     * entirely was tried and it broke player input: every level here has its
+     * own clock, so a frozen level is thousands of ticks behind a busy one, and
+     * a client crossing between them jumps its clock backwards by that much.
+     * The server's input ring is seeded by whichever frame arrives first, so
+     * one straggler stamped on the old clock made every subsequent real frame
+     * look far too old to use -- the player went deaf and kept walking in the
+     * direction they entered with. Keeping every level on the same count costs
+     * nothing and removes that whole class of problem.
+     */
+    void step_idle() noexcept;
+
     // --- invariant-preserving mutators -------------------------------------
     //
     // The ONLY way anything outside the simulation may move an entity. They
@@ -357,6 +377,40 @@ public:
     // Entities that reached for a side this tick (Doom's use key). Rebuilt every
     // step like the crush log; the server drains it and hands it to Lua.
     const InteractLog& interactions() const noexcept { return interacts_; }
+
+    // WHAT DOES A MOVING THING OF THIS SIZE REACH FIRST?
+    //
+    // A swept sphere along a segment, against entity cylinders AND the map, in
+    // one answer -- because "did it hit a wall" and "did it hit somebody" asked
+    // separately give a missile that bursts on a monster standing behind a
+    // door. Whichever is nearer wins, and the caller gets the point.
+    //
+    // A QUERY: it reads the world and changes nothing, so it is not in the
+    // hash and adding it does not move the determinism gate. That is worth
+    // asserting rather than assuming, and core/tests/test_sweep.cpp does.
+    //
+    // TWO things to ignore, not one, and that is not an indulgence: a missile
+    // must skip ITSELF -- it is an entity, sitting exactly at `from`, so a
+    // single-ignore version stops at distance zero on the tick it is fired --
+    // and it must skip the mob that fired it, which at launch is standing in
+    // the same place. Either alone leaves the other. Pass -1 for unused.
+    //
+    // `sector` is where the ray starts, for the geometry cast; -1 means look
+    // it up.
+    //
+    // Written because dnp.sweep answers geometry only, so the mob runtime was
+    // walking every entity in Lua for every missile every tick. This is the
+    // same scan with the cheap rejects the swing already uses, in the language
+    // the positions are already in.
+    struct SweepHit {
+        bool hit = false;         // did it reach anything at all
+        bool entity_hit = false;  // ... and was it an entity rather than a wall
+        u32  entity = 0;          // index in the one entity index space
+        fx3  point{};             // where it stopped
+        fx   distance{};          // how far along `dir` that was
+    };
+    SweepHit sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
+                            i32 ignore_a, i32 ignore_b, i32 sector) const noexcept;
 
     u32 tick() const noexcept { return tick_; }
 
@@ -422,6 +476,15 @@ private:
     // than something whose value depends on despawn order -- and a bound is all
     // it needs to be.
     u32 agent_high_water_ = 0;
+    // The same trick for props, and it is worth more here: MAX_PROPS is 768
+    // and a Doom level uses a few dozen, so five per-agent loops were walking
+    // seven hundred dead slots each. Slots at or above this mark have NEVER
+    // been active, so bounding a loop by it cannot change an answer -- every
+    // one of those loops already skips `!active`.
+    //
+    // It never shrinks. A high-water mark that fell on despawn would have to be
+    // recomputed, and the recompute is the scan it is trying to avoid.
+    u32 prop_high_water_ = 0;
     i32  find_usable_prop(u32 agent) const noexcept;
     void resolve_attack(u32 agent) noexcept;
     void report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept;

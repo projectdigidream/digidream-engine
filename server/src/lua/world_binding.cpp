@@ -263,6 +263,31 @@ int l_entity_facing(lua_State* L) {
     return 1;
 }
 
+/**
+ * What this entity's controller is holding down, as a bitmask.
+ *
+ * `dnp.button` names the bits, and they are the same ones a script sets on a
+ * monster with set_input -- so "is the player firing" is asked exactly the way
+ * "make the monster fire" is said.
+ *
+ * WHY A SCRIPT NEEDS THIS. on_attack fires when a swing CONNECTS, which is all
+ * a melee weapon needs and is useless to a ranged one: a shotgun that misses
+ * fires no event, so a weapon implemented on on_attack alone can never miss,
+ * never spend ammunition on a miss, and never draw a tracer into a wall. The
+ * trigger being pulled is a different fact from something being hit, and only
+ * one of them was observable.
+ *
+ * The CURRENT frame, which is the one the tick about to run will use. A script
+ * reading it from on_tick sees what the player is pressing now.
+ */
+int l_entity_buttons(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->input(static_cast<u32>(a)).buttons);
+    return 1;
+}
+
 int l_entity_despawn(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -403,6 +428,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"kind", l_entity_kind},
     {"name", l_entity_name},
     {"facing", l_entity_facing},
+    {"buttons", l_entity_buttons},
     {"despawn", l_entity_despawn},
     {"change_map", l_entity_change_map},
     {"add_impulse", l_entity_add_impulse},
@@ -932,8 +958,11 @@ int l_dnp_spawn_prop(lua_State* L) {
         // asking for a prop the operator has not installed used to surface as
         // "the map's script failed", which points at the script.
         return luaL_error(L,
-            "cannot spawn '%s': the prop catalogue is empty or missing "
-            "(see --props, default assets/props.txt)", name);
+            "cannot spawn '%s': the prop catalogue is empty or missing. "
+            "The engine's own assets/props.txt carries no props by design -- "
+            "every prop with a picture belongs to a module (docs/MODULES.md), "
+            "so this usually means a missing --module doom2. See also --props.",
+            name);
     }
     const u16 kind = ctx.props->kind_by_name(name, len);
     if (kind == 0) {
@@ -984,8 +1013,11 @@ int l_dnp_spawn_enemy(lua_State* L) {
 
     if (ctx.props == nullptr || ctx.props->empty()) {
         return luaL_error(L,
-            "cannot spawn '%s': the prop catalogue is empty or missing "
-            "(see --props, default assets/props.txt)", name);
+            "cannot spawn '%s': the prop catalogue is empty or missing. "
+            "The engine's own assets/props.txt carries no props by design -- "
+            "every prop with a picture belongs to a module (docs/MODULES.md), "
+            "so this usually means a missing --module doom2. See also --props.",
+            name);
     }
     const u16 kind = ctx.props->kind_by_name(name, len);
     if (kind == 0) return luaL_error(L, "no entry named '%s' in the prop catalogue", name);
@@ -1061,7 +1093,20 @@ int l_dnp_hitscan(lua_State* L) {
     // stopped by every step in the map.
     const fx eye = sh.pos.z + ctx.world->params(static_cast<u32>(a)).height / 2;
     const fx2 from{sh.pos.x, sh.pos.y};
-    const fx2 dir = fx_dir(sh.facing);
+
+    // An OPTIONAL angular offset from the body's facing, in brad, so one pull
+    // of a trigger can put several pellets in different places.
+    //
+    // The offset, not the randomness. Where a pellet goes is a gameplay
+    // decision and belongs in the script -- which also means a shotgun's
+    // pattern can be tuned without recompiling anything. Without it every
+    // pellet of a seven-pellet shot travels the identical ray and a shotgun is
+    // a pistol that does seven times the damage at any range.
+    // brad wraps by design -- an angle has no range to saturate against -- so a
+    // negative offset is just an addition that goes round the other way.
+    const i64 spread = static_cast<i64>(luaL_optnumber(L, 3, 0));
+    const brad aim = sh.facing + brad(static_cast<u32>(spread));
+    const fx2 dir = fx_dir(aim);
     const fx2 to = from + dir * range;
 
     // Nearest ENTITY along the ray, by the same "in front and within the
@@ -1438,8 +1483,15 @@ int l_dnp_can_see(lua_State* L) {
     // At EYE HEIGHT. Sight is not a floorplan question: a two-sided line with a
     // balcony behind it, or a shut door, is a wall to look through even though
     // it names a neighbouring sector.
+    // SLOPED, from one eye to the other. A flat cast at the looker's own height
+    // is a different line from the one to the target the moment the two are at
+    // different heights, and on a Doom map they nearly always are -- a step, a
+    // stair, a ledge. It answered "no" for a player standing in the open a
+    // little below, so the monster lost its target, reacquired it, and stood
+    // there doing that: an enemy stuck on a step whenever the player was lower.
     const physics::RayHit hit =
-        physics::raycast(*m, from_sector, fx2{from.x, from.y}, normalize(d), dist, 0, from.z);
+        physics::raycast(*m, from_sector, fx2{from.x, from.y}, normalize(d), dist,
+                         0, from.z, to.z);
     // BLOCKED before reaching the target is a wall in the way. Blocked at or
     // past it is the wall behind it.
     lua_pushboolean(L, (!hit.blocked || hit.distance >= dist) ? 1 : 0);
@@ -1492,6 +1544,162 @@ int l_dnp_sweep(lua_State* L) {
     return 2;
 }
 
+// dnp.sweep_hit(from, dir, distance, radius, [ignore_a], [ignore_b])
+//   -> nil                     nothing in reach
+//   -> false, impact           the map stopped it
+//   -> entity, impact          an entity stopped it
+//
+// One question, one answer. `dnp.sweep` reports geometry ONLY, so a caller
+// that also wanted to know whom it reached had to walk every entity itself --
+// which the mob runtime did, in Lua, for every missile every tick, and which
+// could not be right anyway: asking "is there a wall" and "is there a monster"
+// separately gives a fireball that bursts on somebody standing behind a door.
+//
+// The three returns are distinguishable without a flag: nil is nothing,
+// `false` is a wall, an entity is an entity.
+int l_dnp_sweep_hit(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const fx3 from = check_vec3(L, 1);
+    const fx3 dir3 = check_vec3(L, 2);
+    const fx dist = check_fx(L, 3);
+    const fx radius = check_fx(L, 4);
+
+    // TWO, because a missile has two things to skip: itself, which sits
+    // exactly at `from` on the tick it is fired, and the mob that fired it,
+    // which is standing in the same place. Skipping either alone leaves the
+    // other, and the symptom is a fireball that bursts the instant it exists.
+    //
+    // EITHER KIND. A missile IS a prop, and a prop handle is a different
+    // userdata type from an entity handle -- so insisting on an entity here
+    // meant every missile raised "expected an entity, got userdata" on its
+    // first step, every tick, and hung motionless where it was launched.
+    // Reported as "projectiles get stuck in the air".
+    const auto any_handle = [&](int idx) -> i32 {
+        if (lua_isnoneornil(L, idx)) return -1;
+        if (proto::Handle* h = to_handle(L, idx)) return resolve(L, ctx, *h);
+        if (proto::Handle* h = to_prop(L, idx)) return resolve_prop(L, ctx, *h);
+        luaL_error(L, "expected an entity or a prop, got %s", luaL_typename(L, idx));
+        return -1;
+    };
+    const i32 ignore_a = any_handle(5);
+    const i32 ignore_b = any_handle(6);
+
+    const fx2 dir = normalize(fx2{dir3.x, dir3.y});
+    const sim::World::SweepHit hit =
+        ctx.world->sweep_entities(from, dir, dist, radius, ignore_a, ignore_b, -1);
+
+    if (!hit.hit) { lua_pushnil(L); return 1; }
+
+    if (hit.entity_hit) {
+        push_entity(L, ctx, hit.entity);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    // Stopped a hair short, so a burst is visible against what it hit rather
+    // than inside it -- the same tenth of a unit dnp.sweep backs off by, and
+    // for the same reason.
+    const fx back = fx::from_frac(1, 10);
+    const fx d = hit.distance > back ? hit.distance - back : fx::zero();
+    push_vec3(L, fx3{from.x + dir.x * d, from.y + dir.y * d, from.z});
+    return 2;
+}
+
+// dnp.find_path(from_sector, to_sector, [radius], [height], [jump_height])
+//   -> { {sector=, x=, y=, jump=}, ... }  the route, from inclusive to inclusive
+//   -> nil, reason                  no route, or the query was refused
+//
+// A* over the sector graph (design §3.2.4). Sectors are nodes; adjacency comes
+// from the map, INCLUDING across `open` sides where nothing names a neighbour
+// -- see the header of core/include/dnp/nav/navgraph.hpp.
+//
+// Waypoints, not bare indices: every caller that walks a route immediately
+// wants somewhere to steer at, and a sector index alone would make that a
+// second binding call per node. The centroid is what the graph already
+// measured its costs between, so it is the point the cost refers to.
+//
+// WHETHER AN EDGE IS WALKABLE IS ASKED AT QUERY TIME, of the same
+// physics::sector_admits the mover asks. So a route cannot lead through a door
+// the body would be stopped by, cannot refuse a step it would in fact walk up,
+// and changes when a lift moves -- without anything being rebuilt.
+//
+// `jump_height` is how much MORE than a step this body can gain by hopping.
+// Zero -- the default -- is design §3.2.2's rule and routes exactly as before.
+// Where a step needs a jump the waypoint says `jump = true`, and A CALLER THAT
+// IGNORES IT HAS BROKEN THE ROUTE: the path leads somewhere the body will not
+// reach by walking, so it presses into the ledge forever. Worse than never
+// having routed it there.
+int l_dnp_find_path(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    if (m == nullptr || ctx.nav == nullptr) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "no map");
+        return 2;
+    }
+
+    // A PER-TICK BUDGET, because the instruction hook cannot see this.
+    //
+    // A count hook measures bytecode, and an A* over five hundred sectors is
+    // one call. Design risk 6 names the failure exactly: an unbudgeted
+    // find_path storm pushes the loop past the 250 ms drop threshold, every
+    // client gets a burst of corrections, and a Lua performance problem
+    // presents as a netcode bug -- the hardest thing here to diagnose. So the
+    // refusal is explicit and says why, rather than being a mystery stall.
+    static u32 budget_tick = 0xFFFFFFFFu;
+    static u32 budget_used = 0;
+    constexpr u32 PATHS_PER_TICK = 64;
+    const u32 now = ctx.world->tick();
+    if (now != budget_tick) { budget_tick = now; budget_used = 0; }
+    if (budget_used >= PATHS_PER_TICK) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "path budget");
+        return 2;
+    }
+    ++budget_used;
+
+    const i32 from = static_cast<i32>(luaL_checknumber(L, 1));
+    const i32 to   = static_cast<i32>(luaL_checknumber(L, 2));
+
+    nav::NavBody body;
+    if (!lua_isnoneornil(L, 3)) body.radius = check_fx(L, 3);
+    if (!lua_isnoneornil(L, 4)) body.height = check_fx(L, 4);
+    if (!lua_isnoneornil(L, 5)) body.jump_height = check_fx(L, 5);
+
+    // Static, not a local: NavQuery is tens of kilobytes and Emscripten's
+    // default stack is 64 KB. The server is native, but the two builds share
+    // the habit for a reason and a stack overflow here would present as
+    // corruption somewhere else entirely.
+    static nav::NavQuery query;
+    static u32 path[nav::MAX_NAV_NODES];
+    static bool jump[nav::MAX_NAV_NODES];
+
+    const nav::PathResult r =
+        nav::find_path(*m, *ctx.nav, query, static_cast<u32>(from),
+                       static_cast<u32>(to), body, path, nav::MAX_NAV_NODES,
+                       jump);
+
+    if (r.status != nav::PathStatus::Ok &&
+        r.status != nav::PathStatus::SameSector) {
+        lua_pushnil(L);
+        lua_pushstring(L, nav::path_status_text(r.status));
+        return 2;
+    }
+
+    lua_createtable(L, static_cast<int>(r.length), 0);
+    for (u32 i = 0; i < r.length; ++i) {
+        lua_createtable(L, 0, 3);
+        lua_pushnumber(L, path[i]);
+        lua_setfield(L, -2, "sector");
+        const fx2 c = ctx.nav->node(path[i]).centroid;
+        push_fx(L, c.x); lua_setfield(L, -2, "x");
+        push_fx(L, c.y); lua_setfield(L, -2, "y");
+        lua_pushboolean(L, jump[i] ? 1 : 0);
+        lua_setfield(L, -2, "jump");
+        lua_rawseti(L, -2, static_cast<int>(i) + 1);
+    }
+    return 1;
+}
+
 // dnp.atan2(y, x) -> a brad
 //
 // The engine's own CORDIC, not libm: a script computing an aim with a
@@ -1529,6 +1737,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"can_see", l_dnp_can_see},
     {"length", l_dnp_length},
     {"sweep", l_dnp_sweep},
+    {"sweep_hit", l_dnp_sweep_hit},
+    {"find_path", l_dnp_find_path},
     {"atan2", l_dnp_atan2},
     {"dir", l_dnp_dir},
     {"vfx", l_dnp_vfx},
@@ -1629,6 +1839,42 @@ void open_world(lua_State* L, WorldContext* ctx) {
         lua_pushcfunction(L, r->func);
         lua_setfield(L, -2, r->name);
     }
+
+    // dnp.button.* -- the protocol's own values, not copies of them.
+    //
+    // A script pressing JUMP needs the same 0x0001 the wire uses, and a
+    // hardcoded one in Lua is the "two programs, one number" failure this repo
+    // has paid for twice. These are read straight from proto::button.
+    //
+    // BUILT HERE, ONCE. This lived inside push_sector(), which runs every time
+    // a sector userdata is handed to Lua -- so the table was rebuilt on every
+    // such call, and, worse, did not exist at all until something had pushed a
+    // sector. A script reading dnp.button at load time got nil, which is how
+    // this was found: a probe at the top of a file crashed on
+    // "attempt to index field 'button' (a nil value)" while the same
+    // expression worked fine from on_tick.
+    {
+        lua_createtable(L, 0, 11);
+        struct { const char* name; u16 bit; } const BUTTONS[] = {
+            {"JUMP", proto::button::JUMP},
+            {"DASH", proto::button::DASH},
+            {"CLIMB", proto::button::CLIMB},
+            {"HOVER", proto::button::HOVER},
+            {"FLIGHT", proto::button::FLIGHT},
+            {"GRAPPLE", proto::button::GRAPPLE},
+            {"INTERACT", proto::button::INTERACT},
+            {"ATTACK_PRIMARY", proto::button::ATTACK_PRIMARY},
+            {"ATTACK_SECONDARY", proto::button::ATTACK_SECONDARY},
+            {"USE", proto::button::USE},
+            {"CROUCH", proto::button::CROUCH},
+        };
+        for (const auto& b : BUTTONS) {
+            lua_pushnumber(L, b.bit);
+            lua_setfield(L, -2, b.name);
+        }
+        lua_setfield(L, -2, "button");
+    }
+
     lua_setglobal(L, "dnp");
 }
 

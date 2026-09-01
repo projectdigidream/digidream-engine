@@ -28,10 +28,37 @@ LINK=("$LJ/src/libluajit.a" -lm)
 
 SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
 
+# The shooting range needs the REAL world bindings and therefore the core, which
+# the other Lua tests do not: they stub `dnp` with a Lua table. That is the whole
+# point of it -- four bugs this phase came from a stub being more generous than
+# the engine, and every one of them raised the first time a real server ran.
+RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp"
+            $(ls "$ROOT"/core/src/*/*.cpp))
+
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_vm.cpp" "${LINK[@]}" -o "$OUT/test_lua_vm"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_fx.cpp" "${LINK[@]}" -o "$OUT/test_lua_fx"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_effects.cpp" "${LINK[@]}" -o "$OUT/test_lua_effects"
-echo "[lua-tests] $OUT/test_lua_vm $OUT/test_lua_fx $OUT/test_lua_effects"
+# The trigger runtime is Lua, not C++, so this one exists to RUN maps/scripts:
+# it is the only place a syntax error or a broken dispatch in triggers.lua is
+# caught without standing up a server, an edge and a browser.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_triggers.cpp" "${LINK[@]}" -o "$OUT/test_lua_triggers"
+# Not a test: the generator that hands the trigger vocabulary to readers that
+# are not Lua (the editor). It lives here because this is the only build script
+# that already links LuaJIT, and because its output is checked by the suite
+# above rather than by anything of its own.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/tools/vocabjson/main.cpp" "${LINK[@]}" -o "$OUT/trigger_vocab_json"
+echo "[lua-tests] $OUT/test_lua_vm $OUT/test_lua_fx $OUT/test_lua_effects $OUT/test_lua_triggers"
+# And the linter the editor calls to check a trigger table while somebody is
+# still typing, instead of compiling a map and launching a stack to find a typo.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/tools/triggercheck/main.cpp" "${LINK[@]}" -o "$OUT/triggercheck"
+clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_shootrange.cpp" "${LINK[@]}" \
+        -o "$OUT/test_lua_shootrange"
+
+echo "[lua-tests] $OUT/trigger_vocab_json $OUT/triggercheck"

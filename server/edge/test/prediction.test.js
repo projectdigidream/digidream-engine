@@ -26,6 +26,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   fxToNumber, numberToFx, MSG, BUTTON
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -71,7 +72,7 @@ const waitFor = async (fn, ms, label) => {
 const MAP_PATH = bakedMapPath(ROOT)
 const serverArgs = ['--port', String(LINK_PORT)]
 if (MAP_PATH) serverArgs.push('--map', MAP_PATH)
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      serverArgs, { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })

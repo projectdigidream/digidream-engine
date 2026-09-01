@@ -80,6 +80,26 @@ void LinkServer::accept_edge() {
         // One edge at a time. A second connection is more likely a stale process
         // than a legitimate peer, and silently serving both would interleave two
         // sessions' frames onto one id space.
+        //
+        // SAY SO. Closing in silence is correct behaviour with a terrible
+        // symptom: the rejected edge sees the TCP handshake succeed and the
+        // socket close at once, so it logs "upstream connected" then "upstream
+        // lost" and retries every half second, for ever. That reads exactly
+        // like a server that keeps crashing -- and the server is fine, and the
+        // FIRST edge is still playing on it. It has cost a debugging session
+        // more than once, so the rejection is now audible from the only process
+        // that knows the reason.
+        //
+        // Rate-limited: a spinning edge produces two of these a second, and a
+        // log that scrolls is a log nobody reads.
+        ++rejected_edges_;
+        if (rejected_edges_ == 1 || rejected_edges_ % 20 == 0) {
+            std::fprintf(stderr,
+                "[link] refused a second edge (%llu so far): one edge at a time, "
+                "and one is already connected. Another stack is probably running "
+                "on this port -- see scripts/run_stack.sh.\n",
+                static_cast<unsigned long long>(rejected_edges_));
+        }
         ::close(fd);
         return;
     }

@@ -248,6 +248,67 @@ static void test_a_swing_does_not_reach_through_a_wall() {
     CHECK(hit2);
 }
 
+// --- looking DOWN a step ------------------------------------------------------
+//
+// The bug this was written for: "when the player is standing on a step lower
+// than the enemy, the enemy seems to be stuck on that step".
+//
+// A flat cast travels at the LOOKER's eye height for its whole length, so a
+// monster standing above its target asks whether there is a clear horizontal
+// line at its own eye -- which is not the line to the target. Here the room
+// next door is a low one: its ceiling is below the monster's eye but well above
+// the player standing in it. The horizontal ray runs into that ceiling; the
+// real line of sight, sloping down, is clear the whole way.
+//
+// The monster therefore decided it could not see somebody standing in plain
+// view a little below, dropped its target, immediately reacquired it, and stood
+// on the step doing that.
+static void test_a_sloped_ray_reaches_a_target_below_a_low_ceiling() {
+    std::printf("sight: looking down into a lower room\n");
+    // East room: floor at 0, ceiling at 5. The looker's eye is at 6 -- it is
+    // standing on something -- and the target's eye is at 2, inside that room.
+    //
+    // The numbers are chosen so the two casts genuinely disagree, which took a
+    // wrong fixture to notice: the boundary is 10 of the ray's 25 units away,
+    // so a ray sloping 6 -> 2 is at 4.4 where it crosses. A ceiling of 4 blocks
+    // BOTH casts -- correctly, the line really does clip it -- and the test
+    // then proved nothing. At 5 the sloped line passes under and the flat one
+    // at 6 does not.
+    static Pair p(F(0), F(5));
+
+    const fx2 from{F(10), F(20)};
+    const fx2 dir{fx::one(), fx::zero()};
+
+    // THE CONTROL, and it is the old behaviour: flat at the looker's eye, the
+    // low ceiling is a wall. This must fail, or the sloped cast below is not
+    // being asked anything.
+    CHECK(raycast(p.view, 0, from, dir, F(25), 0, F(6)).blocked);
+
+    // The same geometry, the same two points, with the ray told where it is
+    // going: clear.
+    const RayHit sloped = raycast(p.view, 0, from, dir, F(25), 0, F(6), F(2));
+    CHECK(!sloped.blocked);
+
+    // AND IT STILL BLOCKS WHAT IT SHOULD. A target below the far room's floor
+    // is behind a wall however the ray slopes, so a sloped cast is not simply a
+    // more permissive one.
+    static Pair high(F(8), F(12));   // east floor at 8, above both eyes
+    CHECK(raycast(high.view, 0, from, dir, F(25), 0, F(6), F(2)).blocked);
+}
+
+// A sloped cast with no far height is the flat one, exactly. Every existing
+// caller passes six arguments and must be untouched by this.
+static void test_omitting_the_far_height_is_the_flat_cast() {
+    std::printf("sight: a ray with no far height is flat\n");
+    static Pair p(F(0), F(4));
+    const fx2 from{F(10), F(20)};
+    const fx2 dir{fx::one(), fx::zero()};
+    const RayHit a = raycast(p.view, 0, from, dir, F(25), 0, F(6));
+    const RayHit b = raycast(p.view, 0, from, dir, F(25), 0, F(6), RAY_NO_HEIGHT);
+    CHECK(a.blocked == b.blocked);
+    CHECK(a.blocked);
+}
+
 int main() {
     test_an_open_neighbour_does_not_block();
     test_a_raised_floor_blocks_sight_below_it();
@@ -257,6 +318,8 @@ int main() {
     test_a_plain_wall_still_blocks();
     test_the_walk_does_not_bounce_between_two_sectors();
     test_a_swing_does_not_reach_through_a_wall();
+    test_a_sloped_ray_reaches_a_target_below_a_low_ceiling();
+    test_omitting_the_far_height_is_the_flat_cast();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

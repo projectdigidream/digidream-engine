@@ -52,6 +52,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
 } from '../../../client/src/proto.js'
+import { serverBin, doomProps } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -110,10 +111,10 @@ const core = await Core.load()
 // directory and this test does not run from the repository root -- which is
 // also true of any real deployment.
 const args = ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start',
-              '--props', join(ROOT, 'assets', 'props.txt')]
+              '--props', doomProps]
 if (NO_SCRIPT) args.push('--no-scripts')
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
+const server = spawn(serverBin, args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })
@@ -234,7 +235,7 @@ const PROP_KEY_BLUE = 1        // assets/props.txt
 // What the client needs to stop where the server stops it: the catalogue (for
 // how big a monster is), the reserved band bodies get mirrored into, and its own
 // entity index so it does not mirror a collider on top of itself.
-const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+const catalogue = parseProps(readFileSync(doomProps, 'utf8'))
 const mirrorBase = core.M._dnp_mirror_base()
 const selfIndex = (welcome.selfHandle & 0x00ffffff) - 1
 

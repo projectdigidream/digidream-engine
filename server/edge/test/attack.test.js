@@ -28,6 +28,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
 } from '../../../client/src/proto.js'
+import { serverBin, doomProps } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -69,15 +70,15 @@ if (!MAP_PATH) { console.error('no baked doors map'); process.exit(2) }
 // The same catalogue the server reads, read for its simulation half: a solid
 // prop has to exist in the client's world too, or the client walks through what
 // the server stops it against.
-const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+const catalogue = parseProps(readFileSync(doomProps, 'utf8'))
 
 const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 const core = await Core.load()
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start',
-                      '--props', join(ROOT, 'assets', 'props.txt')],
+                      '--props', doomProps],
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })

@@ -223,7 +223,21 @@ struct RayHit {
 // the golden traces that predate this.
 inline constexpr fx RAY_NO_HEIGHT = fx::from_raw(INT64_MIN);
 
+// `z_end`, when given, makes the ray SLOPE: it starts at `z` and arrives at
+// `z_end`, and each boundary is tested against the height the ray is at where
+// it crosses rather than against one height for the whole cast.
+//
+// Sight needs this and a flat ray cannot express it. A monster standing on a
+// step looking down at somebody was asking "is there a clear horizontal line at
+// MY eye height", which is a different line from the one to its target: the
+// horizontal one runs into the far room's ceiling, or over the target's head
+// and into the wall behind it. The monster then decided it could not see a
+// player standing in the open a few units below, lost its target, reacquired
+// it, and stood on the step doing that -- reported as an enemy stuck on a step
+// whenever the player was lower than it.
+//
+// Left out, the ray is flat and every existing caller behaves exactly as it did.
 RayHit raycast(const geom::MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
-               u8 flag, fx z = RAY_NO_HEIGHT) noexcept;
+               u8 flag, fx z = RAY_NO_HEIGHT, fx z_end = RAY_NO_HEIGHT) noexcept;
 
 }  // namespace dnp::physics

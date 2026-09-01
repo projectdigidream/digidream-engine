@@ -732,7 +732,7 @@ static constexpr int MAX_RAY_HOPS = 256;
 static constexpr fx RAY_EPSILON = fx::from_frac(1, 4096);
 
 RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
-               u8 flag, fx z) noexcept {
+               u8 flag, fx z, fx z_end) noexcept {
     RayHit hit;
     // No sector to start from means the ray cannot be resolved, and an
     // unresolvable ray must FAIL CLOSED.
@@ -810,6 +810,23 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
         // any height at all. Treating every neighbour as transparent is what let
         // a monster see and shoot a player on the far side of several walls.
         if (!solid && z.raw != RAY_NO_HEIGHT.raw) {
+            // THE HEIGHT THE RAY IS AT WHERE IT CROSSES, not where it started.
+            //
+            // With z_end given the ray slopes, so a boundary halfway along is
+            // tested at halfway between the two heights. Without it this is `z`
+            // and the cast is flat, which is what every caller that does not
+            // care about the far end still gets.
+            //
+            // COMPUTED HERE, not once per hop above. `(z_end - z) * best_t` is
+            // an fx multiply, which is a 128-bit multiply, and a hop that ends
+            // at a one-sided wall or a BLOCKING side never needs it. Doing it
+            // unconditionally cost enough to push the monster script's stall
+            // count from 0-1 to 1-2 on maps/monsters -- small, and measured,
+            // and there is no reason to pay it.
+            const fx z_here = (z_end.raw == RAY_NO_HEIGHT.raw)
+                                  ? z
+                                  : z + (z_end - z) * best_t;
+
             // The neighbour's own floor and ceiling, read directly.
             //
             // The first version asked query_surface where a point just past the
@@ -827,7 +844,7 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
             // needs its own test, because `floor <= z <= ceil` is satisfied by a
             // zero gap at exactly that height.
             if (beyond.ceil_z <= beyond.floor_z ||
-                z < beyond.floor_z || z > beyond.ceil_z) {
+                z_here < beyond.floor_z || z_here > beyond.ceil_z) {
                 solid = true;
             }
         }

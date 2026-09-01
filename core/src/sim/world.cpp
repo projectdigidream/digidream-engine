@@ -25,6 +25,7 @@ void World::reset() noexcept {
         // slot-0 agent at generation 0 would encode to exactly that.
         generation_[i] = 1;
     }
+    prop_high_water_ = 0;
     for (u32 i = 0; i < MAX_PROPS; ++i) {
         props_[i] = PropState{};
         generation_[MAX_AGENTS + i] = 1;
@@ -432,6 +433,23 @@ void World::set_velocity(u32 index, fx3 v) noexcept {
     if (v.z.raw != 0) agents_[index].mv.grounded = false;
 }
 
+void World::step_idle() noexcept {
+    // The same event clear step() does, so a caller reading events after an
+    // idle tick sees an empty set rather than the last occupied tick's.
+    crushes_.clear();
+    interacts_.clear();
+    prop_events_.clear();
+    attacks_.clear();
+
+    // Sectors still move. A lift in an empty level goes on travelling, so the
+    // first client to arrive computes it exactly where the server has it -- and
+    // parametric motion is a function of this tick, which is why the tick has
+    // to keep counting even when nothing else happens.
+    if (store_) motions_.apply(*store_, tick_);
+
+    ++tick_;
+}
+
 void World::step() noexcept {
     // Events describe the tick about to run, so the previous tick's are dropped
     // here rather than at the end -- a caller reading them after step() sees
@@ -621,6 +639,7 @@ u32 World::spawn_prop(PropKind kind, fx3 pos) noexcept {
         props_[i].kind = kind;
         props_[i].pos = pos;
         props_[i].active = true;
+        if (i + 1 > prop_high_water_) prop_high_water_ = i + 1;
         ++prop_epoch_;
         return MAX_AGENTS + i;
     }
@@ -645,6 +664,8 @@ bool World::place_prop(u32 entity, PropKind kind, fx3 pos,
     p.height = height;
     p.flags = flags;
     p.active = true;
+    const u32 slot = entity - MAX_AGENTS;
+    if (slot + 1 > prop_high_water_) prop_high_water_ = slot + 1;
     ++prop_epoch_;
     return true;
 }
@@ -772,6 +793,20 @@ static void push_out_of_cylinder(fx3& pos, fx3& vel, fx radius, fx height,
     const fx dx = pos.x - other_xy.x;
     const fx dy = pos.y - other_xy.y;
     const fx want = radius + other_r;
+
+    // BOX REJECT BEFORE THE CIRCLE, because the circle costs a 128-bit multiply
+    // and almost every pair fails. With two hundred monsters on a Doom level
+    // this runs forty thousand times a tick and all but a handful are nowhere
+    // near each other; the profile had 14% of the whole tick in __udivmodti4
+    // and its neighbours, reached to discover exactly that.
+    //
+    // Exact, not approximate: |dx| >= want implies dx*dx >= want*want implies
+    // d_sq >= want_sq, which is precisely the test below. Anything this skips,
+    // the circle test would have skipped too -- so the state hash cannot move,
+    // and the determinism gate is what says so rather than this comment.
+    if (dx >= want || dx <= -want) return;
+    if (dy >= want || dy <= -want) return;
+
     const u128 d_sq = len_sq_raw(fx2{dx, dy});
     const u128 want_sq = static_cast<u128>(static_cast<i128>(want.raw) * want.raw);
     if (d_sq >= want_sq) return;
@@ -812,7 +847,7 @@ void World::resolve_prop_collisions(u32 agent) noexcept {
                         a.pos.y - tick_start_pos_[agent].y};
     const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
 
-    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+    for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
         if ((p.flags & prop_flag::SOLID) == 0) continue;
@@ -883,7 +918,7 @@ i32 World::find_usable_prop(u32 agent) const noexcept {
 
     i32  best = -1;
     u128 best_d = 0;
-    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+    for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
         if ((p.flags & prop_flag::USABLE) == 0) continue;
@@ -1044,7 +1079,7 @@ void World::resolve_attack(u32 agent) noexcept {
         attacks_.push(AttackEvent{agent, t});
     }
 
-    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+    for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
         if ((a.mv.attack_hit_props[pi / 64] >> (pi % 64)) & 1u) continue;
@@ -1068,7 +1103,7 @@ void World::resolve_attack(u32 agent) noexcept {
 // key that vanishes is self-limiting in a way an engine-side edge trigger would
 // only duplicate.
 void World::detect_prop_events() noexcept {
-    for (u32 pi = 0; pi < MAX_PROPS; ++pi) {
+    for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
         for (u32 a = 0; a < MAX_AGENTS; ++a) {
@@ -1123,6 +1158,111 @@ u64 World::hash() const noexcept {
         h.u64v(agent_hash(i));
     }
     return h.value();
+}
+
+// A swept sphere along a segment, against entity cylinders and the map.
+//
+// The geometry first, because a wall bounds everything after it: an entity
+// beyond the wall cannot be reached, so the wall's distance caps the search
+// and most entities are then rejected by one comparison.
+//
+// The entity test is the standard one, arranged to keep the numbers small.
+// For a centre c, with m = c - from and dir a unit vector:
+//
+//   t_c  = m . dir                    how far along the ray it is closest
+//   d2   = |m|^2 - t_c^2              how far off the ray it is, squared
+//   dt   = sqrt(R^2 - d2)             half the chord through the cylinder
+//   t    = t_c - dt                   where the sphere first touches it
+//
+// Solving the quadratic in the b^2 - c form instead would square coordinates
+// that can be a thousand units from the origin; this squares a projection and
+// a radius, which are small. Same answer, and it does not saturate.
+World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
+                                      i32 ignore_a, i32 ignore_b,
+                                      i32 sector) const noexcept {
+    SweepHit out;
+    if (dist <= fx::zero()) return out;
+
+    // The map. `raycast` fails CLOSED -- it reports blocked when it runs out of
+    // hops -- which is right here: a missile that cannot be placed should stop
+    // rather than fly through the level.
+    fx limit = dist;
+    if (map_ != nullptr) {
+        const i32 s = sector >= 0
+            ? sector
+            : geom::find_sector_at(*map_, fx2{from.x, from.y}, from.z, radius);
+        const physics::RayHit wall =
+            physics::raycast(*map_, s, fx2{from.x, from.y}, dir, dist, 0);
+        if (wall.blocked && wall.distance >= fx::zero() && wall.distance < limit) {
+            limit = wall.distance;
+            out.hit = true;
+            out.distance = wall.distance;
+            out.point = fx3{from.x + dir.x * wall.distance,
+                            from.y + dir.y * wall.distance, from.z};
+        }
+    }
+
+    // One shared test for agents and props: they are both cylinders, and the
+    // only difference is which array they live in. Writing it twice is how the
+    // two drift.
+    const auto consider = [&](u32 entity, fx3 pos, fx r, fx h) {
+        // VERTICAL FIRST: one comparison each way, and on a Doom level most
+        // entities are on another floor.
+        if (from.z + radius < pos.z) return;
+        if (from.z - radius > pos.z + h) return;
+
+        const fx2 m{pos.x - from.x, pos.y - from.y};
+        const fx  t_c = m.x * dir.x + m.y * dir.y;
+        const fx  reach = r + radius;
+        // Behind the start, by more than it is wide: it was never in front.
+        if (t_c < -reach) return;
+        if (t_c - reach > limit) return;
+
+        // Perpendicular offset, squared, in raw 128-bit so a long ray does not
+        // saturate what is meant to be a small number.
+        const i128 m_sq = static_cast<i128>(len_sq_raw(m));
+        const i128 tc_sq = static_cast<i128>(t_c.raw) * t_c.raw;
+        const i128 d2 = m_sq - tc_sq;
+        const i128 rr = static_cast<i128>(reach.raw) * reach.raw;
+        if (d2 > rr) return;                       // misses to the side
+
+        // Half the chord. d2 <= rr, so this is non-negative.
+        const fx dt = fx_sqrt(fx::from_raw(static_cast<i64>((rr - d2) >> 32)));
+        fx t = t_c - dt;
+        // Already overlapping at the start: it touches immediately.
+        if (t < fx::zero()) t = fx::zero();
+        if (t > limit) return;
+
+        limit = t;
+        out.hit = true;
+        out.entity_hit = true;
+        out.entity = entity;
+        out.distance = t;
+        out.point = fx3{from.x + dir.x * t, from.y + dir.y * t, from.z};
+    };
+
+    const auto skipped = [&](u32 e) {
+        return (ignore_a >= 0 && static_cast<u32>(ignore_a) == e) ||
+               (ignore_b >= 0 && static_cast<u32>(ignore_b) == e);
+    };
+
+    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+        if (!agents_[i].active || skipped(i)) continue;
+        consider(i, agents_[i].pos, params_[i].radius, params_[i].height);
+    }
+    for (u32 pi = 0; pi < prop_high_water_; ++pi) {
+        const PropState& p = props_[pi];
+        if (!p.active) continue;
+        const u32 entity = MAX_AGENTS + pi;
+        if (skipped(entity)) continue;
+        consider(entity, p.pos, p.radius, p.height);
+    }
+
+    // A wall found first and then beaten by an entity leaves `entity_hit` set
+    // and the point on the entity, which is what the caller wants. A wall that
+    // survives leaves entity_hit false. Both are already correct above; this
+    // is the note that says so rather than a fix.
+    return out;
 }
 
 }  // namespace dnp::sim

@@ -28,6 +28,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -74,7 +75,7 @@ const core = await Core.load()
 // Boot a server on the crush map at a named spawn, attach an edge and one
 // predicting client, run `ticks` frames, and hand back everything observed.
 async function session ({ spawnTag, ticks, wtPort, linkPort }) {
-  const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+  const server = spawn(serverBin,
                        ['--port', String(linkPort), '--map', MAP_PATH, '--spawn', spawnTag,
                       '--script', join(ROOT, 'maps', 'scripts', 'init.lua')],
                        { stdio: ['ignore', 'inherit', 'pipe'] })

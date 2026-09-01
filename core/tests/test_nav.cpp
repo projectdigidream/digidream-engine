@@ -532,6 +532,289 @@ static void test_a_local_rebuild_refuses_a_changed_topology() {
     grid.refresh();
 }
 
+// ADJACENCY ACROSS `open` SIDES.
+//
+// A side is `wall`, `neighbor N`, or `open`, and only `neighbor` names what is
+// beyond it. Hand-authored maps use `open` almost throughout --
+// maps/mylevel.map is five sectors and every edge is `open` -- and under the
+// neighbour-only rule its graph had ZERO edges: every sector an island, and
+// nothing could path anywhere.
+//
+// Two rooms side by side, sharing the boundary at x = 20, both edges `open`
+// and NEITHER naming the other.
+struct OpenPair {
+    MapStorage store;
+    MapData    view{};
+
+    OpenPair(fx east_floor) {
+        const fx2 west[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)}, {F(0), F(20)}};
+        const fx2 east[] = {{F(20), F(0)}, {F(40), F(0)}, {F(40), F(20)}, {F(20), F(20)}};
+        store.add_sector(west, 4, F(0), F(20), 1);
+        store.add_sector(east, 4, east_floor, east_floor + F(20), 2);
+        for (u16 s = 0; s < 2; ++s) {
+            for (u16 i = 0; i < 4; ++i) {
+                store.add_side(s, i, static_cast<u16>((i + 1) % 4), NO_SECTOR,
+                               side_flag::LEDGE);
+            }
+        }
+        refresh();
+    }
+    void refresh() { view = store.view(); }
+};
+
+static bool has_edge(const NavGraph& g, u32 from, u32 to) {
+    for (u32 k = 0; k < g.node(from).edge_count; ++k) {
+        if (g.edge(g.node(from).first_edge + k).to == to) return true;
+    }
+    return false;
+}
+
+static void test_open_sides_are_adjacency() {
+    std::printf("nav: `open` sides connect, though nothing names a neighbour\n");
+
+    static OpenPair flat(fx::zero());
+    NavGraph g;
+    CHECK(g.build(flat.view));
+    CHECK(g.edge_count() > 0);
+    CHECK(has_edge(g, 0, 1));
+    CHECK(has_edge(g, 1, 0));
+
+    // And the edge is usable, not merely present.
+    NavBody body;
+    bool crossable = false;
+    for (u32 k = 0; k < g.node(0).edge_count; ++k) {
+        const NavEdge& e = g.edge(g.node(0).first_edge + k);
+        if (e.to == 1 && g.edge_is_open(flat.view, 0, e, body)) crossable = true;
+    }
+    CHECK(crossable);
+
+    // THE CONTROL, and it is the whole point: the same two rooms with `wall`
+    // instead of `open` are NOT connected. `wall` and `open` are separate
+    // words in the format because one is a barrier and the other is a fall,
+    // and a nav graph that derived a route through a wall would be overruling
+    // the author. Without this, "adjacency is derived from geometry" would
+    // read as "every sector touching another is connected".
+    static MapStorage walled;
+    {
+        const fx2 west[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)}, {F(0), F(20)}};
+        const fx2 east[] = {{F(20), F(0)}, {F(40), F(0)}, {F(40), F(20)}, {F(20), F(20)}};
+        walled.add_sector(west, 4, F(0), F(20), 1);
+        walled.add_sector(east, 4, F(0), F(20), 2);
+        for (u16 s = 0; s < 2; ++s)
+            for (u16 i = 0; i < 4; ++i)
+                walled.add_side(s, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+    }
+    MapData wv = walled.view();
+    NavGraph gw;
+    CHECK(gw.build(wv));
+    CHECK(!has_edge(gw, 0, 1));
+    CHECK(gw.edge_count() == 0);
+}
+
+// A drop is one-way. Walking off a platform is free; walking back up is not,
+// and nothing here implements that -- it falls out of edge_is_open asking the
+// same sector_admits the mover asks, which refuses a rise over STEP_HEIGHT.
+static void test_a_derived_drop_is_one_way() {
+    std::printf("nav: you can walk off a ledge and not back up it\n");
+
+    // The east room's floor is three units up: far more than a step.
+    static OpenPair step_up(F(3));
+    NavGraph g;
+    CHECK(g.build(step_up.view));
+    // BOTH edges exist -- adjacency is not the same question as walkability.
+    CHECK(has_edge(g, 0, 1));
+    CHECK(has_edge(g, 1, 0));
+
+    NavBody body;
+    bool up = false, down = false;
+    for (u32 k = 0; k < g.node(0).edge_count; ++k) {
+        const NavEdge& e = g.edge(g.node(0).first_edge + k);
+        if (e.to == 1 && g.edge_is_open(step_up.view, 0, e, body)) up = true;
+    }
+    for (u32 k = 0; k < g.node(1).edge_count; ++k) {
+        const NavEdge& e = g.edge(g.node(1).first_edge + k);
+        if (e.to == 0 && g.edge_is_open(step_up.view, 1, e, body)) down = true;
+    }
+    CHECK(!up);      // three units is not a step
+    CHECK(down);     // but you can always fall
+
+    // THE CONTROL: the same pair at the same height is crossable BOTH ways, so
+    // the refusal above is about the rise and not about derived edges being
+    // unusable in general.
+    static OpenPair flat(fx::zero());
+    NavGraph g2;
+    g2.build(flat.view);
+    bool a = false, b = false;
+    for (u32 k = 0; k < g2.node(0).edge_count; ++k) {
+        const NavEdge& e = g2.edge(g2.node(0).first_edge + k);
+        if (e.to == 1 && g2.edge_is_open(flat.view, 0, e, body)) a = true;
+    }
+    for (u32 k = 0; k < g2.node(1).edge_count; ++k) {
+        const NavEdge& e = g2.edge(g2.node(1).first_edge + k);
+        if (e.to == 0 && g2.edge_is_open(flat.view, 1, e, body)) b = true;
+    }
+    CHECK(a);
+    CHECK(b);
+}
+
+// Derived edges are not duplicated: three probe points along one side must not
+// add the same neighbour three times.
+static void test_derived_edges_are_deduplicated() {
+    std::printf("nav: one edge per neighbour, not one per probe\n");
+
+    static OpenPair flat(fx::zero());
+    NavGraph g;
+    g.build(flat.view);
+
+    u32 to_one = 0;
+    for (u32 k = 0; k < g.node(0).edge_count; ++k) {
+        if (g.edge(g.node(0).first_edge + k).to == 1) ++to_one;
+    }
+    CHECK(to_one == 1);
+}
+
+// A SETTABLE JUMP.
+//
+// Design §3.2.2 says enemies do not jump, and that is still the default: a
+// NavBody with jump_height zero routes exactly as it always did. A body that
+// states a height can also cross rises it could clear.
+//
+// The whole test is the pair. If the jumping body reached the ledge and the
+// non-jumping one did too, the field would be doing nothing.
+static void test_a_settable_jump_opens_a_ledge() {
+    std::printf("nav: a body that can hop crosses what a walker cannot\n");
+
+    // Three units up: six times STEP_HEIGHT, so nothing walks it.
+    static OpenPair ledge(F(3));
+    NavGraph g;
+    CHECK(g.build(ledge.view));
+
+    const NavEdge* up = nullptr;
+    for (u32 k = 0; k < g.node(0).edge_count; ++k) {
+        const NavEdge& e = g.edge(g.node(0).first_edge + k);
+        if (e.to == 1) up = &e;
+    }
+    CHECK(up != nullptr);
+
+    NavBody walker;                       // jump_height defaults to zero
+    bool hop = false;
+    CHECK(!g.edge_is_open(ledge.view, 0, *up, walker, &hop));
+    CHECK(!hop);
+
+    // Enough to clear it: the rise is 3 and a step is already worth 0.5.
+    NavBody hopper;
+    hopper.jump_height = F(3);
+    CHECK(g.edge_is_open(ledge.view, 0, *up, hopper, &hop));
+    CHECK(hop);                           // and it KNOWS it needed one
+
+    // Not enough. The threshold is a real comparison, not a boolean "can jump".
+    NavBody feeble;
+    feeble.jump_height = F(1);
+    CHECK(!g.edge_is_open(ledge.view, 0, *up, feeble, &hop));
+
+    // And a jump does not turn a walk INTO a jump: an edge the walker already
+    // crosses is reported as needing none, or a runtime would jump its way
+    // across a flat room.
+    static OpenPair flat(fx::zero());
+    NavGraph g2;
+    g2.build(flat.view);
+    for (u32 k = 0; k < g2.node(0).edge_count; ++k) {
+        const NavEdge& e = g2.edge(g2.node(0).first_edge + k);
+        if (e.to != 1) continue;
+        CHECK(g2.edge_is_open(flat.view, 0, e, hopper, &hop));
+        CHECK(!hop);
+    }
+}
+
+// A jump answers ONE of sector_admits' three refusals. A crawlspace is still a
+// crawlspace to something that can jump, and a body that jumped into one would
+// end up inside the ceiling.
+static void test_a_jump_does_not_open_a_crawlspace() {
+    std::printf("nav: jumping does not make a body shorter\n");
+
+    static MapStorage store;
+    {
+        const fx2 west[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)}, {F(0), F(20)}};
+        const fx2 east[] = {{F(20), F(0)}, {F(40), F(0)}, {F(40), F(20)}, {F(20), F(20)}};
+        store.add_sector(west, 4, F(0), F(20), 1);
+        // Floor at the same height, ceiling one unit above it. A two-unit body
+        // cannot stand there however high it can jump.
+        store.add_sector(east, 4, fx::zero(), F(1), 2);
+        for (u16 s = 0; s < 2; ++s)
+            for (u16 i = 0; i < 4; ++i)
+                store.add_side(s, i, static_cast<u16>((i + 1) % 4), NO_SECTOR,
+                               side_flag::LEDGE);
+    }
+    MapData view = store.view();
+    NavGraph g;
+    CHECK(g.build(view));
+
+    NavBody hopper;
+    hopper.jump_height = F(10);
+    bool hop = false;
+    for (u32 k = 0; k < g.node(0).edge_count; ++k) {
+        const NavEdge& e = g.edge(g.node(0).first_edge + k);
+        if (e.to == 1) CHECK(!g.edge_is_open(view, 0, e, hopper, &hop));
+    }
+
+    // THE CONTROL: raise that ceiling and the same body walks in, so the
+    // refusal is about the headroom and not about the sector being unreachable.
+    store.sector_mut(1).ceil_z = F(20);
+    view = store.view();
+    NavGraph g2;
+    g2.build(view);
+    bool crossed = false;
+    for (u32 k = 0; k < g2.node(0).edge_count; ++k) {
+        const NavEdge& e = g2.edge(g2.node(0).first_edge + k);
+        if (e.to == 1 && g2.edge_is_open(view, 0, e, hopper, &hop)) crossed = true;
+    }
+    CHECK(crossed);
+}
+
+// find_path reports WHICH steps need a jump, because a route through one is a
+// promise the caller has to keep.
+static void test_the_route_says_where_to_jump() {
+    std::printf("nav: the route says which steps need a jump\n");
+
+    static OpenPair ledge(F(3));
+    static NavQuery q;
+    u32 path[MAX_NAV_NODES];
+    bool jump[MAX_NAV_NODES];
+
+    NavGraph g;
+    g.build(ledge.view);
+
+    NavBody hopper;
+    hopper.jump_height = F(3);
+    const PathResult r = find_path(ledge.view, g, q, 0, 1, hopper, path,
+                                   MAX_NAV_NODES, jump);
+    CHECK(r.status == PathStatus::Ok);
+    CHECK(r.length == 2);
+    CHECK(path[0] == 0);
+    CHECK(path[1] == 1);
+    // Nobody jumps to arrive where they already are.
+    CHECK(!jump[0]);
+    CHECK(jump[1]);
+
+    // THE CONTROL: a walker has no route at all, so the flag above is not
+    // simply set on every step of every route.
+    NavBody walker;
+    const PathResult r2 = find_path(ledge.view, g, q, 0, 1, walker, path,
+                                    MAX_NAV_NODES, jump);
+    CHECK(r2.status == PathStatus::Unreachable);
+
+    // And on ground both can walk, the jumper's route is flagged as needing
+    // none -- otherwise a runtime would hop across a flat room.
+    static OpenPair flat(fx::zero());
+    NavGraph g2;
+    g2.build(flat.view);
+    const PathResult r3 = find_path(flat.view, g2, q, 0, 1, hopper, path,
+                                    MAX_NAV_NODES, jump);
+    CHECK(r3.status == PathStatus::Ok);
+    CHECK(!jump[0]);
+    CHECK(!jump[1]);
+}
+
 int main() {
     test_the_graph_is_the_map();
     test_walkability_is_the_movers_walkability();
@@ -544,6 +827,12 @@ int main() {
     test_a_local_rebuild_matches_a_full_one();
     test_a_local_rebuild_refuses_a_changed_topology();
 
+    test_open_sides_are_adjacency();
+    test_a_derived_drop_is_one_way();
+    test_derived_edges_are_deduplicated();
+    test_a_settable_jump_opens_a_ledge();
+    test_a_jump_does_not_open_a_crawlspace();
+    test_the_route_says_where_to_jump();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

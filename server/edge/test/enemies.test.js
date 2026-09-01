@@ -31,6 +31,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
 } from '../../../client/src/proto.js'
+import { serverBin, doomProps, catalogueText } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -74,14 +75,17 @@ function mapPath () {
 const MAP_PATH = mapPath()
 if (!MAP_PATH) { console.error('no baked monsters map'); process.exit(2) }
 
-const vfxCatalogue = parseVfx(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
+// The whole catalogue the client would have: the engine's vfx records plus
+// the module's props. The tracers are engine-authored -- colours and widths,
+// no art -- so they stayed in assets/props.txt when the Doom half moved out.
+const vfxCatalogue = parseVfx(catalogueText())
 const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 const core = await Core.load()
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      ['--port', String(LINK_PORT), '--map', MAP_PATH, '--spawn', 'start',
-                      '--props', join(ROOT, 'assets', 'props.txt')],
+                      '--props', doomProps],
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })

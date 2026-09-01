@@ -26,7 +26,7 @@ const check = (ok, label) => {
 }
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps
 
-const ENT = { POS: 1 << 0, FACING: 1 << 1, DESTROYED: 1 << 7 }
+const ENT = { POS: 1 << 0, FACING: 1 << 1, DESTROYED: 1 << 7, ANIM: 1 << 4, SOLID: 1 << 8 }
 const handle = (index, generation) => (index & 0xffffff) | ((generation & 0xff) << 24)
 
 // A stand-in for a Three.js scene and mesh: only add/remove and a position.
@@ -150,6 +150,57 @@ console.log('\n--- coordinates ---')
   // Engine (x, y, z) -> three (x, z, -y), the same rotation mapgeom uses.
   check(near(mesh.position.x, 7) && near(mesh.position.y, 13) && near(mesh.position.z, -11),
         `engine (7,11,13) becomes three (${mesh.position.x},${mesh.position.y},${mesh.position.z})`)
+}
+
+// --- a corpse stops being solid, and stops moving ----------------------------
+//
+// THE BUG THIS EXISTS FOR. A monster that dies stops moving, so the block that
+// announces it is a corpse carries SOLID (and ANIMATION_STATE) and NO POS at
+// all. Solidity used to be handled after `if (!(mask & POS)) continue`, so that
+// block was skipped: the death animation played, the body lay on the floor, and
+// the collider this client mirrors into its own world stayed solid for ever.
+// The player then walked into an invisible corpse that the server walks
+// straight through -- an invisible wall exactly where something died.
+//
+// It only happened SOMETIMES, which is what made it hard to see: a corpse that
+// settles in the same tick puts POS back in the mask and takes the working path.
+console.log('\n--- a corpse that does not move still stops being solid ---')
+{
+  const scene = fakeScene()
+  const bodies = []
+  const view = new EntityView({
+    makeMesh: fakeMesh, scene,
+    onBody: (index, kind, pos, solid) => bodies.push({ index, pos, solid })
+  })
+
+  // Alive and moving: solid, with a position.
+  view.ingest(snap(100, [{ handle: handle(4, 1), mask: ENT.POS | ENT.SOLID,
+                           pos: { x: 5, y: 0, z: 0 }, solid: 1 }]), CONV)
+  check(bodies.length === 1 && bodies[0].solid === true,
+        'a living body is mirrored as solid')
+
+  // Dies. No POS -- it is not going anywhere.
+  view.ingest(snap(102, [{ handle: handle(4, 1), mask: ENT.SOLID | ENT.ANIM,
+                           solid: 0, animationState: 4 }]), CONV)
+  const last = bodies.at(-1)
+  check(bodies.length === 2, `the corpse reached the mirror (${bodies.length} calls)`)
+  check(last && last.solid === false, 'and did so as NOT solid')
+
+  // THE CONTROL. The same block WITH a position took the working path all
+  // along, which is why this was intermittent rather than constant -- so a test
+  // that only sent one with POS would have passed against the bug.
+  const scene2 = fakeScene()
+  const bodies2 = []
+  const view2 = new EntityView({
+    makeMesh: fakeMesh, scene: scene2,
+    onBody: (index, kind, pos, solid) => bodies2.push({ solid })
+  })
+  view2.ingest(snap(100, [{ handle: handle(4, 1), mask: ENT.POS | ENT.SOLID,
+                            pos: { x: 5, y: 0, z: 0 }, solid: 1 }]), CONV)
+  view2.ingest(snap(102, [{ handle: handle(4, 1), mask: ENT.POS | ENT.SOLID | ENT.ANIM,
+                            pos: { x: 5, y: 0, z: 0 }, solid: 0, animationState: 4 }]), CONV)
+  check(bodies2.at(-1)?.solid === false,
+        'CONTROL: with a position in the same block it always worked')
 }
 
 console.log(`\nentities: ${checks} checks, ${fails} failures`)

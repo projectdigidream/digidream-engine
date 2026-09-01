@@ -22,6 +22,8 @@ const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
+  // A baked track is opaque bytes; the browser only ever hands it to the synth.
+  '.mstk': 'application/octet-stream',
   '.wasm': 'application/wasm',
   '.json': 'application/json',
   '.dnpm': 'application/octet-stream',
@@ -34,6 +36,34 @@ const TYPES = {
 // serving the repository root: this process has the whole source tree under it,
 // including certificates and Lua the server runs, and none of that has any
 // business being fetchable.
+// Modules named on the command line, in order (docs/MODULES.md). Repeatable:
+// several load together, and every asset lookup tries them in turn before the
+// engine's own assets/. Per FILE, so a module that adds three sprites does not
+// have to copy the other two thousand.
+const MODULES = []
+for (let i = 2; i < process.argv.length; i++) {
+  if (process.argv[i] === '--module' && process.argv[i + 1]) {
+    MODULES.push(join(ROOT, 'modules', process.argv[++i]))
+  }
+}
+if (MODULES.length) console.error('[web] modules: ' + MODULES.join(', '))
+
+/**
+ * The first module that has this file, or the engine's own copy.
+ *
+ * `rel` is a path under a module root, like 'assets/sprites/POSSA1.png'. The
+ * engine's fallback drops the leading 'assets/' because that IS its assets
+ * root -- modules/x/assets/sprites/a.png and assets/sprites/a.png are the same
+ * file in two places.
+ */
+async function moduleFile (rel) {
+  for (const m of MODULES) {
+    const p = join(m, rel)
+    if (await readFile(p).then(() => true).catch(() => false)) return p
+  }
+  return join(ROOT, rel)
+}
+
 const MOUNTS = [
   ['/vendor/three/', join(ROOT, 'client', 'node_modules', 'three', 'build')],
   ['/src/', join(ROOT, 'client', 'src')],
@@ -49,6 +79,22 @@ const MOUNTS = [
   // which is the layout on disk, and a mount that skipped the dist level would
   // make the source's own relative import wrong only when served.
   ['/wasm/', join(ROOT, 'client', 'wasm')],
+  // The synth, and its instruments.
+  //
+  // TWO MOUNTS AND NOT ONE ROOT: midisynth/ also holds sources, a build tree
+  // and vendored third-party code, none of which has any business being
+  // fetchable -- the same reason this server lists prefixes instead of serving
+  // the repository.
+  //
+  // tool/ rather than a copy of the two files in it, because synth-worklet.js
+  // imports './dist/midisynth.mjs' RELATIVELY: the worklet and the wasm module
+  // have to stay siblings or the import resolves to nothing.
+  ['/synth/', join(ROOT, 'midisynth', 'tool')],
+  ['/synth-content/', join(ROOT, 'midisynth', 'content')],
+  // Baked .mstk tracks. A FALLBACK, not the only place: a module ships its own
+  // soundtrack (modules/doom2/assets/music) and the per-file rule above finds
+  // it first, exactly as it does for sprites.
+  ['/music/', join(ROOT, 'assets', 'music')],
   // NOTE: /maps/ is NOT a plain mount -- see findMap below.
   ['/', join(ROOT, 'client')]
 ]
@@ -81,7 +127,10 @@ function resolve (urlPath) {
 // nothing had written this month.
 async function findMap (name) {
   if (name.includes('/') || name.includes('..')) return null
-  for (const dir of [join(ROOT, 'build', 'arm64'), join(ROOT, 'build', 'x86_64'),
+  // Modules first, then the build directories. A module's maps live beside its
+  // scripts, which is how a baked map stays self-contained.
+  const dirs = MODULES.map((m) => join(m, 'maps'))
+  for (const dir of [...dirs, join(ROOT, 'build', 'arm64'), join(ROOT, 'build', 'x86_64'),
                      join(ROOT, 'build', 'native'), join(ROOT, 'build')]) {
     const p = join(dir, name)
     try {
@@ -126,27 +175,38 @@ createServer(async (req, res) => {
     // The animation catalogue, alongside the prop one and for the same reason:
     // a named route, because MOUNTS are directory prefixes matched with
     // startsWith and '/animations.txt' would resolve to a directory.
-    if (req.url.split('?')[0] === '/animations.txt') {
-      const body = await readFile(join(ROOT, 'assets', 'animations.txt')).catch(() => null)
-      log(body ? 200 : 404, req.url)
-      if (!body) { res.writeHead(404).end('no assets/animations.txt'); return }
+    // The two catalogues are CONCATENATED across modules, not chosen between:
+    // several modules load at once and each contributes its own entries. Ids
+    // are absolute and are never renumbered here -- the server refuses to start
+    // on a collision, which is the only place that check can be made once.
+    for (const [route, rel] of [['/animations.txt', 'assets/animations.txt'],
+                                ['/props.txt', 'assets/props.txt']]) {
+      if (req.url.split('?')[0] !== route) continue
+      const parts = []
+      const base = await readFile(join(ROOT, rel)).catch(() => null)
+      if (base) parts.push(base.toString())
+      for (const m of MODULES) {
+        const extra = await readFile(join(m, rel)).catch(() => null)
+        if (extra) parts.push('\n# --- ' + m + ' ---\n' + extra.toString())
+      }
+      log(parts.length ? 200 : 404, req.url)
+      if (!parts.length) { res.writeHead(404).end('no ' + rel); return }
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-         .end(body)
-      return
-    }
-
-    if (req.url.split('?')[0] === '/props.txt') {
-      const body = await readFile(join(ROOT, 'assets', 'props.txt')).catch(() => null)
-      log(body ? 200 : 404, req.url)
-      if (!body) { res.writeHead(404).end('no assets/props.txt'); return }
-      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-         .end(body)
+         .end(parts.join('\n'))
       return
     }
 
     let file
     if (req.url.startsWith('/maps/')) {
       file = await findMap(req.url.slice('/maps/'.length).split('?')[0])
+    } else if (MODULES.length &&
+               (req.url.startsWith('/sprites/') || req.url.startsWith('/textures/') ||
+                req.url.startsWith('/music/'))) {
+      // PER FILE, not per directory. A module that adds three sprites does not
+      // have to carry the other two thousand, and one that ships a whole set
+      // overrides all of them -- without either having to say which it is.
+      const clean = normalize(decodeURIComponent(req.url.split('?')[0]))
+      file = clean.includes('..') ? null : await moduleFile(join('assets', clean))
     } else {
       file = resolve(req.url)
     }

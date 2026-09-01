@@ -37,6 +37,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG, SNAP_FLAG
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -86,7 +87,7 @@ if (!NO_SCRIPT) {
                              EFFECTS ? 'effects_test.lua' : 'teleport_test.lua'))
 }
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
+const server = spawn(serverBin, args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })

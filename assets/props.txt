@@ -37,99 +37,24 @@
 # `id` is explicit and never positional: two files that happened to list props
 # in a different order would otherwise silently swap them.
 
-# --- Doom keycards and skull keys -------------------------------------------
+# WHAT IS *NOT* IN THIS FILE, AND WHY.
 #
-# Doom's keys are 8-unit-radius sprites that bob in place; at 1/48 scale that is
-# 0.167, widened here to 0.35 because a pickup you have to stand exactly on is a
-# pickup nobody picks up. The sprite names are the WAD's own lumps, extracted by
-# tools/wad/extract_sprites.js.
-
-prop 1 key_blue   radius 0.35 height 0.6
-sprite 1 size 0.35 billboard state 0 fps 6 frames BKEYA0,BKEYB0
-
-prop 2 key_yellow radius 0.35 height 0.6
-sprite 2 size 0.35 billboard state 0 fps 6 frames YKEYA0,YKEYB0
-
-prop 3 key_red    radius 0.35 height 0.6
-sprite 3 size 0.35 billboard state 0 fps 6 frames RKEYA0,RKEYB0
-
-prop 4 skull_blue   radius 0.35 height 0.6
-sprite 4 size 0.35 billboard state 0 fps 6 frames BSKUA0,BSKUB0
-
-prop 5 skull_yellow radius 0.35 height 0.6
-sprite 5 size 0.35 billboard state 0 fps 6 frames YSKUA0,YSKUB0
-
-prop 6 skull_red    radius 0.35 height 0.6
-sprite 6 size 0.35 billboard state 0 fps 6 frames RSKUA0,RSKUB0
-
-# --- an obstacle, and a thing you press --------------------------------------
+# Every prop with a picture used to live here, and every one of those pictures
+# came out of DOOM2.WAD -- the keys, the barrel, the lever, all eighteen
+# monsters. That art is id Software's, and an engine whose default catalogue
+# points at it cannot be handed to anybody, nor can a new project start from it
+# without inheriting the problem.
 #
-# Neither is placed by any map yet; they are here because the catalogue is the
-# documentation for what a prop can be, and a format with no example of its own
-# features is a format nobody uses them from.
+# So the whole Doom catalogue moved to modules/doom2/assets/props.txt, next to
+# the sprites and textures it names. Load it the way you load any module:
 #
-# A barrel is solid: you walk into it and stop. Doom's own explodes, which is a
-# script's decision -- on_prop_use and on_touch are where that would live.
-
-# Doom's barrel is a 10-unit radius, 42-unit tall solid thing that explodes when
-# hit. At 1/48 that is 0.21 and 0.875. Two states, and the SERVER declares which
-# -- state 1 is the explosion, and how fast it plays is the client's business.
-
-prop 10 barrel radius 0.21 height 0.875 solid
-sprite 10 size 0.875 billboard state 0 fps 2 frames BAR1A0,BAR1B0
-sprite 10 once state 1 fps 14 frames BEXPA0,BEXPB0,BEXPC0,BEXPD0,BEXPE0
-
-# A wall switch you press rather than a wall you press. Two states, and the
-# server declares WHICH -- the client decides how fast it plays.
-
-prop 11 lever radius 0.4 height 1.0 solid usable
-sprite 11 size 1.0 billboard state 0 fps 0 frames SW1BRNGN
-sprite 11 state 1 fps 0 frames SW2BRNGN
-
-# --- enemies -----------------------------------------------------------------
+#     scripts/run_stack.sh --module doom2
 #
-# An enemy is an AGENT, not a prop: it walks, falls, steps up, slides along
-# walls and is stopped by doors, and all of that is the controller a player
-# already runs. It is drawn from these records all the same, because "what a
-# thing looks like" is one question whether the thing moves or not.
+# What stays here is what the engine itself authored. At present that is the
+# transient effects below, which are colours and numbers and nothing else.
 #
-# Doom's own sizes: a zombieman is a 20-unit radius, 56 tall; an imp the same.
-# At 1/48 that is 0.417 and 1.167.
-#
-# ANIMATION STATES, declared by the server and timed by the client (design §4):
-#   0 idle   1 walk   2 attack   3 pain   4 die
-#
-# Only the front-facing sprite of each frame is used. Doom stores eight angles
-# per frame and picking one by the viewer's bearing is a renderer feature this
-# does not have yet -- so an imp seen from behind looks like an imp seen from
-# the front. Stated rather than left to be discovered.
-
-# Doom's own speeds, converted: a monster moves N map units per tic at 35 Hz,
-# which at 1/48 scale is N * 35 / 48 world units per second. A zombieman and an
-# imp both move 8 -- 5.83 -- and a demon moves 10.
-prop 20 zombieman radius 0.417 height 1.167 speed 5.83 solid
-# `rot8`: eight viewing angles. The frames below are then named WITHOUT their
-# rotation digit -- POSSA, not POSSA1 -- and the renderer appends 1..8 from the
-# angle between where the monster faces and where you are standing. Extract them
-# with:  node tools/wad/extract_sprites.js DOOM2.WAD --rot POSS,TROO
-sprite 20 size 1.167 billboard rot8 state 0 fps 0  frames POSSA
-sprite 20 rot8 state 1 fps 6  frames POSSA,POSSB,POSSC,POSSD
-sprite 20 rot8 state 2 fps 5  frames POSSE,POSSF
-sprite 20 rot8 state 3 fps 0  frames POSSG
-sprite 20 rot8 once state 4 fps 8  frames POSSH,POSSI,POSSJ,POSSK,POSSL,POSSM
-
-prop 21 imp radius 0.417 height 1.167 speed 5.83 solid
-sprite 21 size 1.167 billboard rot8 state 0 fps 0  frames TROOA
-sprite 21 rot8 state 1 fps 6  frames TROOA,TROOB,TROOC,TROOD
-sprite 21 rot8 state 2 fps 5  frames TROOE,TROOF,TROOG
-sprite 21 rot8 state 3 fps 0  frames TROOH
-sprite 21 rot8 once state 4 fps 8  frames TROOI,TROOJ,TROOK,TROOL,TROOM
-
-# The imp's fireball. A prop rather than an agent: it has no controller, it does
-# not walk, and what it needs is a straight line and something to hit.
-prop 22 fireball radius 0.13 height 0.26
-sprite 22 size 0.4 billboard state 0 fps 10 frames BAL1A0,BAL1B0
-sprite 22 once state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
+# This file is deliberately nearly empty. That is the point: it is the
+# catalogue a project starts from, and it starts clean.
 
 # --- transient effects -------------------------------------------------------
 #
@@ -151,3 +76,4 @@ sprite 22 once state 1 fps 12 frames BAL1C0,BAL1D0,BAL1E0
 # turn out to be gaudy, and turning them down needs no recompile.
 vfx 1 tracer colour ffee88 width 0.09 life 0.35
 vfx 2 tracer colour ff8844 width 0.12 life 0.45
+

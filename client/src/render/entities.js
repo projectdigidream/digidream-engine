@@ -96,11 +96,45 @@ export class EntityView {
       // renderer can pick it up without re-reading the snapshot.
       if (e.mask & ENT_FIELD.ANIMATION_STATE) ent.animationState = e.animationState ?? 0
 
+      // SOLIDITY, BEFORE THE POSITION EARLY-RETURN.
+      //
+      // `solid` is delta-encoded like everything else: it arrives on the tick
+      // it CHANGES and never again, so the last value has to be remembered
+      // rather than read from this message.
+      //
+      // AND IT ARRIVES ON A TICK WITH NO POSITION. A monster that dies stops
+      // moving, so the block announcing it is a corpse carries SOLID and
+      // ANIMATION_STATE and no POS at all. Handling solidity after the POS
+      // return meant that block was skipped: the death animation played (that
+      // is applied above), the body was drawn on the floor, and the collider
+      // mirrored into this client's world stayed solid for ever. The player
+      // then walked into an invisible corpse the server walks straight
+      // through, which is a misprediction that reads as an invisible wall
+      // exactly where something died.
+      //
+      // It only happened SOMETIMES because a corpse that settles in the same
+      // tick puts POS back in the mask and takes the old path.
+      if (e.mask & ENT_FIELD.SOLID) {
+        ent.solid = e.solid !== 0
+        // A body that has just stopped being solid needs no position: the
+        // mirror is removed. One that has just become solid does, and the last
+        // known one is the right answer -- it has not moved, or POS would be
+        // here too.
+        if (!(e.mask & ENT_FIELD.POS) && this.onBody && (ent.lastPos || !ent.solid)) {
+          this.onBody(index, ent.kind, ent.lastPos, ent.solid !== false)
+        }
+      }
+
       // No POS in the mask means the position did not change. Absence is
       // information in a delta-encoded snapshot (docs/protocol.md §5.3), so
       // there is nothing to record -- and holding at the last sample is
       // exactly what a stationary entity should do.
       if (!(e.mask & ENT_FIELD.POS)) continue
+
+      // The raw fx position, kept for the solidity path above: the samples
+      // below are converted to three-space and rounded, and the simulation
+      // needs engine space.
+      ent.lastPos = e.pos
 
       // Props go into the simulation as well as onto the screen, at the raw fx
       // position rather than the converted one: the simulation works in engine
@@ -109,10 +143,6 @@ export class EntityView {
       // The KIND, not a size: how big a thing is comes from the catalogue for
       // a monster and from the map for a player, and neither is this view's
       // business to know.
-      // `solid` is delta-encoded like everything else: it arrives on the tick
-      // it CHANGES and never again, so the last value has to be remembered
-      // rather than read from this message.
-      if (e.mask & ENT_FIELD.SOLID) ent.solid = e.solid !== 0
       if (this.onBody) this.onBody(index, ent.kind, e.pos, ent.solid !== false)
 
       const last = ent.samples.at(-1)

@@ -26,6 +26,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG
 } from '../../../client/src/proto.js'
+import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -53,7 +54,7 @@ const waitFor = async (fn, ms, l) => {
 const MAP_PATH = bakedMapPath(ROOT)
 if (!MAP_PATH) { console.error('no baked map; run mapc first'); process.exit(2) }
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'),
+const server = spawn(serverBin,
                      // Spawn directly onto the lift. Walking onto one is a
                      // separate concern (and only possible while it is within
                      // step height of the ground); what is being tested here is

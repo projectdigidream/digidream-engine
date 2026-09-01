@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
+import { serverBin, doomProps } from './serverbin.js'
 import { decodeControlMessage, encodeHello, encodeUiEvent, encodeInputBundle,
          decodeSnapshot, axisFromNumber, MSG, UI_KIND, CAMERA_FIELD }
   from '../../../client/src/proto.js'
@@ -68,10 +69,10 @@ const certHash = Buffer.from(
 // true of any real deployment. Needed because MAP_A spawns monsters, and a
 // catalogue that is not found is fatal for the level that wanted it.
 const args = ['--port', String(LINK_PORT), '--map', MAP_A, '--map', MAP_B, '--spawn', 'start',
-              '--props', join(ROOT, 'assets', 'props.txt')]
+              '--props', doomProps]
 if (!NO_SCRIPT) args.push('--script', join(ROOT, 'maps', 'scripts', 'debug_panel.lua'))
 
-const server = spawn(join(ROOT, 'build', 'server', 'dnp-server'), args,
+const server = spawn(serverBin, args,
                      { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
 server.stderr.on('data', (d) => { serverLog += d.toString() })

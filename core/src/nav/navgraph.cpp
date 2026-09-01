@@ -72,6 +72,96 @@ bool NavGraph::build_edges(const MapData& map) noexcept {
             ++nodes_[s].edge_count;
         }
 
+        // ADJACENCY THE MAP DOES NOT SPELL OUT.
+        //
+        // A side is `wall`, `neighbor N`, or `open`. Only `neighbor` names the
+        // sector on the other side, and hand-authored maps increasingly do not
+        // use it: maps/mylevel.map is five sectors, every edge `open`, and
+        // under the neighbour-only rule its graph had ZERO edges. Every sector
+        // an island, and nothing could path anywhere.
+        //
+        // `open` means the sector ENDS at that edge -- walk off and you fall.
+        // What is on the other side is a question about the geometry, so ask
+        // the geometry: step a hair past the edge and see which sector is
+        // there. find_sector_at answers it through the broadphase grid, and it
+        // is the same function the mover uses to decide where a body IS, so
+        // nav cannot disagree with movement about what is next to what.
+        //
+        // WALLS ARE LEFT ALONE, deliberately. `wall` and `open` are both
+        // explicit in the format precisely because the difference is invisible
+        // in the geometry and total in play -- one is a barrier, the other is a
+        // fall. Deriving a route through a wall because a room happens to be on
+        // the far side would be the nav graph overruling the author.
+        //
+        // Whether a derived edge can actually be CROSSED is not decided here.
+        // That stays where it was, in edge_is_open, asked of the same
+        // sector_admits the mover asks -- so a three-unit drop off a platform
+        // is walkable downward and not upward, and nothing here needs to know
+        // that. An edge is a candidate; walkability is a query-time answer,
+        // because a lift connects two rooms at one end of its travel and not
+        // at the other.
+        for (u16 k = 0; k < sec.side_count; ++k) {
+            const u32 si = sec.first_side + k;
+            const Side& sd = map.side(si);
+            if (sd.neighbor != NO_SECTOR) continue;          // already has one
+            if (!(sd.flags & side_flag::LEDGE)) continue;    // a wall stays a wall
+            if (sd.flags & side_flag::BLOCKING) continue;
+
+            const fx2 a = map.point(sd.a);
+            const fx2 b = map.point(sd.b);
+            const fx2 along{b.x - a.x, b.y - a.y};
+            const fx len = length(along);
+            if (len <= fx::from_frac(1, 1024)) continue;     // a degenerate side
+
+            // The perpendicular. WHICH WAY IS OUT is not knowable from the
+            // winding: core/src/geom/map.cpp is explicit that point order is
+            // not normalised, and a map with inconsistent winding is meant to
+            // render oddly rather than misbehave. So try both and discard the
+            // one that lands back inside the sector we started in.
+            const fx2 out{along.y / len, -(along.x / len)};
+            const fx step = fx::from_frac(1, 64);
+            const fx feet = sec.floor_z;
+
+            // Three points along the side, because one long `open` edge can
+            // run past two different sectors and the midpoint alone would find
+            // whichever it happened to touch.
+            const fx frac[3] = {fx::from_frac(1, 4), fx::from_frac(1, 2),
+                                fx::from_frac(3, 4)};
+            for (u32 f = 0; f < 3; ++f) {
+                const fx2 at{a.x + along.x * frac[f], a.y + along.y * frac[f]};
+                for (i32 sign = 1; sign >= -1; sign -= 2) {
+                    const fx off = sign > 0 ? step : -step;
+                    const fx2 probe{at.x + out.x * off, at.y + out.y * off};
+                    const i32 found =
+                        geom::find_sector_at(map, probe, feet, fx::zero());
+                    if (found < 0 || static_cast<u32>(found) >= node_count_) continue;
+                    if (static_cast<u32>(found) == s) continue;
+
+                    // One edge per neighbouring sector. Explicit edges are NOT
+                    // deduplicated -- two doorways between the same rooms are
+                    // two real routes and the narrower one must not shadow the
+                    // wider -- but a derived edge carries no such information,
+                    // and three probes along one side would otherwise add the
+                    // same sector three times.
+                    bool already = false;
+                    for (u32 q = 0; q < nodes_[s].edge_count; ++q) {
+                        if (edges_[nodes_[s].first_edge + q].to ==
+                            static_cast<u32>(found)) { already = true; break; }
+                    }
+                    if (already) continue;
+                    if (edge_count_ >= MAX_NAV_EDGES) return false;
+
+                    NavEdge& e = edges_[edge_count_++];
+                    e.to = static_cast<u32>(found);
+                    e.side = static_cast<i32>(si);
+                    e.derived = true;
+                    e.width = len;
+                    e.cost = distance(nodes_[s].centroid, nodes_[e.to].centroid);
+                    ++nodes_[s].edge_count;
+                }
+            }
+        }
+
         for (u32 p = 0; p < portal_count_; ++p) {
             if (portals_[p].from != s) continue;
             if (edge_count_ >= MAX_NAV_EDGES) return false;
@@ -105,11 +195,25 @@ bool NavGraph::rebuild_sector(const MapData& map, u32 s) noexcept {
     // The topology check the header promises. A commit that changed a sector's
     // side list would leave every later node's first_edge pointing at the wrong
     // place, and the graph would describe a map nobody authored.
+    // COUNTED THE SAME WAY build_edges BUILDS THEM, derived edges included.
+    // Counting only explicit neighbours reported a topology change on every
+    // map that has an `open` side -- which is every hand-authored map -- and
+    // rebuild_sector would refuse to do anything at all.
     const Sector& sec = map.sector(s);
     u32 expect = 0;
     for (u16 k = 0; k < sec.side_count; ++k) {
         const Side& sd = map.side(sec.first_side + k);
         if (sd.neighbor != NO_SECTOR && static_cast<u32>(sd.neighbor) < node_count_) ++expect;
+    }
+    for (u32 k = 0; k < nodes_[s].edge_count; ++k) {
+        const NavEdge& e = edges_[nodes_[s].first_edge + k];
+        if (!e.derived) continue;
+        ++expect;
+        // And it must still BE derivable: a side that has since acquired a
+        // `neighbor`, or stopped being `open`, is a topology change even
+        // though the count would come out the same.
+        const Side& sd = map.side(static_cast<u32>(e.side));
+        if (sd.neighbor != NO_SECTOR || !(sd.flags & side_flag::LEDGE)) return false;
     }
     for (u32 p = 0; p < portal_count_; ++p) if (portals_[p].from == s) ++expect;
     if (expect != nodes_[s].edge_count) return false;
@@ -152,7 +256,8 @@ bool NavGraph::link_portal(const MapData& map, u32 from, u32 to) noexcept {
 }
 
 bool NavGraph::edge_is_open(const MapData& map, u32 from, const NavEdge& e,
-                            const NavBody& body) const noexcept {
+                            const NavBody& body, bool* needs_jump) const noexcept {
+    if (needs_jump != nullptr) *needs_jump = false;
     if (e.to >= node_count_) return false;
 
     // A portal is not a doorway: no width, no floor, no headroom to check.
@@ -172,7 +277,25 @@ bool NavGraph::edge_is_open(const MapData& map, u32 from, const NavEdge& e,
     // asks. Feet at the source sector's floor, because that is where a body
     // standing in it actually is.
     const fx feet = map.sector(from).floor_z;
-    return physics::sector_admits(map, e.to, feet, body.height);
+    if (physics::sector_admits(map, e.to, feet, body.height)) return true;
+
+    // WALKING SAID NO. Can it hop?
+    //
+    // Only the RISE is reconsidered. sector_admits refuses for three reasons --
+    // the floor is too high, the space is too short to stand in, or the ceiling
+    // is too low to cross under -- and a jump answers exactly one of them. A
+    // crawlspace is still a crawlspace to something that can jump.
+    if (body.jump_height <= fx::zero()) return false;
+
+    const Sector& to = map.sector(e.to);
+    if (to.floor_z - feet > sim::STEP_HEIGHT + body.jump_height) return false;
+    // It still has to fit where it lands. Measured in the destination, because
+    // that is where the body ends up standing -- the source sector's headroom
+    // is the mover's problem and the body is already living with it.
+    if (to.ceil_z - to.floor_z < body.height) return false;
+
+    if (needs_jump != nullptr) *needs_jump = true;
+    return true;
 }
 
 u64 NavGraph::hash() const noexcept {
@@ -190,6 +313,7 @@ u64 NavGraph::hash() const noexcept {
         h.i32v(edges_[i].side);
         h.fxv(edges_[i].width);
         h.fxv(edges_[i].cost);
+        h.u32v(edges_[i].derived ? 1u : 0u);
     }
     return h.value();
 }
@@ -242,7 +366,7 @@ u32 heap_pop(NavQuery& q) noexcept {
 
 PathResult find_path(const MapData& map, const NavGraph& g, NavQuery& q,
                      u32 from, u32 to, const NavBody& body,
-                     u32* out_path, u32 max_path) noexcept {
+                     u32* out_path, u32 max_path, bool* out_jump) noexcept {
     PathResult r;
 
     if (from >= g.node_count() || to >= g.node_count() || g.node_count() == 0) {
@@ -255,6 +379,7 @@ PathResult find_path(const MapData& map, const NavGraph& g, NavQuery& q,
     }
     if (from == to) {
         out_path[0] = from;
+        if (out_jump != nullptr) out_jump[0] = false;
         r.status = PathStatus::SameSector;
         r.length = 1;
         return r;
@@ -273,6 +398,7 @@ PathResult find_path(const MapData& map, const NavGraph& g, NavQuery& q,
         q.g[i] = fx::max();
         q.f[i] = fx::max();
         q.came_from[i] = -1;
+        q.came_jump[i] = 0;
         q.closed[i] = 0;
         q.opened[i] = 0;
     }
@@ -301,12 +427,17 @@ PathResult find_path(const MapData& map, const NavGraph& g, NavQuery& q,
         for (u32 k = 0; k < node.edge_count; ++k) {
             const NavEdge& e = g.edge(node.first_edge + k);
             if (q.closed[e.to]) continue;
-            if (!g.edge_is_open(map, cur, e, body)) continue;
+            bool hop = false;
+            if (!g.edge_is_open(map, cur, e, body, &hop)) continue;
 
             const fx tentative = q.g[cur] + e.cost;
             if (q.opened[e.to] && !(tentative < q.g[e.to])) continue;
 
             q.came_from[e.to] = static_cast<i32>(cur);
+            // Recorded with the parent link, not with the node: whether a jump
+            // is needed is a property of the EDGE taken to get here, and a
+            // cheaper route found later replaces both together.
+            q.came_jump[e.to] = hop ? 1 : 0;
             q.g[e.to] = tentative;
             q.f[e.to] = tentative + heuristic(e.to);
             q.opened[e.to] = 1;
@@ -337,7 +468,14 @@ PathResult find_path(const MapData& map, const NavGraph& g, NavQuery& q,
     }
 
     u32 w = len;
-    for (i32 at = static_cast<i32>(to); at >= 0; at = q.came_from[at]) out_path[--w] = static_cast<u32>(at);
+    for (i32 at = static_cast<i32>(to); at >= 0; at = q.came_from[at]) {
+        --w;
+        out_path[w] = static_cast<u32>(at);
+        // out_jump[i] is about the step INTO i, so it comes from i's own
+        // parent link. Index 0 has no parent and is always false: nobody jumps
+        // to arrive where they already are.
+        if (out_jump != nullptr) out_jump[w] = w > 0 && q.came_jump[at] != 0;
+    }
 
     r.status = PathStatus::Ok;
     r.length = len;

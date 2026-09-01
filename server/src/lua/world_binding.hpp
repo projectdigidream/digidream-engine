@@ -22,6 +22,7 @@
 #include "dnp/geom/mapstore.hpp"
 #include "dnp/math/rng.hpp"
 #include "dnp/sim/world.hpp"
+#include "dnp/nav/navgraph.hpp"
 #include "lua/commands.hpp"
 #include "lua/effects.hpp"
 
@@ -116,6 +117,11 @@ struct UiSink {
 struct WorldContext {
     sim::World*       world = nullptr;
     geom::MapStorage* map_store = nullptr;
+
+    // The level's sector graph, for dnp.find_path. Borrowed, not owned: the
+    // server builds one per level at load and rebuilds it when a shape commits,
+    // and a second copy here would path over a map that no longer exists.
+    const nav::NavGraph* nav = nullptr;
 
     // Which level this context belongs to, and where to send a map change. The
     // level index is fixed at load; a script never names its own level, it just

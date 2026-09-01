@@ -9,7 +9,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/build/server"
+# WHERE THE BINARY GOES.
+#
+# `build/server` by default, which is what scripts/run_stack.sh runs. The test
+# suite overrides it, and the reason is not tidiness: relinking this file while
+# a server is executing it REPLACES THE IMAGE UNDER A RUNNING PROCESS, and the
+# process dies. From the outside that is an edge logging "upstream lost" every
+# time somebody runs the tests, which looks like a networking fault and is not.
+OUT="${DNP_SERVER_OUT:-$ROOT/build/server}"
 mkdir -p "$OUT"
 
 # The ONE build script that links Lua. scripts/check_source_lists.sh asserts
@@ -23,7 +30,22 @@ fi
 LUA_EXTRA_LIBS=""
 [[ "$(uname -s)" == "Darwin" ]] || LUA_EXTRA_LIBS="-ldl"
 
-clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror \
+# DNP_SERVER_SAN=1 builds with AddressSanitizer and UBSan.
+#
+# For catching a crash that only happens while somebody is playing. A plain
+# build dies with a signal and no explanation; this one prints the exact line,
+# the allocation it came from, and the stack. It is roughly 2x slower, which is
+# fine for reproducing a fault and not for a session you care about.
+#
+#   DNP_SERVER_SAN=1 ./scripts/build_server.sh
+#   ./scripts/run_stack.sh --module doom2 2>&1 | tee /tmp/dnp.log
+SAN_FLAGS=""
+if [[ -n "${DNP_SERVER_SAN:-}" ]]; then
+  SAN_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+  echo "[build] AddressSanitizer + UBSan enabled (slower; for diagnosing a crash)"
+fi
+
+clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
   -I"$ROOT/core/include" -I"$ROOT/server/src" -I"$ROOT/third_party/luajit/src" \
   "$ROOT/core/src/math/trig.cpp" \
   "$ROOT/core/src/proto/messages.cpp" \
@@ -46,6 +68,11 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror \
   "$ROOT/server/src/main.cpp" \
   "$ROOT/third_party/luajit/src/libluajit.a" \
   -lm $LUA_EXTRA_LIBS \
-  -o "$OUT/dnp-server"
+  -o "$OUT/dnp-server.new"
+
+# ATOMIC, even into the default directory. `mv` replaces the directory entry
+# while a running process keeps the inode it already opened, so a server that
+# is mid-game survives a rebuild -- where writing in place corrupts it.
+mv -f "$OUT/dnp-server.new" "$OUT/dnp-server"
 
 echo "[build] $OUT/dnp-server"
