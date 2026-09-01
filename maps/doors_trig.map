@@ -64,10 +64,19 @@ body radius 0.3333 height 1.1667
 # What this map needs to behave. mapc copies each one next to the baked map and
 # the server loads them from there -- no --script arguments required.
 #
-# scripts/doom.lua is DELIBERATELY ABSENT. This map's doors are triggers, and
-# loading the Doom line-action library beside them would put two
-# implementations on the same hooks -- both dispatched, both complaining about
-# sides the other one owns. maps/doors.map is where doom.lua is under test.
+# scripts/doom.lua is DELIBERATELY ABSENT, and NOT because two scripts cannot
+# share a hook -- they can, and that is settled: the VM keeps a LIST of handlers
+# per hook and calls every one in load order, so doom.lua and triggers.lua would
+# both be dispatched to correctly.
+#
+# The reason is overlap in what they DO. doom.lua's on_attack blows up a barrel
+# on its own account, without consulting its line table at all, so a map loading
+# both would have two scripts deciding what a hit barrel means -- each setting
+# the animation, each clearing `solid`, each scheduling a despawn. Sharing a
+# hook is safe; agreeing to disagree about the same prop is not, and no engine
+# mechanism can settle that for a map author.
+#
+# maps/doors.map is where doom.lua is under test.
 #
 # The vocabulary must be declared BEFORE the runtime, which validates against
 # it, and the runtime before the table, which is loaded into it. Out of order

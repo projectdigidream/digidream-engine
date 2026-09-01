@@ -15,6 +15,9 @@ do
   -- end props
   -- monsters
   local M = {
+    {name="imp", x=-499, y=28, z=240},
+    {name="imp", x=-858, y=412, z=0},
+    {name="imp", x=-454, y=-53, z=144},
   }
   -- end monsters
   if enemies ~= nil and #M > 0 then enemies.place(M) end

@@ -1,6 +1,7 @@
 script scripts/doom.lua
 script scripts/enemies.lua
 script mylevel.lua
+script scripts/debug_panel.lua
 body radius 0.3333 height 1.1667
 sector floor 3 ceil 32 floortex ROCKFLOOR1 skirt 20
   vertex -4 -7 open tex ROCKWALL1
@@ -60,3 +61,4 @@ sector floor -3 ceil 55.63 skirt 2 floortex LAVA1
   vertex 25.7083 -5.4375 open
 end
 light -27.431375 -4.721373 8 color 255 230 200 radius 16 intensity 1.4
+spawn start 5.733199 -2.468786 1
