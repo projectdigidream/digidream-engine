@@ -271,6 +271,16 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
   }
 
   const run = (a, b) => {
+    // STOP THE SONG FIRST. This probe shares one synth with every check above
+    // it, and those load a Doom track and play() it -- so without this the
+    // measurement is taken over whatever the soundtrack happens to be doing,
+    // and `brightness` reads the track rather than the note under test.
+    //
+    // It passed for months because the residue was a handful of quiet FM tones.
+    // It stopped passing the moment the kit's cymbals became broadband noise,
+    // which lifted both windows equally and flattened the difference to
+    // 0.092 -> 0.094. The probe was always wrong; the noise made it visible.
+    synth.stop()
     synth.loadBank(probe(a, b))
     synth.programChange(0, 0)
     synth.noteOn(0, 60, 110)
