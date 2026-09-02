@@ -1342,7 +1342,10 @@ async function playMapMusic (hash, fadeMs = 0) {
     // Only the starting cue is chosen here. Anything that changes it later is
     // the map's decision, which reaches the client over the wire -- and when
     // that message exists its handler is one call to music.cue().
-    await music.cue('default', fadeMs)
+    // `immediate`: a map change is not a musical transition. The new map's
+    // track is a different piece with its own instruments, so it swaps rather
+    // than waiting for a bar that belongs to the song being left.
+    await music.cue('default', { fadeMs, at: 'immediate' })
   } catch (e) {
     // Not fatal, and said once. A game with no music is a game; a game that
     // fails to start because a track is missing is not.

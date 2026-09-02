@@ -250,7 +250,12 @@ export class Music {
    * here: the resolution from a NAME to a url stays on the client, where the
    * manifest already lives, so the wire only ever carries the name.
    */
-  async cue (name, fadeMs = 800) {
+  async cue (name, opts = {}) {
+    // `cue(name, 800)` still means a fade, because that is how it read before
+    // there was anywhere else to put the argument.
+    const { fadeMs = 800, at = 'nextBar' } =
+      typeof opts === 'number' ? { fadeMs: opts } : opts
+
     const url = this.cues?.[name]
     if (!url) {
       // Named, not silent. A cue that does not exist is a map asking for music
@@ -258,9 +263,43 @@ export class Music {
       this.log(`[music] no cue '${name}' in this map (have: ${Object.keys(this.cues ?? {}).join(', ') || 'none'})`)
       return
     }
+    if (this.current === url) return
+
+    // ON A MUSICAL BOUNDARY, not the instant the game asked.
+    //
+    // A fight starting mid-bar and the music changing mid-bar are two different
+    // things: the first is gameplay, the second is a mistake you can hear. The
+    // synth can hold a transition until the next bar or the end of the loop
+    // (MusicDirector::transition), so a cue change is QUEUED and the engine
+    // decides when it lands.
+    //
+    // Only for siblings. queueTrackFromBuffer takes the incoming SONG and keeps
+    // the loaded content, exactly as the crossfade does, so it carries the same
+    // constraint: cues must be slices of one parent. A map change is not, and
+    // falls through to the swap below.
+    if (this.sameContent && this.ready && at !== 'immediate') {
+      const bytes = await fetch(url).then((r) => r.arrayBuffer())
+      this.node.port.postMessage(
+        { type: 'queueTrack', bytes, mode: at === 'loopEnd' ? 'loopEnd' : 'nextBar', fadeMs },
+        [bytes])
+      this.current = url
+      this.log(`[music] queued ${name} for the ${at === 'loopEnd' ? 'end of the loop' : 'next bar'}`)
+      return
+    }
+
     await this.play(url, { loop: true, fadeMs, crossfade: this.sameContent })
     // From here on, the cues in this table are siblings of what is playing.
     this.sameContent = true
+  }
+
+  /**
+   * Drop a queued cue change that has not landed yet.
+   *
+   * The fight ended before the bar did, and the music should stay where it is
+   * rather than switching to a cue nothing is waiting for any more.
+   */
+  cancelQueuedCue () {
+    this.node?.port.postMessage({ type: 'cancelQueued' })
   }
 
   /** Master volume, 0..1000 (the synth works in milli). */

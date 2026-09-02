@@ -162,6 +162,71 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
         `crossfading a differently-baked track warns (${xf.warnings?.length ?? 0} warnings)`)
 }
 
+// --- CUES: slices of one parent, and boundary-timed switching ----------------
+//
+// This is the arrangement the adaptive-music design rests on, and it is worth
+// pinning because it is invisible from the outside: two cues that LOOK
+// interchangeable behave completely differently depending on how they were
+// baked.
+//
+//   slices of one parent -> crossfade cleanly, sharing one loaded bank
+//   independently baked   -> the incoming score plays through the OUTGOING
+//                            track's instruments, with a warning and no error
+//
+// The queue is the other half: a fight starting mid-bar is gameplay, and the
+// music changing mid-bar is a mistake you can hear, so a cue change is held
+// until the next bar.
+{
+  const parent = readFileSync(TRACK)
+  const cut = (a, b, name) => {
+    const ptr = synth.songBufferPrepare(parent.length)
+    mod.HEAPU8.set(parent, ptr)
+    const rep = JSON.parse(synth.cutTrackFromBuffer(a, b, name))
+    if (!rep.ok) return null
+    const size = synth.bakedTrackSize()
+    const out = Buffer.alloc(size)
+    out.set(new Uint8Array(mod.HEAPU8.buffer, synth.bakedTrackPtr(), size))
+    return out
+  }
+
+  const calm = cut(0, 3840, 'calm')
+  const fight = cut(3840, 7680, 'fight')
+  check(calm !== null && fight !== null, 'two cues cut from one parent track')
+
+  if (calm && fight) {
+    const put = (buf) => {
+      const ptr = synth.songBufferPrepare(buf.length)
+      mod.HEAPU8.set(buf, ptr)
+    }
+    put(calm)
+    JSON.parse(synth.loadTrackFromBuffer())
+    synth.setLoop(true)
+    synth.play()
+    for (let i = 0; i < 200; i++) synth.render(128)
+
+    put(fight)
+    const sib = JSON.parse(synth.crossfadeTrackFromBuffer(600))
+    check(sib.ok === true && (sib.warnings ?? []).length === 0,
+          `siblings crossfade with no content warning (${(sib.warnings ?? []).length})`)
+
+    // THE CONTROL. A track baked separately is not a sibling, and the warning
+    // is the only thing that says so -- which is why a map change swaps.
+    const stranger = readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'music', 'd_stalks.mstk'))
+    put(stranger)
+    const alien = JSON.parse(synth.crossfadeTrackFromBuffer(600))
+    check((alien.warnings ?? []).some((w) => /different content/.test(w)),
+          'CONTROL: a separately baked track still warns')
+
+    // And a cue change can be held for the next bar rather than cutting in.
+    put(fight)
+    const q = JSON.parse(synth.queueTrackFromBuffer(1, 600))
+    check(q.ok === true && synth.queued() === true,
+          `a cue change queues for the next bar (${synth.msToBoundary()} ms away)`)
+    synth.cancelQueued()
+    check(synth.queued() === false, 'and can be cancelled before it lands')
+  }
+}
+
 // --- the map-to-track manifest -----------------------------------------------
 //
 // The client looks a track up by the map's CONTENT HASH, which is the only
