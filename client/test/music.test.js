@@ -283,16 +283,40 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
   }
 
   const brightAtEnd = run(0, 8)
-  check(brightAtEnd.early > brightAtEnd.late * 2,
+  const brightAtStart = run(8, 0)
+
+  // ASSERTED AS A DIRECTION, NOT AS A RATIO, and the history is the reason.
+  //
+  // This used to demand `early > late * 2`. The factor was never the property
+  // under test -- it was one engine's contrast, written down. When the synth
+  // moved to Q8.24 envelopes with per-sample wavetable-morph interpolation the
+  // same patch measured 0.091 -> 0.065, still decaying but only by 1.4x, and
+  // the test failed while the thing it exists to catch was fine.
+  //
+  // The claim is about WHICH END OF THE TABLE THE ENVELOPE STARTS AT, so the
+  // sharp form of it is that the two patches disagree: bright-at-end must fall
+  // over the note and bright-at-start must rise. That is two-sided, needs no
+  // magnitude, and would still fail the inversion this was written for -- which
+  // a smaller ratio would also have passed. Weaker in arithmetic, stronger in
+  // kind.
+  check(brightAtEnd.early > brightAtEnd.late,
         `endIndex is where a decaying wtPosEnv STARTS ` +
         `(${brightAtEnd.early.toFixed(3)} -> ${brightAtEnd.late.toFixed(3)})`)
 
   // THE CONTROL. The same patch the other way round must invert, or the
   // measurement is not reading the morph at all.
-  const brightAtStart = run(8, 0)
   check(brightAtStart.late > brightAtStart.early,
         `CONTROL: swapping them inverts it ` +
         `(${brightAtStart.early.toFixed(3)} -> ${brightAtStart.late.toFixed(3)})`)
+
+  // AND THEY MUST DISAGREE WITH EACH OTHER. Two runs that both drifted the
+  // same way would satisfy the pair above if the probe were reading something
+  // other than the morph -- amplitude, say. This is what makes the direction
+  // claim mean the morph.
+  const fell = brightAtEnd.early - brightAtEnd.late
+  const rose = brightAtStart.late - brightAtStart.early
+  check(fell > 0 && rose > 0,
+        `the two directions oppose (fell ${fell.toFixed(3)}, rose ${rose.toFixed(3)})`)
 }
 
 // --- the map-to-track manifest -----------------------------------------------
