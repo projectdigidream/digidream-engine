@@ -186,6 +186,15 @@ export class Music {
     // songs never overlap, which is the price of them being unrelated pieces
     // of music.
     //
+    // HOW TO AUTHOR CUES THAT CROSSFADE: cut them from one parent track.
+    // midisynth's cut_track (and the cutter tool) slices a .mstk into regions
+    // and gives each the parent's embedded content VERBATIM -- "every slice of
+    // one parent therefore shares the same content hash, and a game can
+    // crossfade freely between them over one loaded bank/kit"
+    // (midisynth/src/track/track.cpp). Baking several cues independently from
+    // separate MIDI files does NOT give you that, and the mismatch is a warning
+    // rather than an error.
+    //
     // So a map change swaps and a cue change within one map crossfades. That is
     // a property of how the tracks were BAKED, not a preference, which is why
     // cue() decides it rather than the caller.
