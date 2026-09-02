@@ -227,6 +227,74 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
   }
 }
 
+// --- WHICH WAY THE WAVETABLE MORPH RUNS --------------------------------------
+//
+// tools/wad/genmidi_bank.js builds every patch in the Doom bank on one
+// assumption: with a DECAYING wtPosEnv (attack 0, sustain 0) the envelope
+// starts at the LAST frame, so the bright value belongs in `endIndex`.
+//
+// Getting that backwards makes all 175 instruments attack dull and bloom
+// brighter as they fade -- the opposite of an FM instrument, on every note of
+// the soundtrack, with no error anywhere. It shipped that way once. The doc
+// warns about it (PATCH_FORMAT.md 4.8, "inverted: put the bright value where
+// the envelope starts") and it was still read the wrong way, which is why this
+// is a measurement rather than a comment.
+//
+// Amplitude is held CONSTANT here (attack 0, sustain 1), so the only thing that
+// can change the waveform over time is the morph.
+{
+  const probe = (startIndex, endIndex) => JSON.stringify({
+    version: 1,
+    programs: { 0: { name: 'probe', layers: [{
+      wavetable: { generator: 'fm2op', frameCount: 8, params: { ratio: 3, startIndex, endIndex } },
+      mixGain: 0.8,
+      ampEnv: { attack: 0, decay: 0, sustain: 1.0, release: 50 },
+      wtPosEnv: { attack: 0, decay: 200, sustain: 0, release: 0, depth: 1.0, decayCurve: 'exp' }
+    }] } }
+  })
+
+  // Crude but sufficient: a harmonically rich waveform changes fast between
+  // adjacent samples, a sine barely does. Normalised by amplitude so it
+  // measures timbre and not loudness.
+  const brightness = (blocks) => {
+    let dsum = 0, asum = 0, prev = 0
+    for (let b = 0; b < blocks; b++) {
+      const p = synth.render(128)
+      const h = mod.HEAP16
+      const base = p >> 1
+      for (let i = 0; i < 128; i++) {
+        const v = h[base + 2 * i]
+        dsum += Math.abs(v - prev); asum += Math.abs(v); prev = v
+      }
+    }
+    return asum > 0 ? dsum / asum : 0
+  }
+
+  const run = (a, b) => {
+    synth.loadBank(probe(a, b))
+    synth.programChange(0, 0)
+    synth.noteOn(0, 60, 110)
+    const early = brightness(20)   // ~50 ms in, the morph has barely moved
+    brightness(80)                 // let the 200 ms morph finish
+    const late = brightness(60)
+    synth.noteOff(0, 60)
+    for (let i = 0; i < 120; i++) synth.render(128)
+    return { early, late }
+  }
+
+  const brightAtEnd = run(0, 8)
+  check(brightAtEnd.early > brightAtEnd.late * 2,
+        `endIndex is where a decaying wtPosEnv STARTS ` +
+        `(${brightAtEnd.early.toFixed(3)} -> ${brightAtEnd.late.toFixed(3)})`)
+
+  // THE CONTROL. The same patch the other way round must invert, or the
+  // measurement is not reading the morph at all.
+  const brightAtStart = run(8, 0)
+  check(brightAtStart.late > brightAtStart.early,
+        `CONTROL: swapping them inverts it ` +
+        `(${brightAtStart.early.toFixed(3)} -> ${brightAtStart.late.toFixed(3)})`)
+}
+
 // --- the map-to-track manifest -----------------------------------------------
 //
 // The client looks a track up by the map's CONTENT HASH, which is the only
