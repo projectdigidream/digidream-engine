@@ -1,0 +1,78 @@
+<meta charset="utf-8">
+<title>music probe</title>
+<!--
+  THE SOUNDTRACK, WITH NO GAME UNDER IT.
+
+  WHY THIS EXISTS. A background noise was reported in the browser that is not in
+  an offline render of the same track. Everything that could differ between the
+  two has been measured and does not: the browser is served the same synth from
+  midisynth/tool, a baked .mstk carries its own instruments (so the client's
+  stock-bank fetch cannot change what is heard), and rendering d_runnin through
+  the wasm build in Node is BYTE-IDENTICAL to the native render -- same SHA-256.
+  The samples leaving the synth in the browser are therefore the samples in the
+  clean WAV, and the noise is added after them.
+
+  What that leaves is the audio thread: an AudioWorklet that misses its 2.67 ms
+  deadline glitches, and NOTHING IN THE SYNTH CAN SEE IT. `steals`, `drops` and
+  `queueDepth` are the synth's own counters and were all zero while the noise
+  was audible, which is not evidence of health -- it is evidence that the fault
+  is below where those counters look.
+
+  So this page is the control. It runs the identical audio path -- same Music
+  class, same worklet, same track -- with no renderer, no wasm sim, no network
+  and no mesh building competing for the machine. The report was "especially
+  obvious in the beginning", which is exactly when the main thread is loading a
+  map, so:
+
+    grainy here too  -> the browser's synth path, independent of the game
+    clean here       -> contention with the game, and the fix is scheduling
+
+  Kept in the tree rather than thrown away because a "can you still hear it with
+  nothing else running" question recurs, and rebuilding the control each time is
+  how a control ends up subtly different from the thing it is controlling.
+-->
+<style>
+  body { background:#111; color:#ddd; font:13px/1.5 ui-monospace,Menlo,monospace; padding:2rem }
+  button { font:inherit; padding:.5rem 1rem; margin-right:.5rem }
+  pre { color:#8f8 }
+</style>
+<h3>music probe — the soundtrack with no game under it</h3>
+<p>
+  <button id="go">play</button>
+  <button id="stop">stop</button>
+  <select id="track"></select>
+</p>
+<pre id="out">idle</pre>
+<script type="module">
+  import { Music } from './src/audio/music.js'
+
+  const out = document.getElementById('out')
+  const sel = document.getElementById('track')
+  const log = (m) => { out.textContent = m + '\n' + out.textContent.slice(0, 2000) }
+  const music = new Music({ log })
+
+  // The manifest is keyed by map hash, so its VALUES are the track list. Read
+  // from it rather than hardcoding a filename: a rebake renames nothing but a
+  // module with a different soundtrack would leave a hardcoded name dangling.
+  const index = await fetch('/music/index.json').then((r) => r.json()).catch(() => ({}))
+  const files = [...new Set(Object.values(index).flatMap((cues) => Object.values(cues)))].sort()
+  for (const f of files) sel.add(new Option(f, `/music/${f}`))
+  if (!files.length) log('no /music/index.json -- run tools/wad/music_all.js')
+
+  document.getElementById('go').onclick = async () => {
+    // A gesture is required before a context may start, and this click is it.
+    await music.start()
+    await music.play(sel.value, { loop: true, fadeMs: 0 })
+    log(`playing ${sel.value}`)
+  }
+  document.getElementById('stop').onclick = () => music.stop?.()
+
+  // The synth's own numbers, at the rate it reports them. They cannot see an
+  // audio-thread stall -- that is the point of this page -- but a rate that is
+  // not 48000, or a climbing steal count, would mean the fault is one of the
+  // things already ruled out and the ruling was wrong.
+  setInterval(() => {
+    const h = music.health?.()
+    if (h) out.textContent = h + '\n' + out.textContent.split('\n').slice(1).join('\n')
+  }, 500)
+</script>

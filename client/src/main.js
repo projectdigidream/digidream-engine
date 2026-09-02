@@ -1273,8 +1273,11 @@ function frame (now) {
       ? `\nothers ${others.count}   exact ${st.exactMatches}   misp ${st.mispredictions}` +
         `   starved ${st.starvedDivergences}   resync ${st.hardResyncs}`
       : '')
-}
+  // Inside frame(), where musicLine is. This sat after the closing brace,
+  // which put it at module scope reading a const declared in the function --
+  // "musicLine is not defined", on the first frame.
   if (musicLine) hud.textContent += `\nmusic ${musicLine}`
+}
 
 // The live floor/ceiling of a sector, read from the wasm store that sector
 // motion writes into. Recomputing it in JS would be a second implementation of
