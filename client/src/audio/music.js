@@ -28,6 +28,10 @@
 
 const READY_TIMEOUT_MS = 10000
 
+// What midisynth renders at, and cannot be told otherwise: SAMPLE_RATE in
+// midisynth/src/synth/config.h is a compile-time constant.
+const SYNTH_SAMPLE_RATE = 48000
+
 export class Music {
   /**
    * @param baseUrl     where synth-worklet.js and its dist/ live
@@ -108,7 +112,31 @@ export class Music {
     if (this.started) return
     this.started = true
 
-    this.ctx = new (window.AudioContext ?? window.webkitAudioContext)()
+    // 48 kHz, ASKED FOR EXPLICITLY.
+    //
+    // The engine's sample rate is a compile-time constant (midisynth
+    // src/synth/config.h, SAMPLE_RATE = 48000) and synth-worklet.js never reads
+    // the worklet's own `sampleRate` -- it renders 48 kHz samples and writes
+    // them straight into the output buffer. So whatever rate the context runs
+    // at is the rate they are PLAYED at: on a 44.1 kHz device, every note comes
+    // out about 8.8% flat and slow, with nothing reporting anything.
+    //
+    // Asking is a hint, not a guarantee -- a browser may hand back the device
+    // rate anyway -- so the result is checked and said out loud rather than
+    // assumed.
+    const Ctor = window.AudioContext ?? window.webkitAudioContext
+    try {
+      this.ctx = new Ctor({ sampleRate: SYNTH_SAMPLE_RATE })
+    } catch {
+      // Some implementations reject the option outright rather than ignoring it.
+      this.ctx = new Ctor()
+    }
+    if (this.ctx.sampleRate !== SYNTH_SAMPLE_RATE) {
+      this.log(`[music] WARNING: the audio context runs at ${this.ctx.sampleRate} Hz but the ` +
+               `synth renders ${SYNTH_SAMPLE_RATE} Hz and does not resample -- ` +
+               `pitch and tempo will be off by ` +
+               `${((SYNTH_SAMPLE_RATE / this.ctx.sampleRate - 1) * 100).toFixed(1)}%`)
+    }
     // Even after a gesture a context can come up suspended; resuming is
     // idempotent and costs nothing when it is already running.
     if (this.ctx.state === 'suspended') await this.ctx.resume()
@@ -300,6 +328,21 @@ export class Music {
    */
   cancelQueuedCue () {
     this.node?.port.postMessage({ type: 'cancelQueued' })
+  }
+
+  /**
+   * One line of synth health, or null before it has spoken.
+   *
+   * Exists because "there is a noise" and "the synth is struggling" are
+   * indistinguishable by ear, and the status feed already carries the numbers
+   * that tell them apart: voices, notes it had to steal, notes it had to drop,
+   * and how deep its command queue is running.
+   */
+  health () {
+    const st = this.lastStatus
+    if (!st) return null
+    return `${this.ctx?.sampleRate ?? '?'}Hz  voices ${st.activeVoices}/${st.peakVoices}  ` +
+           `steals ${st.steals}  drops ${st.drops}  queue ${st.queueDepth}`
   }
 
   /** Master volume, 0..1000 (the synth works in milli). */

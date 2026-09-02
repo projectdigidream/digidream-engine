@@ -1232,6 +1232,12 @@ function frame (now) {
   // show.
   if (LIVE) showHealth(latestHp)
 
+  // The synth's own numbers, when it has any. A background noise and a synth
+  // that is struggling sound alike; steals, drops and queue depth are what
+  // separate them, and the sample rate is there because the engine renders at a
+  // fixed 48 kHz and does not resample.
+  const musicLine = LIVE ? music.health() : null
+
   const st = predictor?.stats
   hud.textContent =
     `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps\n` +
@@ -1268,6 +1274,7 @@ function frame (now) {
         `   starved ${st.starvedDivergences}   resync ${st.hardResyncs}`
       : '')
 }
+  if (musicLine) hud.textContent += `\nmusic ${musicLine}`
 
 // The live floor/ceiling of a sector, read from the wasm store that sector
 // motion writes into. Recomputing it in JS would be a second implementation of
