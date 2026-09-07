@@ -11,6 +11,7 @@
 //
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { dirname, join, normalize, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -43,7 +44,29 @@ const TYPES = {
 const MODULES = []
 for (let i = 2; i < process.argv.length; i++) {
   if (process.argv[i] === '--module' && process.argv[i + 1]) {
-    MODULES.push(join(ROOT, 'modules', process.argv[++i]))
+    const given = process.argv[++i]
+    // BOTH `doom2` AND `modules/doom2`, because the SERVER accepts both --
+    // server/src/main.cpp says so in as many words -- and these two processes
+    // are handed the same flag by the same run_stack.sh invocation. One
+    // argument meaning two different things to two programs in one stack is the
+    // "two programs, one number" trap this project keeps paying for.
+    //
+    // The path form is not a mistake anybody has to make deliberately: shell
+    // completion produces it.
+    const candidates = [join(ROOT, 'modules', given), join(ROOT, given)]
+    const root = candidates.find((p) => existsSync(p))
+    if (!root) {
+      // LOUDLY, AND FATAL. `join(ROOT, 'modules', 'modules/doom2')` is a
+      // perfectly good path that simply does not exist, and serving from it
+      // fails one file at a time: every texture and every track 404s, the game
+      // still runs, and it looks like the renderer lost its textures. That cost
+      // a debugging session. A module root that is not there is a startup
+      // error, not two hundred quiet 404s.
+      console.error(`[web] no such module: ${given}`)
+      console.error(`[web]   looked in ${candidates.join(' and ')}`)
+      process.exit(2)
+    }
+    MODULES.push(root)
   }
 }
 if (MODULES.length) console.error('[web] modules: ' + MODULES.join(', '))
