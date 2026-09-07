@@ -8,9 +8,14 @@
 // makes lighting look wrong everywhere at once -- the falloff curve, the
 // orientation term, and above all whether a lamp adds or multiplies.
 //
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   attenuation, lightAt, occlusionAlpha, MAX_ACTIVE_LIGHTS, FRAGMENT_SHADER
 } from '../src/render/lighting.js'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
 
 let checks = 0
 let fails = 0
@@ -190,6 +195,57 @@ console.log('\n--- the shader is the twin of the tested function ---')
         'and its occlusion test keeps the same gap in front of the player')
   check(FRAGMENT_SHADER.includes('smoothstep(0.0, occludeRadius'),
         'and the same soft edge')
+}
+
+console.log('\n--- the shader and the material it is used with agree ---')
+{
+  // A TWIN CHECK, and it is here because the drift actually happened.
+  //
+  // The occlusion window used to be resolved by alpha blending, so the map
+  // material was `transparent: true`. It was changed to a dither and a discard
+  // -- which is the whole point, a transparent material sorts per object and
+  // gets no early-z -- and the flag was left behind. For months the map paid
+  // the cost the dither exists to avoid, in silence, and README claimed the
+  // opposite.
+  //
+  // GLSL is not executed here (see the top of this file), so this cannot check
+  // what the shader DOES. It can check that the two files still tell the same
+  // story, which is the failure that occurred.
+  // Only the MAP material. scene.js also builds a debug arrow that is properly
+  // transparent, and a check that fired on that would be read as a false alarm
+  // and then ignored. Comments are stripped first for the same reason
+  // check_render_isolation.sh strips them: a guard that trips on its own
+  // explanation is a guard somebody eventually deletes.
+  const sceneSrc = readFileSync(join(HERE, '..', 'src', 'render', 'scene.js'), 'utf8')
+    .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+  const mapMaterial = sceneSrc.slice(sceneSrc.indexOf('new THREE.ShaderMaterial('),
+                                     sceneSrc.indexOf('#build'))
+
+  // Does the shader ever emit a fragment whose alpha is not 1?
+  const writes = [...FRAGMENT_SHADER.matchAll(/gl_FragColor\s*=\s*([^;]+);/g)].map((m) => m[1])
+  const needsBlending = (src) =>
+    [...src.matchAll(/gl_FragColor\s*=\s*([^;]+);/g)]
+      .map((m) => m[1]).some((w) => !/,\s*1\.0\s*\)/.test(w))
+
+  check(writes.length > 0, `the fragment shader writes gl_FragColor (${writes.length} site)`)
+  check(!needsBlending(FRAGMENT_SHADER),
+        'every write ends at alpha 1.0, so the material needs no blending')
+  check(FRAGMENT_SHADER.includes('discard'),
+        'because the occlusion window is resolved by discard, not by alpha')
+  check(mapMaterial.length > 0 && !/transparent:\s*true/.test(mapMaterial),
+        'and the map material is not marked transparent')
+
+  // CONTROL: the drift this exists for. The map material as it used to be must
+  // be caught -- otherwise the assertion above is satisfied by a slice that
+  // failed to find the material at all.
+  check(/transparent:\s*true/.test('side: THREE.FrontSide,\n transparent: true,\n depthWrite: true'),
+        'CONTROL: the old map material would be caught')
+
+  // CONTROL: a shader that really does need blending must be classified as
+  // needing it. Without this, `needsBlending` could be a function that returns
+  // false unconditionally and every assertion above would still pass.
+  check(needsBlending('void main(){ gl_FragColor = vec4(rgb, alpha); }'),
+        'CONTROL: a shader writing a real alpha is classified as needing blending')
 }
 
 console.log(`\nlighting: ${checks} checks, ${fails} failures`)

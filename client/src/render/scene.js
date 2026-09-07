@@ -60,6 +60,9 @@ export class MapView {
     this.staticMeshes = []
     this.dynamicMeshes = []
     this.dynamic = new Set()
+    this.dynamicOrder = []
+    // How many times geometry has been derived, for the HUD. See #build.
+    this.builds = 0
     this.rebuildStatic()
   }
 
@@ -80,12 +83,19 @@ export class MapView {
         vertexShader: VERTEX_SHADER,
         fragmentShader: FRAGMENT_SHADER,
         side: THREE.FrontSide,
-        // Transparent so the occlusion window can fade, but depth is still
-        // WRITTEN: everything outside the window is at alpha 1, where blending is
-        // identical to opaque. Turning depth writing off -- the usual reflex for
-        // a transparent material -- would make the entire map sort per object
-        // instead of per fragment, and a map is a handful of merged meshes.
-        transparent: true,
+        // OPAQUE, AND THAT IS NOT AN OVERSIGHT.
+        //
+        // This material was `transparent: true` for as long as the occlusion
+        // window was resolved by blending. It is not any more: lighting.js
+        // resolves it with a 4x4 ordered dither and a `discard`, and its only
+        // write is `gl_FragColor = vec4(texel.rgb * lit, 1.0)` -- literal alpha,
+        // every fragment, no exceptions. The flag outlived the blending by
+        // several months and cost the whole map early-z plus a per-object depth
+        // sort every frame, which is exactly what the dither was introduced to
+        // avoid. README says the map keeps early-z; this is what makes that true.
+        //
+        // depthWrite stays explicit because it is load-bearing and the usual
+        // reflex on a material like this is to turn it off.
         depthWrite: true
     })
   }
@@ -208,11 +218,17 @@ export class MapView {
         if (nb >= 0) this.dynamic.add(nb)
       }
     }
+    this.dynamicOrder = [...this.dynamic].sort((a, b) => a - b)
     this.rebuildStatic()
     this.rebuildDynamic()
   }
 
   #build (indices, into) {
+    // Counted, because "the renderer rebuilds too often" is a claim and a claim
+    // wants a number. The HUD divides this by the sampling window to show
+    // rebuilds per second: standing still in a level whose doors have all been
+    // opened should read 0, and read 60 the moment the guard is removed.
+    this.builds++
     for (const m of into) { this.root.remove(m); m.geometry.dispose() }
     into.length = 0
     const surfaces = []
@@ -231,10 +247,12 @@ export class MapView {
     this.#build(idx, this.staticMeshes)
   }
 
-  /** Per-frame, and only for the sectors that actually move. */
+  /** Only for the sectors that actually move, and only on frames they moved. */
   rebuildDynamic () {
     if (this.dynamic.size === 0) return
-    this.#build([...this.dynamic].sort((a, b) => a - b), this.dynamicMeshes)
+    // The order is fixed in setDynamicSectors, the one place `dynamic` changes,
+    // rather than re-spread and re-sorted here on every call.
+    this.#build(this.dynamicOrder, this.dynamicMeshes)
   }
 
   get meshes () { return [...this.staticMeshes, ...this.dynamicMeshes] }

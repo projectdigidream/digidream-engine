@@ -261,5 +261,62 @@ check(((left - 1) + (right - 1)) % 8 === 0,
         `and visits every one of its frames (${seen.size}/${walk.frames.length})`)
 }
 
+// --- the registry forgets what has left the scene ---------------------------
+//
+// `prune` was written with the registry and then never called from anywhere, so
+// `animated` grew for the whole session: every barrel that had ever exploded
+// still in the map, still being stepped over sixty times a second to be
+// skipped, and its mesh and material never collectable. The frame loop calls
+// this once a second now.
+{
+  const THREE = {
+    PlaneGeometry: class { constructor (w, h) { this.w = w; this.h = h } },
+    MeshBasicMaterial: class {
+      constructor (o) { Object.assign(this, o); this.color = { setHex () {} } }
+    },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry
+        this.material = material
+        this.userData = {}
+        this.parent = {}          // pretend it is in the scene
+      }
+    },
+    DoubleSide: 2
+  }
+  const catalogue = parseProps(`
+prop 10 barrel radius 0.2 height 0.9 solid
+sprite 10 size 0.9 billboard state 0 fps 0 frames IDLE
+`)
+  const textures = new Map([['IDLE', 'tex:idle']])
+
+  const spawnAndKill = (reg, n) => {
+    const live = []
+    for (let i = 0; i < n; i++) {
+      const mesh = reg.make(10)
+      // What EntityView.#remove leaves behind: out of the scene, parent null.
+      if (i % 2 === 0) mesh.parent = null
+      else live.push(mesh)
+    }
+    return live
+  }
+
+  const reg = new PropRegistry({ THREE, textures, catalogue })
+  const live = spawnAndKill(reg, 500)
+  const before = reg.animated.size
+  reg.prune()
+  check(before === 500 && reg.animated.size === live.length,
+        `500 spawned, 250 destroyed: ${before} tracked, ${reg.animated.size} after prune`)
+
+  // CONTROL: the leak itself. Without the call the registry keeps all 500 --
+  // which is what it did in every session until the frame loop started calling
+  // it. Without this control the assertion above passes for a registry that
+  // never tracked anything in the first place.
+  const leak = new PropRegistry({ THREE, textures, catalogue })
+  spawnAndKill(leak, 500)
+  check(leak.animated.size === 500,
+        `CONTROL: never pruned, the registry still holds all ${leak.animated.size}`)
+}
+
 console.log(`\nprops: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

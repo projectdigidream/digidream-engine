@@ -163,6 +163,14 @@ export class EntityView {
     if (!ent) return
     this.scene.remove(ent.mesh)
     ent.mesh.geometry?.dispose?.()
+    // The MATERIAL too -- one is allocated per entity, so leaving them behind
+    // leaks a GPU program slot per corpse over a long session.
+    //
+    // NOT THE TEXTURE. `material.map` is shared with every other prop of the
+    // same kind and with the preloaded frame set, so disposing it here would
+    // blank every barrel in the map the instant one of them was destroyed --
+    // which reads as a texture-loading bug and would be hunted as one.
+    ent.mesh.material?.dispose?.()
     this.entities.delete(index)
   }
 

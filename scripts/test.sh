@@ -282,6 +282,11 @@ else
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | tail -2
+  # What the renderer does PER FRAME, in counts rather than milliseconds -- a
+  # count is the same on every machine and a millisecond is whatever the laptop
+  # was doing at the time. Guards the dirty check that stops the map being
+  # re-derived sixty times a second once a level's first door has opened.
+  node client/test/renderbudget.test.js | tail -2
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.

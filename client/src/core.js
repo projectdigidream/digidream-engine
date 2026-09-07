@@ -200,6 +200,8 @@ export class WasmWorld {
   constructor (core, ptr) {
     this.core = core
     this.ptr = ptr
+    // name -> wire id, resolved once. See paramId.
+    this.paramIds = new Map()
   }
 
   destroy () { this.core.M._dnp_world_destroy(this.ptr); this.ptr = 0 }
@@ -292,12 +294,29 @@ export class WasmWorld {
    * happened the first time the swing collider was drawn, using ids five short.
    */
   paramId (name) {
+    // MEMOISED, AND THAT IS NOT THE MISTAKE THE COMMENT ABOVE WARNS ABOUT.
+    //
+    // The warning is against a client HARDCODING these numbers, because the
+    // table then exists in two programs and appending a MoveParams field shifts
+    // every id after it. This asks the engine exactly once per name and keeps
+    // the answer, which cannot go stale: the id is a property of the compiled
+    // binary, and the binary does not change while the page is loaded. A new
+    // wasm module means a new Core, which means a new cache.
+    //
+    // Worth doing because the callers are per-frame: readSwingShape resolves
+    // seven names every frame, and each miss was a TextEncoder, a _malloc, a
+    // heap write and a _free. Note this caches the ID only -- the VALUES behind
+    // these ids are read fresh every frame on purpose (see swing.js), because
+    // that is what makes the debug panel's sliders do anything.
+    let id = this.paramIds.get(name)
+    if (id !== undefined) return id
     const bytes = new TextEncoder().encode(name)
     const ptr = this.core.M._malloc(bytes.length + 1)
     this.core.M.HEAPU8.set(bytes, ptr)
     this.core.M.HEAPU8[ptr + bytes.length] = 0
-    const id = this.core.M._dnp_param_id_by_name(ptr)
+    id = this.core.M._dnp_param_id_by_name(ptr)
     this.core.M._free(ptr)
+    this.paramIds.set(name, id)
     return id
   }
 

@@ -16,6 +16,7 @@
 import * as THREE from 'three'
 import { Core } from './core.js'
 import { readMap, fxToFloat } from './mapdata.js'
+import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
 import {
   MapView, makeCamera, resizeCamera, distanceFor, makeAgentMesh, PROJECTIONS,
@@ -973,13 +974,39 @@ let ticks = 0
 let frames = 0
 let fpsAt = last
 let fps = 0
+// Geometry rebuilds per second, sampled over the same window as fps.
+//
+// THE NUMBER THAT MAKES THE GUARD VISIBLE. A rebuild is the expensive thing the
+// renderer does -- derive surfaces, merge by texture, allocate attribute buffers,
+// upload them -- and the only honest way to show it is not being done needlessly
+// is a counter that reads 0 while nothing moves. Standing still in a level whose
+// doors have all been opened reads 0; remove the guard in the frame loop and it
+// reads whatever the frame rate is.
+let buildsAt = 0
+let rebuildRate = 0
+// `?perf=1` -- one parseable line a second, so a run on real hardware can be
+// pasted into a commit message. There is no headless GPU here and a software
+// rasteriser measures a differently-shaped frame, so a recorded human run is the
+// honest baseline rather than a harness that would name culprits this machine
+// does not have.
+const PERF_LOG = params.get('perf') === '1'
+let perfAt = last
+let perfLogged = false
+let pruneAt = last
 let inputHistory = []
 let newestServerTick = 0
 
 // Where the frame's time actually goes, so this is measurable on real hardware
 // rather than argued about. Smoothed, because a single frame's numbers are
 // noise and the question is always "what is this costing on average".
-const cost = { sim: 0, mesh: 0, draw: 0 }
+//
+// `follow` IS SEPARATE FROM `mesh` ON PURPOSE. They used to be one figure
+// covering the wasm height reads and the geometry rebuild together. Now that
+// the rebuild is skipped on frames where nothing moved, a combined figure would
+// sit near zero and "costs nothing" would be indistinguishable from "did not
+// happen" -- and a measurement that names the mesh builder has to be measuring
+// the mesh builder. `follow` is the reads, which happen every frame regardless.
+const cost = { frame: 0, sim: 0, follow: 0, mesh: 0, draw: 0 }
 const blend = (k, v) => { cost[k] += (v - cost[k]) * 0.1 }
 
 // The newest health the server has told us. Kept here rather than read from a
@@ -1024,6 +1051,7 @@ function drainSnapshots () {
 
 function frame (now) {
   requestAnimationFrame(frame)
+  const tFrame = performance.now()
   const dt = Math.min(0.25, (now - last) / 1000)
   last = now
 
@@ -1071,25 +1099,32 @@ function frame (now) {
   if (acc > DT) acc = 0
   blend('sim', performance.now() - tSim)
 
+  let fresh = false
   if (LIVE) {
     // Motions declared since the last frame -- a door someone just opened.
-    let fresh = false
     while (motionSets.length) fresh = takeMotion(motionSets.shift()) || fresh
-    if (fresh) view.setDynamicSectors(movers)
     drainSnapshots()
   }
 
   // Moving sectors changed the geometry, so the mesh follows -- for the movers
   // and their neighbours only. See MapView.setDynamicSectors.
+  //
+  // THE HEIGHTS ARE COPIED BEFORE THE SPLIT IS RE-DECLARED, not after, and the
+  // order matters for one frame in the life of every door: a sector that
+  // becomes a mover is already in motion when we hear about it, so building it
+  // from the baked heights draws it shut for a frame before the next frame
+  // corrects it.
+  const tFollow = performance.now()
+  const moved = movers.length > 0 && followMovers(movers, liveSector, mapData.sectors)
+  blend('follow', performance.now() - tFollow)
+
+  // AND THE REBUILD IS GUARDED ON MOVEMENT, not on there being movers at all.
+  // `movers` never shrinks (takeMotion), so the unguarded form rebuilt every
+  // frame for the rest of the map once any door had opened once -- see
+  // mapmovers.js, which is where that reasoning lives.
   const tMesh = performance.now()
-  if (movers.length) {
-    for (const i of movers) {
-      const live = liveSector(i)
-      mapData.sectors[i].floorZ = live.floorZ
-      mapData.sectors[i].ceilZ = live.ceilZ
-    }
-    view.rebuildDynamic()
-  }
+  if (fresh) view.setDynamicSectors(movers)   // rebuilds both halves itself
+  else if (moved) view.rebuildDynamic()
   blend('mesh', performance.now() - tMesh)
 
   let a = world.readAgent(agent)
@@ -1161,8 +1196,27 @@ function frame (now) {
   // feet leaves the head behind the wall.
   view.setOcclusionTarget({ x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z })
   shadows.update(subject, groundUnder(subject.x, subject.z), view.lights, onGround)
+
+  // ANIMATED SURFACES ARE NEITHER A LIVE FEATURE NOR A PROP FEATURE, and used
+  // to be treated as both: this sat inside `if (props)` inside `if (LIVE)`, so
+  // nukage and lava never moved in solo mode at all, and stopped moving in a
+  // live game if the prop CATALOGUE failed to fetch -- wall textures freezing
+  // because a list of barrels did not arrive. Which picture is on a wall is
+  // nothing the simulation can observe, which is why it is out here.
+  //
+  // One clock for every animated surface: two nukage pools out of phase read as
+  // a bug nobody can name.
+  if (animator) animator.update(now / 1000)
+
   if (LIVE) {
     others.update(newestServerTick, acc / DT)
+    // performance.now(), NOT the frame's `now`. They are the same clock but not
+    // the same instant: `now` is when the frame began, and the tracers being
+    // faded here were spawned later in this same frame, from drainSnapshots.
+    // Fading them against the earlier stamp gave them a negative age, which
+    // used to mean "retire immediately". Out of `if (props)` for the same
+    // reason as the animator: a tracer is not a prop.
+    if (vfx) vfx.update(performance.now() / 1000)
     if (props) {
       // The animation's own clock, in seconds, shared by every prop of a kind.
       // Independent phases would make a row of keys shimmer in a way nobody
@@ -1178,15 +1232,6 @@ function frame (now) {
       // to show: the view depends on the angle between the thing's facing and
       // the direction to the viewer, and only the caller knows the second half.
       props.update(now / 1000, cam3.position)
-      // One clock for every animated surface: two nukage pools out of phase read
-      // as a bug nobody can name.
-      if (animator) animator.update(now / 1000)
-      // performance.now(), NOT the frame's `now`. They are the same clock but
-      // not the same instant: `now` is when the frame began, and the tracers
-      // being faded here were spawned later in this same frame, from
-      // drainSnapshots. Fading them against the earlier stamp gave them a
-      // negative age, which used to mean "retire immediately".
-      if (vfx) vfx.update(performance.now() / 1000)
       // Billboarding: yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.
       const bb = billboardYaw(yaw)
@@ -1221,7 +1266,22 @@ function frame (now) {
   blend('draw', performance.now() - tDraw)
 
   frames++
-  if (now - fpsAt > 500) { fps = Math.round(frames * 1000 / (now - fpsAt)); frames = 0; fpsAt = now }
+  if (now - fpsAt > 500) {
+    const span = now - fpsAt
+    fps = Math.round(frames * 1000 / span)
+    rebuildRate = Math.round((view.builds - buildsAt) * 1000 / span)
+    frames = 0; fpsAt = now; buildsAt = view.builds
+  }
+
+  // Forget the meshes of things that have died. `prune` existed from the start
+  // and nothing ever called it, so `animated` grew for the life of the session
+  // and the per-frame scan grew with it -- every corpse in the level still
+  // being stepped over, sixty times a second, to be skipped.
+  //
+  // Once a second rather than per removal, because per removal would mean the
+  // entity view knowing about the prop registry, and the two are deliberately
+  // strangers. The list is small and the scan is cheap; the leak was the growth.
+  if (props && now - pruneAt > 1000) { pruneAt = now; props.prune() }
 
   // What the frame actually costs, from the renderer rather than from a guess.
   const ri = renderer.info.render
@@ -1246,9 +1306,23 @@ function frame (now) {
     `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
     `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}\n` +
     `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
-    `meshes ${view.meshes.length}\n` +
-    `sim ${cost.sim.toFixed(2)}ms   mesh ${cost.mesh.toFixed(2)}ms   ` +
-    `draw ${cost.draw.toFixed(2)}ms\n` +
+    // Which half is which, and no allocation to read it: `view.meshes` builds a
+    // combined array, which is fine once on a map change and wasteful sixty
+    // times a second for a length.
+    `meshes ${view.staticMeshes.length}+${view.dynamicMeshes.length}\n` +
+    // Rebuilds per second, and the two counters that only ever go up if
+    // something is leaking. renderer.info.memory is the renderer's own count of
+    // what it is holding, not a guess from this side.
+    `rebuilds/s ${rebuildRate}   geo ${renderer.info.memory.geometries}   ` +
+    `tex ${renderer.info.memory.textures}` +
+    `${props ? `   props ${props.animated.size}` : ''}\n` +
+    // "of 16.7" is the budget the frame is being spent against, not a second
+    // measurement -- it is the display's interval, derived from fps. Blank
+    // until fps has a sample, because "of 1000.0" in the first half second
+    // reads as a number rather than as a missing one.
+    `frame ${cost.frame.toFixed(2)}ms${fps > 0 ? ` of ${(1000 / fps).toFixed(1)}` : ''}   ` +
+    `sim ${cost.sim.toFixed(2)}   follow ${cost.follow.toFixed(2)}   ` +
+    `mesh ${cost.mesh.toFixed(2)}   draw ${cost.draw.toFixed(2)}\n` +
     `vfx  seen ${vfxSeen}   live ${vfx ? vfx.live.length : 0}   ` +
     `pool ${vfx ? vfx.pool.length : 'NO VIEW'}\n` +
     // The swing as the renderer sees it. Three numbers rather than a
@@ -1277,6 +1351,36 @@ function frame (now) {
   // which put it at module scope reading a const declared in the function --
   // "musicLine is not defined", on the first frame.
   if (musicLine) hud.textContent += `\nmusic ${musicLine}`
+
+  // The capture. One line a second, comma-separated, headed once -- a minute of
+  // this from a real GPU is a baseline somebody can paste into a commit message
+  // and compare against, which "it felt slow" is not.
+  if (PERF_LOG && now - perfAt >= 1000) {
+    perfAt = now
+    if (!perfLogged) {
+      perfLogged = true
+      console.log('[perf] t,fps,frame,sim,follow,mesh,draw,rebuilds/s,draws,tris,geo,tex,props,ents')
+    }
+    console.log(`[perf] ${(now / 1000).toFixed(0)},${fps},${cost.frame.toFixed(2)},` +
+      `${cost.sim.toFixed(2)},${cost.follow.toFixed(2)},${cost.mesh.toFixed(2)},` +
+      `${cost.draw.toFixed(2)},${rebuildRate},${ri.calls},${ri.triangles},` +
+      `${renderer.info.memory.geometries},${renderer.info.memory.textures},` +
+      `${props ? props.animated.size : 0},${LIVE ? others.count : 0}`)
+  }
+
+  // THE WHOLE FRAME, which is the number the others are fractions of.
+  //
+  // sim + follow + mesh + draw do not add up to it and are not meant to: entity
+  // interpolation, billboarding, shadows, the camera and this HUD are all real
+  // frame cost and none of them is timed separately. The gap between this and
+  // the sum is where any unaccounted work is hiding, which is the point of
+  // showing a total rather than only the parts somebody thought to measure.
+  //
+  // Measured to the END of the frame, so the HUD is displaying the PREVIOUS
+  // frame's total -- the current one is not over yet. Against 16.7 ms at 60 Hz
+  // this says how much headroom there is: a frame doing 4 ms of work at 60 fps
+  // is waiting for the display, not struggling.
+  blend('frame', performance.now() - tFrame)
 }
 
 // The live floor/ceiling of a sector, read from the wasm store that sector
