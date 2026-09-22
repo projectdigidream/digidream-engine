@@ -178,6 +178,12 @@ node editor/test/assets.test.js | tail -2
 # tree lists that tree's maps and none of the real ones. The same resolver is
 # what a VS Code extension will read a dnp.engineRoot setting into.
 node editor/test/engineroot.test.js | tail -2
+# The VS Code extension, driven without VS Code: a stub host, and a REAL editor
+# server underneath. Double-click a map and the claim is that the tab would have
+# shown a live editor pointed at the right module -- read off the path -- and
+# that deactivate() takes the server down. It found a server bug on its first
+# run: IS_MAIN compared a URL to argv[1], and a symlinked script exited 0.
+node editor/test/extension.test.js | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run

@@ -23,9 +23,10 @@ import { createServer } from 'node:http'
 import { readFile, writeFile, stat, readdir, mkdir, unlink } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
 import { dirname, join, normalize, extname, relative, sep } from 'node:path'
+import { realpathSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { arch } from 'node:os'
-import { resolveEngineRoot } from './engineroot.js'
+import { resolveEngineRoot, MODULE_ID } from './engineroot.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -159,7 +160,7 @@ const MODULES = join(ROOT, 'modules')
  */
 function moduleRoot (id) {
   if (id === null || id === undefined || id === '') return ROOT
-  if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id)) return null
+  if (typeof id !== 'string' || !MODULE_ID.test(id)) return null
   if (id.length > 64) return null
   return join(MODULES, id)
 }
@@ -1075,8 +1076,18 @@ function textHash (s) {
 // editor/test/server.test.js can exercise underMaps() -- the one gate every
 // path from the page passes through -- without a port being bound by the act
 // of importing the module that defines it.
-const IS_MAIN = process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
+//
+// BY REAL PATH, not by URL. Node resolves symlinks when it loads an ES module,
+// so import.meta.url is the file's real location while process.argv[1] is
+// whatever was typed -- and if that was a symlink (a scratch engine whose
+// tools/ points at the real one, which is how the extension is tested) the
+// two differ, this is false, and the server imports itself, does nothing and
+// exits 0. Found by exactly that: "the editor server did not come up (it
+// exited with 0)", with no output, because nothing had gone wrong.
+const IS_MAIN = (() => {
+  if (!process.argv[1]) return false
+  try { return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) } catch { return false }
+})()
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
