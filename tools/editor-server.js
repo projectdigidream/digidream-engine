@@ -23,7 +23,8 @@ import { createServer } from 'node:http'
 import { readFile, writeFile, stat, readdir, mkdir, unlink } from 'node:fs/promises'
 import { spawn, execFile } from 'node:child_process'
 import { dirname, join, normalize, extname, relative, sep } from 'node:path'
-import { realpathSync } from 'node:fs'
+import { realpathSync, readFileSync } from 'node:fs'
+import { X509Certificate } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { arch } from 'node:os'
 import { resolveEngineRoot, MODULE_ID } from './engineroot.js'
@@ -400,9 +401,68 @@ function stopStack () {
   return true
 }
 
-function startStack (mapRelPath, module = null) {
+/**
+ * The dev certificate's state: 'missing', 'expired' or 'ok', and when it ends.
+ *
+ * WebTransport over a self-signed certificate works only while the certificate
+ * is currently valid and no more than fourteen days long -- which is why
+ * server/edge regenerates one every thirteen. scripts/test.sh checks expiry
+ * before it starts a stack; scripts/run_stack.sh, which Test uses, checks only
+ * that the file exists. So the editor started a stack the browser then refused
+ * with "WebTransport connection rejected", two days after the certificate had
+ * quietly run out.
+ *
+ * `now` is a parameter so the decision can be tested at any point on the
+ * calendar; the margin is an hour, because a certificate that expires
+ * mid-session is one the browser rejects at the next reconnect with the same
+ * screen and less to go on.
+ */
+const CERT = join(ROOT, 'server', 'edge', 'certs', 'cert.pem')
+const GEN_CERT = join(ROOT, 'server', 'edge', 'scripts', 'gen_dev_cert.js')
+const CERT_MARGIN_MS = 3600e3
+
+function certState (pemPath = CERT, now = Date.now()) {
+  let pem
+  try { pem = readFileSync(pemPath) } catch { return { state: 'missing', validTo: null } }
+  try {
+    const validTo = new Date(new X509Certificate(pem).validTo)
+    return { state: validTo.getTime() - now < CERT_MARGIN_MS ? 'expired' : 'ok', validTo }
+  } catch {
+    // Unreadable is missing: whatever is there, the edge cannot serve with it.
+    return { state: 'missing', validTo: null }
+  }
+}
+
+/**
+ * Make sure a usable dev certificate exists, regenerating it the way test.sh
+ * does -- through the edge's own script, so there is one way to make one.
+ * Returns what was found and what was done, for the stack log.
+ */
+async function ensureDevCert ({ pemPath = CERT, gen = GEN_CERT, now = Date.now() } = {}) {
+  const before = certState(pemPath, now)
+  if (before.state === 'ok') return { ...before, regenerated: false }
+  const why = before.state === 'missing' ? 'is missing' : `expired ${before.validTo.toISOString()}`
+  const r = await new Promise((resolve) => {
+    execFile(process.execPath, [gen], { cwd: dirname(dirname(gen)) }, (err, stdout, stderr) =>
+      resolve({ ok: !err, out: String(stdout) + String(stderr) }))
+  })
+  const after = certState(pemPath, now)
+  return { ...after, regenerated: r.ok && after.state === 'ok', why, output: r.out.trim() }
+}
+
+async function startStack (mapRelPath, module = null) {
   stopStack()
   stack.log = []
+
+  // Before run_stack.sh, which would start a stack the browser refuses. Said
+  // in the stack log, which the page shows, rather than only on the console.
+  const cert = await ensureDevCert()
+  if (cert.why) {
+    stack.log.push(cert.regenerated
+      ? `[editor] the dev certificate ${cert.why}; regenerated, valid to ${cert.validTo.toISOString()}\n`
+      : `[editor] the dev certificate ${cert.why} and could NOT be regenerated:\n${cert.output}\n`)
+    process.stdout.write(stack.log[stack.log.length - 1])
+  }
   const args = module ? ['--module', module, '--map', mapRelPath] : ['--map', mapRelPath]
   const child = spawn(join(ROOT, 'scripts', 'run_stack.sh'), args, {
     cwd: ROOT,
@@ -1047,7 +1107,7 @@ const routes = {
     // engine's catalogue and every prop the module added is unknown.
     const module = req.module ?? null
     if (!moduleRoot(module)) return { code: 400, body: { error: 'no such module' } }
-    startStack(relative(ROOT, dnpm), module)
+    await startStack(relative(ROOT, dnpm), module)
     return { code: 200, body: { started: true, map: relative(ROOT, dnpm), module } }
   },
 
@@ -1165,7 +1225,7 @@ if (IS_MAIN) {
 }
 
 export {
-  ROOT, ENGINE,
+  ROOT, ENGINE, certState, ensureDevCert,
   underMaps, underModuleLua, textHash, listMaps, resolveStatic, MOUNTS,
   moduleRoot, moduleAsset
 }
