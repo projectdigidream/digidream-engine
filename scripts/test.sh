@@ -294,6 +294,10 @@ else
   # Static, and about the one client file nothing else loads.
   node client/test/tdz.test.js | tail -2
   node client/test/props.test.js | tail -2
+  # ThreeSprite sheets: where a trimmed frame sits on its canvas, how that
+  # becomes a quad hanging off the feet, and which rectangle of the packed
+  # image it samples. Pure arithmetic over a manifest -- no sheet, no GPU.
+  node client/test/atlas.test.js | tail -2
   node client/test/swing.test.js | tail -2
   node client/test/vfx.test.js | tail -2
   # Panels: the client's decoder against real bytes from the C++ encoder.

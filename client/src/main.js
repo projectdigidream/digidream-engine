@@ -32,6 +32,7 @@ import { Connection } from './net.js'
 import { LocalConnection, hasLocalTransport } from './net_local.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
+import { parseAtlas, pivotDisagreement } from './render/atlas.js'
 import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
          sweptSpan, SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
@@ -722,7 +723,53 @@ try {
             `sprites ${spritesDone} / ${spritesTotal}`)
     })))
   }
-  props = new PropRegistry({ THREE, textures, catalogue })
+  // ThreeSprite sheets. A kind with an `atlas` line draws from one packed image
+  // and a manifest instead of a PNG per frame per angle, so each sheet is one
+  // request for the JSON, one for the image, and ONE material shared by every
+  // entity that uses it -- where the per-frame path gives each entity its own.
+  //
+  // A sheet that fails to load is not fatal: the registry says so once and the
+  // entity falls back to the default body, which is visibly wrong rather than
+  // invisible. A monster that draws nothing becomes a bug report about
+  // collision; one that draws a capsule becomes a bug report about art.
+  const atlases = new Map()
+  const sheets = new Set()
+  for (const def of catalogue.kinds.values()) if (def.type === 'atlas' && def.sheet) sheets.add(def.sheet)
+  if (sheets.size) {
+    const sheetLoader = new THREE.TextureLoader()
+    await Promise.all([...sheets].map(async (name) => {
+      try {
+        const res = await fetch(`/sprites/${name}.json`)
+        if (!res.ok) throw new Error(`${res.status} fetching the manifest`)
+        const atlas = parseAtlas(await res.json(), `${name}.json`)
+        // The manifest states the feet twice. If the two disagree the sheet was
+        // written by something that is not the exporter, and every sprite on it
+        // stands at the wrong height -- which reads as a content mistake.
+        const drift = pivotDisagreement(atlas)
+        if (drift > 1e-6) console.warn(`[props] sheet ${name}: its two statements of the feet differ by ${drift}`)
+        const texture = await new Promise((resolve, reject) => {
+          sheetLoader.load(`/sprites/${atlas.image}`, resolve, undefined,
+                           () => reject(new Error(`cannot load ${atlas.image}`)))
+        })
+        texture.magFilter = THREE.NearestFilter
+        texture.minFilter = THREE.NearestFilter
+        texture.generateMipmaps = false
+        texture.colorSpace = THREE.SRGBColorSpace
+        atlases.set(name, {
+          atlas,
+          texture,
+          material: new THREE.MeshBasicMaterial({
+            map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide
+          })
+        })
+      } catch (e) {
+        console.warn(`[props] sheet ${name} not loaded (${e.message}); kinds using it draw the fallback body`)
+      }
+    }))
+    console.log(`[props] ${atlases.size} of ${sheets.size} sprite sheet(s) loaded`)
+  }
+
+  props = new PropRegistry({ THREE, textures, catalogue, atlases })
   // Transients read the same file. A tracer's colour, width and lifetime are
   // catalogue lines, so a shot can be retuned without touching either binary.
   const vfxCat = parseVfx(text)

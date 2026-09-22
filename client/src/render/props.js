@@ -26,6 +26,47 @@
  * by hand and by artists, and a parser that refuses the whole thing over one
  * typo teaches people not to touch it.
  */
+import { frameKey, quadFor, uvFor } from './atlas.js'
+
+/**
+ * Put one atlas frame's corners into a plane's attributes.
+ *
+ * FEET AT THE ORIGIN. quadFor gives the quad's size and where its CENTRE sits
+ * relative to the feet; the four corners follow from that. Because the offsets
+ * are written into the geometry rather than into the mesh's position, the mesh
+ * stays exactly where the simulation puts the entity, and entities.js needs to
+ * know nothing about any of this.
+ *
+ * PlaneGeometry's vertices are top-left, top-right, bottom-left, bottom-right,
+ * and uvFor returns its four corners in that same order -- which is why the two
+ * loops below can share an index. Getting the two orders out of step draws the
+ * right rectangle of the sheet onto the wrong corners, which shears the sprite.
+ */
+export function writeAtlasFrame (geometry, atlas, key, worldHeight = atlas.worldHeight) {
+  const q = quadFor(atlas, key, worldHeight)
+  const uv = uvFor(atlas, key)
+  if (!q || !uv) return false
+  const pos = geometry.attributes?.position
+  const tex = geometry.attributes?.uv
+  if (!pos || !tex) return false
+
+  const x0 = q.dx - q.w / 2
+  const x1 = q.dx + q.w / 2
+  const yBottom = q.dy - q.h / 2
+  const yTop = q.dy + q.h / 2
+  pos.setXYZ(0, x0, yTop, 0)
+  pos.setXYZ(1, x1, yTop, 0)
+  pos.setXYZ(2, x0, yBottom, 0)
+  pos.setXYZ(3, x1, yBottom, 0)
+  pos.needsUpdate = true
+  for (let i = 0; i < 4; i++) tex.setXY(i, uv[i * 2], uv[i * 2 + 1])
+  tex.needsUpdate = true
+  // The bounding sphere is derived from the positions and is what frustum
+  // culling tests, so a stale one culls a sprite that is on screen.
+  geometry.computeBoundingSphere?.()
+  return true
+}
+
 export function parseProps (text) {
   const kinds = new Map()   // id -> { id, sprite?: {...}, mesh?: {...} }
   const warnings = []
@@ -65,6 +106,43 @@ export function parseProps (text) {
         if (tok[k - 1] === 'radius') d.radius = Number(v)
         else if (tok[k - 1] === 'height') d.height = Number(v)
       }
+      return
+    }
+
+    // An `atlas` line draws this kind from a ThreeSprite export: one packed
+    // sheet and a manifest, rather than one PNG per frame per angle.
+    //
+    //   atlas <id> sheet <name> [state <n>] anim <animation>
+    //
+    // DELIBERATELY SHORT. The manifest already states how tall the sprite
+    // stands, how many views it has, how fast each animation runs and whether
+    // it loops -- so this line does not restate any of them. A `size` here
+    // would be a second opinion about a number the sheet already carries, and
+    // the two would drift the first time somebody re-exported.
+    if (tok[0] === 'atlas') {
+      const id = Number(tok[1])
+      if (!Number.isInteger(id) || id <= 0) {
+        warnings.push(`line ${i + 1}: '${tok[1]}' is not a prop id`)
+        return
+      }
+      const d = def(id)
+      d.type = 'atlas'
+      let state = 0
+      let anim = null
+      for (let k = 2; k < tok.length; k++) {
+        const val = tok[k + 1]
+        if (val === undefined) { warnings.push(`line ${i + 1}: '${tok[k]}' has no value`); break }
+        k++
+        switch (tok[k - 1]) {
+          case 'sheet': d.sheet = val; break
+          case 'state': state = Number(val); break
+          case 'anim': anim = val; break
+          default: warnings.push(`line ${i + 1}: unknown attribute '${tok[k - 1]}'`)
+        }
+      }
+      if (!d.sheet) { warnings.push(`line ${i + 1}: atlas ${id} names no sheet`); return }
+      if (!anim) { warnings.push(`line ${i + 1}: atlas ${id} state ${state} names no animation`); return }
+      d.states.set(state, { anim })
       return
     }
 
@@ -159,7 +237,7 @@ export function parseProps (text) {
  * factor of pi to get the wrong way round. Two rotations in this renderer have
  * already shipped mirrored from exactly that mistake.
  */
-export function rotationFor (facingTurns, cameraToThingTurns) {
+export function rotationFor (facingTurns, cameraToThingTurns, views = 8) {
   // No offset. Rotation 1 is the view where the thing faces the camera, and
   // "faces the camera" is when its facing and the direction from it TO the
   // camera are the SAME -- the first version added half a turn here on the
@@ -168,9 +246,17 @@ export function rotationFor (facingTurns, cameraToThingTurns) {
   // this renderer has now shipped two mirrored angle conventions.
   const rel = (cameraToThingTurns - facingTurns) % 1
   const wrapped = rel < 0 ? rel + 1 : rel
-  // Rounded, not truncated: each of the eight views should own the 45 degrees
-  // CENTRED on its angle, so the boundary falls at 22.5 and not at 0.
-  return (Math.round(wrapped * 8) % 8) + 1
+  // Rounded, not truncated: each view should own the arc CENTRED on its angle,
+  // so with eight the boundary falls at 22.5 degrees and not at 0.
+  //
+  // `views` IS A PARAMETER BECAUSE THERE IS NOW A SECOND SOURCE OF SPRITES.
+  // Doom stores eight rotations and that is still the default. A ThreeSprite
+  // atlas may hold any number from 1 to 64, and its numbering is the same one --
+  // view 1 faces the camera, then anticlockwise, which its own documentation
+  // says was chosen to match Doom. So the atlas path passes its count here
+  // rather than carrying a second copy of this arithmetic, which is the whole
+  // reason this function takes an argument instead of the atlas growing its own.
+  return (Math.round(wrapped * views) % views) + 1
 }
 
 /** The texture name for a frame, given the view. */
@@ -201,9 +287,13 @@ export function frameAt (state, seconds) {
  * better answer than pretending it worked.
  */
 export class PropRegistry {
-  constructor ({ THREE, textures, catalogue }) {
+  constructor ({ THREE, textures, catalogue, atlases = new Map() }) {
     this.THREE = THREE
     this.textures = textures          // name -> THREE.Texture
+    // sheet name -> { atlas, texture, material }. One material per SHEET, not
+    // per entity: every prop drawn from one export samples the same image, so
+    // they can share it, and sharing is what lets the renderer batch them.
+    this.atlases = atlases
     this.kinds = catalogue?.kinds ?? new Map()
     this.warned = new Set()
     // mesh -> { def, stateId }. A Map rather than an array searched linearly,
@@ -227,6 +317,8 @@ export class PropRegistry {
 
     const state = def.states.get(0) ?? [...def.states.values()][0]
     if (!state) return null
+
+    if (def.type === 'atlas') return this.#makeAtlas(kind, def)
 
     const first = this.textures.get(state.frames[0])
     const size = def.size ?? 1
@@ -253,6 +345,44 @@ export class PropRegistry {
     mesh.userData.yOffset = size / 2
 
     this.animated.set(mesh, { def, stateId: 0 })
+    return mesh
+  }
+
+  /**
+   * A sprite drawn out of a ThreeSprite sheet.
+   *
+   * Two differences from the per-frame-PNG path above, both of them the point:
+   *
+   * THE MATERIAL IS SHARED. Every prop from one sheet samples one image, so
+   * they share one material. The old path gives each entity its own, which on a
+   * busy level is four hundred materials for four hundred textures.
+   *
+   * THE GEOMETRY CARRIES THE FRAME. A packed frame is TRIMMED to its opaque
+   * pixels, so its quad is a different size and sits at a different height for
+   * every frame -- a crouch is shorter than a stand, and an outstretched arm is
+   * off-centre. Rather than scale the mesh and push the offset through
+   * `yOffset` (which entities.js applies, and which is one number where two are
+   * needed), the four corners are written in the entity's own space with the
+   * FEET AT THE ORIGIN. `yOffset` is therefore 0 here and the mesh sits exactly
+   * where the simulation says the thing is.
+   */
+  #makeAtlas (kind, def) {
+    const entry = this.atlases.get(def.sheet)
+    if (!entry) {
+      if (!this.warned.has(kind)) {
+        this.warned.add(kind)
+        console.warn(`[props] kind ${kind} draws from sheet '${def.sheet}', which was not loaded`)
+      }
+      return null
+    }
+    const THREE = this.THREE
+    // 1x1 and then rewritten every time the frame changes. The size passed here
+    // never survives; what matters is that the attributes exist to write into.
+    const geo = new THREE.PlaneGeometry(1, 1)
+    const mesh = new THREE.Mesh(geo, entry.material)
+    mesh.userData.propKind = kind
+    mesh.userData.yOffset = 0
+    this.animated.set(mesh, { def, stateId: 0, sheet: def.sheet, frameKey: null })
     return mesh
   }
 
@@ -286,6 +416,7 @@ export class PropRegistry {
   update (seconds, cameraPos = null) {
     for (const [mesh, a] of this.animated) {
       if (!mesh.parent) continue                   // removed from the scene
+      if (a.def.type === 'atlas') { this.#updateAtlas(mesh, a, seconds, cameraPos); continue }
       const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
       if (!state?.frames) continue
       // Idle states share one clock so props of a kind bob in lockstep; a state
@@ -315,6 +446,51 @@ export class PropRegistry {
         mesh.material.needsUpdate = true
       }
     }
+  }
+
+  /**
+   * One atlas-backed sprite, for this instant.
+   *
+   * The timing rule is frameAt(), the SAME one the per-PNG path uses -- the
+   * manifest's fps and loop flag are shaped into what it expects rather than a
+   * second clock being written here. The view rule is rotationFor(), likewise,
+   * with the sheet's own view count.
+   *
+   * Writing the corners is skipped unless the frame actually changed, for the
+   * reason the animated-texture code gives: at 144 Hz against an 8 fps
+   * animation, seventeen of every eighteen writes would be setting the values
+   * that are already there.
+   */
+  #updateAtlas (mesh, a, seconds, cameraPos) {
+    const entry = this.atlases.get(a.sheet)
+    if (!entry) return
+    const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
+    if (!state?.anim) return
+    const anim = entry.atlas.byName.get(state.anim)
+    if (!anim) {
+      if (!this.warned.has(`${a.sheet}/${state.anim}`)) {
+        this.warned.add(`${a.sheet}/${state.anim}`)
+        console.warn(`[props] sheet '${a.sheet}' has no animation '${state.anim}'`)
+      }
+      return
+    }
+    if (a.startedAt == null) a.startedAt = a.stateId === 0 ? 0 : seconds
+
+    let view = 1
+    if (entry.atlas.views.count > 1 && cameraPos) {
+      const dx = cameraPos.x - mesh.position.x
+      const dz = cameraPos.z - mesh.position.z
+      const toCamera = Math.atan2(-dz, dx) / (Math.PI * 2)
+      view = rotationFor(mesh.userData.facingTurns ?? 0, toCamera, entry.atlas.views.count)
+    }
+
+    // frameAt wants { frames, fps, once }. `loop` and `once` are the same fact
+    // stated the other way up.
+    const idx = frameAt({ frames: anim.frames, fps: anim.fps, once: !anim.loop }, seconds - a.startedAt)
+    const key = frameKey(entry.atlas, state.anim, idx, view)
+    if (!key || key === a.frameKey) return
+    a.frameKey = key
+    writeAtlasFrame(mesh.geometry, entry.atlas, key)
   }
 
   /** Forget meshes that have left the scene, so a long session does not grow. */
