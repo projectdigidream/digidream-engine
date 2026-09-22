@@ -1125,6 +1125,36 @@ const routes = {
     return { code: 200, body: { path: rel, module, file: p, hash: textHash(text) } }
   },
 
+  /**
+   * A new module, made -- for the command palette.
+   *
+   * What a module IS comes from docs/MODULES.md: modules/<id>/ with
+   * module.txt, maps/, scripts/ and assets/, and "nothing in it is required" --
+   * the engine's assets/ fills in whatever a module does not carry. So this
+   * makes the four things and no more: no props.txt, no scripts, which would
+   * be inventing content the doc says a module need not have. module.txt is
+   * written in the shape the two existing ones have, columns and all, and
+   * says `id` so the reader that warns about a mismatch has something to
+   * agree with.
+   */
+  'POST /api/newmodule': async (url, body) => {
+    const req = JSON.parse(body)
+    if (typeof req.id !== 'string' || !MODULE_ID.test(req.id)) {
+      return { code: 400, body: { error: `'${req.id}' is not a module id: letters, digits, - and _, starting with a letter or digit` } }
+    }
+    const root = join(MODULES, req.id)
+    if (await exists(root)) return { code: 409, body: { error: `modules/${req.id} already exists` } }
+
+    const name = typeof req.name === 'string' && req.name.trim() ? req.name.trim().replace(/\s+/g, ' ') : req.id
+    const about = typeof req.about === 'string' ? req.about.trim() : ''
+    const lines = [`name    ${name}`, `id      ${req.id}`]
+    for (const l of about.split('\n').map((x) => x.trim()).filter(Boolean)) lines.push(`about   ${l}`)
+
+    for (const d of ['maps', 'scripts', 'assets']) await mkdir(join(root, d), { recursive: true })
+    await writeFile(join(root, 'module.txt'), lines.join('\n') + '\n')
+    return { code: 200, body: { id: req.id, name, root, path: relative(ROOT, root) } }
+  },
+
   'POST /api/compile': async (url, body) => {
     const req = JSON.parse(body)
     const p = underMaps(req.path, { extensions: ['.map'], module: req.module ?? null })
