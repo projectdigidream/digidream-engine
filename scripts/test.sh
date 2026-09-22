@@ -318,6 +318,14 @@ else
   # cover, and a suite everybody waits four minutes for is one people stop
   # running. DNP_EDITOR_PAGE_TEST=1 includes it.
   node editor/test/page.test.js | tail -2
+  # Does the editor leak? Asked of Chrome: a repeated stimulus, a forced GC, a
+  # metrics read after each round -- a leak grows every round, churn plateaus.
+  # The two stimuli are the two that leaked: a render per keystroke in the mob
+  # window (+542,000 retained nodes per twenty, and dropped WebGL contexts) and
+  # a full rebuild in the viewport (+450 nodes per eight opens, one <img> per
+  # stranded texture). Both zero now. Opt-in with the page test above; self-
+  # gated, so it says so and exits clean without DNP_EDITOR_PAGE_TEST=1.
+  node editor/test/leak.test.js | tail -2
 
   # --- the desktop build ------------------------------------------------------
   #
