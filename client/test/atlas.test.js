@@ -15,6 +15,11 @@
 //
 import { parseAtlas, pivotDisagreement, frameKey, quadFor, uvFor, sheetsOf } from '../src/render/atlas.js'
 import { parseProps, rotationFor, writeAtlasFrame } from '../src/render/props.js'
+import { readFileSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 let checks = 0
 let fails = 0
@@ -226,6 +231,56 @@ console.log('\n--- writing a frame into a plane ---')
 
   check(writeAtlasFrame({ attributes: {} }, b, 'idle/0/v1') === false, 'a geometry with no attributes is refused')
   check(writeAtlasFrame(geo, b, 'nope/0/v1') === false, 'and so is a frame that is not in the sheet')
+}
+
+console.log('\n--- the sheet the module actually ships ---')
+{
+  // The fixtures above prove the READER. This proves it against a real export,
+  // which is a different failure: a manifest this cannot draw would pass every
+  // fixture and still ship a level of invisible monsters. Skipped loudly rather
+  // than failed when the module is not present, the way mapmesh.test.js does.
+  const SHEET = join(ROOT, 'modules', 'doom2', 'assets', 'sprites', 'SPIR.json')
+  if (!existsSync(SHEET)) {
+    console.log('  (skipped: modules/doom2/assets/sprites/SPIR.json is not here)')
+  } else {
+    const a = parseAtlas(JSON.parse(readFileSync(SHEET, 'utf8')), 'SPIR.json')
+    check(a.views.count === 8 && a.animations.length === 4,
+          `${Object.keys(a.frames).length} frames, ${a.animations.length} animations, ${a.views.count} views`)
+    check(pivotDisagreement(a) === 0, 'its two statements of the feet agree exactly')
+
+    // Every frame, not a sample. A packed sheet has one rect per frame and any
+    // one of them can be wrong on its own.
+    let bad = 0
+    let lowest = Infinity
+    let tallest = 0
+    for (const key of Object.keys(a.frames)) {
+      const q = quadFor(a, key)
+      const uv = uvFor(a, key)
+      if (!q || !uv || !(q.w > 0 && q.h > 0)) { bad++; continue }
+      if (uv.some((v) => v < -1e-9 || v > 1 + 1e-9)) bad++
+      lowest = Math.min(lowest, q.dy - q.h / 2)
+      tallest = Math.max(tallest, q.dy + q.h / 2)
+    }
+    check(bad === 0, `every frame gives a quad with UVs inside the sheet (${bad} bad)`)
+    // THE FEET, ON REAL ART. Nothing may hang below the origin, and nothing may
+    // stand taller than the height the sheet declares -- which together are
+    // what "the sprite stands on the floor at the size it says" means.
+    check(lowest >= -1e-9, `nothing hangs below the feet (lowest ${lowest.toFixed(4)})`)
+    check(tallest <= a.worldHeight + 1e-9,
+          `and nothing exceeds its declared height (tallest ${tallest.toFixed(4)} of ${a.worldHeight})`)
+
+    // The catalogue names animations in this sheet, and a typo there draws
+    // nothing at all -- silently, because a missing animation is warned once
+    // and then skipped.
+    const cat = parseProps(readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'props.txt'), 'utf8'))
+    for (const [, def] of cat.kinds) {
+      if (def.type !== 'atlas' || def.sheet !== a.sprite) continue
+      for (const [stateId, st] of def.states) {
+        check(a.byName.has(st.anim),
+              `catalogue state ${stateId} names animation '${st.anim}', which the sheet has`)
+      }
+    }
+  }
 }
 
 console.log(`\natlas: ${checks} checks, ${fails} failures`)
