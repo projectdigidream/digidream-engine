@@ -184,6 +184,11 @@ node editor/test/engineroot.test.js | tail -2
 # that deactivate() takes the server down. It found a server bug on its first
 # run: IS_MAIN compared a URL to argv[1], and a symlinked script exited 0.
 node editor/test/extension.test.js | tail -2
+# The INSTALLABLE form: build the .vsix with the real script, unpack it where no
+# tools/ is anywhere near, and drive that extension.cjs the same way. The
+# in-place test cannot make this claim -- the sibling it needs is always there.
+# Needs the network once for npx to fetch vsce; skips out loud without it.
+node editor/test/vsix.test.js | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run
