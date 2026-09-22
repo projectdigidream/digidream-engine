@@ -27,7 +27,9 @@ import { realpathSync, readFileSync } from 'node:fs'
 import { X509Certificate } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { arch } from 'node:os'
-import { resolveEngineRoot, MODULE_ID } from './engineroot.js'
+import { resolveEngineRoot, MODULE_ID, MAP_NAME } from './engineroot.js'
+import { roomText } from '../editor/src/shapes.js'
+import { parseMap, emitMap } from '../editor/src/mapfmt.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -399,6 +401,22 @@ function stopStack () {
   stack.map = null
   stack.url = null
   return true
+}
+
+/**
+ * What a new map contains: one sixteen-unit room at the origin, floor 0,
+ * ceiling 32 (roomText's default), and a spawn in the middle of it.
+ *
+ * Counter-clockwise, which is the winding the renderer takes as fact -- see
+ * editor/src/topology.js -- so the walls face in. Through parseMap and back
+ * out, so the text on disk is the editor's own emitter's, not a string here
+ * that agrees with it until it does not.
+ */
+function starterMap () {
+  const h = 8
+  const room = roomText(
+    [{ x: -h, y: -h }, { x: h, y: -h }, { x: h, y: h }, { x: -h, y: h }], { floor: 0 })
+  return emitMap(parseMap(`${room}spawn start 0 0 2\n`))
 }
 
 /**
@@ -1070,6 +1088,41 @@ const routes = {
     await mkdir(dirname(p), { recursive: true })
     await writeFile(p, req.text)
     return { code: 200, body: { hash: textHash(req.text), path: relative(ROOT, p) } }
+  },
+
+  /**
+   * A new map, made and written -- for the command palette.
+   *
+   * The page's own New makes NO file: it opens an empty document and leaves
+   * the name to the author, on the reasoning that inventing untitled.map on
+   * disk is a file nobody asked for. A palette command is the author asking,
+   * name first, so this writes one. What it writes is the editor's own idea of
+   * a room -- shapes.js's roomText, the thing the draw tool emits -- with
+   * somewhere to stand, so Test works before a wall has been drawn; and it is
+   * round-tripped through parseMap/emitMap, so the file is what the editor
+   * would have written rather than a template that drifts from it.
+   */
+  'POST /api/newmap': async (url, body) => {
+    const req = JSON.parse(body)
+    const module = req.module ?? null
+    const root = moduleRoot(module)
+    // moduleRoot() answers for any WELL-FORMED id, whether or not the module
+    // is there -- it is a path rule, not a directory check -- and this route
+    // creates files, so it has to look. Found by the test: a map for a module
+    // that did not exist got a 200 and a fresh modules/nosuch/maps/.
+    if (!root || (module && !await exists(root))) return { code: 400, body: { error: `no such module: ${module}` } }
+    if (typeof req.name !== 'string' || !MAP_NAME.test(req.name)) {
+      return { code: 400, body: { error: `'${req.name}' is not a map name: letters, digits, - and _, starting with a letter or digit` } }
+    }
+    const rel = `${req.name}.map`
+    const p = underMaps(rel, { extensions: ['.map'], module })
+    if (!p) return { code: 400, body: { error: 'not a map path' } }
+    if (await exists(p)) return { code: 409, body: { error: `${relative(ROOT, p)} already exists` } }
+
+    const text = starterMap()
+    await mkdir(dirname(p), { recursive: true })
+    await writeFile(p, text)
+    return { code: 200, body: { path: rel, module, file: p, hash: textHash(text) } }
   },
 
   'POST /api/compile': async (url, body) => {

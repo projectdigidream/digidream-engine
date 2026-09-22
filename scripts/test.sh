@@ -178,6 +178,12 @@ node editor/test/assets.test.js | tail -2
 # tree lists that tree's maps and none of the real ones. The same resolver is
 # what a VS Code extension will read a dnp.engineRoot setting into.
 node editor/test/engineroot.test.js | tail -2
+# POST /api/newmap, the command palette's New map. The claim that matters is the
+# oracle: what it writes, mapc BAKES -- one sector, one spawn -- so Test works
+# before a wall has been drawn. Against a scratch engine through
+# DNP_ENGINE_ROOT; nothing touches the real maps/. It found the route creating
+# modules/nosuch/ for a module that did not exist, on its first run.
+node editor/test/newmap.test.js | tail -2
 # The VS Code extension, driven without VS Code: a stub host, and a REAL editor
 # server underneath. Double-click a map and the claim is that the tab would have
 # shown a live editor pointed at the right module -- read off the path -- and

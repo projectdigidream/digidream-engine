@@ -55,6 +55,14 @@ export const isEngineRoot = (dir) => MARKERS.every((m) => existsSync(join(dir, m
  */
 export const MODULE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
+/**
+ * What a map file's stem may look like. The same characters as a module id,
+ * and its own name because it is its own rule: a map is named by a person in
+ * a text box, and the server that writes the file and the box that validates
+ * the typing must refuse the same things.
+ */
+export const MAP_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+
 /** Walk up from `from` to the filesystem root, or return null. */
 export function findEngineRoot (from) {
   let dir = resolve(from)
