@@ -30,6 +30,9 @@ import { arch } from 'node:os'
 import { resolveEngineRoot, MODULE_ID, MAP_NAME } from './engineroot.js'
 import { roomText } from '../editor/src/shapes.js'
 import { parseMap, emitMap } from '../editor/src/mapfmt.js'
+// The CLIENT's atlas reader, so what the editor says a sheet contains is what
+// the game will read from it. A second reader here would agree until it did not.
+import { parseAtlas } from '../client/src/render/atlas.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -768,7 +771,32 @@ const routes = {
       }
       const bases = [...seen].filter(([, mask]) => mask === 0xff).map(([b]) => b).sort()
 
-      return { code: 200, body: { module, path: relative(ROOT, from), frames, bases } }
+      // ThreeSprite sheets: every sprites/NAME.json beside the index, read with
+      // the client's own parser. What is reported is what a picker and a check
+      // need -- the animation names with their timing, the view count, the
+      // height -- and not the frames, of which SPIR alone has 1,680. A manifest
+      // the reader refuses is reported with its reason rather than left out,
+      // so "this sheet is broken" and "there is no such sheet" stay different.
+      const sheets = {}
+      const dir = dirname(from)
+      for (const f of await readdir(dir).catch(() => [])) {
+        if (!f.endsWith('.json') || f === 'index.json') continue
+        const name = f.slice(0, -5)
+        try {
+          const a = parseAtlas(JSON.parse(await readFile(join(dir, f), 'utf8')), name)
+          sheets[name] = {
+            animations: a.animations.map((an) => ({ name: an.name, fps: an.fps, loop: !!an.loop, frames: an.frames.length })),
+            views: a.views.count,
+            mirror: a.views.mirror,
+            worldHeight: a.worldHeight,
+            canvas: a.canvas
+          }
+        } catch (e) {
+          sheets[name] = { error: e.message }
+        }
+      }
+
+      return { code: 200, body: { module, path: relative(ROOT, from), frames, bases, sheets } }
     } catch (e) {
       return {
         code: 200,
@@ -1308,7 +1336,7 @@ if (IS_MAIN) {
 }
 
 export {
-  ROOT, ENGINE, certState, ensureDevCert,
+  ROOT, ENGINE, certState, ensureDevCert, routes,
   underMaps, underModuleLua, textHash, listMaps, resolveStatic, MOUNTS,
   moduleRoot, moduleAsset
 }
