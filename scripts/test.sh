@@ -171,6 +171,13 @@ node editor/test/orbit.test.js | tail -2
 # It starts the real server and fetches what editor/src/assets.js builds, with
 # the control that the old path still 404s.
 node editor/test/assets.test.js | tail -2
+# Where the engine is. The editor server's root used to be fixed to its own
+# parent, which meant it could only ever be tested against the real repository
+# -- the browser tests build a throwaway module inside modules/ for exactly that
+# reason. The decisive check here is ISOLATION: a server pointed at a scratch
+# tree lists that tree's maps and none of the real ones. The same resolver is
+# what a VS Code extension will read a dnp.engineRoot setting into.
+node editor/test/engineroot.test.js | tail -2
 
 # The Lua runtime, built separately from the core tests on purpose: those
 # compile against core sources only, which is what lets the determinism gate run

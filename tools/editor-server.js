@@ -25,9 +25,38 @@ import { spawn, execFile } from 'node:child_process'
 import { dirname, join, normalize, extname, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { arch } from 'node:os'
+import { resolveEngineRoot } from './engineroot.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const ROOT = join(HERE, '..')
+
+/**
+ * Where the ENGINE is -- maps, modules, build/, scripts/, the client. Not
+ * necessarily beside this script any more.
+ *
+ * It was `join(HERE, '..')`, fixed, and that was right for as long as the
+ * editor only ever ran from its own checkout. Two things need it to be a
+ * parameter: a VS Code extension that opens a MODULE folder and has to find the
+ * engine from there, and this server's own tests, which could only ever run
+ * against the real repository and so had to build a throwaway module inside
+ * modules/ to have anything to test with.
+ *
+ * Precedence and the reasons are in tools/engineroot.js. The value comes from
+ * --engine-root, then DNP_ENGINE_ROOT, then walking up from the working
+ * directory, then beside this script -- which is what it always was.
+ */
+function engineRootFromArgs () {
+  const argv = process.argv.slice(2)
+  const at = argv.findIndex((a) => a === '--engine-root' || a.startsWith('--engine-root='))
+  if (at < 0) return process.env.DNP_ENGINE_ROOT || null
+  const a = argv[at]
+  return a.includes('=') ? a.slice(a.indexOf('=') + 1) : (argv[at + 1] ?? null)
+}
+const ENGINE = resolveEngineRoot({
+  explicit: engineRootFromArgs(),
+  from: process.cwd(),
+  fallback: join(HERE, '..')
+})
+const ROOT = ENGINE.root
 const PORT = Number(process.env.DNP_EDITOR_PORT ?? 8081)
 const ARCH = arch() === 'arm64' ? 'arm64' : 'x86_64'
 const MAPC = join(ROOT, 'build', ARCH, 'mapc')
@@ -54,9 +83,16 @@ const TYPES = {
 // imports '../wasm/dist/dnp_core.mjs' -- that is the layout on disk, and a
 // mount that skipped a level would make the source's own relative import wrong
 // only when served, which is the kind of breakage that looks like a wasm bug.
+//
+// TWO KINDS OF MOUNT, now that the engine root can be elsewhere. The editor's
+// own pages and source (/, /src/) travel with this script and are served from
+// beside it; everything else is the ENGINE's -- its client, its assets -- and
+// is served from ROOT. The two are the same directory when the editor runs
+// from its own checkout, which is why nothing noticed the difference before.
+const EDITOR = join(HERE, '..', 'editor')
 const MOUNTS = [
   ['/vendor/three/', join(ROOT, 'client', 'node_modules', 'three', 'build')],
-  ['/src/', join(ROOT, 'editor', 'src')],
+  ['/src/', join(EDITOR, 'src')],
   ['/client/', join(ROOT, 'client')],
   // The engine's own, which after the assets moved into modules is very
   // little -- kept so a map outside any module still finds whatever remains.
@@ -64,7 +100,7 @@ const MOUNTS = [
   // file below.
   ['/textures/', join(ROOT, 'assets', 'textures')],
   ['/sprites/', join(ROOT, 'assets', 'sprites')],
-  ['/', join(ROOT, 'editor')]
+  ['/', EDITOR]
 ]
 
 // Stricter than tools/devserver.js's, in two places, and both were found by
@@ -872,6 +908,26 @@ const routes = {
     }
   },
 
+  /**
+   * Which engine this editor is pointed at, and how it decided.
+   *
+   * The question only gets asked once something has gone wrong -- an empty map
+   * list, a Test that will not start -- so the answer is a request away rather
+   * than a log line in a terminal somebody closed. `mapc` and `luajit` are
+   * reported as present or not, because "found the engine" and "the engine is
+   * built" are different facts and the second is the one Test needs.
+   */
+  'GET /api/engine': async () => ({
+    code: 200,
+    body: {
+      root: ROOT,
+      how: ENGINE.how,
+      mapc: await exists(MAPC),
+      luajit: await exists(LUAJIT),
+      editor: EDITOR
+    }
+  }),
+
   'GET /api/stack': async () => ({
     code: 200,
     body: { running: !!stack.child, map: stack.map, url: stack.url, log: stack.log.join('') }
@@ -1090,6 +1146,7 @@ const server = createServer(async (req, res) => {
 if (IS_MAIN) {
   server.listen(PORT, () => {
     console.log(`[editor] http://localhost:${PORT}/`)
+    console.log(`[editor] engine root ${ROOT} (${ENGINE.how})`)
     console.log(`[editor] engine maps under ${join(ROOT, 'maps')}, modules under ${MODULES}`)
     console.log(`[editor] mapc      ${MAPC}`)
     console.log('[editor] Test mode runs scripts/run_stack.sh, which serves the GAME on 8080')
@@ -1097,6 +1154,7 @@ if (IS_MAIN) {
 }
 
 export {
+  ROOT, ENGINE,
   underMaps, underModuleLua, textHash, listMaps, resolveStatic, MOUNTS,
   moduleRoot, moduleAsset
 }
