@@ -183,11 +183,31 @@ bool Vm::open(const VmConfig& cfg) {
     // suite hanging rather than failing, which is the only way it presents:
     // with the JIT on the budget does not fail loudly, it just is not there.
     //
-    // The cost is real and worth naming: LuaJIT's headline feature is forfeited.
-    // Its interpreter is still substantially faster than PUC Lua's, and the fx
-    // arithmetic these scripts spend their time in lives in C functions the JIT
-    // would not have accelerated much anyway -- but an unenforceable budget was
-    // never an option, so this is not a close call.
+    // The cost is real and worth naming: LuaJIT's headline feature is
+    // forfeited. This used to add that the fx arithmetic these scripts spend
+    // their time in "lives in C functions the JIT would not have accelerated
+    // much anyway" -- which was a guess, and the sort that survives because it
+    // is comfortable. It has now been measured, and it is right.
+    //
+    // Turning the JIT on and removing the hook, then running 1000 monsters on
+    // maps/mobperf.map through tools/mobperf/run.js, three alternating runs of
+    // each build:
+    //
+    //     JIT on    4.11  4.64  4.01   us of Lua per awake mob per tick
+    //     JIT off   3.90  4.92  4.00
+    //
+    // Indistinguishable, and the control says that is a fact about the
+    // workload rather than a JIT that failed to engage: in the SAME binary
+    // `jit.status()` returns true and a 500k-iteration pure-Lua numeric loop
+    // runs in 0.72 ms against the interpreter's 3.19 ms. The JIT works. It has
+    // nothing to do here, because a mob think is a few dozen calls into C --
+    // engine bindings and fx metamethods -- with almost no Lua between them.
+    //
+    // Which settles the question this comment used to leave open. Trading the
+    // instruction budget for the JIT under Trust::Full was a planned step; it
+    // would have bought nothing and cost the only control that can stop a
+    // runaway script. Making those calls cheaper is a different piece of work
+    // and does not start here.
     luaJIT_setmode(L_, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_OFF);
 
     lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
