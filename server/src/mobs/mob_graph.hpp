@@ -1,0 +1,196 @@
+#pragma once
+//
+// A mob's behaviour graph, compiled out of the Lua tables it was validated in.
+//
+// WHY THIS EXISTS. maps/scripts/mobs.lua is a bounded interpreter over those
+// tables, and the interpretation is the cost: a think walks a state's
+// transitions, and each transition's conditions, through Lua table lookups and
+// `fx` userdata whose every comparison allocates. Profiled at a thousand
+// monsters, 88% of all Lua time was in `lj_BC_FUNCC` -- the dispatch into C --
+// with a further 15% in allocation and the collector chasing it. Not in the
+// interpreter deciding things: in the cost of asking.
+//
+// SO C++ ASKS INSTEAD. The graph crosses once, at load, into the flat arrays
+// below, and the per-think decision -- where am I, who am I hunting, which
+// transition fires, which way do I walk -- runs here with no Lua and no
+// allocation at all.
+//
+// WHAT DOES NOT MOVE, and this is the important half:
+//
+//   THE VOCABULARY. maps/scripts/mob_vocab.lua stays the only definition of
+//   what a condition or an action IS, and mobs.lua stays the only thing that
+//   validates against it. This reads a graph that has ALREADY been checked; it
+//   has no opinion about whether it is well formed, and it cannot accept
+//   anything the loader would have rejected. A second validator would be a
+//   second answer to "is this legal", which is exactly the trap docs/ENGINE.md
+//   names as two programs sharing one fact.
+//
+//   THE ACTIONS. All nineteen of them stay in Lua, unchanged, and are called
+//   back in the order and at the tick they would have been. That is not a
+//   compromise, it is where the frequency actually is: a think evaluates
+//   conditions every time and fires an action only when something happens. A
+//   zombieman's `chase` is four conditions eight times a second and a hitscan
+//   once a second, so moving the conditions is nearly all of the win and moving
+//   `spawn` would be a second implementation of pain-elemental budgeting for
+//   no measurable gain.
+//
+//   ANY GRAPH THIS CANNOT RUN. A condition it does not implement puts that mob
+//   on the Lua path for good, counted and reportable -- see MobRuntime. Silence
+//   there would make the whole exercise unmeasurable.
+//
+#include "dnp/math/fixed.hpp"
+#include "dnp/proto/messages.hpp"
+
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace dnp::server::mobs {
+
+using namespace dnp;
+
+// The conditions, by the names mob_vocab.lua gives them. The order here is not
+// meaningful -- transitions carry their own order, and the graph records it.
+enum class Cond : u8 {
+    HasTarget,
+    TargetWithin,
+    TargetVisible,
+    TargetInFront,
+    HpBelow,
+    StateElapsed,
+    Chance,
+    VarAtLeast,
+    VarIs,
+    CooldownReady,
+    Grounded,
+    WasHurt,
+    HurtByMob,
+    // Everything below is NOT evaluated here. A graph that uses one runs in
+    // Lua, and MobRuntime says so out loud.
+    Unsupported,
+};
+
+// `move` and `face` on a state. Kept as enums rather than strings because
+// drive() reads them every think.
+enum class Move : u8 { Stop, Chase, Flee, Strafe, Wander, Free };
+enum class Face : u8 { Target, Hold };
+
+struct Condition {
+    Cond id = Cond::Unsupported;
+    bool negate = false;
+    // `distance` for target_within, and nothing else needs an fx.
+    fx   f{};
+    // `percent`, `ticks`, `value`, `arc`, `within` -- one integer is enough for
+    // every condition in the vocabulary that takes one.
+    i32  i = 0;
+    // Which of the mob's var slots, for the three that name one. -1 otherwise.
+    i16  var = -1;
+};
+
+struct Transition {
+    u16 to = 0;            // state index within the kind
+    u16 first_cond = 0;
+    u16 cond_count = 0;
+};
+
+// A sequence entry stays a POINTER INTO LUA: `at`, plus the 1-based index of
+// the entry in that state's `sequence` array. When it comes due, C++ asks Lua
+// to run exactly that entry. Nothing about what the action DOES crosses.
+struct SeqEntry {
+    i32 at = 0;
+    u16 lua_index = 0;
+    // `goto` is the one action the decision loop has to understand, because it
+    // stops the rest of the sequence and changes state -- run_due's return
+    // value. Resolved here so the common case needs no call into Lua at all.
+    i16 goto_state = -1;
+};
+
+struct State {
+    u32  name = 0;          // index into MobGraph::strings
+    i32  anim = -1;         // index into MobGraph::strings, or -1
+    Move move = Move::Stop;
+    Face face = Face::Target;
+    i8   solid = -1;        // -1 unset, 0 false, 1 true
+    i32  ticks = -1;        // -1 for "no timeout"
+    i16  next = -1;
+    u16  first_trans = 0, trans_count = 0;
+    u16  first_seq = 0, seq_count = 0;
+};
+
+struct Kind {
+    u32  name = 0;
+    i32  hp = 0;
+    fx   sight{};
+    bool has_sight = false;
+    bool flying = false;
+    fx   hover_z{};
+    fx   jump_height{};
+    i16  initial = -1;
+    u16  first_state = 0, state_count = 0;
+    // Var slots, as names interned per kind. Every `var` argument anywhere in
+    // the graph gets one, whether or not `vars` declared it -- mob_vocab's
+    // `var` type is a name, not a declaration, and set_var may name a fresh one.
+    u32  first_var = 0, var_count = 0;
+    // The reason this kind cannot run here, or empty. Held rather than
+    // discarded so the report names the condition and not just the mob.
+    std::string unsupported;
+    bool supported() const { return unsupported.empty(); }
+};
+
+// The compiled graph for one level's mobs.
+//
+// Flat arrays with ranges into them, because a think walks them and a tree of
+// small allocations is what this exists to stop being.
+struct MobGraph {
+    std::vector<Kind>       kinds;
+    std::vector<State>      states;
+    std::vector<Transition> transitions;
+    std::vector<Condition>  conditions;
+    std::vector<SeqEntry>   sequence;
+    // Var names, in per-kind ranges.
+    std::vector<u32>        var_names;
+    // Interned strings: mob names, state names, animation names.
+    std::vector<std::string> strings;
+
+    void clear() {
+        kinds.clear(); states.clear(); transitions.clear();
+        conditions.clear(); sequence.clear(); var_names.clear(); strings.clear();
+    }
+
+    u32 intern(const char* s, size_t n) {
+        for (u32 i = 0; i < strings.size(); ++i) {
+            if (strings[i].size() == n && std::memcmp(strings[i].data(), s, n) == 0) return i;
+        }
+        strings.emplace_back(s, n);
+        return static_cast<u32>(strings.size() - 1);
+    }
+    const char* str(u32 i) const { return i < strings.size() ? strings[i].c_str() : ""; }
+
+    i32 kind_by_name(const char* s, size_t n) const {
+        for (u32 i = 0; i < kinds.size(); ++i) {
+            const std::string& k = strings[kinds[i].name];
+            if (k.size() == n && std::memcmp(k.data(), s, n) == 0) return static_cast<i32>(i);
+        }
+        return -1;
+    }
+
+    // A state's index within a kind, or -1. Used only while compiling and by
+    // the bindings that let Lua name a state -- never per think.
+    i32 state_by_name(const Kind& k, const char* s, size_t n) const {
+        for (u16 i = 0; i < k.state_count; ++i) {
+            const std::string& v = strings[states[k.first_state + i].name];
+            if (v.size() == n && std::memcmp(v.data(), s, n) == 0) return i;
+        }
+        return -1;
+    }
+
+    i32 var_slot(const Kind& k, const char* s, size_t n) const {
+        for (u32 i = 0; i < k.var_count; ++i) {
+            const std::string& v = strings[var_names[k.first_var + i]];
+            if (v.size() == n && std::memcmp(v.data(), s, n) == 0) return static_cast<i32>(i);
+        }
+        return -1;
+    }
+};
+
+}  // namespace dnp::server::mobs

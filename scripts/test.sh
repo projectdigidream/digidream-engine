@@ -228,6 +228,12 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # server, and it is where docs/TRIGGERS.md is checked against the vocabulary
   # it is written from.
   "./build/lua/test_lua_triggers"
+  # The mob graph as C++ compiles it, walked against the tables it came from.
+  # Everything the C++ mob runtime will decide rests on those arrays saying
+  # what mobs.lua's `defs` said, and this walks the two together in the
+  # TABLE's terms -- state names and condition names, never the indices the
+  # compiler chose for itself, which would agree with themselves.
+  "./build/lua/test_mob_graph" .
   # The shooting range: a room with a player in the middle and hitscan monsters
   # all round it, asserting every one of them lands a shot. The ONLY test that
   # drives the real world bindings -- every other Lua test stubs `dnp` with a

@@ -525,6 +525,38 @@ function M.load(data)
   end
 
   M.defs, M.missiles = defs, missiles
+
+  -- THE GRAPH GOES TO C++, once, here.
+  --
+  -- After validation and not before: that is the whole arrangement. This file
+  -- and mob_vocab.lua remain the only definition of what a condition IS and
+  -- the only thing that checks a graph against it, and what crosses is a graph
+  -- already known to be well formed. server/src/mobs/ reads it and has no
+  -- opinion about whether it is legal -- a second validator would be a second
+  -- answer to the same question.
+  --
+  -- NOT AN ERROR PATH. A kind using a condition the C++ loop does not
+  -- implement keeps running here, exactly as it always has, and says which
+  -- condition kept it. `problems` above is about graphs that are WRONG; this
+  -- is about graphs that are merely expensive, and conflating the two would
+  -- make "your mob is broken" and "your mob is slow" the same message.
+  --
+  -- Guarded because the Lua-only test harness (scripts/check_mobs.sh) has no
+  -- engine behind it, and a mob framework that required one to load would be
+  -- untestable without a server.
+  M.compiled, M.on_lua_path, M.lua_path_why = 0, 0, {}
+  if dnp ~= nil and dnp.mobs_compile ~= nil then
+    M.compiled, M.on_lua_path, M.lua_path_why = dnp.mobs_compile(defs)
+    -- SAID OUT LOUD, EVERY LOAD, including when the answer is "all of them".
+    -- "800 of your 1000 mobs are on the slow path because their graph uses
+    -- `spawn`" has to be findable, and a line that only appears when something
+    -- is wrong makes the normal case indistinguishable from the binding never
+    -- having run at all.
+    print(("mobs: %d kinds compiled, %d on the Lua path")
+          :format(M.compiled, M.on_lua_path))
+    for i = 1, #M.lua_path_why do print("mobs: " .. M.lua_path_why[i]) end
+  end
+
   return #problems == 0, problems
 end
 

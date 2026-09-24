@@ -1,4 +1,5 @@
 #include "lua/world_binding.hpp"
+#include "mobs/mob_runtime.hpp"
 
 #include <cstring>
 
@@ -1879,6 +1880,12 @@ void open_world(lua_State* L, WorldContext* ctx) {
         }
         lua_setfield(L, -2, "button");
     }
+
+    // The mob runtime's own bindings, onto the same table. Separate file
+    // because it is a separate subsystem -- this one is about entities and the
+    // world, that one is about a behaviour graph -- and separate compilation
+    // unit so the mob work does not rebuild this.
+    mobs::open_mobs(L);
 
     lua_setglobal(L, "dnp");
 }

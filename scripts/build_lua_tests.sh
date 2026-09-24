@@ -33,6 +33,9 @@ SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
 # point of it -- four bugs this phase came from a stub being more generous than
 # the engine, and every one of them raised the first time a real server ran.
 RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp"
+            "$ROOT/server/src/mobs/mob_compile.cpp"
+            "$ROOT/server/src/mobs/mob_eval.cpp"
+            "$ROOT/server/src/mobs/mob_binding.cpp"
             $(ls "$ROOT"/core/src/*/*.cpp))
 
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
@@ -46,6 +49,16 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # caught without standing up a server, an edge and a browser.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/tests/test_lua_triggers.cpp" "${LINK[@]}" -o "$OUT/test_lua_triggers"
+# The mob graph, as C++ compiles it. Needs the mob sources but NOT the world
+# bindings: mobs.load touches no entity, so the double in the test is the few
+# verbs it calls and the two real bindings are installed on top of it.
+# NOT mob_eval.cpp: the conditions need core (raycast, the CORDIC atan2) and
+# this test compiles a graph rather than evaluating one. Linking it would make
+# the graph test depend on the whole engine to check a data structure.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/src/mobs/mob_compile.cpp" \
+        "$ROOT/server/src/mobs/mob_binding.cpp" \
+        "$ROOT/server/tests/test_mob_graph.cpp" "${LINK[@]}" -o "$OUT/test_mob_graph"
 # Not a test: the generator that hands the trigger vocabulary to readers that
 # are not Lua (the editor). It lives here because this is the only build script
 # that already links LuaJIT, and because its output is checked by the suite
