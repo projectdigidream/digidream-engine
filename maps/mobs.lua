@@ -707,6 +707,17 @@ local function set_move(m, mx, my, aim, buttons)
 end
 
 local function enter(m, name, tick)
+  -- A MOB THE C++ LOOP OWNS IS ENTERED THERE, and this returns.
+  --
+  -- `hurt` and `revive` both call this from outside a think -- pain, death, a
+  -- corpse put back on its feet -- and they are the only callers that can
+  -- reach a tracked mob. Doing it here as well would leave the two runtimes
+  -- disagreeing about which state the mob is in, with the C++ one winning on
+  -- the next think and the animation this set already sent.
+  if m.cpp then
+    dnp.mob_enter(m.idx, name)
+    return
+  end
   local st = m.def.states[name]
   if st == nil then return end
   m.state, m.st, m.entered = name, st, tick
@@ -973,6 +984,10 @@ function acts.revive(m, a)
       if dx * dx + dy * dy <= a.radius * a.radius then
         table.remove(corpses, i)
         c.hp, c.dead = c.max_hp, false
+        if c.cpp then
+          dnp.mob_set(c.idx, "hp", c.hp)
+          dnp.mob_set(c.idx, "dead", false)
+        end
         c.e:set_solid(true)
         enter(c, c.def.initial, dnp.tick())
         return
@@ -1114,15 +1129,28 @@ function M.spawn(kind, pos, opts)
   end
 
   live[m.idx] = m
-  -- Round-robin by SPAWN ORDER, so a level's mobs are spread evenly across the
-  -- think buckets whatever their entity indices turn out to be.
-  local b = spawned % THINK
-  spawned = spawned + 1
-  local list = buckets[b]
-  list[#list + 1] = m
-  m.bucket = b
 
-  enter(m, def.initial, dnp.tick())
+  -- THE C++ LOOP TAKES IT, OR THIS ONE DOES -- never both.
+  --
+  -- dnp.mob_track answers false for a kind whose graph uses something the loop
+  -- cannot run, and that is not a failure: it is the Lua path, and the record
+  -- above is all it needs. What must not happen is two owners, because both
+  -- would write the mob's state and neither would see the other -- so the
+  -- think bucket below is built ONLY when C++ declined.
+  m.cpp = dnp ~= nil and dnp.mob_track ~= nil and dnp.mob_track(m.idx, kind, m.dormant) or false
+  M.tracked = (M.tracked or 0) + (m.cpp and 1 or 0)
+  M.on_lua = (M.on_lua or 0) + (m.cpp and 0 or 1)
+
+  if not m.cpp then
+    -- Round-robin by SPAWN ORDER, so a level's mobs are spread evenly across
+    -- the think buckets whatever their entity indices turn out to be.
+    local b = spawned % THINK
+    spawned = spawned + 1
+    local list = buckets[b]
+    list[#list + 1] = m
+    m.bucket = b
+    enter(m, def.initial, dnp.tick())
+  end
   return e
 end
 
@@ -1144,6 +1172,11 @@ function M.reset()
   for i = #corpses, 1, -1 do corpses[i] = nil end
   spawned, asleep = 0, false
   players = {}
+  M.tracked, M.on_lua = 0, 0
+  -- And the C++ side, for exactly the same reason: it keys by entity index
+  -- too, so a record left behind is one that will be found for somebody else's
+  -- entity once the new level starts handing out indices from the bottom.
+  if dnp ~= nil and dnp.mobs_reset ~= nil then dnp.mobs_reset() end
 end
 
 -- M.place{ scale = 48, {kind="imp", x=.., y=.., z=..}, ... }
@@ -1162,9 +1195,26 @@ function M.place(list)
     if scale == nil then return v end
     return fx.frac(v, scale)
   end
+  local before = (M.tracked or 0) + (M.on_lua or 0)
   for _, it in ipairs(list or {}) do
     M.spawn(it.kind or it.name,
             vec3.new(coord(it.x), coord(it.y), coord(it.z)), it)
+  end
+
+  -- THE CENSUS, and it is the number that matters.
+  --
+  -- "18 kinds compiled" at load says what COULD run on the C++ loop. This says
+  -- what does. The two differ whenever a kind compiled but its instances were
+  -- refused, which a load-time count cannot see -- and without this line every
+  -- end-to-end test passes just as happily with the loop never having taken a
+  -- single mob, which is the way a comparison between two runtimes agrees for
+  -- the wrong reason.
+  --
+  -- Here rather than on the first tick because this is when a level's monsters
+  -- arrive, and a level with nobody in it is not ticked at all.
+  if (M.tracked or 0) + (M.on_lua or 0) > before then
+    print(("mobs: placed %d on the C++ loop, %d on the Lua path")
+          :format(M.tracked or 0, M.on_lua or 0))
   end
 end
 
@@ -1224,10 +1274,22 @@ function hurt(target, amount, by)
   m.hp = m.hp - amount
   m.hurt_at = dnp.tick()
   m.hurt_by_mob = by ~= nil
+  -- MIRRORED, because the C++ loop owns the copy its conditions read. `hp` is
+  -- what `hp_below` tests and the pain edge is what `was_hurt` and
+  -- `hurt_by_mob` test, so a mob the loop owns would otherwise be hurt here
+  -- and healthy there -- and would never flinch.
+  if m.cpp then
+    dnp.mob_set(m.idx, "hp", m.hp)
+    dnp.mob_set(m.idx, "hurt", by ~= nil)
+  end
 
   if m.hp <= 0 then
     m.dead = true
     m.target = nil
+    if m.cpp then
+      dnp.mob_set(m.idx, "dead", true)
+      dnp.mob_set(m.idx, "target", nil)
+    end
     if m.e:valid() then m.e:set_solid(false) end
     enter(m, "death", dnp.tick())
     if m.def.corpse then
@@ -1247,6 +1309,7 @@ function hurt(target, amount, by)
   if by ~= nil and m.def.infighting and by.e:valid() and by.idx ~= m.idx and
      not by.dead then
     m.target = by.e
+    if m.cpp then dnp.mob_set(m.idx, "target", by.idx) end
   end
 
   -- PAIN CHANCE, rolled. A monster that ALWAYS flinches can be stun-locked
@@ -1495,11 +1558,30 @@ function on_tick()
   -- most of the work each tick would be on behalf of empty rooms. Nothing a
   -- mob does is even defined without a target: it chases one, aims at one,
   -- decides whether it can see one.
+  -- THE C++ LOOP'S SHARE, and it runs UNCONDITIONALLY -- above the sleep check
+  -- below, not after it.
+  --
+  -- It owns whichever mobs dnp.mob_track took, and that includes owning their
+  -- sleep: it has the same "nobody here, stop" rule and the same one-shot flag
+  -- for it. Calling it only when a player is present would mean a tracked mob
+  -- never gets the stop input when the last one leaves -- it would keep
+  -- walking, on an input set eight ticks before the level emptied, because
+  -- set_input is sticky.
+  --
+  -- Two loops rather than one because they own DISJOINT sets, not because the
+  -- work is split: a mob is in exactly one of them, so there is no ordering
+  -- question between them.
+  if dnp.mobs_tick ~= nil then dnp.mobs_tick() end
+
   if #players == 0 then
     if not asleep then
       asleep = true
       for _, m in pairs(live) do
-        if m.e:valid() and not m.dead then set_move(m, ZERO, ZERO, m.aim) end
+        -- Not the tracked ones: their stop came from the call above, through
+        -- the loop's own set_move and its own memo of what it last sent.
+        -- Writing it again from here would leave that memo believing it had
+        -- sent something it had not.
+        if not m.cpp and m.e:valid() and not m.dead then set_move(m, ZERO, ZERO, m.aim) end
       end
     end
     update_missiles(tick)
@@ -1550,6 +1632,46 @@ end
 function on_attack(attacker, target)
   if target == nil or not target:valid() then return end
   hurt(target, M.player_damage or 25, nil)
+end
+
+-- WHAT THE C++ LOOP CALLS when a state's sequence reaches an action it does
+-- not run itself.
+--
+-- It names the mob by entity index, the state by name and the entry by its
+-- position in that state's own `sequence` -- which is exactly what the graph
+-- carried across, so nothing about what the action DOES ever crossed. The
+-- action then runs through the same `acts` table it always did, on the same
+-- `m` record, so there is one implementation of `spawn` and it is this one.
+--
+-- `m.p` is refreshed here because the actions read it and the loop's copy
+-- lives on the other side. Cheap: this runs when something happens, not every
+-- think, which is the whole reason the split is drawn where it is.
+function M.run_action(idx, state_name, i)
+  local m = live[idx]
+  if m == nil or not m.e:valid() then return end
+  local st = m.def.states[state_name]
+  if st == nil or st.sequence == nil then return end
+  local a = st.sequence[i]
+  if a == nil then return end
+
+  -- The fields an action reads that the loop owns. Pulled over rather than
+  -- mirrored continuously: four values once per action beats four writes per
+  -- think, and an action is rare by construction.
+  local _, _, target, aim = dnp.mob_state(idx)
+  m.aim = aim
+  m.target = target ~= nil and dnp.entity(target) or nil
+  m.p = m.e:pos()
+  m.tp = (m.target ~= nil and m.target:valid()) and m.target:pos() or nil
+  m.st = st
+
+  local fn = acts[a.action]
+  if fn == nil then return end
+  fn(m, a)
+
+  -- And back, for the one field an action may have moved. `face` in an on_hit
+  -- does exactly this, and without it the loop would steer by a stale aim on
+  -- the very tick the action was trying to correct.
+  if m.aim ~= aim then dnp.mob_set(idx, "aim", m.aim) end
 end
 
 M.live = live

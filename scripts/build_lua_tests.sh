@@ -35,6 +35,7 @@ SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
 RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp"
             "$ROOT/server/src/mobs/mob_compile.cpp"
             "$ROOT/server/src/mobs/mob_eval.cpp"
+            "$ROOT/server/src/mobs/mob_runtime.cpp"
             "$ROOT/server/src/mobs/mob_binding.cpp"
             $(ls "$ROOT"/core/src/*/*.cpp))
 
@@ -52,12 +53,16 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # The mob graph, as C++ compiles it. Needs the mob sources but NOT the world
 # bindings: mobs.load touches no entity, so the double in the test is the few
 # verbs it calls and the two real bindings are installed on top of it.
-# NOT mob_eval.cpp: the conditions need core (raycast, the CORDIC atan2) and
-# this test compiles a graph rather than evaluating one. Linking it would make
-# the graph test depend on the whole engine to check a data structure.
+# The graph test needs core as well now: the bindings it exercises live beside
+# the loop, and the loop asks the world questions. It was linking without core
+# while the binding was only a compiler; that stopped being true the moment the
+# same file gained dnp.mobs_tick.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
+        "$ROOT/server/src/mobs/mob_eval.cpp" \
+        "$ROOT/server/src/mobs/mob_runtime.cpp" \
         "$ROOT/server/src/mobs/mob_binding.cpp" \
+        $(ls "$ROOT"/core/src/*/*.cpp) \
         "$ROOT/server/tests/test_mob_graph.cpp" "${LINK[@]}" -o "$OUT/test_mob_graph"
 # And the loop that spends the graph, against a REAL sim::World on a real room:
 # half the conditions ask the world something, and a double would be a second

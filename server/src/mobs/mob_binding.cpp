@@ -8,6 +8,7 @@
 // file exists yet; when the decision loop lands it moves next to the context.
 //
 #include "mobs/mob_runtime.hpp"
+#include "lua/world_binding.hpp"
 
 extern "C" {
 #include "lauxlib.h"
@@ -15,16 +16,81 @@ extern "C" {
 }
 
 #include <cstdio>
+#include <cstring>
 #include <map>
 
 namespace dnp::server::mobs {
 
 namespace {
 
-std::map<lua_State*, MobGraph>& graphs() {
-    static std::map<lua_State*, MobGraph> g;
-    return g;
+std::map<lua_State*, MobRuntime>& runtimes() {
+    static std::map<lua_State*, MobRuntime> r;
+    return r;
 }
+
+// The world this VM is attached to, read the way world_binding.cpp reads it.
+//
+// Through the registry rather than through a parameter, because that is where
+// the host already put it and a second copy would be a second answer to which
+// world a script is talking about. Null when nothing is attached, which is the
+// Lua-only test harness -- and every caller here checks, because a mob
+// framework that needed an engine to LOAD would be untestable without one.
+lua::WorldContext* ctx_of(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "dnp_world_ctx");
+    auto* c = static_cast<lua::WorldContext*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    return (c && c->world) ? c : nullptr;
+}
+
+// Point the runtime at whatever the context currently holds.
+//
+// EVERY TICK, not once: a level's nav graph is rebuilt when a shape commits,
+// and a runtime holding the old pointer would path over a map that no longer
+// exists. Cheap enough that caching it would be an optimisation of four stores.
+MobRuntime& runtime_of(lua_State* L) {
+    MobRuntime& rt = runtimes()[L];
+    if (lua::WorldContext* c = ctx_of(L)) {
+        rt.world = c->world;
+        rt.nav = c->nav;
+        rt.commands = c->commands;
+        rt.rng = &c->rng;
+    }
+    return rt;
+}
+
+// Actions the loop does not run, handed to maps/scripts/mobs.lua.
+//
+// It calls ONE function -- mobs.run_action(entity_index, state, i) -- which
+// looks the mob up in its own `live` table and calls the same `acts` entry it
+// always did. So there is still exactly one implementation of `spawn`, and it
+// is the one that has always been there.
+struct LuaActions : ActionSink {
+    lua_State* L = nullptr;
+    u32 tick = 0;
+    u64 errors = 0;
+
+    void run(u32 entity, const char* state_name, u16 seq_index) override {
+        lua_getglobal(L, "mobs");
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }
+        lua_getfield(L, -1, "run_action");
+        if (!lua_isfunction(L, -1)) { lua_pop(L, 2); return; }
+        lua_pushnumber(L, entity);
+        lua_pushstring(L, state_name);
+        lua_pushnumber(L, seq_index);
+        // PROTECTED, and the error is counted rather than propagated. One
+        // script's broken action must not take the rest of the bucket with it
+        // -- which is the failure mobs.lua already names, where a typo in one
+        // monster's hitscan killed on_tick and froze every projectile on the
+        // level.
+        if (lua_pcall(L, 3, 0, 0) != 0) {
+            ++errors;
+            std::fprintf(stderr, "[mobs] action %s[%u]: %s\n",
+                         state_name, seq_index, lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);   // the mobs table
+    }
+};
 
 // dnp.mobs_compile(defs) -> compiled, skipped, problems
 //
@@ -33,6 +99,10 @@ std::map<lua_State*, MobGraph>& graphs() {
 // skipped kind saying which condition kept it there.
 int l_mobs_compile(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
+    // Reset FIRST and take the reference after: a new graph means every live
+    // mob's kind index is meaningless, and reset() is what drops them. The
+    // same rule mobs.lua's "called twice" refusal enforces one level up.
+    runtimes()[L].reset();
     MobGraph& g = graph_of(L);
     g.clear();
 
@@ -189,15 +259,182 @@ int l_mobs_graph(lua_State* L) {
     return 1;
 }
 
+// --- driving the loop from mobs.lua -----------------------------------------
+
+// dnp.mob_track(entity, kind, dormant) -> true if the C++ loop took it
+//
+// FALSE IS NOT AN ERROR. A kind whose graph uses something the loop does not
+// implement stays entirely in Lua, and the caller keeps its own record either
+// way -- so the two runtimes never both own one mob.
+int l_mob_track(lua_State* L) {
+    const u32 e = static_cast<u32>(luaL_checknumber(L, 1));
+    size_t n = 0;
+    const char* kind = luaL_checklstring(L, 2, &n);
+    const bool dormant = lua_toboolean(L, 3) != 0;
+    MobRuntime& rt = runtime_of(L);
+    if (rt.world == nullptr) { lua_pushboolean(L, 0); return 1; }
+    lua_pushboolean(L, track(rt, e, kind, n, dormant, rt.world->tick()) ? 1 : 0);
+    return 1;
+}
+
+int l_mob_untrack(lua_State* L) {
+    untrack(runtime_of(L), static_cast<u32>(luaL_checknumber(L, 1)));
+    return 0;
+}
+
+// dnp.mobs_tick() -> thought, lua_actions
+//
+// One bucket's worth of decisions. Called from mobs.lua's on_tick, which keeps
+// doing its own missiles and corpses either way: those are not per-mob
+// decisions and there was never anything to move.
+int l_mobs_tick(lua_State* L) {
+    MobRuntime& rt = runtime_of(L);
+    if (rt.world == nullptr) { lua_pushnumber(L, 0); lua_pushnumber(L, 0); return 2; }
+    LuaActions sink;
+    sink.L = L;
+    sink.tick = rt.world->tick();
+    tick_mobs(rt, rt.world->tick(), &sink);
+    lua_pushnumber(L, rt.thought);
+    lua_pushnumber(L, rt.lua_actions);
+    return 2;
+}
+
+// dnp.mob_enter(entity, state) -> true if it moved
+//
+// For the things outside the loop that move a mob: `hurt` sending it to pain
+// or death, and `revive` putting a corpse back on its feet.
+int l_mob_enter(lua_State* L) {
+    const u32 e = static_cast<u32>(luaL_checknumber(L, 1));
+    size_t n = 0;
+    const char* st = luaL_checklstring(L, 2, &n);
+    MobRuntime& rt = runtime_of(L);
+    if (rt.world == nullptr) { lua_pushboolean(L, 0); return 1; }
+    lua_pushboolean(L, mob_enter(rt, e, st, n, rt.world->tick()) ? 1 : 0);
+    return 1;
+}
+
+// dnp.mob_state(entity) -> state name, hp, target entity index or nil, aim
+//
+// What a Lua action needs to read about a mob the loop owns. Four values
+// rather than a table, because this is called per action and a table is an
+// allocation the collector then has to chase -- the cost this whole subsystem
+// exists to remove.
+int l_mob_state(lua_State* L) {
+    MobRuntime& rt = runtime_of(L);
+    Mob* m = mob_of(rt, static_cast<u32>(luaL_checknumber(L, 1)));
+    if (!m || m->kind < 0) return 0;
+    const Kind& k = rt.graph.kinds[static_cast<u32>(m->kind)];
+    if (m->state >= 0) {
+        lua_pushstring(L, rt.graph.str(rt.graph.states[k.first_state + m->state].name));
+    } else {
+        lua_pushnil(L);
+    }
+    lua_pushnumber(L, m->hp);
+    if (m->target >= 0) lua_pushnumber(L, m->target); else lua_pushnil(L);
+    lua_pushnumber(L, m->aim);
+    return 4;
+}
+
+// dnp.mob_set(entity, field, value)
+//
+// The few fields a Lua action still writes: hp and dead, which `hurt` owns,
+// and the aim, which `face` in an on_hit can move. Named rather than
+// positional so adding one does not renumber the others.
+int l_mob_set(lua_State* L) {
+    MobRuntime& rt = runtime_of(L);
+    Mob* m = mob_of(rt, static_cast<u32>(luaL_checknumber(L, 1)));
+    if (!m || m->kind < 0) return 0;
+    const char* field = luaL_checkstring(L, 2);
+    if (std::strcmp(field, "hp") == 0)          m->hp = static_cast<i32>(luaL_checknumber(L, 3));
+    else if (std::strcmp(field, "dead") == 0)   m->dead = lua_toboolean(L, 3) != 0;
+    else if (std::strcmp(field, "aim") == 0)    m->aim = static_cast<u32>(luaL_checknumber(L, 3));
+    else if (std::strcmp(field, "dormant") == 0) m->dormant = lua_toboolean(L, 3) != 0;
+    else if (std::strcmp(field, "target") == 0) {
+        if (lua_isnil(L, 3)) { m->target = -1; }
+        else {
+            m->target = static_cast<i32>(luaL_checknumber(L, 3));
+            if (rt.world && m->target >= 0) {
+                m->target_gen = rt.world->generation(static_cast<u32>(m->target));
+            }
+        }
+    } else if (std::strcmp(field, "hurt") == 0) {
+        // One call for the whole pain edge, because the three move together:
+        // when it happened, and whether a mob did it.
+        m->hurt_ever = true;
+        if (rt.world) m->hurt_at = rt.world->tick();
+        m->hurt_by_mob = lua_toboolean(L, 3) != 0;
+    } else {
+        return luaL_error(L, "dnp.mob_set: no field '%s'", field);
+    }
+    return 0;
+}
+
+// dnp.mob_var(entity, name [, value]) -> the value
+//
+// A read with two arguments and a write with three, which is how `entity:hp`
+// and the rest of this binding layer already read and write.
+int l_mob_var(lua_State* L) {
+    MobRuntime& rt = runtime_of(L);
+    Mob* m = mob_of(rt, static_cast<u32>(luaL_checknumber(L, 1)));
+    if (!m || m->kind < 0) { lua_pushnil(L); return 1; }
+    size_t n = 0;
+    const char* name = luaL_checklstring(L, 2, &n);
+    i32* v = mob_var(rt, *m, name, n);
+    if (!v) { lua_pushnil(L); return 1; }
+    if (!lua_isnoneornil(L, 3)) *v = static_cast<i32>(luaL_checknumber(L, 3));
+    lua_pushnumber(L, *v);
+    return 1;
+}
+
+// dnp.mobs_reset() -- a level torn down and rebuilt.
+//
+// `live` is keyed by entity index and a new level's indices start again from
+// the bottom, so a stale record is not merely dead weight: it is one that will
+// be found for somebody ELSE'S entity. mobs.lua's M.reset says the same thing
+// about its own tables.
+int l_mobs_reset(lua_State* L) {
+    runtime_of(L).reset();
+    return 0;
+}
+
+// dnp.mobs_stats() -> tracked, thought, lua_actions, routes_truncated
+int l_mobs_stats(lua_State* L) {
+    MobRuntime& rt = runtime_of(L);
+    u32 live = 0;
+    for (const Mob& m : rt.mobs) if (m.kind >= 0) ++live;
+    lua_pushnumber(L, live);
+    lua_pushnumber(L, rt.thought);
+    lua_pushnumber(L, rt.lua_actions);
+    lua_pushnumber(L, rt.routes_truncated);
+    return 4;
+}
+
 const luaL_Reg MOB_FUNCS[] = {
     {"mobs_compile", l_mobs_compile},
     {"mobs_graph", l_mobs_graph},
+    {"mobs_tick", l_mobs_tick},
+    {"mobs_reset", l_mobs_reset},
+    {"mobs_stats", l_mobs_stats},
+    {"mob_track", l_mob_track},
+    {"mob_untrack", l_mob_untrack},
+    {"mob_enter", l_mob_enter},
+    {"mob_state", l_mob_state},
+    {"mob_set", l_mob_set},
+    {"mob_var", l_mob_var},
     {nullptr, nullptr},
 };
 
 }  // namespace
 
-MobGraph& graph_of(lua_State* L) { return graphs()[L]; }
+// ONE GRAPH, and it is the runtime's own.
+//
+// This was two for about an hour -- a `graphs()` map beside the runtimes, so
+// the compiler filled one and the loop walked the other, which is empty. It
+// would have presented as every mob standing still with nothing reporting
+// anything, because an empty graph is not an error, it is a level with no
+// monsters defined. The same "two programs, one fact" shape this whole
+// subsystem is careful about, one layer down.
+MobGraph& graph_of(lua_State* L) { return runtimes()[L].graph; }
 
 void open_mobs(lua_State* L) {
     for (const luaL_Reg* r = MOB_FUNCS; r->name; ++r) {
