@@ -173,10 +173,16 @@ struct MobRuntime {
 struct ActionSink {
     virtual ~ActionSink() = default;
     // Run entry `seq_index` (1-based, into that state's Lua `sequence`) for the
-    // mob on `entity`. Returns true if the mob LEFT the state -- an action that
-    // went somewhere, or a death -- which stops the rest of the sequence,
-    // because the rest belongs to a state the mob is no longer in.
-    virtual bool run(u32 entity, const char* state_name, u16 seq_index) = 0;
+    // mob on `entity`.
+    //
+    // VOID, and the caller works out for itself whether the mob left the state
+    // -- by looking at whether it is in a different one, or entered the same
+    // one again, once this returns. An action that goes somewhere does it
+    // through mob_enter like everything else, so there is nothing for the sink
+    // to report that the runtime cannot already see. A bool here would be a
+    // second channel for one fact, and the sink would have to be told what its
+    // own callee did.
+    virtual void run(u32 entity, const char* state_name, u16 seq_index) = 0;
 };
 
 // --- driving it -------------------------------------------------------------

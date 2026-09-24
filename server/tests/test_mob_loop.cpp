@@ -77,12 +77,16 @@ struct Recorder : ActionSink {
     struct Call { u32 tick; std::string state; u16 index; };
     std::vector<Call> calls;
     u32 now = 0;
-    // What to answer: true means "the mob left the state", which is what a Lua
-    // action that went somewhere looks like from in here.
-    bool leaves = false;
-    bool run(u32 /*entity*/, const char* state_name, u16 seq_index) override {
+    // When set, the recorder does what a Lua action that goes somewhere
+    // actually does: it calls mob_enter. Not a flag the sink returns -- the
+    // runtime works that out by watching, and faking the answer here would
+    // test the fake.
+    MobRuntime* rt = nullptr;
+    u32 entity = 0;
+    const char* leaves_to = nullptr;
+    void run(u32 /*entity*/, const char* state_name, u16 seq_index) override {
         calls.push_back(Call{now, state_name, seq_index});
-        return leaves;
+        if (leaves_to && rt) mob_enter(*rt, entity, leaves_to, std::strlen(leaves_to), now);
     }
 };
 
@@ -306,12 +310,24 @@ int main(int argc, char** argv) {
     // The sink's answer is the mob having gone somewhere -- a death, or an
     // action that called goto. Same rule, other direction.
     rec.calls.clear();
-    rec.leaves = true;
+    rec.rt = &rt;
+    rec.entity = mob_e;
+    rec.leaves_to = "idle";
     CHECK(mob_enter(rt, mob_e, "attack", 6, tick));
-    step(THINK * 4);
-    // Entry 2 is the first that reaches Lua; entries after it must not.
+    // TWO THINKS, which is exactly one attack episode: the first runs the
+    // entries due at age 0, the second the ones due at 4 and after. Stepping
+    // further is not a stronger test, it is a second episode -- the mob goes
+    // back to idle, sees the player again and attacks again, which is correct
+    // and would make the count below mean nothing.
+    step(THINK * 2);
+    // Entry 2 is the first that reaches Lua, and it went somewhere; entries 3
+    // and 4 belong to a state the mob is no longer in and must not run.
     CHECK(rec.calls.size() == 1);
-    rec.leaves = false;
+    CHECK(m->state != attack);
+    std::printf("  a Lua action that goes somewhere stops it too: %zu action(s), now '%s'\n",
+                rec.calls.size(),
+                rt.graph.str(rt.graph.states[rt.graph.kinds[0].first_state + m->state].name));
+    rec.leaves_to = nullptr;
 
     // --- a kind the loop cannot run is refused, not half-tracked -------------
     {

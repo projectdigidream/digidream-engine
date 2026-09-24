@@ -321,18 +321,26 @@ bool run_due(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
         case Act::Goto:
             enter(rt, w, m, e.state, tick);
             return true;
-        case Act::Lua:
+        case Act::Lua: {
             // Out to maps/scripts/mobs.lua, by the index of this entry in the
             // state's own `sequence`. One implementation of each action, and
             // it is that one.
             ++rt.lua_actions;
-            if (lua && lua->run(m.entity, rt.graph.str(st.name), e.lua_index)) {
-                // It left the state -- a Lua action that called goto, or a
-                // death that entered `death`. The rest of the sequence belongs
-                // to a state the mob is no longer in.
-                return true;
-            }
+            if (!lua) break;
+            // WATCHED, not asked. A Lua action that goes somewhere -- a goto,
+            // a death entering `death`, a revive -- does it through mob_enter,
+            // so the runtime can see it happen rather than being told. Both
+            // halves matter: a different state, and the SAME state entered
+            // again, which is a re-entry and equally means the sequence this
+            // loop is walking no longer belongs to the mob.
+            const i16 was_state = m.state;
+            const u32 was_entered = m.entered;
+            lua->run(m.entity, rt.graph.str(st.name), e.lua_index);
+            if (m.state != was_state || m.entered != was_entered) return true;
+            // And it may have despawned itself, which leaves nothing to walk.
+            if (m.kind < 0 || !w.agent(m.entity).active) return true;
             break;
+        }
         }
     }
     return false;
