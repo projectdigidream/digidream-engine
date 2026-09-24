@@ -340,6 +340,8 @@ function M.load(data)
   -- read would be reported as missing when it is only late.
   for name, m in pairs(data.missiles or {}) do
     local where = ("missile '%s'"):format(name)
+    -- Its body, defaulted to its name. Same rule as a mob's, below.
+    m.prop = m.prop or name
     for k in pairs(m) do
       if MISSILE_FIELD[k] == nil then
         complain("%s: has no field named `%s`", where, k)
@@ -369,6 +371,26 @@ function M.load(data)
   for name, d in pairs(data.mobs or {}) do
     local where = ("mob '%s'"):format(name)
     d.name = name
+
+    -- A MOB IS A PROP WITH A BRAIN, and the name is the join.
+    --
+    -- This file says what a monster decides; assets/props.txt says what it is
+    -- -- how wide, how tall, how fast, what it looks like -- because the
+    -- client reads that file and must never read this one. Two files, one
+    -- thing, and the thing has one name.
+    --
+    -- `prop` used to be required, and every definition that has ever been
+    -- written restated its own key into it: nineteen in the editor's sidecar,
+    -- nineteen in doom_monsters.lua, thirty-eight for thirty-eight, and not
+    -- one naming anything else. A field whose only observed value is derivable
+    -- is not a link, it is a chance to typo one -- and a typo here spawns a
+    -- monster with somebody else's body, or nothing at all.
+    --
+    -- So it defaults, and stays accepted: naming a record deliberately is how
+    -- two mobs share one body, which is a real thing to want (a spectre is a
+    -- demon that renders differently) even though nothing here does it yet.
+    d.prop = d.prop or name
+
     for k in pairs(d) do
       if MOB_FIELD[k] == nil and k ~= "name" then
         complain("%s: has no field named `%s`", where, k)

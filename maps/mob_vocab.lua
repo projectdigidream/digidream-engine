@@ -62,12 +62,16 @@ mob_vocab = {
   -- silently ignored `helth = 60` is a monster that looks configured and has
   -- the default hit points.
   mob_fields = {
-    { name = "prop", type = "string",
-      doc = "The catalogue name in assets/props.txt. That file owns the body " ..
-            "-- radius, height, speed, solid -- and the sprites, because the " ..
-            "client reads it too. NOTHING in this file crosses the wire: a " ..
-            "client that needed a pain chance to draw a monster would be a " ..
-            "protocol leak." },
+    { name = "prop", type = "string", optional = true,
+      doc = "Which catalogue record is this mob's BODY. Defaults to the mob's " ..
+            "own name, which is what you want: a mob and its body are one " ..
+            "thing said in two files, and restating the name in the second " ..
+            "one is how they come to disagree. assets/props.txt owns the " ..
+            "radius, height, speed, solid flag and the sprites, because the " ..
+            "client reads that file too. NOTHING in THIS file crosses the " ..
+            "wire: a client that needed a pain chance to draw a monster " ..
+            "would be a protocol leak. Name a record here only to make two " ..
+            "mobs share one body deliberately." },
     { name = "hp", type = "int",
       doc = "The engine has no notion of health. This is the script's." },
     { name = "initial", type = "state", optional = true,
@@ -398,8 +402,10 @@ mob_vocab = {
   -- them. A missile is not a mob: it has no graph, it has a flight and an
   -- arrival.
   missile_fields = {
-    { name = "prop", type = "string",
-      doc = "The catalogue name. Its radius is what it hits with." },
+    { name = "prop", type = "string", optional = true,
+      doc = "Which catalogue record this missile is drawn from, and whose " ..
+            "radius it hits with. Defaults to the missile's own name, as a " ..
+            "mob's does." },
     { name = "speed", type = "fx", doc = "World units per second." },
     { name = "damage", type = "int", optional = true },
     { name = "radius", type = "fx", optional = true,

@@ -340,6 +340,8 @@ function M.load(data)
   -- read would be reported as missing when it is only late.
   for name, m in pairs(data.missiles or {}) do
     local where = ("missile '%s'"):format(name)
+    -- Its body, defaulted to its name. Same rule as a mob's, below.
+    m.prop = m.prop or name
     for k in pairs(m) do
       if MISSILE_FIELD[k] == nil then
         complain("%s: has no field named `%s`", where, k)
@@ -369,6 +371,26 @@ function M.load(data)
   for name, d in pairs(data.mobs or {}) do
     local where = ("mob '%s'"):format(name)
     d.name = name
+
+    -- A MOB IS A PROP WITH A BRAIN, and the name is the join.
+    --
+    -- This file says what a monster decides; assets/props.txt says what it is
+    -- -- how wide, how tall, how fast, what it looks like -- because the
+    -- client reads that file and must never read this one. Two files, one
+    -- thing, and the thing has one name.
+    --
+    -- `prop` used to be required, and every definition that has ever been
+    -- written restated its own key into it: nineteen in the editor's sidecar,
+    -- nineteen in doom_monsters.lua, thirty-eight for thirty-eight, and not
+    -- one naming anything else. A field whose only observed value is derivable
+    -- is not a link, it is a chance to typo one -- and a typo here spawns a
+    -- monster with somebody else's body, or nothing at all.
+    --
+    -- So it defaults, and stays accepted: naming a record deliberately is how
+    -- two mobs share one body, which is a real thing to want (a spectre is a
+    -- demon that renders differently) even though nothing here does it yet.
+    d.prop = d.prop or name
+
     for k in pairs(d) do
       if MOB_FIELD[k] == nil and k ~= "name" then
         complain("%s: has no field named `%s`", where, k)
@@ -683,9 +705,25 @@ local conds = {}
 -- `m.p` and `m.tp` are refreshed at the top of the mob's turn and are valid
 -- only within it. Nothing outside a think reads them, and the tick they were
 -- taken on is recorded so a stale pair cannot be used by accident.
+-- IS THIS TARGET STILL WORTH HAVING?
+--
+-- Not the same question as "does the entity exist". A mob that dies keeps its
+-- entity -- that is what a corpse IS -- and it stays in `live` so it can be
+-- resurrected, so `valid()` goes on saying yes long after it has stopped being
+-- an opponent. Anything that retaliated against it during infighting therefore
+-- kept it as a target and went on shooting the body, which is both useless and
+-- unmistakable to watch.
+--
+-- A player is never in `live`, so this is only ever the mob case.
+local function target_gone(t)
+  if t == nil or not t:valid() then return true end
+  local other = live[t:index()]
+  return other ~= nil and other.dead == true
+end
+
 local function refresh_pos(m, tick)
   m.p = m.e:pos()
-  m.tp = (m.target ~= nil and m.target:valid()) and m.target:pos() or nil
+  m.tp = (not target_gone(m.target)) and m.target:pos() or nil
   m.pos_tick = tick
 end
 
@@ -956,11 +994,23 @@ function acts.goto(m, a)
   return true                              -- stop the rest of the sequence
 end
 
-function acts.set_param(m, a)  m.e:param(a.param, a.value) end
+-- A PARAMETER IS CHANGED THROUGH THE EFFECT STACK, not by writing it.
+--
+-- `entity:param(name)` is a READ. It takes no value and ignores one, so
+-- `e:param("turn_speed", 12)` compiled, ran, and did nothing at all -- which is
+-- why `flying` never floated anything either: its gravity_scale was set the
+-- same non-existent way. The stack is the mechanism because it recomputes from
+-- base every tick and therefore cannot drift (design §6).
+--
+-- add_effect(name, op, value [, ticks]); ticks 0 or absent is permanent.
+function acts.set_param(m, a)
+  m.e:add_effect(a.param, "set", a.value)
+end
 
 function acts.effect(m, a)
-  m.e:add_effect({ param = a.param, mul = a.mul, add = a.add,
-                   ticks = a.ticks, tag = a.tag })
+  -- One op per effect, so a modifier that both scales and offsets is two.
+  if a.mul ~= nil then m.e:add_effect(a.param, "mul", a.mul, a.ticks) end
+  if a.add ~= nil then m.e:add_effect(a.param, "add", a.add, a.ticks) end
 end
 
 function acts.vfx(m, a)
@@ -1019,12 +1069,16 @@ function M.spawn(kind, pos, opts)
   -- table would have every zombieman on the level share one cooldown.
   for k, v in pairs(def.vars or {}) do m.vars[k] = v end
 
-  if def.turn_speed then e:param("turn_speed", def.turn_speed) end
+  -- Through the effect stack, permanently. `param` is a read-only accessor and
+  -- silently ignored the value it was handed, so neither of these did anything
+  -- until the shooting range made it obvious that a monster's turn rate was
+  -- never changing.
+  if def.turn_speed then e:add_effect("turn_speed", "set", def.turn_speed) end
 
   if def.flying then
     -- No engine support needed: gravity_scale is a replicated parameter, so a
     -- flyer is flying on every client without a word of it crossing the wire.
-    e:param("gravity_scale", ZERO)
+    e:add_effect("gravity_scale", "set", ZERO)
   end
 
   live[m.idx] = m
@@ -1156,7 +1210,10 @@ function hurt(target, amount, by)
   -- INFIGHTING. Doom's monsters turn on whatever hurt them, and it is most of
   -- what makes a crowded room interesting. `by` is nil for a player, so this
   -- only ever retargets onto another mob.
-  if by ~= nil and m.def.infighting and by.e:valid() and by.idx ~= m.idx then
+  -- And not onto something already dead: a corpse cannot have hurt anybody,
+  -- but a delayed missile from one can arrive after it died.
+  if by ~= nil and m.def.infighting and by.e:valid() and by.idx ~= m.idx and
+     not by.dead then
     m.target = by.e
   end
 
@@ -1431,7 +1488,7 @@ function on_tick()
       -- and `sight` is what makes it cheap.
       if not m.dead then
         refresh_pos(m, tick)
-        if m.target == nil or not m.target:valid() then
+        if target_gone(m.target) then
           local p = m.p
           local player, d2 = nearest_player(p)
           local sight = m.def.sight
@@ -1440,7 +1497,7 @@ function on_tick()
           else
             m.target = nil
           end
-          m.tp = (m.target ~= nil and m.target:valid()) and m.target:pos() or nil
+          m.tp = (not target_gone(m.target)) and m.target:pos() or nil
         end
         think(m, tick)
         -- Steered here, in the bucket, rather than in a second pass over every

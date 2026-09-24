@@ -17,8 +17,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# AND THAT THE COPY IS THE SOURCE.
+#
+# Present is not enough. A map that declares `../../../maps/scripts/mobs.lua`
+# runs the copy beside its own .dnpm, so editing the source and not re-baking
+# leaves the level running the version from before the change -- silently, and
+# looking exactly like the change not working. That is this repository's oldest
+# trap ("two programs, one number") wearing a build system as a disguise, and
+# the fix is one `cp` that nobody remembers to run.
+#
+# Only declarations with a directory in them are compared: a bare name IS the
+# file beside the map and has no source anywhere else.
 missing=0
+stale=0
 checked=0
+reported=
 for map in maps/*.map modules/*/maps/*.map; do
   [[ -f "$map" ]] || continue
   baked="${map%.map}.dnpm"
@@ -33,14 +46,37 @@ for map in maps/*.map modules/*/maps/*.map; do
     if [[ ! -f "$want" ]]; then
       echo "  MISSING $want   (declared by $map)"
       missing=$((missing + 1))
+      continue
+    fi
+    [[ "$decl" == */* ]] || continue
+    src="$dir/$decl"
+    [[ -f "$src" ]] || continue
+    if ! cmp -s "$src" "$want"; then
+      # Once per copy, not once per map that declares it: thirty-two Doom
+      # levels declare the same mobs.lua, and thirty-two identical lines about
+      # one file buries the second file that is also stale.
+      if [[ " $reported " != *" $want "* ]]; then
+        reported="$reported $want"
+        echo "  STALE   $want"
+        srcnorm="$(cd "$(dirname "$src")" && pwd -P)/$(basename "$src")"
+        echo "          differs from ${srcnorm#"$ROOT/"}   (declared by $map among others)"
+        stale=$((stale + 1))
+      fi
     fi
   done < <(grep -E '^\s*script\s+' "$map" || true)
 done
 
-if (( missing > 0 )); then
-  echo "map scripts: $missing missing of $checked declared"
-  echo "  a baked map whose scripts are gone kills the server at startup;"
-  echo "  re-run mapc for that map to copy them back."
+if (( missing > 0 || stale > 0 )); then
+  (( missing > 0 )) && {
+    echo "map scripts: $missing missing of $checked declared"
+    echo "  a baked map whose scripts are gone kills the server at startup;"
+    echo "  re-run mapc for that map to copy them back."
+  }
+  (( stale > 0 )) && {
+    echo "map scripts: $stale stale of $checked declared"
+    echo "  the level runs the copy, so it is running the code from before your"
+    echo "  edit; re-run mapc for that map, or copy the source over the copy."
+  }
   exit 1
 fi
-echo "map scripts ok: $checked declared, all present"
+echo "map scripts ok: $checked declared, all present and current"

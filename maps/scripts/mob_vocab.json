@@ -478,8 +478,9 @@
   ],
   "missile_fields": [
     {
-      "doc": "The catalogue name. Its radius is what it hits with.",
+      "doc": "Which catalogue record this missile is drawn from, and whose radius it hits with. Defaults to the missile's own name, as a mob's does.",
       "name": "prop",
+      "optional": true,
       "type": "string"
     },
     {
@@ -551,8 +552,9 @@
   ],
   "mob_fields": [
     {
-      "doc": "The catalogue name in assets/props.txt. That file owns the body -- radius, height, speed, solid -- and the sprites, because the client reads it too. NOTHING in this file crosses the wire: a client that needed a pain chance to draw a monster would be a protocol leak.",
+      "doc": "Which catalogue record is this mob's BODY. Defaults to the mob's own name, which is what you want: a mob and its body are one thing said in two files, and restating the name in the second one is how they come to disagree. assets/props.txt owns the radius, height, speed, solid flag and the sprites, because the client reads that file too. NOTHING in THIS file crosses the wire: a client that needed a pain chance to draw a monster would be a protocol leak. Name a record here only to make two mobs share one body deliberately.",
       "name": "prop",
+      "optional": true,
       "type": "string"
     },
     {
