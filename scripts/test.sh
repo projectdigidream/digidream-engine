@@ -62,6 +62,11 @@ HOST_ARCH="$(uname -m)"
 # compared rather than one replacing the other.
 "./build/$HOST_ARCH/mapc" maps/doors_trig.map "build/$HOST_ARCH/doors_trig.dnpm"
 "./build/$HOST_ARCH/mapc" maps/monsters.map "build/$HOST_ARCH/monsters.dnpm"
+# The scaling fixture: 144 generated sectors and a script that fills them with
+# as many monsters as it is asked for. Used by the snapshot-ordering test below
+# and by tools/mobperf/run.js, which is not part of the suite because it takes
+# a minute and answers a question rather than asserting one.
+"./build/$HOST_ARCH/mapc" maps/mobperf.map "build/$HOST_ARCH/mobperf.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_a.map "build/$HOST_ARCH/level_a.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_b.map "build/$HOST_ARCH/level_b.dnpm"
 # Floating platforms with open edges -- the only map here that is not a sealed
@@ -414,6 +419,14 @@ else
      && node test/triggers.test.js 2>/dev/null | tail -2 \
      && node test/attack.test.js 2>/dev/null | tail -2 \
      && node test/enemies.test.js 2>/dev/null | tail -2 \
+     `# WHICH entities a full snapshot spends its budget on. A datagram holds` \
+     `# about 46 and a real level has more, so the choice is the whole question,` \
+     `# and docs/protocol.md 5.4 has always specified distance then staleness.` \
+     `# It did not do that: it ordered by entity INDEX, which is spawn order, so` \
+     `# a player was told about whatever the map placed first however far away it` \
+     `# had wandered -- and 211 of 250 monsters were never sent ONCE. The control` \
+     `# is in the test: restore index order and four of its seven checks fail.` \
+     && node test/snapshot_order.test.js 2>/dev/null | tail -2 \
      && node test/levels.test.js 2>/dev/null | tail -2 \
      && node test/live.test.js 2>/dev/null | tail -2)
 

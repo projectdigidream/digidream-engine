@@ -57,12 +57,23 @@ local CX, CY, CZ = 98.689, 118.944, 3
 local GOLDEN = 2.399963
 local SPACING = 0.9
 
+-- OUTSIDE IN: monster 1 is the FURTHEST from the player, monster N the nearest.
+--
+-- Free for the cost measurement -- it is the same set of positions, numbered
+-- the other way -- and it is what makes an ordering test possible at all.
+-- Entity slots are handed out in spawn order, so spawning nearest-first would
+-- make index order and distance order agree, and a snapshot that picked the
+-- lowest fifty indices would look exactly like one that picked the nearest
+-- fifty. Anti-correlating them is the only way to tell those apart.
+--
+-- See server/edge/test/snapshot_order.test.js, which is the reason.
+
 local kinds = { "zombieman", "imp" }
 
 local spawned, refused = 0, 0
 for i = 1, N do
-  local r = SPACING * math.sqrt(i)
-  local a = i * GOLDEN
+  local r = SPACING * math.sqrt(N + 1 - i)
+  local a = (N + 1 - i) * GOLDEN
   local x = CX + r * math.cos(a)
   local y = CY + r * math.sin(a)
   -- Well above the floor: the mover settles a body down onto whatever is under

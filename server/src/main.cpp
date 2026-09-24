@@ -1679,32 +1679,100 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // Ordering, not filtering: nothing is excluded, and an entity that
             // does not fit this tick is still recorded as "the client has the
             // old value" so the next delta is computed against what arrived.
+            // SORTED BY DISTANCE, which is what docs/protocol.md section 5.4
+            // has always specified and what this did not do.
+            //
+            // What was here was a binary near/far split at a radius of 64
+            // engine units -- 3072 Doom map units, which is most of a level --
+            // and WITHIN each half the order was the entity INDEX. Two things
+            // followed, and both are worse than they sound:
+            //
+            //   the fifty entities a player was told about were the fifty with
+            //   the lowest slot numbers, not the fifty nearest. Slot order is
+            //   spawn order, so it was "whatever the map script placed first",
+            //   for ever, however far away it had wandered;
+            //
+            //   and when the near half alone overflowed the budget -- which on
+            //   any real Doom level it does -- the far half was never reached
+            //   at all. The cursor advanced and nothing read it. The comment
+            //   below it promised the far field "takes turns"; it did not.
+            //
+            // Only ACTIVE entities are candidates now. The old sweep walked all
+            // 1152 slots twice, reading positions out of dead ones, which is
+            // also why `order` had to be the size of the whole table.
             u32 order[sim::MAX_ENTITIES];
             u32 order_n = 0;
             {
                 const fx3 eye = world.agent(s.agent).pos;
-                // A generous radius -- this is about SPENDING the budget well,
-                // not about hiding things. Anything inside it is sent every
-                // tick; outside it, turns.
-                const fx near_r = fx::from_int(64);
-                const auto near_enough = [&](fx3 p) {
-                    const fx2 d{p.x - eye.x, p.y - eye.y};
-                    return len_sq_raw(d) <=
-                           static_cast<u128>(static_cast<i128>(near_r.raw) * near_r.raw);
-                };
                 const auto pos_of = [&](u32 i) {
                     return sim::World::is_prop(i) ? world.prop(i).pos
                                                   : world.agent(i).pos;
                 };
+                const auto live = [&](u32 i) {
+                    return sim::World::is_prop(i) ? world.prop(i).active
+                                                  : world.agent(i).active;
+                };
+
+                // The key is the horizontal distance squared, in raw fx units,
+                // divided down as the entity goes unsent.
+                //
+                // "Distance, then time since last sent" is the spec's rule, and
+                // a strict sort on distance alone starves the far field exactly
+                // as the old code did -- an entity beyond the budget is never
+                // sent, so it is never not-stale, so it never rises. Halving
+                // its effective distance every AGE_TICKS unsent snapshots gives
+                // it a way in without letting it outrank something actually in
+                // front of the player: a body twice as far away has to go four
+                // times as long unheard before it competes.
+                constexpr u32 AGE_TICKS = 8;
+                constexpr u32 AGE_MAX_SHIFT = 12;
+                struct Cand { u64 key; u32 i; };
+                Cand cand[sim::MAX_ENTITIES];
+
                 for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) {
-                    if (near_enough(pos_of(i))) order[order_n++] = i;
+                    if (i == s.agent) continue;
+
+                    // A DEAD SLOT THE CLIENT STILL BELIEVES IN IS A CANDIDATE,
+                    // and leaving it out was a real regression: the only thing
+                    // that sends DESTROYED is the loop below noticing an entity
+                    // that is no longer present while the baseline says it was.
+                    // Filtering to live entities meant a picked-up key stayed on
+                    // the floor of every client for ever -- caught by
+                    // doors.test.js's "walking into it destroyed it".
+                    const bool believed = baseline && baseline->entities[i].present;
+                    if (!live(i) && !believed) continue;
+
+                    if (!live(i)) {
+                        // Top priority, and it costs six bytes. A destruction is
+                        // the one message that does not become truer by waiting,
+                        // and an entity the client draws that the server does
+                        // not have is the most confusing thing a snapshot can
+                        // leave behind.
+                        cand[order_n++] = Cand{0, i};
+                        continue;
+                    }
+
+                    const fx3 p = pos_of(i);
+                    const fx2 d{p.x - eye.x, p.y - eye.y};
+                    u64 key = static_cast<u64>(
+                        len_sq_raw(d) >> 32);   // fx raw squared is wide; 32 bits of it is plenty
+                    // +1 so nothing that is merely close outranks a destruction.
+                    key += 1;
+                    const u32 unsent = s.last_sent_tick[i] == 0
+                                     ? AGE_MAX_SHIFT * AGE_TICKS
+                                     : world.tick() - s.last_sent_tick[i];
+                    const u32 shift = unsent / AGE_TICKS;
+                    key >>= (shift > AGE_MAX_SHIFT ? AGE_MAX_SHIFT : shift);
+                    cand[order_n++] = Cand{key, i};
                 }
-                for (u32 k = 0; k < sim::MAX_ENTITIES; ++k) {
-                    const u32 i = (s.snapshot_cursor + k) % sim::MAX_ENTITIES;
-                    if (!near_enough(pos_of(i))) order[order_n++] = i;
-                }
-                // Advance by a slice, so successive ticks start further along.
-                s.snapshot_cursor = (s.snapshot_cursor + 64) % sim::MAX_ENTITIES;
+
+                // Insertion order is the tie-break, and it is the entity index,
+                // so two bodies at the same distance are still ordered the same
+                // way on every tick -- a snapshot set that reshuffled under a
+                // tie would make the delta baselines churn for no reason.
+                std::stable_sort(cand, cand + order_n,
+                                 [](const Cand& a, const Cand& b) { return a.key < b.key; });
+                for (u32 k = 0; k < order_n; ++k) order[k] = cand[k].i;
             }
 
             for (u32 oi = 0; oi < order_n; ++oi) {
@@ -1780,6 +1848,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;
+                    // WHEN, so the ordering above can age it. `tick` rather
+                    // than a counter of snapshots: a client that joins late
+                    // must not look like one whose entities are all fresh.
+                    s.last_sent_tick[i] = world.tick();
                 } else {
                     // Did not fit. Record what the client STILL has, not what we
                     // wanted to send -- otherwise the next delta is computed

@@ -52,7 +52,24 @@ public:
     // Near entities are sent first and every tick; the rest resume from here
     // and wrap, so the far field takes turns rather than the same tail being
     // dropped forever.
+    //
+    // THAT NEVER WORKED and the cursor is no longer read. Entities were ordered
+    // near-then-far, and within each half by entity INDEX -- so the fifty a
+    // player heard about were the fifty with the lowest slot numbers, and once
+    // the near half alone overflowed the budget the far half was never reached,
+    // cursor or no cursor. Kept as a field only so nothing reading a snapshot
+    // has to change; send_snapshots now sorts by distance with an ageing term.
     u32  snapshot_cursor     = 0;
+
+    // The tick each entity was last successfully sent on, or 0 for never.
+    //
+    // This is the "then time since that entity was last sent" half of
+    // docs/protocol.md section 5.4's ordering rule, and without it a strict
+    // sort by distance starves the far field exactly as the index order did:
+    // an entity past the budget is never sent, so it never becomes stale, so
+    // it never rises. Per session, because two players standing in different
+    // rooms disagree about what is near.
+    u32  last_sent_tick[sim::MAX_ENTITIES]{};
     u32  newest_input_tick   = 0;
     // Bundles discarded as belonging to the world this session just left.
     // Counted rather than dropped in silence: "input stopped working after a
@@ -119,6 +136,11 @@ public:
         ack_snapshot_tick = 0;
         last_snapshot_sent = 0;
         snapshot_cursor = 0;
+        // Cleared with the rest of the history: a session that moved level and
+        // kept these would age every entity against a tick from the world it
+        // left, and the ordering would be wrong for as long as the numbers
+        // stayed larger than the new level's tick.
+        for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) last_sent_tick[i] = 0;
         newest_input_tick = 0;
         next_tick_ = 0;
         started_ = false;
@@ -135,6 +157,11 @@ public:
         ack_snapshot_tick = 0;
         last_snapshot_sent = 0;
         snapshot_cursor = 0;
+        // Cleared with the rest of the history: a session that moved level and
+        // kept these would age every entity against a tick from the world it
+        // left, and the ordering would be wrong for as long as the numbers
+        // stayed larger than the new level's tick.
+        for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) last_sent_tick[i] = 0;
         newest_input_tick = 0;
         next_tick_ = 0;
         started_ = false;
