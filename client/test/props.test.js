@@ -6,12 +6,15 @@
 // are about the parser being tolerant in the right places and strict in the
 // right places, and about the animation clock being the client's own.
 //
-import { parseProps, frameAt, rotationFor, frameName, PropRegistry } from '../src/render/props.js'
+import { parseProps, frameAt, rotationFor, frameName, propScale, PropRegistry } from '../src/render/props.js'
+import { parseAtlas } from '../src/render/atlas.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps
 
 let checks = 0
 let fails = 0
@@ -316,6 +319,158 @@ sprite 10 size 0.9 billboard state 0 fps 0 frames IDLE
   spawnAndKill(leak, 500)
   check(leak.animated.size === 500,
         `CONTROL: never pruned, the registry still holds all ${leak.animated.size}`)
+}
+
+// --- `scale` makes the picture bigger and the body exactly the same ----------
+//
+// One number per kind, multiplying whatever its art would otherwise be drawn
+// at. Both drawing paths have to honour it -- the per-PNG plane, whose size is
+// baked into the geometry when the mesh is made, and the atlas, whose quad is
+// rewritten on every frame from the sheet's declared height.
+//
+// The control is the body. `radius` and `height` are replicated and predicted;
+// a scale that moved them would draw one size and collide at another, which is
+// a misprediction on every touch and presents as a netcode fault rather than
+// as an art setting.
+console.log('\n--- a kind is drawn at its own scale ---')
+{
+  const THREE = {
+    PlaneGeometry: class { constructor (w, h) { this.w = w; this.h = h } },
+    MeshBasicMaterial: class {
+      constructor (o) { Object.assign(this, o); this.color = { setHex () {} } }
+    },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry; this.material = material
+        this.userData = {}; this.parent = {}
+      }
+    },
+    DoubleSide: 2
+  }
+  const catalogue = parseProps(`
+prop 30 runt   radius 0.2 height 0.9 scale 0.5 solid
+sprite 30 size 1 billboard state 0 fps 0 frames IDLE
+prop 31 giant  radius 0.2 height 0.9 scale 3 solid
+sprite 31 size 1 billboard state 0 fps 0 frames IDLE
+prop 32 plain  radius 0.2 height 0.9 solid
+sprite 32 size 1 billboard state 0 fps 0 frames IDLE
+`)
+  const textures = new Map([['IDLE', 'tex:idle']])
+  const reg = new PropRegistry({ THREE, textures, catalogue })
+
+  const runt = reg.make(30)
+  const giant = reg.make(31)
+  const plain = reg.make(32)
+  check(runt.geometry.w === 0.5, 'a half-scale kind gets a half-size quad')
+  check(giant.geometry.w === 3, 'and a triple-scale one a triple-size quad')
+  check(plain.geometry.w === 1, 'while a kind with no scale is unchanged')
+
+  // Feet stay on the ground: the simulation's position is the BOTTOM of the
+  // thing, so the offset that lifts the quad has to scale with it. Getting
+  // this wrong sinks a big sprite into the floor rather than making it big.
+  check(runt.userData.yOffset === 0.25 && giant.userData.yOffset === 1.5,
+        'and each sits with its feet on the ground')
+
+  // THE CONTROL. Same three kinds, read back from the catalogue: the body is
+  // identical whatever the picture does.
+  for (const id of [30, 31, 32]) {
+    const d = catalogue.kinds.get(id)
+    check(d.radius === 0.2 && d.height === 0.9,
+          `CONTROL: kind ${id}'s body is untouched by its scale`)
+  }
+  check(propScale(catalogue.kinds.get(32)) === 1, 'and absent means 1, not 0')
+}
+
+// --- and the atlas path, which sizes its quad from the SHEET ------------------
+//
+// The two drawing paths arrive at a size completely differently. A per-PNG
+// sprite bakes it into the geometry once, when the mesh is made; an atlas
+// rewrites the quad on every frame change, from the height the sheet declares,
+// because each frame carries its own trim. So scale has to be applied in two
+// places and a test of one says nothing about the other.
+console.log('\n--- the atlas path scales too ---')
+{
+  const CANVAS = 64
+  const atlas = parseAtlas({
+    format: 'threesprite-atlas',
+    version: 1,
+    sprite: 'SPRT',
+    canvas: { w: CANVAS, h: CANVAS },
+    worldHeight: 2,
+    image: 'SPRT.png',
+    size: { w: 128, h: 128 },
+    views: { count: 1, mirror: false, list: [] },
+    frames: {
+      f0: {
+        rect: { x: 0, y: 0, w: CANVAS, h: CANVAS },
+        source: { x: 0, y: 0, w: CANVAS, h: CANVAS },
+        pivot: { x: 0.5, y: 1 }
+      }
+    },
+    animations: [{ name: 'idle', fps: 8, loop: true, frames: [{ index: 0, views: { 1: 'f0' } }] }]
+  }, 'SPRT')
+
+  // The quad the geometry is given, captured. A full-canvas frame is
+  // worldHeight square, so the numbers below are the claim stated directly.
+  const written = []
+  const THREE = {
+    // The attribute API writeAtlasFrame actually uses -- setXYZ/setXY, not a
+    // raw array. A double that took the shape this test wanted rather than the
+    // shape the code calls would test nothing.
+    PlaneGeometry: class {
+      constructor (w, h) {
+        this.w = w; this.h = h
+        const buf = (n) => ({
+          v: [],
+          setXYZ (i, x, y, z) { this.v[i] = { x, y, z } },
+          setXY (i, x, y) { this.v[i] = { x, y } },
+          needsUpdate: false,
+          n
+        })
+        this.attributes = { position: buf(3), uv: buf(2) }
+      }
+    },
+    MeshBasicMaterial: class { constructor (o) { Object.assign(this, o); this.color = { setHex () {} } } },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry; this.material = material
+        this.userData = {}; this.parent = {}
+      }
+    },
+    DoubleSide: 2
+  }
+  const catalogue = parseProps(`
+prop 40 small radius 0.2 height 0.9 scale 0.5 solid
+atlas 40 sheet SPRT anim idle
+prop 41 big   radius 0.2 height 0.9 scale 4 solid
+atlas 41 sheet SPRT anim idle
+prop 42 plain radius 0.2 height 0.9 solid
+atlas 42 sheet SPRT anim idle
+`)
+  const atlases = new Map([['SPRT', { atlas, material: {} }]])
+  const reg = new PropRegistry({ THREE, textures: new Map(), catalogue, atlases })
+
+  // Corner 0 is top-left and corner 2 is bottom-left, as writeAtlasFrame lays
+  // a quad out, so their y difference is how tall it was drawn.
+  const heightOf = (mesh) => {
+    const v = mesh.geometry.attributes.position.v
+    return Math.abs(v[0].y - v[2].y)
+  }
+
+  const small = reg.make(40)
+  const big = reg.make(41)
+  const plain = reg.make(42)
+  reg.update(0)
+  written.push(heightOf(small), heightOf(big), heightOf(plain))
+  check(near(heightOf(plain), 2),
+        `an unscaled kind is drawn at the sheet's worldHeight (${heightOf(plain)})`)
+  check(near(heightOf(small), 1), `a half-scale one at half of it (${heightOf(small)})`)
+  check(near(heightOf(big), 8), `and a four-times one at four (${heightOf(big)})`)
+
+  // CONTROL: the sheet itself did not move. Scaling one kind must not resize
+  // every other kind drawn from the same sheet -- which is exactly what
+  // writing the scale into the atlas rather than passing it would do.
+  check(atlas.worldHeight === 2, "CONTROL: the sheet's own worldHeight is unchanged")
 }
 
 console.log(`\nprops: ${checks} checks, ${fails} failures`)

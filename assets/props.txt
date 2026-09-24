@@ -8,7 +8,7 @@
 # TWO RECORD TYPES, because two different programs need two different halves and
 # neither should have to understand the other's:
 #
-#   prop   <id> <name> radius <r> height <h> [speed <s>] [solid] [usable]
+#   prop   <id> <name> radius <r> height <h> [speed <s>] [scale <k>] [solid] [usable]
 #           The SIMULATION's half. The server reads it. `radius` and `height`
 #           are the cylinder an agent has to be inside to touch the thing;
 #           `solid` means a body cannot walk through it, and `usable` means
@@ -21,6 +21,21 @@
 #           A prop with neither flag is a trigger volume you walk into -- a key,
 #           a checkpoint. With `solid` it is an obstacle. With `usable` it is
 #           something you press. They compose: a lever on a plinth is both.
+#
+#           `scale` is the exception on this line and the server reads past it:
+#           it multiplies how big the kind is DRAWN, over whatever its picture
+#           would otherwise be -- the `size` on a sprite line, or the height the
+#           sheet declares for an atlas. It is here rather than on a visual line
+#           because it is a fact about the KIND: a big imp is big in every state
+#           and from every angle. And it is a MULTIPLIER rather than a size, so
+#           it is not a second opinion about a number the sheet already carries
+#           -- which is what the atlas line refuses to restate.
+#
+#           It does not touch the body. A scaled-up prop is exactly as wide and
+#           as tall to walk into as it was, because that half is replicated and
+#           predicted: drawing one size and colliding at another is a
+#           misprediction on every touch and looks like a netcode fault.
+#
 #
 #   sprite <id> size <world-height> [billboard] [state <n>] [fps <f>] frames A,B,C
 #   mesh   <id> model <name> [state <n>] [clip <name>]

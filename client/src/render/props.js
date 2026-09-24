@@ -67,6 +67,19 @@ export function writeAtlasFrame (geometry, atlas, key, worldHeight = atlas.world
   return true
 }
 
+/**
+ * A kind's drawing scale: 1 unless the catalogue says otherwise.
+ *
+ * Clamped, and the clamp is the point. `scale 0` is a prop that draws as
+ * nothing with no error anywhere, which is indistinguishable from missing art
+ * and is the failure this whole file is careful about elsewhere; a negative
+ * one mirrors the quad. Both are typos rather than intentions.
+ */
+export function propScale (def) {
+  const s = Number(def?.scale)
+  return Number.isFinite(s) && s > 0 ? s : 1
+}
+
 export function parseProps (text) {
   const kinds = new Map()   // id -> { id, sprite?: {...}, mesh?: {...} }
   const warnings = []
@@ -105,6 +118,16 @@ export function parseProps (text) {
         k++
         if (tok[k - 1] === 'radius') d.radius = Number(v)
         else if (tok[k - 1] === 'height') d.height = Number(v)
+        // HOW BIG IT IS DRAWN, as a multiplier on whatever its picture would
+        // otherwise be -- the `size` on a sprite line, or the worldHeight the
+        // sheet declares for an atlas. A multiplier rather than a size, which
+        // is the whole reason it can sit here and serve both: it is not a
+        // second opinion about a number the sheet already carries, and the
+        // `atlas` line's comment below refuses a `size` for exactly that
+        // reason. It does NOT touch radius or height -- what a thing collides
+        // as is the simulation's business and is replicated; how big it looks
+        // is not.
+        else if (tok[k - 1] === 'scale') d.scale = Number(v)
       }
       return
     }
@@ -321,7 +344,10 @@ export class PropRegistry {
     if (def.type === 'atlas') return this.#makeAtlas(kind, def)
 
     const first = this.textures.get(state.frames[0])
-    const size = def.size ?? 1
+    // The kind's scale, applied once here. Guarded rather than trusted: a
+    // catalogue with `scale 0` would make every one of these vanish with
+    // nothing saying why, and a negative one turns the quad inside out.
+    const size = (def.size ?? 1) * propScale(def)
     const THREE = this.THREE
 
     // A billboarded plane rather than THREE.Sprite: a Sprite is always screen
@@ -490,7 +516,11 @@ export class PropRegistry {
     const key = frameKey(entry.atlas, state.anim, idx, view)
     if (!key || key === a.frameKey) return
     a.frameKey = key
-    writeAtlasFrame(mesh.geometry, entry.atlas, key)
+    // The sheet says how tall the sprite stands; the kind's scale multiplies
+    // it. Passed on every frame because writeAtlasFrame rewrites the quad
+    // anyway -- each frame has its own trim and so its own size.
+    writeAtlasFrame(mesh.geometry, entry.atlas, key,
+                    entry.atlas.worldHeight * propScale(a.def))
   }
 
   /** Forget meshes that have left the scene, so a long session does not grow. */

@@ -149,6 +149,21 @@ public:
                 if (tok[i] == "radius")      d.radius = parse_fx(tok[i + 1], ok);
                 else if (tok[i] == "height") d.height = parse_fx(tok[i + 1], ok);
                 else if (tok[i] == "speed")  d.speed = parse_fx(tok[i + 1], ok);
+                // READ AND IGNORED, deliberately. `scale` multiplies how big
+                // the kind is DRAWN; the body it collides as is `radius` and
+                // `height` and is not affected. So it is none of the server's
+                // business -- but it has to be consumed here rather than
+                // skipped, because the loop below treats an attribute it does
+                // not know as a broken line and drops the whole record.
+                //
+                // Which is why it is on the `prop` line at all: it is a fact
+                // about the KIND, not about one animation state or one sheet,
+                // and the visual lines are where a per-state fact goes. The
+                // cost is that an older server binary meeting a newer
+                // catalogue refuses every prop that carries one -- loudly, by
+                // name, which is the right way round for a single tree that is
+                // built together.
+                else if (tok[i] == "scale")  { /* the renderer's half */ }
                 else {
                     std::fprintf(stderr, "[props] %s:%d: unknown attribute '%s'\n",
                                  path, lineno, tok[i].c_str());
