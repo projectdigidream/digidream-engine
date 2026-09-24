@@ -88,6 +88,23 @@ export const STATE_FLAG = {
 
 export const PROTOCOL_VERSION = 0
 export const TICK_RATE_HZ = 60
+
+/**
+ * `proto::MAX_ENTITIES`, and A COPY — named as one, and checked.
+ *
+ * The decoder needs an upper bound on a length it read off the network, and the
+ * authority for that bound is `core/include/dnp/proto/messages.hpp`, which
+ * JavaScript cannot include. So it is copied, and `client/test/snapshots.test.js`
+ * reads the header and fails if the two stop agreeing — the same trade
+ * `editor/src/entities.js` makes for the Doom scale against the Lua that
+ * defines it.
+ *
+ * The number that was here said 768 while calling itself `proto::MAX_ENTITIES`,
+ * which was 1152. It had simply gone stale, and nothing could have noticed:
+ * a 1200-byte datagram holds about 46 entities, so the cap was never
+ * approached. A copy with no check is a copy that is already wrong.
+ */
+export const MAX_ENTITIES = 2432
 export const FX_ONE = 4294967296n // 2^32
 const FXQ_SHIFT = 20n
 
@@ -442,7 +459,14 @@ export function decodeSnapshot (buf) {
   const entityCount = r.u16()
   // proto::MAX_ENTITIES. A cap rather than a trusted length: this is the size
   // the decoder will loop to on data from the network.
-  if (!r.ok || entityCount > 768) return null
+  //
+  // IT SAID 768 AND CALLED ITSELF proto::MAX_ENTITIES, which was 1152 -- a
+  // hand-copied constant that had gone stale, and the third copy of the
+  // "two programs, one number" failure this repository keeps paying for. It was
+  // harmless only because a 1200-byte datagram holds about 46 entities, so the
+  // cap was never approached; it would have become a truncated snapshot the
+  // moment anything raised the budget.
+  if (!r.ok || entityCount > MAX_ENTITIES) return null
   for (let i = 0; i < entityCount; i++) {
     const e = { handle: r.u32(), mask: r.varint() }
     if (!r.ok) return null

@@ -10,7 +10,12 @@
 // No network, no wasm, no dependencies -- plain node.
 //
 import { SnapshotReassembler } from '../src/snapshots.js'
-import { ENT_FIELD } from '../src/proto.js'
+import { ENT_FIELD, MAX_ENTITIES } from '../src/proto.js'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 let checks = 0
 let fails = 0
@@ -139,6 +144,30 @@ const ent = (index, gen, fields = {}) => {
   check(r.entities().get(1).facing === 199, 'long delta chain stays correct')
   check(r.stats.droppedNoBaseline === 0, 'no baseline was lost mid-chain')
   check(r.history.size <= 65, `history is bounded (${r.history.size})`)
+}
+
+// --- the decoder's entity cap, against the header that defines it -----------
+//
+// `MAX_ENTITIES` in client/src/proto.js is a copy of a C++ constant, because
+// JavaScript cannot include a header. This is what makes the copy survivable:
+// the day somebody raises the simulation's entity space, this fails HERE rather
+// than presenting as a snapshot that decodes to nothing on a busy level.
+//
+// It is not hypothetical. The constant said 768 while naming itself
+// `proto::MAX_ENTITIES`, which was 1152, and had said so for long enough that
+// nobody could say when it drifted -- harmless only because a 1200-byte
+// datagram holds about 46 entities and the cap was never approached.
+{
+  const hpp = readFileSync(
+    join(ROOT, 'core', 'include', 'dnp', 'proto', 'messages.hpp'), 'utf8')
+  const m = /inline constexpr u32 MAX_ENTITIES\s*=\s*(\d+);/.exec(hpp)
+  check(m !== null, `messages.hpp still declares MAX_ENTITIES (${m?.[1] ?? 'not found'})`)
+  check(m !== null && Number(m[1]) === MAX_ENTITIES,
+        `and proto.js agrees: header ${m?.[1]}, client ${MAX_ENTITIES}`)
+  // CONTROL: the comparison can fail. Without this the two checks above pass
+  // for a test that read the wrong number out of the wrong file.
+  check(Number(m?.[1]) !== MAX_ENTITIES + 1,
+        'CONTROL: it is comparing values, not just finding a digit')
 }
 
 console.log(`snapshots: ${checks} checks, ${fails} failures`)

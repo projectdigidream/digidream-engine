@@ -31,7 +31,21 @@ inline constexpr u32 TICK_RATE_HZ = 60;
 // silently truncated real levels -- the largest converted Doom map places 166
 // monsters, so two thirds of it did not exist and the only sign of that was one
 // line saying "N did not fit".
-inline constexpr u32 MAX_AGENTS = 384;
+//
+// 384 WAS ITSELF A CEILING SOMEBODY HIT. Players and monsters share this space,
+// because a monster is an agent that runs the player's mover -- so a level with
+// 384 monsters has no slot left for a PLAYER. The session gets no agent,
+// maps/scripts/mobs.lua sees `#players == 0` and puts the level to sleep, and
+// the tick gets cheaper while the game becomes unjoinable.
+// tools/mobperf/run.js refuses to report a number in that state for exactly
+// that reason; it is where this figure came from.
+//
+// Raising it is not free and the costs are named where they are paid:
+// MoveState::attack_hit_agents is one bit per slot inside EVERY agent, the
+// mirror band in world.hpp is carved out of the prop range, and a session's
+// snapshot history is MAX_ENTITIES samples deep times SNAPSHOT_RING. Measure
+// resident memory when changing it, not just the tick.
+inline constexpr u32 MAX_AGENTS = 1024;
 
 // Written as an exact rational rather than a decimal literal, so that changing
 // the rate cannot introduce a rounding difference that only shows up as drift.

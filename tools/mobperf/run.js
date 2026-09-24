@@ -40,9 +40,17 @@ const arg = (name, fallback) => {
   const i = args.indexOf(`--${name}`)
   return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback
 }
-const COUNTS = arg("n", null) ? [Number(arg("n"))] : [50, 150, 250, 350, 500]
+const COUNTS = arg("n", null) ? [Number(arg("n"))] : [50, 250, 500, 750, 1000]
 const SECS = Number(arg('secs', 8))
 const PORT = Number(arg('port', 34700))
+
+// Read from the header, not copied. This said 384 and kept saying it after the
+// cap was raised to 1024 -- a harness announcing a ceiling it had just measured
+// straight past.
+const MAX_AGENTS = Number(
+  /inline constexpr u32 MAX_AGENTS = (\d+);/.exec(
+    readFileSync(join(ROOT, 'core', 'include', 'dnp', 'sim', 'constants.hpp'), 'utf8'))?.[1] ?? 0)
+if (!MAX_AGENTS) { console.error('could not read MAX_AGENTS from constants.hpp'); process.exit(2) }
 
 const arch = process.arch === 'x64' ? 'x86_64' : 'arm64'
 const MAP = join(ROOT, 'build', arch, 'mobperf.dnpm')
@@ -210,7 +218,7 @@ const sweep = async (dormant) => {
       console.log(`  ${String(n).padStart(4)}  ${String(r.spawned).padStart(7)}  ` +
                   `${String(agents).padStart(6)}   NOT MEASURED -- the agent table filled ` +
                   `and the player never got a slot`)
-      console.log(`                        MAX_AGENTS is ${384}, shared with players; ` +
+      console.log(`                        MAX_AGENTS is ${MAX_AGENTS}, shared with players; ` +
                   `${r.refused} refused, then the level slept`)
       continue
     }
@@ -272,24 +280,32 @@ if (dormant.length >= 3) {
               `${share(1000).toFixed(0)}% at 1000.`)
 
   console.log(`\n  projected -- A PROJECTION FROM A FIT, NOT A MEASUREMENT:`)
-  console.log(`    MAX_AGENTS is 384, so 1000 cannot be run today at all.`)
+  console.log(`    MAX_AGENTS is ${MAX_AGENTS}.`)
   for (const N of [384, 600, 1000]) {
     console.log(`    ${String(N).padStart(4)} agents:  step ~${at(N).toFixed(1)} ms` +
                 (at(N) > 16.67 ? '   OVER a 16.7 ms tick on its own' : ''))
   }
 }
 
-// What the mob runtime itself costs: the difference between the two sweeps at
-// the same N. Taking Lua's figure alone would miss that an awake monster is
-// also more expensive to SIMULATE -- it moves, so it collides differently.
-if (dormant.length && awake.length) {
-  console.log('\n  what being awake costs, per agent per tick:\n')
-  console.log('     N     lua     step    total')
+// WHAT THE MOB RUNTIME COSTS: Lua per awake agent, and nothing else.
+//
+// The first version of this also subtracted the dormant sweep's PHYSICS from
+// the awake one's and called the difference "what being awake costs to
+// simulate". It is not: the two sweeps at the same N do not have the same
+// number of agents, because an awake fixture kills itself -- 1000 spawned is
+// 1001 dormant agents and about 610 awake ones. Subtracting them compared a
+// thousand bodies against six hundred and reported the missing four hundred as
+// a saving, which came out NEGATIVE and looked like being awake made physics
+// cheaper.
+//
+// Physics per agent is in the dormant table above, where the population holds
+// still. This is the decision cost, which is what the awake sweep is for.
+if (awake.length) {
+  console.log('\n  the mob runtime, per AWAKE agent per tick:\n')
+  console.log('     N   agents    lua/agent')
   for (const w of awake) {
-    const d = dormant.find((x) => x.n === w.n)
-    if (!d || !w.agents) continue
-    console.log(`  ${String(w.n).padStart(4)}  ${((w.lua - d.lua) / w.agents).toFixed(2).padStart(6)}us  ` +
-                `${((w.step - d.step) / w.agents).toFixed(2).padStart(6)}us  ` +
-                `${((w.total - d.total) / w.agents).toFixed(2).padStart(6)}us`)
+    if (!w.agents) continue
+    console.log(`  ${String(w.n).padStart(4)}   ${String(w.agents).padStart(6)}    ` +
+                `${(w.lua / w.agents).toFixed(2).padStart(6)} us`)
   }
 }
