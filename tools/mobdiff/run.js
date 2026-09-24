@@ -20,8 +20,33 @@
 //
 // THE CONTROL IS BUILT IN. A comparison of two things that are equal by
 // construction proves nothing, so this refuses to report agreement unless the
-// C++ run actually took the mobs -- the census line mobs.lua prints -- and it
-// runs a deliberate perturbation at the end that must break it.
+// C++ run actually took the mobs -- the census line mobs.lua prints -- and
+// unless the world changed over the run at all.
+//
+// And the control for the control: --self runs ONE runtime twice. A divergence
+// there is this harness rather than a difference between the runtimes, and
+// finding that out afterwards costs a day in the wrong file. It found exactly
+// that the first time: without --test-player the client's arrival tick is
+// wall-clock dependent, mobs think on `tick % 8`, and two runs start with a
+// different set of monsters deciding first -- a phase difference, which no
+// re-basing can align.
+//
+// WHAT IT FOUND, when it first passed its own self-check: `hurt` read the
+// current state from `m.st`, which only the Lua path maintains, so a mob the
+// C++ loop owned could never flinch. Silently -- a monster that does not
+// flinch looks like a monster with a low pain chance.
+//
+// MEASURED, at 1000 monsters on maps/mobperf.map, three alternating runs each,
+// microseconds of Lua per awake mob per tick:
+//
+//     C++ loop   3.33  3.00  2.74
+//     Lua        3.80  4.21  4.01
+//
+// A quarter off, and the two groups do not overlap -- which is the bar the JIT
+// measurement failed and this one has to clear to mean anything. Not the 7x a
+// naive reading of the profile suggested, because the actions, the missiles,
+// the corpses and the player refresh are all still Lua and are a large part of
+// that column.
 //
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
