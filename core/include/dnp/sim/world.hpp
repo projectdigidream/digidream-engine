@@ -470,11 +470,28 @@ private:
     // One past the highest agent slot ever used. Every per-tick sweep over the
     // agent space runs to this instead of to MAX_AGENTS.
     //
-    // The agent space is 256 now and the resolution is a pair test, so a fixed
-    // bound is sixty-five thousand iterations a tick to serve a map with two
-    // players on it. Never shrinks on despawn, which keeps it a bound rather
-    // than something whose value depends on despawn order -- and a bound is all
-    // it needs to be.
+    // The agent space is 384 and the resolution is a pair test, so a fixed
+    // bound is a hundred and forty thousand iterations a tick to serve a map
+    // with two players on it. Never shrinks on despawn, which keeps it a bound
+    // rather than something whose value depends on despawn order -- and a bound
+    // is all it needs to be.
+    //
+    // "EVERY SWEEP" WAS NOT TRUE WHEN THIS WAS WRITTEN. Six of them ran the
+    // full table anyway -- carry_anchored, sweep_moving_sectors,
+    // detect_vertical_crush, resolve_attack, detect_prop_events and
+    // sweep_entities -- so an empty level paid for 384 slots on every tick of
+    // every one of them. Measured before raising the cap, precisely because
+    // raising it would have multiplied a cost nobody had noticed.
+    //
+    // Three sweeps still run the full table, and must:
+    //
+    //   reset()   clears every slot, including ones above the mark
+    //   spawn()   scans every slot to find a free one, and is what MOVES the
+    //             mark -- bounding it by the mark could never grow it
+    //   hash()    folds `active` for every slot, so the state hash is a
+    //             function of the agent space rather than of how much of it
+    //             has been used. Bounding that would make two worlds with the
+    //             same live agents hash differently for having once had more.
     u32 agent_high_water_ = 0;
     // The same trick for props, and it is worth more here: MAX_PROPS is 768
     // and a Doom level uses a few dozen, so five per-agent loops were walking

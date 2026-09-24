@@ -1645,17 +1645,17 @@ int l_dnp_find_path(lua_State* L) {
     // client gets a burst of corrections, and a Lua performance problem
     // presents as a netcode bug -- the hardest thing here to diagnose. So the
     // refusal is explicit and says why, rather than being a mystery stall.
-    static u32 budget_tick = 0xFFFFFFFFu;
-    static u32 budget_used = 0;
+    // PER LEVEL, on the context -- see WorldContext::path_budget_tick for what
+    // a process-wide static did instead.
     constexpr u32 PATHS_PER_TICK = 64;
     const u32 now = ctx.world->tick();
-    if (now != budget_tick) { budget_tick = now; budget_used = 0; }
-    if (budget_used >= PATHS_PER_TICK) {
+    if (now != ctx.path_budget_tick) { ctx.path_budget_tick = now; ctx.path_budget_used = 0; }
+    if (ctx.path_budget_used >= PATHS_PER_TICK) {
         lua_pushnil(L);
         lua_pushliteral(L, "path budget");
         return 2;
     }
-    ++budget_used;
+    ++ctx.path_budget_used;
 
     const i32 from = static_cast<i32>(luaL_checknumber(L, 1));
     const i32 to   = static_cast<i32>(luaL_checknumber(L, 2));

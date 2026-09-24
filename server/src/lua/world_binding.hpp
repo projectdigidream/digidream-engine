@@ -127,6 +127,22 @@ struct WorldContext {
     // level index is fixed at load; a script never names its own level, it just
     // says "next".
     u32               level = 0;
+
+    // dnp.find_path's per-tick budget, PER LEVEL.
+    //
+    // These were function-static in world_binding.cpp, which is one budget for
+    // every level in the process, and it failed in both directions at once.
+    // Levels advance their own tick counters: two levels on the same tick SHARE
+    // the sixty-four paths, so a busy level starves a quiet one; two levels on
+    // different ticks each see `now != budget_tick`, reset the counter, and the
+    // budget never applies to either. A server hosting thirty-two Doom levels
+    // had both happening depending on join order.
+    //
+    // Here instead, because a WorldContext is what a level has one of. Not in
+    // sim::World: a pathfinding budget is a property of the script host, and
+    // core/ has no idea Lua exists.
+    u32               path_budget_tick = 0xFFFFFFFFu;
+    u32               path_budget_used = 0;
     MapChangeSink*    map_changes = nullptr;
     UiSink*           ui = nullptr;
     LevelListSink*    levels = nullptr;

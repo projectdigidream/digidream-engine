@@ -298,7 +298,11 @@ void World::report_crossings(u32 i, fx2 from, fx2 to, i32 from_sector) noexcept 
 }
 
 void World::carry_anchored() noexcept {
-    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+    // To the high-water mark, not the full table: see agent_high_water_ in
+    // world.hpp. Every loop below skips inactive agents, and a slot at or above
+    // the mark has never been active, so the work is identical and the state
+    // hash does not move.
+    for (u32 i = 0; i < agent_high_water_; ++i) {
         AgentState& a = agents_[i];
         if (!a.active || !a.mv.anchored || a.mv.anchor < 0) continue;
         const i32 mi = motions_.find(static_cast<u32>(a.mv.anchor));
@@ -361,7 +365,7 @@ void World::sweep_moving_sectors() noexcept {
         // never came at them.
         if (d.x.raw == 0 && d.y.raw == 0) continue;
 
-        for (u32 i = 0; i < MAX_AGENTS; ++i) {
+        for (u32 i = 0; i < agent_high_water_; ++i) {
             if (!agents_[i].active) continue;
             // A rider was already carried with this sector and is where the
             // sector expects it to be; sweeping it too would push it off its own
@@ -374,7 +378,7 @@ void World::sweep_moving_sectors() noexcept {
 
 void World::detect_vertical_crush() noexcept {
     if (!map_) return;
-    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+    for (u32 i = 0; i < agent_high_water_; ++i) {
         const AgentState& a = agents_[i];
         if (!a.active) continue;
         const i32 s = a.mv.sector;
@@ -1066,7 +1070,7 @@ void World::resolve_attack(u32 agent) noexcept {
         return true;
     };
 
-    for (u32 t = 0; t < MAX_AGENTS; ++t) {
+    for (u32 t = 0; t < agent_high_water_; ++t) {
         if (t == agent || !agents_[t].active) continue;
         if ((a.mv.attack_hit_agents[t / 64] >> (t % 64)) & 1u) continue;   // already hit
         if (a_top + mp.attack_reach < agents_[t].pos.z) continue;
@@ -1106,7 +1110,7 @@ void World::detect_prop_events() noexcept {
     for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
-        for (u32 a = 0; a < MAX_AGENTS; ++a) {
+        for (u32 a = 0; a < agent_high_water_; ++a) {
             if (!agents_[a].active) continue;
             const fx3& ap = agents_[a].pos;
 
@@ -1246,7 +1250,7 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
                (ignore_b >= 0 && static_cast<u32>(ignore_b) == e);
     };
 
-    for (u32 i = 0; i < MAX_AGENTS; ++i) {
+    for (u32 i = 0; i < agent_high_water_; ++i) {
         if (!agents_[i].active || skipped(i)) continue;
         consider(i, agents_[i].pos, params_[i].radius, params_[i].height);
     }
