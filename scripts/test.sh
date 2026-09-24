@@ -234,6 +234,12 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # TABLE's terms -- state names and condition names, never the indices the
   # compiler chose for itself, which would agree with themselves.
   "./build/lua/test_mob_graph" .
+  # And the loop that spends it, against a real sim::World on a real room: the
+  # sequence fires at the ticks it declares, `goto` stops the rest of it, the
+  # six actions the loop runs never reach the sink and the rest do -- exactly
+  # once, in order. The control is a run with no player in the level, where
+  # nothing may advance at all.
+  "./build/lua/test_mob_loop" .
   # The shooting range: a room with a player in the middle and hitscan monsters
   # all round it, asserting every one of them lands a shot. The ONLY test that
   # drives the real world bindings -- every other Lua test stubs `dnp` with a

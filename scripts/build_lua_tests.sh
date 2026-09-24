@@ -59,6 +59,16 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_binding.cpp" \
         "$ROOT/server/tests/test_mob_graph.cpp" "${LINK[@]}" -o "$OUT/test_mob_graph"
+# And the loop that spends the graph, against a REAL sim::World on a real room:
+# half the conditions ask the world something, and a double would be a second
+# answer to all of it. Needs core, which the graph test does not.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/src/mobs/mob_compile.cpp" \
+        "$ROOT/server/src/mobs/mob_eval.cpp" \
+        "$ROOT/server/src/mobs/mob_runtime.cpp" \
+        "$ROOT/server/src/mobs/mob_binding.cpp" \
+        $(ls "$ROOT"/core/src/*/*.cpp) \
+        "$ROOT/server/tests/test_mob_loop.cpp" "${LINK[@]}" -o "$OUT/test_mob_loop"
 # Not a test: the generator that hands the trigger vocabulary to readers that
 # are not Lua (the editor). It lives here because this is the only build script
 # that already links LuaJIT, and because its output is checked by the suite
