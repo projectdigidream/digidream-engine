@@ -21,8 +21,11 @@
 -- Inside the room, not on its wall. Sector 0 spans y 0..10 and these were at
 -- y = 480/48 = 10 exactly -- standing in the north wall, which is why they
 -- appeared to "move" 17 units without ever seeing anybody.
-enemies.spawn("zombieman", 288, 384, 48, { dormant = true })
-enemies.spawn("imp",       144, 384, 48, { dormant = true })
+mobs.place{
+  scale = 48,
+  {kind="zombieman", x=288, y=384, z=48, dormant=true},
+  {kind="imp",       x=144, y=384, z=48, dormant=true},
+}
 
 doom.load{
   name = "doors",

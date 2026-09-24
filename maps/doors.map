@@ -68,7 +68,9 @@ body radius 0.3333 height 1.1667
 # What this map needs to behave. mapc copies both next to the baked map, and
 # the server loads them from there -- no --script arguments required.
 script scripts/doom.lua
-script scripts/enemies.lua
+script scripts/mob_vocab.lua
+script scripts/mobs.lua
+script mobs/doom_monsters.lua
 script doors_lines.lua
 
 spawn start 5 5 1

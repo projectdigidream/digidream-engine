@@ -5,7 +5,7 @@
 -- left exactly as it was.
 --
 -- Positions are Doom units, 48 to the engine unit -- the same units
--- maps/scripts/enemies.lua and every converted level are written in.
+-- every converted level is written in.
 do
   local S = 48
   local function du(n) return fx.frac(n, S) end
@@ -20,6 +20,18 @@ do
     {name="imp", x=-454, y=-53, z=144},
   }
   -- end monsters
-  if enemies ~= nil and #M > 0 then enemies.place(M) end
+  if #M > 0 then
+    local placed, unknown = 0, {}
+    for _, e in ipairs(M) do
+      local m = nil
+      if mobs ~= nil then
+        m = mobs.spawn(e.name, vec3.new(du(e.x), du(e.y), du(e.z)))
+      end
+      if m ~= nil then placed = placed + 1
+      else unknown[#unknown + 1] = e.name end
+    end
+    print(("[editor] %d monster(s) placed%s"):format(placed,
+      #unknown > 0 and (", " .. #unknown .. " the mob runtime does not define: " .. table.concat(unknown, ", ")) or ""))
+  end
 end
 -- <<< level editor: entities

@@ -32,8 +32,11 @@
 -- gives: a live monster chases, so it eventually arrives wherever the test
 -- walks, and "placed where the door test does not go" stops being true the
 -- moment either of them takes a step.
-enemies.spawn("zombieman", 288, 384, 48, { dormant = true })
-enemies.spawn("imp",       144, 384, 48, { dormant = true })
+mobs.place{
+  scale = 48,
+  {kind="zombieman", x=288, y=384, z=48, dormant=true},
+  {kind="imp",       x=144, y=384, z=48, dormant=true},
+}
 
 -- Doom's map unit is 1/48 of ours. Props are placed here rather than by the
 -- trigger table because placing a prop at load is not an event -- there is no

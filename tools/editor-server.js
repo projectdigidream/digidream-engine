@@ -806,22 +806,6 @@ const routes = {
   },
 
   /**
-   * The monster names that have behaviour, from maps/scripts/enemies.lua.
-   *
-   * Served as the FILE, so the editor extracts them with one function that is
-   * tested against the real Lua. Sending a parsed list from here would put the
-   * extraction in the process that cannot be unit-tested against it.
-   */
-  'GET /api/enemies': async () => {
-    const text = await readFile(join(ROOT, 'maps', 'scripts', 'enemies.lua'), 'utf8')
-      .catch(() => null)
-    if (text === null) {
-      return { code: 200, body: { text: '', note: 'no maps/scripts/enemies.lua' } }
-    }
-    return { code: 200, body: { text } }
-  },
-
-  /**
    * The Lua files a module carries that define mobs, and which mobs each names.
    *
    * DISPLAY ONLY, and the reason is worth stating because it looks like a

@@ -81,7 +81,9 @@ body radius 0.3333 height 1.1667
 # The vocabulary must be declared BEFORE the runtime, which validates against
 # it, and the runtime before the table, which is loaded into it. Out of order
 # is an error that names the missing declaration.
-script scripts/enemies.lua
+script scripts/mob_vocab.lua
+script scripts/mobs.lua
+script mobs/doom_monsters.lua
 script scripts/trigger_vocab.lua
 script scripts/triggers.lua
 script doors_trig.lua

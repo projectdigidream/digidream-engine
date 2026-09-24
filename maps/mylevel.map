@@ -1,5 +1,7 @@
 script scripts/doom.lua
-script scripts/enemies.lua
+script scripts/mob_vocab.lua
+script scripts/mobs.lua
+script mobs/doom_monsters.lua
 script mylevel.lua
 script scripts/debug_panel.lua
 body radius 0.3333 height 1.1667

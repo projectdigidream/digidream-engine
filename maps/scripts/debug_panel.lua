@@ -130,12 +130,10 @@ local function build(e)
       { kind = "slider", id = W_TURN,   label = "Turn/s",
         value = (e:param("turn_speed")).int, lo = 1, hi = 20 },
       { kind = "slider", id = W_DAMAGE, label = "Damage",
-        -- `mobs` first, `enemies` second: maps/scripts/mobs.lua is the current
-        -- monster runtime and maps/scripts/enemies.lua is the one it replaced.
-        -- Both are checked so this panel works against either, which is what
-        -- lets a map be moved across without the panel going quiet.
-        value = damage or (mobs and mobs.player_damage)
-                or (enemies and enemies.melee_damage) or 25, lo = 1, hi = 200 },
+        -- Through the monster runtime's own published table. `mobs` may be
+        -- nil -- a map that declares no monsters declares no mobs.lua -- so
+        -- the panel falls back to a number rather than going quiet.
+        value = damage or (mobs and mobs.player_damage) or 25, lo = 1, hi = 200 },
       { kind = "slider", id = W_HP,     label = "Health",
         value = e:hp() or 100, lo = 1, hi = 200 },
       { kind = "button", id = W_HEAL,   label = "Full health" },
@@ -272,7 +270,6 @@ function on_ui_event(e, ui_id, widget, value)
     -- a script cooperates with another by name, not through the engine.
     damage = value
     if mobs then mobs.player_damage = value end
-    if enemies then enemies.melee_damage = value end
   elseif widget == W_REACH then
     set_param(e, "reach", "attack_reach", fx.frac(value, 100))
   elseif widget == W_INNER then

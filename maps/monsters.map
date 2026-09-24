@@ -36,7 +36,9 @@ end
 # Doom's player at 1/48, matching every other converted map here.
 body radius 0.3333 height 1.1667
 
-script scripts/enemies.lua
+script scripts/mob_vocab.lua
+script scripts/mobs.lua
+script mobs/doom_monsters.lua
 script monsters_lines.lua
 
 spawn start 5 10 1
