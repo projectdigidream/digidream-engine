@@ -314,6 +314,19 @@ else
   # camera.js -- one implementation of "a push on screen is a direction in the
   # world", with a control that the comparison can fail.
   node client/test/touch.test.js | tail -2
+  # THE CLIENT, LOADED IN A BROWSER. tdz.test.js above checks main.js's
+  # declaration order statically and says why that was all it could do:
+  # main.js "wants a DOM, a WebGL context, three.js and a live WebTransport
+  # session, so it is the one file in the client with no automated coverage at
+  # all -- and it is the file that changes most". This is the other half. It
+  # asserts the module reached the end of its start-up and mounted what it
+  # should have, with controls both ways: ?touch=0 gets the keyboard legend
+  # and no thumbstick, and a fine-pointer browser with no override gets none
+  # either -- so wantsTouch reads the browser rather than defaulting to yes.
+  #
+  # Self-gated like the editor's: it launches headless Chrome, so it skips
+  # loudly without DNP_CLIENT_PAGE_TEST=1 rather than costing every run.
+  node client/test/page.test.js | tail -2
   node client/test/entities.test.js | tail -2
   node client/test/lighting.test.js | tail -2
   node client/test/shadows.test.js | tail -2
