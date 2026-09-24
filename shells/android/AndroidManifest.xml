@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Android shell.
+
+  ONE PERMISSION, AND IT IS NOT FOR THE NETWORK. Android gates the CREATION
+  of any socket on android.permission.INTERNET, loopback included: without it
+  even 127.0.0.1 fails with EPERM before it can be bound. The game server runs
+  inside this process tree and the client talks to it over a loopback socket,
+  so the permission is required to talk to ourselves.
+
+  Nothing outbound is ever attempted, and that is enforced rather than
+  promised: MainActivity.shouldInterceptRequest answers EVERY request, and
+  answers anything that is not our own asset origin with a 404 rather than
+  letting WebView go and fetch it. There is no other network code in the app.
+
+  This comment used to claim the app needed no permissions at all. It was
+  written before the thing was ever run, the emulator answered with EPERM, and
+  what it said is what the code now does instead.
+
+  android:extractNativeLibs="true" is REQUIRED, and it is not a size
+  optimisation in reverse. The server is a real executable, and Android only
+  lets a process exec files out of its own nativeLibraryDir, which exists only
+  when the libraries are extracted rather than mapped straight from the APK.
+  With extraction off, libdnpserver.so stays inside the archive,
+  nativeLibraryDir has nothing in it, and the game starts to a black screen
+  with "no such file" in the log.
+
+  android:allowNativeHeapPointerTagging="false" is what makes LuaJIT work at
+  all. Android 11 and later set the TOP BYTE of every heap pointer to a tag
+  that the hardware ignores (Top Byte Ignore), so malloc returns things like
+  0xb40079c5ec048020. The address in there is low, but LuaJIT's 64-bit GC packs
+  a pointer into 47 bits and checks it fits, and 0xb4 in the top byte does not.
+  The state is refused, and the server says only "lua_newstate failed (memory
+  cap too low?)", which is a true thing to guess and the wrong one. Opting out
+  of tagging gives back plain 0x0079c5ec048020 and the check passes.
+
+  (No double hyphens anywhere in this comment: XML forbids them inside one,
+  and aapt2 reports it as "not well-formed" against the line the comment
+  STARTS on, which is a confusing place to go looking.)
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="com.digidream.app">
+
+  <!-- See the note above: this is what lets the app open a socket to itself. -->
+  <uses-permission android:name="android.permission.INTERNET" />
+
+  <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+  <!-- A phone is a landscape device for this camera: the isometric view is
+       much wider than it is tall, and a portrait window shows a corridor. -->
+  <supports-screens android:largeScreens="true" android:xlargeScreens="true" />
+
+  <application
+      android:label="Digidream"
+      android:icon="@mipmap/ic_launcher"
+      android:hardwareAccelerated="true"
+      android:extractNativeLibs="true"
+      android:allowNativeHeapPointerTagging="false"
+      android:allowBackup="false"
+      android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
+    <activity
+        android:name="com.digidream.app.MainActivity"
+        android:exported="true"
+        android:screenOrientation="sensorLandscape"
+        android:launchMode="singleTask"
+        android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+        android:resizeableActivity="false">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

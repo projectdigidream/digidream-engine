@@ -100,7 +100,34 @@ if [[ "${#LUA_IN[@]}" -gt 1 ]]; then
   echo "FAIL: Lua is linked in ${#LUA_IN[@]} build scripts: ${LUA_IN[*]}"
 fi
 
-# --- 3. core/ never mentions Lua at all ------------------------------------
+# --- 3. the APK's server build has no list of its own -----------------------
+#
+# scripts/build_apk.sh cross-compiles the same server for arm64, and it reads
+# the source list OUT of build_server.sh rather than keeping one. That is why
+# it is not in CORE_LISTS: there is nothing there to drift.
+#
+# But "it derives the list" is an invariant, not a fact about the file, and the
+# day somebody pastes the twenty filenames in for convenience it becomes a
+# seventh list that nothing compares. So that is what this checks: the APK
+# build must still be reading them, and must not name core sources itself.
+if [[ -f scripts/build_apk.sh ]]; then
+  if ! grep -q 'scripts/build_server.sh' scripts/build_apk.sh; then
+    FAILED=1
+    echo "FAIL: scripts/build_apk.sh no longer reads its source list out of"
+    echo "      scripts/build_server.sh. Either put it back, or add it to"
+    echo "      CORE_LISTS above so the two are compared."
+  fi
+  OWN="$(grep -cE '^\s*"?\$?\{?ROOT\}?/?(core|server)/src/.*\.cpp' scripts/build_apk.sh || true)"
+  if [[ "$OWN" -gt 0 ]]; then
+    FAILED=1
+    echo "FAIL: scripts/build_apk.sh names $OWN core/server source file(s) itself."
+    echo "      It is meant to read them out of build_server.sh; a second list"
+    echo "      is one that goes stale, and the APK would then ship a server"
+    echo "      missing whatever was added last."
+  fi
+fi
+
+# --- 4. core/ never mentions Lua at all ------------------------------------
 #
 # A path check, not a link check: core/ is compiled into every target including
 # wasm, so a single #include there defeats everything above.
@@ -117,4 +144,5 @@ if [[ "$FAILED" -ne 0 ]]; then
 fi
 
 echo "source lists ok: ${#CORE_LISTS[@]} lists agree on $REF_COUNT core sources," \
-     "Lua linked in ${#LUA_IN[@]} of them, core/ is Lua-free"
+     "Lua linked in ${#LUA_IN[@]} of them, core/ is Lua-free," \
+     "the APK build keeps no list of its own"

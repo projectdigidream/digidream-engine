@@ -148,6 +148,16 @@
     }
   }
   </script>
+  <!--
+    THE NATIVE SHELL'S HOOK, and nothing in a browser.
+
+    A CLASSIC script, deliberately: the spec runs these in order before
+    deferred module scripts, so whatever this sets is in place by the time
+    main.js reads it. main.js decides its transport at module scope by asking
+    whether `window.dnp` exists, and a hook that ran afterwards would be a
+    hook that never ran. See client/shell.js, which is empty on purpose.
+  -->
+  <script src="/shell.js"></script>
   <script type="module" src="/src/main.js"></script>
   <script type="module">
     addEventListener('error', (e) => {

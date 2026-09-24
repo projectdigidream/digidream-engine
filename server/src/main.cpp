@@ -1770,7 +1770,44 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
 }  // namespace
 
+#if defined(__ANDROID__)
+#include <malloc.h>
+// ANDROID TAGS ITS HEAP POINTERS, AND LUAJIT CANNOT SEE PAST THE TAG.
+//
+// From Android 11, bionic puts a tag in the TOP BYTE of every pointer malloc
+// returns -- 0xb40079c5ec048020 rather than 0x0079c5ec048020. The hardware
+// ignores that byte when it loads and stores (Top Byte Ignore), so the pointer
+// works perfectly for C. It does not work for LuaJIT: a 64-bit LuaJIT packs a
+// pointer into 47 bits and checks up front that it fits, and 0xb4 up there does
+// not. lua_newstate returns NULL.
+//
+// What the server then printed was "lua_newstate failed (memory cap too low?)",
+// which is an honest guess and the wrong one, and it cost an hour. The guess is
+// still the right thing to print on every other platform.
+//
+// So tagging is turned off before anything allocates. It is a per-process
+// setting that only affects LATER allocations, which is why this is the first
+// statement in main() and not somewhere tidier. The manifest's
+// allowNativeHeapPointerTagging="false" covers the APP process; this one is a
+// child of it, exec'd rather than forked from the zygote, so it gets the
+// platform default and has to opt out for itself.
+//
+// WHAT IS GIVEN UP: Scudo's use-after-free detection on this process. Worth
+// saying plainly rather than leaving as a footnote -- and the trade is not
+// close, because the alternative is no scripting at all.
+static void dnp_untag_heap() {
+    if (mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE) != 1) {
+        std::fprintf(stderr, "[srv] could not turn off heap pointer tagging; "
+                             "Lua will refuse to start\n");
+    }
+}
+#else
+static void dnp_untag_heap() {}
+#endif
+
 int main(int argc, char** argv) {
+    dnp_untag_heap();
+
     u16 port = 34500;
     // Repeatable, and the order IS the progression: `--map a --map b` means an
     // exit in a takes you to b.
