@@ -311,22 +311,81 @@ SweepContact resolve_slabs(const MapData& map, fx2& p, fx radius, fx feet_z,
     //
     // The vertical overlap test is slab_overlaps: a slab is a finite box, not a
     // half-space, so a body can be entirely beneath one and pass under it.
-    for (u32 s = 0; s < map.sector_count; ++s) {
-        if (!slab_overlaps(map.sector(s), feet_z, body_height)) continue;
+    //
+    // ONE SECTOR AT A TIME, in ascending index order. Order matters because two
+    // pushes can disagree, and index order is the one both the client and the
+    // server will always agree on.
+    const auto apply = [&](u32 s) {
+        if (!slab_overlaps(map.sector(s), feet_z, body_height)) return;
         // A slab blocks a body exactly when the body could not STAND in the
         // sector above it -- the same predicate that decides whether a wall is
         // a wall. That settles the step case for nothing: a sector half a unit
         // higher ADMITS you, so its slab does not stand in the way of the step
         // up onto it, while a tower fifteen units higher does not and does.
-        if (sector_admits(map, s, feet_z, body_height)) continue;
+        if (sector_admits(map, s, feet_z, body_height)) return;
         const SweepContact hit = push_out_of_slab(map, s, p, radius);
         if (hit.contacted) out.contacted = true;
+    };
+
+    // NARROWED BY THE SECTOR GRID, which is the other half of the broadphase
+    // this function's own comment used to ask for.
+    //
+    // Scanning every sector for every agent is what this was, and at a thousand
+    // bodies on a 144-sector map a profile put ten of every fourteen samples in
+    // step_agent right here. The grid over sector footprints already exists --
+    // find_sector uses it, and a property test checks it against a linear scan
+    // over thousands of points -- so this is a question it can already answer.
+    //
+    // WHAT MAY BE SKIPPED, exactly: push_out_volume does nothing unless `p` is
+    // inside the footprint or within `radius` of one of its sides. So a sector
+    // whose bounding box is further than `radius` from `p` is a no-op, and
+    // sectors_near returns a superset of the ones that are not.
+    //
+    // AND `p` MOVES while the loop runs, so the radius that was enough when the
+    // query was made can stop being enough -- the same trap as the agent grid,
+    // and answered the same way. Query with a margin, check after every push
+    // that the body is still inside it, and if it is not, put `p` back and run
+    // the full scan. The full scan IS the definition; the grid only ever gets
+    // to make it shorter.
+    constexpr u32 MAX_NEAR = 64;
+    constexpr i64 MARGIN_UNITS = 2;
+    const fx margin = fx::from_int(MARGIN_UNITS);
+
+    bool narrowed = false;
+    u32 n_near = 0;
+    u16 near_s[MAX_NEAR];
+    if (map.grid.usable && map.sector_count > MAX_NEAR) {
+        n_near = sectors_near(map, p, radius + margin, near_s, MAX_NEAR);
+        // sectors_near stops AT the cap and cannot say whether more were
+        // waiting, so a full result is treated as no result.
+        narrowed = n_near < MAX_NEAR;
     }
 
-    // Ascending sector order, one pass. Order matters because two pushes can
-    // disagree, and index order is the one both the client and the server will
-    // always agree on. A linear scan is also what find_sector already does; the
-    // broadphase grid that fixes both is the same piece of work.
+    if (narrowed) {
+        // Cell order is not index order, and index order is the contract.
+        for (u32 k = 1; k < n_near; ++k) {
+            const u16 v = near_s[k];
+            u32 m = k;
+            while (m > 0 && near_s[m - 1] > v) { near_s[m] = near_s[m - 1]; --m; }
+            near_s[m] = v;
+        }
+        bool escaped = false;
+        for (u32 k = 0; k < n_near && !escaped; ++k) {
+            apply(near_s[k]);
+            const fx dx = p.x - start.x;
+            const fx dy = p.y - start.y;
+            escaped = dx > margin || dx < -margin || dy > margin || dy < -margin;
+        }
+        if (!escaped) {
+            out.escape = p - start;
+            return out;
+        }
+        p = start;
+        out = SweepContact{};
+    }
+
+    for (u32 s = 0; s < map.sector_count; ++s) apply(s);
+
     out.escape = p - start;
     return out;
 }

@@ -1033,6 +1033,151 @@ static void test_nested_sector_pillar() {
     CHECK(off.pos.z == F(2));
 }
 
+// THE SLAB SCAN, NARROWED.
+//
+// resolve_slabs consulted EVERY sector for EVERY body on EVERY tick. On a
+// 144-sector map with a thousand bodies a profile put ten of every fourteen
+// samples in step_agent inside it, which is what made it the other half of the
+// broadphase its own comment had been asking for.
+//
+// It is now narrowed by the same sector grid find_sector uses, and the claim is
+// the same strong one made for the agent grid: the SAME sectors in the SAME
+// order, with only the ones that would have done nothing left out. Order
+// matters because `p` moves as the loop pushes it, so two slabs resolved the
+// other way round leave the body somewhere else.
+//
+// The control is the map with its grid switched off, which is the documented
+// fallback for a stale grid rather than a hook added for testing -- so the
+// other side of the comparison is code that really runs.
+static void test_the_slab_scan_narrows_without_changing_the_answer() {
+    std::printf("broadphase: narrowing the slab scan does not move a single body\n");
+
+    // A FIELD OF PLATFORMS with NARROW gaps between them, and bodies down in
+    // the gaps at slab height. 144 sectors, which is over the 64 below which
+    // narrowing is not worth the sort -- a smaller fixture would exercise the
+    // full scan twice and agree with itself.
+    //
+    // The gaps are a fraction of a unit against a half-unit radius, so a body
+    // in one is touching the slabs on BOTH sides at once. That is deliberate
+    // and it is what makes this a test of the ORDER as well as of the set: the
+    // first version of this fixture left 2-to-6-unit gaps, averaged 1.2
+    // candidates a query, and passed unchanged when the candidates were sorted
+    // backwards -- with one slab in reach there is no order to get wrong.
+    static geom::MapStorage store;
+    store.clear();
+    int made = 0;
+    for (int gy = 0; gy < 12; ++gy) {
+        for (int gx = 0; gx < 12; ++gx) {
+            // Irregular, as above: sizes and offsets vary so a footprint covers
+            // one cell here and four there, and some straddle cell boundaries.
+            const fx x0 = fx::from_frac(gx * 150 + (gy % 3) * 17, 10);
+            const fx y0 = fx::from_frac(gy * 150 + (gx % 5) * 13, 10);
+            const fx w = fx::from_frac(140 + (gx * 7 + gy * 3) % 9, 10);
+            const fx h = fx::from_frac(140 + (gy * 11 + gx * 5) % 9, 10);
+            const fx2 poly[4] = {{x0, y0}, {x0 + w, y0}, {x0 + w, y0 + h}, {x0, y0 + h}};
+            const u32 s = store.add_sector(poly, 4, F(6), F(60), static_cast<u16>(made));
+            if (s >= MAX_MAP_SECTORS) continue;
+            // A SLAB, which is what makes any of this run: solid from -2 up to
+            // the floor at 6, so a body at z = -1 is underneath it and cannot
+            // stand in it.
+            store.sector_mut(s).thickness = F(8);
+            for (u16 i = 0; i < 4; ++i) {
+                store.add_side(static_cast<u16>(s), i, static_cast<u16>((i + 1) % 4),
+                               NO_SECTOR, 0);
+            }
+            ++made;
+        }
+    }
+    CHECK(made == 144);
+    store.rebuild_grid();
+
+    const MapData m = store.view();
+    CHECK(m.sector_count > 64);        // the gate the narrowing is behind
+    CHECK(m.grid.usable);
+
+    MapData plain = m;
+    plain.grid.usable = false;         // the reference: the scan it replaced
+
+    // IT REALLY NARROWS. Without this the agreement below is two full scans
+    // agreeing with each other, which they would do with the grid deleted.
+    {
+        u16 near_s[144];
+        u32 worst = 0;
+        u32 total = 0;
+        int probes = 0;
+        for (int gy = 0; gy < 12; ++gy) {
+            for (int gx = 0; gx < 12; ++gx) {
+                const fx2 p{fx::from_frac(gx * 150 + 60, 10), fx::from_frac(gy * 150 + 60, 10)};
+                const u32 n = sectors_near(m, p, F(3), near_s, 144);
+                if (n > worst) worst = n;
+                total += n;
+                ++probes;
+            }
+        }
+        CHECK(worst < 64);
+        std::printf("       %u sectors, %.1f candidates on average, %u at worst\n",
+                    m.sector_count, static_cast<double>(total) / probes, worst);
+    }
+
+    // The same bodies, the same ticks, through both maps.
+    const fx dt = fx::from_frac(1, 60);
+    Rng rng(0x5AB5u, 7);
+    int disagreements = 0;
+    int contacts = 0;
+    int moved = 0;
+    int touched = 0;
+    for (int b = 0; b < 48; ++b) {
+        // Started at a platform's CENTRE, under it. That is Phase 1 of
+        // push_out_volume -- the body is not near one side, it is inside all of
+        // them -- so every body is guaranteed to meet a slab on its first tick
+        // and then wanders off into the gaps with the rest.
+        const Sector& sec = m.sector(static_cast<u32>(b) * 3);
+        fx2 centre = fx2::zero();
+        for (u16 k = 0; k < sec.point_count; ++k) {
+            centre.x += m.point(sec.first_point + k).x;
+            centre.y += m.point(sec.first_point + k).y;
+        }
+        centre.x = centre.x / fx::from_int(sec.point_count);
+        centre.y = centre.y / fx::from_int(sec.point_count);
+
+        MoveInput a;
+        MoveInput c;
+        a.pos = fx3{centre.x, centre.y, -F(1)};
+        a.vel = fx3{rng.next_fx(-F(9), F(9)), rng.next_fx(-F(9), F(9)), fx::zero()};
+        a.sector = NO_SECTOR;
+        c = a;
+        const fx3 began = a.pos;
+        bool hit_any = false;
+        for (int t = 0; t < 120 && disagreements == 0; ++t) {
+            const MoveResult ra = move(m, a, dt);
+            const MoveResult rc = move(plain, c, dt);
+            if (ra.pos.x.raw != rc.pos.x.raw || ra.pos.y.raw != rc.pos.y.raw ||
+                ra.pos.z.raw != rc.pos.z.raw || ra.vel.x.raw != rc.vel.x.raw ||
+                ra.vel.y.raw != rc.vel.y.raw || ra.sector != rc.sector ||
+                ra.hit_wall != rc.hit_wall) {
+                ++disagreements;
+                std::printf("       diverged: body %d tick %d\n", b, t);
+            }
+            if (ra.hit_wall) { ++contacts; hit_any = true; }
+            a.pos = ra.pos; a.vel = ra.vel; a.sector = ra.sector; a.grounded = ra.grounded;
+            c.pos = rc.pos; c.vel = rc.vel; c.sector = rc.sector; c.grounded = rc.grounded;
+            a.vel.z = fx::zero();
+            c.vel.z = fx::zero();
+        }
+        if (a.pos.x != began.x || a.pos.y != began.y) ++moved;
+        if (hit_any) ++touched;
+    }
+    CHECK(disagreements == 0);
+    // And the run was not two copies of nothing happening. Stated as "every
+    // body met a slab and every body went somewhere" rather than as a count,
+    // because a count is a number somebody picked and it passes for as long as
+    // the scenario happens to clear it.
+    CHECK(touched == 48);
+    CHECK(moved == 48);
+    std::printf("       48 bodies x 120 ticks, %d slab contacts, all 48 touched, "
+                "0 divergence\n", contacts);
+}
+
 static void test_broadphase_agrees_with_a_linear_scan() {
     std::printf("broadphase: the grid narrows the search and never changes the answer\n");
 
@@ -1327,6 +1472,7 @@ int main() {
     test_tower_side_is_solid_from_a_neighbouring_sector();
     test_nested_sector_pillar();
     test_broadphase_agrees_with_a_linear_scan();
+    test_the_slab_scan_narrows_without_changing_the_answer();
     test_bridge_over_a_path();
     test_ledge_does_not_leak_into_closed_maps();
     test_determinism_of_move();
