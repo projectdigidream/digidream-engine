@@ -143,6 +143,19 @@ node editor/test/mobfile.test.js  | tail -2
 # caught a default graph the editor called clean and the loader refused, and an
 # argument name the vocabulary does not have. Skips loudly without LuaJIT.
 node editor/test/mobgraph.test.js | tail -2
+# ONE LIST out of the two files that define a kind. A mob is a prop with a
+# brain, so the entity window shows one row per kind and behaviour is a
+# property of the row -- it used to be two lists in that window plus the
+# catalogue in a panel of the other one, which made a monster three steps in
+# two places. What this checks is the cases that are NOT one-to-one: a record
+# with no mob (most of a catalogue), a mob that wears another record's body
+# (six in maps/mobs/exercise.lua), a name defined twice (a map that does not
+# load), and a mob whose body is missing (a monster spawned invisible).
+#
+# Every one has its control, and the load-bearing one is that with no
+# catalogue fetched yet NOTHING is accused -- the window renders before that
+# lands, so reading it unconditionally would flag the whole module on open.
+node editor/test/entitylist.test.js | tail -2
 # Where the boxes go in the AI graph. Pure arithmetic, which is the half of a
 # visual editor that can be checked at all -- the claims are that the picture is
 # deterministic, that it draws every edge the RUNTIME follows, and that it
