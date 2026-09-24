@@ -17,6 +17,7 @@ extern "C" {
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <map>
 
 namespace dnp::server::mobs {
@@ -267,6 +268,20 @@ int l_mobs_graph(lua_State* L) {
 // implement stays entirely in Lua, and the caller keeps its own record either
 // way -- so the two runtimes never both own one mob.
 int l_mob_track(lua_State* L) {
+    // DNP_MOBS_LUA=1 refuses everything, which puts every mob back on the Lua
+    // path without a map or a script changing.
+    //
+    // FOR THE COMPARISON, and for nothing else. The two runtimes are meant to
+    // decide the same things, and a claim like that is worth exactly what the
+    // ability to run the other side of it is worth. Not an operator setting:
+    // there is one right answer here and it is measured, not configured. Read
+    // once, because getenv in a spawn path is a syscall per monster.
+    static const bool force_lua = [] {
+        const char* v = std::getenv("DNP_MOBS_LUA");
+        return v != nullptr && v[0] == '1';
+    }();
+    if (force_lua) { lua_pushboolean(L, 0); return 1; }
+
     const u32 e = static_cast<u32>(luaL_checknumber(L, 1));
     size_t n = 0;
     const char* kind = luaL_checklstring(L, 2, &n);

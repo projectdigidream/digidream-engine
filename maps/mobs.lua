@@ -706,7 +706,20 @@ local function set_move(m, mx, my, aim, buttons)
   if m.e:valid() then m.e:set_input(mx, my, aim, buttons) end
 end
 
+-- DNP_MOB_TRACE=1 prints every state change, from whichever runtime made it.
+--
+-- For comparing the two against each other: a world hash says they differ and
+-- never says how, and the difference between two mob runtimes is always a
+-- decision one of them took. `os` is absent under Trust::Strict, which is why
+-- this is guarded rather than assumed.
+local TRACE = (os ~= nil and os.getenv ~= nil and os.getenv("DNP_MOB_TRACE") == "1") or false
+M.TRACE = TRACE
+
 local function enter(m, name, tick)
+  if TRACE then
+    print(("[mobenter] %d %d %s %s"):format(
+      dnp.tick(), m.idx, name, m.cpp and "cpp" or "lua"))
+  end
   -- A MOB THE C++ LOOP OWNS IS ENTERED THERE, and this returns.
   --
   -- `hurt` and `revive` both call this from outside a think -- pain, death, a
@@ -1137,7 +1150,15 @@ function M.spawn(kind, pos, opts)
   -- above is all it needs. What must not happen is two owners, because both
   -- would write the mob's state and neither would see the other -- so the
   -- think bucket below is built ONLY when C++ declined.
-  m.cpp = dnp ~= nil and dnp.mob_track ~= nil and dnp.mob_track(m.idx, kind, m.dormant) or false
+  -- M.use_cpp = false forces every mob onto the Lua path.
+  --
+  -- FOR THE COMPARISON, and for nothing else. The two runtimes are supposed to
+  -- decide the same things, and a claim like that is worth exactly as much as
+  -- the ability to run the other side of it -- so the switch exists, defaults
+  -- to on, and is what tools/mobdiff drives. It is not an operator setting:
+  -- there is one right answer here and it is measured, not configured.
+  m.cpp = M.use_cpp ~= false and dnp ~= nil and dnp.mob_track ~= nil and
+          dnp.mob_track(m.idx, kind, m.dormant) or false
   M.tracked = (M.tracked or 0) + (m.cpp and 1 or 0)
   M.on_lua = (M.on_lua or 0) + (m.cpp and 0 or 1)
 
@@ -1312,10 +1333,30 @@ function hurt(target, amount, by)
     if m.cpp then dnp.mob_set(m.idx, "target", by.idx) end
   end
 
+  local chance = m.def.pain_chance
+
+  -- WHICH STATE IT IS IN, asked of whichever runtime owns it.
+  --
+  -- `m.st` is the current state's TABLE and only the Lua path maintains it:
+  -- for a tracked mob `enter` delegates and returns, so m.st stays nil, the
+  -- `and` chain below short-circuits, and the monster never flinches. It was
+  -- exactly that -- silently, because a monster that does not flinch looks
+  -- like a monster with a low pain chance -- and it is what the two-runtime
+  -- comparison in tools/mobdiff was built to catch.
+  local st = m.st
+  if m.cpp then
+    local name = dnp.mob_state(m.idx)
+    st = name ~= nil and m.def.states[name] or nil
+  end
+
   -- PAIN CHANCE, rolled. A monster that ALWAYS flinches can be stun-locked
   -- into never acting; one that never does gives no sign a hit landed.
-  local chance = m.def.pain_chance
-  if chance ~= nil and m.st and m.st.interruptible ~= false and
+  --
+  -- The roll is the LAST term on purpose: Lua's `and` short-circuits, so a
+  -- mob with no pain state or an uninterruptible one must not draw. The two
+  -- runtimes share one RNG stream, and a draw one of them makes and the other
+  -- does not desynchronises every later one.
+  if chance ~= nil and st and st.interruptible ~= false and
      m.def.states.pain ~= nil and dnp.random(0, 255) < chance then
     enter(m, "pain", dnp.tick())
   end

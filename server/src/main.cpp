@@ -360,6 +360,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // OFF BY DEFAULT and gated on one branch. `now_us()` is a syscall on some
     // platforms and this runs per tick per level; a measurement that changes
     // what it measures is worse than none.
+    // Ticks between hash-trace lines; 0 disables it. See the trace itself.
+    u32 hash_trace = 0;
+
     struct Perf {
         u32 every = 0;          // ticks per report; 0 disables the whole thing
         u32 ticks = 0;
@@ -1293,6 +1296,38 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             perf.bp_full += L.world.broadphase_full();
         }
 
+        // A HASH TRACE, for comparing one run against another.
+        //
+        // The world's own state hash, per level, per tick. It exists so that
+        // "these two runs did the same thing" is a diff of two files rather
+        // than a description of two videos -- which is what the mob runtime's
+        // differential control needs, and what the determinism gate has always
+        // had for the core.
+        //
+        // AFTER the step and BEFORE the post-step callbacks, so it is the
+        // state the tick produced rather than the state a script then edited:
+        // a script writing through the command queue lands at the next flush,
+        // and hashing on the far side of that would fold one tick's decisions
+        // into the next tick's number.
+        if (hash_trace && L.world.tick() % hash_trace == 0) {
+            std::fprintf(stderr, "[hash] %u %u %016llX\n", li, L.world.tick(),
+                         static_cast<unsigned long long>(L.world.hash()));
+            // AND THE AGENTS THEMSELVES, because a hash says two runs differ
+            // and never says how. Raw fixed-point, not decimals: the question
+            // is exactness and a printed double would round the difference
+            // being looked for.
+            for (u32 a = 0; a < L.world.agent_high_water(); ++a) {
+                const sim::AgentState& ag = L.world.agent(a);
+                if (!ag.active) continue;
+                std::fprintf(stderr, "[agent] %u %u %u %lld %lld %lld %u %u %d\n",
+                             li, L.world.tick(), a,
+                             static_cast<long long>(ag.pos.x.raw),
+                             static_cast<long long>(ag.pos.y.raw),
+                             static_cast<long long>(ag.pos.z.raw),
+                             ag.facing.raw, ag.animation_state, ag.mv.sector);
+            }
+        }
+
         refresh_nav_if_stale(L);
         report_crushes(L);
         dispatch_events(L);
@@ -1428,6 +1463,36 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         link.send_control(s.id, buf, end);
     }
 
+    void music(u32 level_index, i32 agent, const proto::MusicCue& m) override {
+        if (level_index >= level_count()) return;
+        // Not remembered, unlike a side texture: a cue is a moment in the
+        // level's music, and a player joining later starts on the map's default
+        // cue like everyone did (docs/protocol.md §11.1).
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (!s.has_agent || s.level != level_index) continue;
+            if (agent >= 0 && s.agent != static_cast<u32>(agent)) continue;
+            send_music(s, m);
+        }
+    }
+
+    void send_music(Session& s, const proto::MusicCue& m) {
+        u8 buf[512];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_MUSIC);
+        proto::encode_music_cue(w, m);
+        if (!w.ok()) return;
+        const size_t end = w.size();
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(s.id, buf, end);
+    }
+
     void set_camera(u32 level_index, u32 agent, const proto::CameraSet& c) override {
         Session* s = session_for(level_index, agent);
         if (s == nullptr) return;
@@ -1526,7 +1591,23 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
      * given an agent yet is still somebody waiting for this level to run, and
      * skipping it would be a level that never spawns them.
      */
+    // A stationary body of PLAYER kind on level 0, and the level ticked from
+    // tick 0 because of it.
+    //
+    // FOR COMPARING TWO RUNS, and it exists because that is otherwise
+    // impossible. A level is not ticked until a session arrives, its clock
+    // keeps counting while it waits (step_idle, deliberately -- sector motion
+    // is a function of the tick), and so the tick a player lands on depends on
+    // wall clock. Mobs think on `tick % 8`, so two runs of the same scenario
+    // start with a different set of monsters deciding first and never agree
+    // again -- not by a shift, which could be re-based, but by phase.
+    //
+    // NOT FOR PLAY. It puts a body in the world that nobody controls and that
+    // no client is told about.
+    bool test_player = false;
+
     bool level_occupied(u32 li) const {
+        if (test_player && li == 0) return true;
         for (const auto& [id, s] : sessions) if (s.level == li) return true;
         return false;
     }
@@ -1996,6 +2077,8 @@ int main(int argc, char** argv) {
     // APK is the one where that is hardest and the answer matters most.
     //
     // A flag still wins, so a command line remains the last word.
+    u32 hash_trace_every = 0;
+    bool test_player = false;
     const char* env_perf = std::getenv("DNP_PERF");
     const char* env_stall = std::getenv("DNP_LUA_STALL_US");
     u32  perf_every = env_perf ? static_cast<u32>(std::atoi(env_perf)) : 0;
@@ -2040,6 +2123,14 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argv[i], "--perf") == 0 && i + 1 < argc) {
             // Report where each tick went, every N ticks. See Server::Perf.
             perf_every = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--test-player") == 0) {
+            // A stationary player-kind body at the spawn tag, and level 0
+            // ticked from tick 0. See Server::test_player.
+            test_player = true;
+        } else if (std::strcmp(argv[i], "--hash-trace") == 0 && i + 1 < argc) {
+            // One line per level per N ticks: the world's own state hash. For
+            // comparing two runs of the same scenario against each other.
+            hash_trace_every = static_cast<u32>(std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--lua-stall-us") == 0 && i + 1 < argc) {
             // The stall detector's threshold, which was a compile-time constant.
             //
@@ -2190,6 +2281,8 @@ int main(int argc, char** argv) {
     if (!no_scripts && (script_count > 0 || any_map_scripts)) {
         srv.vm_config.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
         if (lua_stall_us > 0) srv.vm_config.stall_warn_us = lua_stall_us;
+        srv.hash_trace = hash_trace_every;
+        srv.test_player = test_player;
         srv.scripts_enabled = true;
         // Stated at startup, deliberately. Under the default profile a script
         // can reach the filesystem, databases and native libraries, and the
@@ -2205,6 +2298,29 @@ int main(int argc, char** argv) {
 
         for (u32 li = 0; li < srv.level_count(); ++li) {
             if (!srv.start_scripts(li, script_args, script_count)) return 1;
+        }
+    }
+
+    // The stand-in body, spawned before the first tick so both runs of a
+    // scenario start from the same state at the same tick.
+    if (srv.test_player) {
+        Level& L = srv.level(0);
+        const fx3 at = L.map_bytes.empty()
+            ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
+            : L.map_store.spawn_for_tag(srv.spawn_tag, srv.spawn_tag_len);
+        const u32 a = L.world.spawn(at);
+        if (a < sim::MAX_AGENTS) {
+            L.hp[a] = 100;
+            physics::MoveParams& p = L.world.params_mut(a);
+            p.radius = L.map_store.body_radius();
+            p.height = L.map_store.body_height();
+            L.effects.set_base(a, L.world.params(a));
+            // kind 0 and NOT scripted, which together are what every mob
+            // script means by "a player": nobody placed it, so it walked in.
+            std::fprintf(stderr, "[srv] --test-player: agent %u at the '%s' tag; "
+                                 "level 0 will tick from tick 0\n", a, srv.spawn_tag);
+        } else {
+            std::fprintf(stderr, "[srv] --test-player: no agent slot free\n");
         }
     }
 

@@ -30,6 +30,9 @@
 #include "mobs/mob_runtime.hpp"
 
 #include "dnp/math/trig.hpp"
+
+#include <cstdio>
+#include <cstdlib>
 #include "lua/world_binding.hpp"
 
 namespace dnp::server::mobs {
@@ -129,6 +132,17 @@ void enter(MobRuntime& rt, sim::World& w, Mob& m, i32 state, u32 tick) {
     const Kind& k = rt.graph.kinds[static_cast<u32>(m.kind)];
     if (state < 0 || static_cast<u32>(state) >= k.state_count) return;
     const State& st = rt.graph.states[k.first_state + state];
+    // DNP_MOB_TRACE=1, the same line mobs.lua prints, so the two runtimes'
+    // decisions can be diffed against each other rather than inferred from a
+    // world hash. Read once: getenv in a per-think path is a syscall a tick.
+    static const bool trace = [] {
+        const char* v = std::getenv("DNP_MOB_TRACE");
+        return v != nullptr && v[0] == '1';
+    }();
+    if (trace) {
+        std::fprintf(stderr, "[mobenter] %u %u %s cpp\n", tick, m.entity,
+                     rt.graph.str(st.name));
+    }
     m.state = static_cast<i16>(state);
     m.entered = tick;
     m.seq_i = 0;
