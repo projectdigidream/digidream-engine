@@ -217,11 +217,24 @@ cp "$MODULE_DIR/assets/props.txt" "$G/modules/$MODULE/assets/" 2>/dev/null || tr
 # are for and what scripts/check_map_scripts.sh guards. A baked map without
 # the scripts it declares kills the server at startup.
 cp -R "$MODULE_DIR/maps" "$G/modules/$MODULE/"
+# WHICH MODULE AND WHICH LEVEL, stated where the app can read it.
+#
+# MainActivity used to hold both as constants, so this script's --map argument
+# was checked and then thrown away: every APK started map01 whatever was asked
+# for. Written as a file rather than compiled in, so the same classes.dex
+# serves every module and changing the level is a rebuild of the assets.
+cat > "$G/start.txt" <<EOF
+# Written by scripts/build_apk.sh. Read by MainActivity at first launch.
+module=$MODULE
+map=$MAP
+EOF
+
 # Nothing the server will not open. A .map is the authored source and an
 # .editor.json is the editor's sidecar; both are megabytes of nothing here.
 find "$G" \( -name '*.map' -o -name '*.editor.json' \) -delete
 
-echo "[apk] assets   web $(du -sh "$W" | cut -f1), game $(du -sh "$G" | cut -f1)"
+echo "[apk] assets   web $(du -sh "$W" | cut -f1), game $(du -sh "$G" | cut -f1)" \
+     "-- $(ls "$W/maps/"*.dnpm 2>/dev/null | wc -l | tr -d ' ') level(s), starting on $MAP"
 
 # --- 5. resources and the manifest --------------------------------------------
 

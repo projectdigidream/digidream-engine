@@ -126,8 +126,21 @@ public final class MainActivity extends Activity {
       File exe = new File(getApplicationInfo().nativeLibraryDir, "libdnpserver.so");
       if (!exe.exists()) throw new IOException("no server binary at " + exe);
 
-      File module = new File(gameDir, "modules/doom2");
-      File map = new File(module, "maps/map01.dnpm");
+      // WHICH MODULE AND WHICH LEVEL, from the file the build wrote.
+      //
+      // Both were constants here, and scripts/build_apk.sh took a --map
+      // argument, checked it existed, and then never passed it on: every APK
+      // started map01 whatever you asked for. A flag that is documented and
+      // ignored is worse than no flag, and this is the fix -- the build states
+      // its choice in the assets and this reads it.
+      //
+      // ALL 32 LEVELS ARE IN THE APK regardless. The staging copies the whole
+      // module, which is 2.1 MB of baked geometry for the lot, so this names a
+      // starting point rather than deciding what shipped.
+      Props start = Props.read(new File(gameDir, "start.txt"));
+      File module = new File(gameDir, "modules/" + start.need("module"));
+      File map = new File(module, "maps/" + start.need("map"));
+      if (!map.exists()) throw new IOException("no such level: " + map);
       int port = GameServer.freePort();
       Log.i(TAG, "starting server on 127.0.0.1:" + port);
       server.start(exe, gameDir, port, module, map);
@@ -361,6 +374,42 @@ public final class MainActivity extends Activity {
     server.stop();
     if (web != null) web.destroy();
     super.onDestroy();
+  }
+
+  /**
+   * The two lines the build wrote: which module, which level.
+   *
+   * A file rather than a generated Java constant, because a constant means
+   * recompiling the shell to change the level and this way the same classes.dex
+   * serves every module. Deliberately not a JSON parser: two keys do not need
+   * one, and org.json's failure mode on a typo is a null nobody checked.
+   */
+  private static final class Props {
+    private final Map<String, String> kv = new HashMap<>();
+
+    static Props read(File f) throws IOException {
+      Props p = new Props();
+      try (InputStream in = new java.io.FileInputStream(f)) {
+        byte[] b = new byte[(int) f.length()];
+        int n = in.read(b);
+        for (String line : new String(b, 0, Math.max(n, 0), "utf-8").split("\n")) {
+          line = line.trim();
+          if (line.isEmpty() || line.startsWith("#")) continue;
+          int eq = line.indexOf('=');
+          if (eq > 0) p.kv.put(line.substring(0, eq).trim(), line.substring(eq + 1).trim());
+        }
+      }
+      return p;
+    }
+
+    /** Refused loudly. A missing key here is a build that did not finish. */
+    String need(String key) throws IOException {
+      String v = kv.get(key);
+      if (v == null || v.isEmpty()) {
+        throw new IOException("game/start.txt has no '" + key + "'; rebuild with scripts/build_apk.sh");
+      }
+      return v;
+    }
   }
 
   private static String esc(String s) {
