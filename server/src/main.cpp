@@ -367,6 +367,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         u64 step_us = 0;
         u64 snap_us = 0;
         u64 worst_total_us = 0;
+        // Bodies that fell out of the agent broadphase and back onto the full
+        // O(n^2) sweep, summed over the whole reporting window. Summed rather
+        // than sampled at report time: the counters on World describe the LAST
+        // tick, and a report every 120 ticks that reads the last one sees 1 in
+        // 120 of them. A fallback that happens in bursts -- which is exactly
+        // how it would happen, since it is driven by bodies moving fast -- would
+        // then be invisible almost every time.
+        u64 bp_full = 0;
     };
     Perf perf{};
 
@@ -394,12 +402,26 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         const double n = static_cast<double>(perf.ticks);
         std::fprintf(stderr,
                      "[perf] %u ticks  agents %u  lua %.0f us  step %.0f us  snap %.0f us"
-                     "  total %.0f us of %u  worst %llu us\n",
+                     "  total %.0f us of %u  worst %llu us%s\n",
                      perf.ticks, agents,
                      perf.lua_us / n, perf.step_us / n, perf.snap_us / n,
                      total / n, 1000000u / sim::TICK_RATE_HZ,
-                     static_cast<unsigned long long>(perf.worst_total_us));
-        perf = Perf{perf.every, 0, 0, 0, 0, 0};
+                     static_cast<unsigned long long>(perf.worst_total_us),
+                     perf.bp_full ? "  [broadphase fell back]" : "");
+        // The broadphase falls back to the full O(n^2) sweep for any body whose
+        // query it cannot bound. The answer is the same either way -- the
+        // fallback IS the reference sweep -- but the cost is the cost it was
+        // built to avoid, so a level quietly running every body down it would
+        // look exactly like a broadphase that simply does not help. Said out
+        // loud, with a rate, so it is a number rather than a mystery.
+        if (perf.bp_full) {
+            std::fprintf(stderr,
+                         "[perf] agent broadphase fell back %llu times over %u ticks "
+                         "(%.1f bodies a tick)\n",
+                         static_cast<unsigned long long>(perf.bp_full), perf.ticks,
+                         static_cast<double>(perf.bp_full) / n);
+        }
+        perf = Perf{perf.every, 0, 0, 0, 0, 0, 0};
     }
 
     // A stand-in for Lua, kept only so PARAM_UPDATE replication can be tested
@@ -1265,7 +1287,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
         const u64 t_step0 = perf.every ? now_us() : 0;
         L.world.step();
-        if (perf.every) perf.step_us += now_us() - t_step0;
+        if (perf.every) {
+            perf.step_us += now_us() - t_step0;
+            perf.bp_full += L.world.broadphase_full();
+        }
 
         refresh_nav_if_stale(L);
         report_crushes(L);

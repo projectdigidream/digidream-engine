@@ -167,10 +167,17 @@ async function measure (n, dormant = false) {
   const rows = [...log.matchAll(
     /\[perf\] (\d+) ticks {2}agents (\d+) {2}lua (\d+) us {2}step (\d+) us {2}snap (\d+) us {2}total (\d+) us of (\d+) {2}worst (\d+) us/g)]
 
+  // The agent broadphase falling back to the full O(n^2) sweep. It is not a
+  // wrong answer -- the fallback IS the reference sweep -- but it costs exactly
+  // what the broadphase was built to avoid, so a sweep where it fires
+  // constantly is measuring the OLD code and reporting it as the new one.
+  const fell = [...log.matchAll(/broadphase fell back (\d+) times over (\d+) ticks/g)]
+
   return {
     n,
     spawned: asked ? Number(asked[2]) : 0,
     refused: asked ? Number(asked[3]) : 0,
+    fellBack: fell.reduce((a, m) => a + Number(m[1]), 0),
     // The FIRST report is dropped: it covers the ticks where the session was
     // still arriving and the monsters had not yet acquired a target, which is
     // not the state being measured.
@@ -227,7 +234,8 @@ const sweep = async (dormant) => {
       `  ${String(n).padStart(4)}  ${String(r.spawned).padStart(7)}  ${String(agents).padStart(6)}  ` +
       `${String(lua).padStart(6)}us  ${String(step).padStart(6)}us  ${String(snap).padStart(6)}us  ` +
       `${String(total).padStart(6)}us  ${(total / r.rows[0].budget * 100).toFixed(1).padStart(7)}%` +
-      (r.refused ? `   (${r.refused} refused)` : ''))
+      (r.refused ? `   (${r.refused} refused)` : '') +
+      (r.fellBack ? `   BROADPHASE FELL BACK ${r.fellBack}x` : ''))
   }
   return out
 }
@@ -252,6 +260,14 @@ const awake = await sweep(false)
 // pair loop -- fitted by least squares, and both terms reported. Assuming the
 // shape is what made the first answer wrong, and assuming it the other way
 // would be the same mistake with a friendlier number.
+//
+// AND B CAN COME OUT AT OR BELOW ZERO, which is not a negative cost and must
+// not be printed as one. Since the broadphase landed, the pair loop is a grid
+// query over a couple of cells rather than a sweep over every agent, so its
+// per-agent term is below this harness's noise floor -- runs differ by more
+// than the term does. The first version printed "the pair loop is -56% of
+// per-agent cost", which is an artefact of fitting a line to flat data and was
+// the sort of number that gets quoted.
 if (dormant.length >= 3) {
   console.log('\n  physics per agent, from the DORMANT sweep:\n')
   console.log('    agents    step/agent')
@@ -273,11 +289,23 @@ if (dormant.length >= 3) {
   console.log(`      ${A.toFixed(2)} us is the FIXED per-agent work -- step_agent, the`)
   console.log(`      query_surface calls, and resolve_slabs scanning all 144 sectors.`)
   console.log(`      ${B.toFixed(4)} us x agents is the pair loop in resolve_agent_collisions.`)
-  const at = (N) => (A + B * N) * N / 1000
-  const share = (N) => (B * N) / (A + B * N) * 100
-  console.log(`\n    the pair loop is ${share(dormant[dormant.length - 1].agents).toFixed(0)}% of ` +
-              `per-agent cost at ${dormant[dormant.length - 1].agents} agents, ` +
-              `${share(1000).toFixed(0)}% at 1000.`)
+
+  // Only project the growth term when it is actually growth. A fit that came
+  // out flat or downhill has measured noise, and the honest report of that is
+  // to say so and drop the term, not to extrapolate it.
+  const grows = B > 0
+  const at = (N) => (A + (grows ? B * N : 0)) * N / 1000
+  if (grows) {
+    const share = (N) => (B * N) / (A + B * N) * 100
+    const last = dormant[dormant.length - 1].agents
+    console.log(`\n    the pair loop is ${share(last).toFixed(0)}% of per-agent cost ` +
+                `at ${last} agents, ${share(1000).toFixed(0)}% at 1000.`)
+  } else {
+    console.log(`\n    the growth term fitted at or below zero, so the pair loop is`)
+    console.log(`    NOT MEASURABLE here -- per-agent cost is flat across the sweep and`)
+    console.log(`    run-to-run noise is larger than the term. That is what the`)
+    console.log(`    broadphase was for; it is not evidence that pairs are free.`)
+  }
 
   console.log(`\n  projected -- A PROJECTION FROM A FIT, NOT A MEASUREMENT:`)
   console.log(`    MAX_AGENTS is ${MAX_AGENTS}.`)

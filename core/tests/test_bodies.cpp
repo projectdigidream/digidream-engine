@@ -404,6 +404,97 @@ static void test_the_push_is_hashed() {
     CHECK(run(true) != run(false));
 }
 
+// A CROWD, RESOLVED BOTH WAYS.
+//
+// Agent-vs-agent resolution used to be a flat double loop: every solid body
+// against every other, every tick. It is now a hash grid over the bodies'
+// tick-start positions, and the claim made for that grid is a strong one --
+// not "close enough", but the SAME PAIRS IN THE SAME ORDER, with only the
+// pairs that would have done nothing left out.
+//
+// It has to be that strong. The inner loop moves the body it is resolving, so
+// the pushes are not independent: reorder two of them and the body ends up
+// somewhere else, which is a different simulation, which is a client
+// mispredicting every tick of a crowd.
+//
+// So the control is the comparison itself. The same crowd runs twice -- once
+// through the grid, once with force_full_agent_sweep -- and every body's
+// position and velocity must agree at every tick, not merely at the end,
+// because two runs that diverge and reconverge are still two simulations.
+//
+// AND THE CROWD HAS TO BE A CROWD. Both paths agree by construction when a
+// body has no neighbours, so a sparse scenario passes whether the grid works
+// or not -- the golden trace's twelve scattered agents do exactly that, and
+// reversing the candidate order does not move its hash. The bodies here start
+// packed at well under a radius apart, and the run asserts the grid was
+// actually used and that several candidates were in play.
+static void test_a_crowd_resolves_the_same_both_ways() {
+    std::printf("bodies: a crowd resolves the same with the broadphase and without\n");
+
+    static Room r;
+
+    // 100 bodies in a 10 x 10 lattice on 0.35-unit spacing, which is under one
+    // radius: every one of them starts overlapping its neighbours, and the
+    // first ticks are a press of mutual depenetration -- the case where the
+    // order of the pushes matters most and where a body travels furthest from
+    // where its query was centred.
+    struct Sample { i64 x, y, z, vx, vy; };
+    static Sample trace[2][64 * 100];
+
+    auto run = [&](bool full_sweep, int slot) {
+        static World w;
+        w.reset();
+        r.attach(w);
+        w.force_full_agent_sweep(full_sweep);
+        for (int gy = 0; gy < 10; ++gy) {
+            for (int gx = 0; gx < 10; ++gx) {
+                w.spawn(fx3{F(18) + fx::from_frac(35 * gx, 100),
+                            F(18) + fx::from_frac(35 * gy, 100), F(0)});
+            }
+        }
+        u32 fast = 0, full = 0;
+        for (u32 t = 0; t < 64; ++t) {
+            w.step();
+            fast += w.broadphase_fast();
+            full += w.broadphase_full();
+            for (u32 i = 0; i < 100; ++i) {
+                const AgentState& a = w.agent(i);
+                trace[slot][t * 100 + i] =
+                    Sample{a.pos.x.raw, a.pos.y.raw, a.pos.z.raw, a.vel.x.raw, a.vel.y.raw};
+            }
+        }
+        return full_sweep ? full : fast;
+    };
+
+    const u32 grid_served = run(false, 0);
+    const u32 swept       = run(true, 1);
+
+    // The grid ran, and ran for everybody. Without this the comparison below
+    // passes just as happily when the fast path is never taken -- the two
+    // sides agree by design, so "identical" and "never tried" look the same.
+    CHECK(grid_served == 64 * 100);
+    CHECK(swept == 64 * 100);
+
+    int first_diff = -1;
+    for (int k = 0; k < 64 * 100 && first_diff < 0; ++k) {
+        const Sample& a = trace[0][k];
+        const Sample& b = trace[1][k];
+        if (a.x != b.x || a.y != b.y || a.z != b.z || a.vx != b.vx || a.vy != b.vy) {
+            first_diff = k;
+        }
+    }
+    if (first_diff >= 0) {
+        std::printf("    first divergence at tick %d, body %d\n", first_diff / 100,
+                    first_diff % 100);
+    }
+    CHECK(first_diff < 0);
+
+    // And the crowd really did move, so "identical" is not two copies of
+    // nothing happening. A hundred bodies starting inside each other cannot
+    // end where they started.
+    CHECK(trace[0][63 * 100].x != trace[0][0].x || trace[0][63 * 100].y != trace[0][0].y);
+}
+
 // A bridge over a path, both sharing a footprint in plan.
 //
 //   path    x 0..40, y 0..40,  floor 0,  ceiling 8
@@ -676,6 +767,7 @@ int main() {
     test_a_push_cannot_shove_you_out_of_the_world();
     test_a_push_cannot_cross_a_wall();
     test_the_push_is_hashed();
+    test_a_crowd_resolves_the_same_both_ways();
     test_you_can_stand_on_a_stacked_sector();
     test_you_are_still_under_a_bridge_when_you_are_under_it();
     test_you_can_jump_out_of_a_pit_onto_a_platform_inside_it();

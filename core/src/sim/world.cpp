@@ -36,6 +36,11 @@ void World::reset() noexcept {
     // again on a snapshot that had nothing to do with it.
     vfx_count_ = 0;
     tick_ = 0;
+    // The broadphase report and its test switch. Cleared here so a World reused
+    // between scenarios does not carry one scenario's mode into the next.
+    agrid_fast_ = 0;
+    agrid_full_ = 0;
+    agrid_off_ = false;
 }
 
 u32 World::spawn(fx3 pos) noexcept {
@@ -889,8 +894,55 @@ void World::resolve_prop_collisions(u32 agent) noexcept {
 // each stop at where the other WAS, which can leave them fractionally
 // overlapped for a tick before the next pass separates them. That is a frame of
 // softness, which is what §7.1 asked for anyway.
+
+// Bucket every solid agent by the cell its TICK-START position falls in.
+//
+// Walked from the top DOWN and head-inserted, so each bucket's chain comes back
+// out in ASCENDING index order. That is half of what keeps the resolution's
+// order intact; the other half is the sort in the caller, which is needed
+// anyway because a query reads several buckets.
+void World::build_agent_grid() noexcept {
+    for (u32 b = 0; b < AGRID_BUCKETS; ++b) agrid_head_[b] = static_cast<u16>(AGRID_EMPTY);
+    for (u32 n = agent_high_water_; n-- > 0;) {
+        if (!agents_[n].active || !agents_[n].solid) continue;
+        const fx3 p = tick_start_pos_[n];
+        const u32 b = agrid_bucket(p.x.raw >> AGRID_SHIFT, p.y.raw >> AGRID_SHIFT);
+        agrid_next_[n] = agrid_head_[b];
+        agrid_head_[b] = static_cast<u16>(n);
+    }
+}
+
+// The full sweep, in the order the answer is defined by. Both paths below end
+// here or match this exactly; it is written once so there is one definition of
+// what the fast path has to reproduce.
+void World::resolve_agent_against_all(u32 j, fx budget) noexcept {
+    AgentState& b = agents_[j];
+    for (u32 i = 0; i < agent_high_water_; ++i) {
+        if (i == j || !agents_[i].active || !agents_[i].solid) continue;
+        const fx3 a = tick_start_pos_[i];
+        push_out_of_cylinder(b.pos, b.vel, params_[j].radius, params_[j].height,
+                             fx2{a.x, a.y}, params_[i].radius, a.z,
+                             a.z + params_[i].height, budget, j > i);
+    }
+}
+
 void World::resolve_agent_collisions() noexcept {
     const fx3* was = tick_start_pos_;
+
+    // The widest solid body in play, so the query radius can be stated without
+    // assuming anything about what a map put in it. One linear pass, and it is
+    // the only O(agents) work here outside the resolution itself.
+    fx max_radius{};
+    for (u32 i = 0; i < agent_high_water_; ++i) {
+        if (!agents_[i].active || !agents_[i].solid) continue;
+        if (params_[i].radius > max_radius) max_radius = params_[i].radius;
+    }
+    build_agent_grid();
+
+    u16 cand[AGRID_MAX_CAND];
+    agrid_fast_ = 0;
+    agrid_full_ = 0;
+
     for (u32 j = 0; j < agent_high_water_; ++j) {
         if (!agents_[j].active || !agents_[j].solid) continue;
         AgentState& b = agents_[j];
@@ -898,12 +950,105 @@ void World::resolve_agent_collisions() noexcept {
         const fx2 travelled{b.pos.x - was[j].x, b.pos.y - was[j].y};
         const fx budget = length(travelled) + DEPENETRATE_PER_TICK;
 
-        for (u32 i = 0; i < agent_high_water_; ++i) {
-            if (i == j || !agents_[i].active || !agents_[i].solid) continue;
-            const fx3 a = was[i];
-            push_out_of_cylinder(b.pos, b.vel, params_[j].radius, params_[j].height,
-                                 fx2{a.x, a.y}, params_[i].radius, a.z,
-                                 a.z + params_[i].height, budget, j > i);
+        // HOW FAR TO LOOK, and it has to be provably enough, because a pair
+        // this misses is not a slower answer -- it is a different one.
+        //
+        // push_out_of_cylinder does nothing unless |b.pos - was[i]| is under
+        // radius_j + radius_i, so a query of radius_j + max_radius around
+        // b.pos catches everything that can matter AT THIS INSTANT. The catch
+        // is that b.pos moves while the inner loop runs: each push shifts it by
+        // at most `budget`, and a chain of pushes through a crowd can carry it
+        // further than any one of them. So the query is widened by budget plus
+        // a cell, and then -- because "plus a cell" is a guess and this file
+        // does not get to guess -- the margin is CHECKED below rather than
+        // assumed. Leave it, and the body falls back to the full sweep.
+        const fx safe = budget + fx::from_int(AGRID_CELL_UNITS);
+        const fx reach = params_[j].radius + max_radius + safe;
+
+        u32 n_cand = 0;
+        bool overflowed = agrid_off_;
+        if (!overflowed) {
+            const i64 x0 = (before.x - reach).raw >> AGRID_SHIFT;
+            const i64 x1 = (before.x + reach).raw >> AGRID_SHIFT;
+            const i64 y0 = (before.y - reach).raw >> AGRID_SHIFT;
+            const i64 y1 = (before.y + reach).raw >> AGRID_SHIFT;
+            // A body moving absurdly fast, or a map with one enormous body in
+            // it, sweeps a cell range wide enough that walking it costs more
+            // than the sweep it replaces. Fall back rather than grind.
+            if ((x1 - x0 + 1) * (y1 - y0 + 1) > AGRID_MAX_CELLS) {
+                overflowed = true;
+            } else {
+                for (i64 cy = y0; cy <= y1 && !overflowed; ++cy) {
+                    for (i64 cx = x0; cx <= x1 && !overflowed; ++cx) {
+                        const u32 bk = agrid_bucket(cx, cy);
+                        for (u32 i = agrid_head_[bk]; i != AGRID_EMPTY; i = agrid_next_[i]) {
+                            if (i == j) continue;
+                            if (n_cand >= AGRID_MAX_CAND) { overflowed = true; break; }
+                            cand[n_cand++] = static_cast<u16>(i);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!overflowed) {
+            // Back into ascending index order, because the inner loop mutates
+            // b.pos and the sequence of pushes is part of the answer.
+            // Insertion sort: the list is short and arrives as a handful of
+            // ascending runs, and it allocates nothing, which the tick path
+            // does not get to do.
+            for (u32 k = 1; k < n_cand; ++k) {
+                const u16 v = cand[k];
+                u32 m = k;
+                while (m > 0 && cand[m - 1] > v) { cand[m] = cand[m - 1]; --m; }
+                cand[m] = v;
+            }
+
+            // Undo material, for the case where the margin turns out not to
+            // have been enough. push_out_of_cylinder writes pos and vel and
+            // nothing else, so this restores everything it could have touched.
+            const fx3 save_pos = b.pos;
+            const fx3 save_vel = b.vel;
+
+            u32 k = 0;
+            u16 last = static_cast<u16>(AGRID_EMPTY);
+            for (; k < n_cand; ++k) {
+                // Two cells can hash to one bucket, so the same agent can be
+                // collected twice. Sorted, the duplicates are adjacent; applied
+                // twice they would be a second push, which is a different
+                // answer rather than a redundant one.
+                if (cand[k] == last) continue;
+                last = cand[k];
+
+                const u32 i = cand[k];
+                const fx3 a = was[i];
+                push_out_of_cylinder(b.pos, b.vel, params_[j].radius, params_[j].height,
+                                     fx2{a.x, a.y}, params_[i].radius, a.z,
+                                     a.z + params_[i].height, budget, j > i);
+
+                // THE MARGIN, CHECKED. If the body is still within `safe` of
+                // where the query was centred, then every agent that could have
+                // been touching it at any point so far was inside the queried
+                // box, and the pairs applied are exactly the pairs the full
+                // sweep would have applied. The moment that stops being true,
+                // stop -- what has been applied so far is discarded, not
+                // patched up.
+                const fx dx = b.pos.x - before.x;
+                const fx dy = b.pos.y - before.y;
+                if (dx > safe || dx < -safe || dy > safe || dy < -safe) break;
+            }
+            if (k < n_cand) {
+                b.pos = save_pos;
+                b.vel = save_vel;
+                overflowed = true;
+            }
+        }
+
+        if (overflowed) {
+            resolve_agent_against_all(j, budget);
+            ++agrid_full_;
+        } else {
+            ++agrid_fast_;
         }
         keep_in_map(j, before);
     }

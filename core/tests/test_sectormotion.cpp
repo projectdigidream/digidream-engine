@@ -9,6 +9,7 @@
 // because any of those failing would break prediction rather than the lift.
 //
 #include <cstdio>
+#include <memory>
 
 #include "dnp/geom/mapfile.hpp"
 #include "dnp/math/rng.hpp"
@@ -116,7 +117,18 @@ static void test_riding_a_lift() {
     std::printf("motion: an anchored agent rides its sector\n");
 
     Stage stage;
-    World w;
+// A World is very nearly a megabyte -- MAX_AGENTS agents, MAX_PROPS props and
+// the per-tick scratch for both -- so it is built on the HEAP here rather than
+// in the frame. It used to be a plain local, which was fine when MAX_AGENTS was
+// 384; at 1024 two of them in one frame overflowed the default 8 MB stack under
+// AddressSanitizer's redzones, and the whole suite aborted in a test that has
+// nothing to do with how big an agent table is.
+//
+// Static would be the other answer and is wrong here: these sites are inside
+// loops that need a FRESH world each pass, and World::reset() does not clear
+// sector motions, which is the one thing this file is about.
+    const auto wp = std::make_unique<World>();
+    World& w = *wp;
     stage.attach(w);
 
     const u32 a = w.spawn(fx3{F(30), F(10), F(1)});
@@ -157,7 +169,8 @@ static void test_detach_inherits_momentum() {
 
     for (int variant = 0; variant < 2; ++variant) {
         Stage stage;
-        World w;
+        const auto wp = std::make_unique<World>();
+        World& w = *wp;
         stage.attach(w);
         const u32 a = w.spawn(fx3{F(30), F(10), F(1)});
         w.motions().add(stage.store, 1);
@@ -211,7 +224,8 @@ static void test_discrete_motion() {
     std::printf("motion: scripted-discrete moves the sector without a path\n");
 
     Stage stage;
-    World w;
+    const auto wp = std::make_unique<World>();
+    World& w = *wp;
     stage.attach(w);
     const u32 a = w.spawn(fx3{F(30), F(10), F(1)});
     w.motions().add(stage.store, 1);
@@ -238,7 +252,10 @@ static void test_determinism() {
     Rng rng(555);
     for (int trial = 0; trial < 60; ++trial) {
         Stage sa, sb;
-        World wa, wb;
+        const auto wap = std::make_unique<World>();
+        const auto wbp = std::make_unique<World>();
+        World& wa = *wap;
+        World& wb = *wbp;
         sa.attach(wa);
         sb.attach(wb);
 
@@ -295,7 +312,8 @@ static void test_no_drift_over_a_long_run() {
     // off by one would put every moving sector one tick out of step with the
     // agents riding it.
     Stage stage;
-    World w;
+    const auto wp = std::make_unique<World>();
+    World& w = *wp;
     stage.attach(w);
     w.motions().add(stage.store, 1);
     const fx home = w.map()->sector(1).floor_z;
@@ -581,7 +599,8 @@ static void test_a_platform_moving_into_its_neighbour_stays_coherent() {
     std::printf("motion: a platform overrunning its neighbour leaves a sane world\n");
 
     Stage stage;                       // two sectors, sharing x = 20
-    World w;
+    const auto wp = std::make_unique<World>();
+    World& w = *wp;
     stage.attach(w);
 
     const u32 a = w.spawn(fx3{F(10), F(10), F(1)});   // standing in sector 0

@@ -424,6 +424,17 @@ public:
 
     u32 tick() const noexcept { return tick_; }
 
+    // Last tick's agent-vs-agent resolution: how many bodies the broadphase
+    // served, and how many fell back to the full sweep. A report, not state --
+    // neither is hashed, and neither affects the answer.
+    u32 broadphase_fast() const noexcept { return agrid_fast_; }
+    u32 broadphase_full() const noexcept { return agrid_full_; }
+
+    // Test-only. See the comment on agrid_off_: the broadphase claims to be
+    // indistinguishable from the sweep it replaces, and this is how a test runs
+    // the other side of that comparison.
+    void force_full_agent_sweep(bool on) noexcept { agrid_off_ = on; }
+
     // Align the simulation clock to the server's.
     //
     // This matters the moment any sector moves. Parametric motion is a pure
@@ -464,6 +475,7 @@ private:
     void detect_prop_events() noexcept;
     void resolve_prop_collisions(u32 agent) noexcept;
     void resolve_agent_collisions() noexcept;
+    void resolve_agent_against_all(u32 j, fx budget) noexcept;
 
     // Undo, or resolve, a push that put a body somewhere the map does not
     // allow. `before` is where it was before the push.
@@ -476,6 +488,97 @@ private:
     // far a body has travelled -- which is the budget for how far it may be
     // pushed. Not hashed; it is scratch, rebuilt every tick.
     fx3 tick_start_pos_[MAX_AGENTS]{};
+
+    // --- the agent broadphase --------------------------------------------------
+    //
+    // resolve_agent_collisions was a flat double loop with no spatial index at
+    // all: every solid agent tested against every other solid agent, every
+    // tick. At 384 slots that is 147,000 pair tests; at 1024 it is a million,
+    // and measured on tools/mobperf/run.js it was 68% of per-agent physics at
+    // a thousand bodies.
+    //
+    // A UNIFORM HASH GRID over the TICK-START positions, rebuilt each tick.
+    // Tick-start rather than current, because `tick_start_pos_` is what the
+    // resolution reads for the other body and it does not move while the
+    // resolution runs -- so the grid cannot go stale underneath the loop that
+    // is querying it.
+    //
+    // WHY A HASH AND NOT A DENSE GRID. A dense grid has to be sized from the
+    // map's bounds, which means either an allocation or a cap on how big a map
+    // may be. A hash needs neither and costs one multiply per lookup. Bucket
+    // collisions are harmless here by construction: a collision only adds
+    // candidates, and a candidate that is not actually touching is a
+    // push_out_of_cylinder that does nothing.
+    //
+    // THE ORDER IS THE CONTRACT. The inner loop mutates `b.pos` as it goes, so
+    // the sequence of pushes is part of the answer -- two bodies resolved in
+    // the other order end up somewhere else. Candidates are therefore sorted
+    // back into ascending agent index before they are applied, which is what
+    // makes this a pure acceleration: the same pairs, in the same order, with
+    // the no-ops skipped. That is why the determinism hash must not move, and
+    // it is the sharpest control in this piece of work.
+    //
+    // AND THE QUERY RADIUS IS CHECKED, NOT ASSUMED. Because `b.pos` moves
+    // while the loop runs, the radius that was wide enough when the query was
+    // made can stop being wide enough part way through -- a chain of pushes
+    // through a crowd carries a body further than any single push. The
+    // resolution therefore re-checks after every push that the body is still
+    // inside the margin the query was made with, and if it is not, it throws
+    // away what it did and runs the full sweep for that body. The fast path
+    // never produces an answer it cannot justify.
+    static constexpr u32 AGRID_BUCKETS = 2048;              // power of two
+    static constexpr u32 AGRID_EMPTY   = 0xFFFFu;
+    static_assert(MAX_AGENTS < AGRID_EMPTY,
+                  "agent indices are stored as u16 in the broadphase chains, "
+                  "with 0xFFFF reserved for the end of a chain");
+    // Two world units. Bodies are about 0.4 in radius, so a cell holds a
+    // handful of them and a query touches a few. Expressed as a shift on the
+    // fixed-point raw value -- 1 unit is 2^32, so 2 units is 2^33 -- because an
+    // arithmetic shift floors towards negative infinity on every target, which
+    // a divide does not.
+    static constexpr u32 AGRID_CELL_UNITS = 2;
+    static constexpr int AGRID_SHIFT = 33;
+    static_assert(fx::from_int(AGRID_CELL_UNITS).raw == (i64{1} << AGRID_SHIFT),
+                  "the cell size and the shift are the same number said twice; "
+                  "they have to agree or the query margin is wrong");
+    // Above these, the query gives up and the caller runs the full sweep for
+    // that body. Correct either way -- the full sweep IS the reference order --
+    // so these only bound the work, never the answer.
+    static constexpr u32 AGRID_MAX_CAND = 256;
+    static constexpr i64 AGRID_MAX_CELLS = 256;
+
+    u16 agrid_head_[AGRID_BUCKETS]{};
+    u16 agrid_next_[MAX_AGENTS]{};
+
+    // How the last tick's resolution went: bodies served by the grid, and
+    // bodies that gave up on it. Not hashed -- it is a report about how the
+    // answer was reached, never part of the answer.
+    //
+    // Counted rather than inferred, because the fast path and the slow path
+    // agree BY DESIGN, so a test that compares them passes just as happily when
+    // the fast path never ran at all. The count is what tells the difference
+    // between "identical" and "never tried".
+    u32 agrid_fast_ = 0;
+    u32 agrid_full_ = 0;
+
+    // Test-only: send every body down the full sweep.
+    //
+    // The broadphase's entire claim is that it is indistinguishable from the
+    // sweep it replaces, and a claim with no way to run the other side is not a
+    // claim anyone can check. One bool, read once per body rather than once per
+    // pair, which is why it costs nothing worth measuring.
+    bool agrid_off_ = false;
+
+    static u32 agrid_bucket(i64 cx, i64 cy) noexcept {
+        // Unsigned throughout: signed overflow is undefined, and a hash that is
+        // undefined behaviour is a hash that may differ between two builds of
+        // the same simulation.
+        const u64 h = static_cast<u64>(cx) * 73856093ull ^
+                      static_cast<u64>(cy) * 19349663ull;
+        return static_cast<u32>(h) & (AGRID_BUCKETS - 1);
+    }
+
+    void build_agent_grid() noexcept;
 
     // One past the highest agent slot ever used. Every per-tick sweep over the
     // agent space runs to this instead of to MAX_AGENTS.
