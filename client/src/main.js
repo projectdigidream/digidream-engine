@@ -37,6 +37,8 @@ import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
          sweptSpan, SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { UiView } from './render/ui.js'
+import { wantsTouch } from './touch.js'
+import { mountTouch } from './render/touchui.js'
 import { parseAnimations, TextureAnimator } from './render/animtex.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
@@ -60,6 +62,55 @@ const DESKTOP = hasLocalTransport()
 const SERVER = params.get('server')
 const LIVE = SERVER !== null || DESKTOP
 const SERVER_URL = SERVER || 'https://127.0.0.1:34433/dnp'
+
+// --- the controls you can touch ----------------------------------------------
+//
+// MOUNTED HERE, ahead of every `await` below, and that position is the whole
+// point. The wasm core, the map fetch and the connection all come after this
+// line and any of them can be slow or fail -- on a phone, with a server that
+// is not there, that used to be a black rectangle with no way to tell whether
+// the game had started. The controls now appear immediately and do nothing
+// until there is something to drive, which is the honest order.
+/**
+ * The thumbstick and its buttons, on a device whose pointer is a finger.
+ *
+ * MOUNTED, NOT BRANCHED ON. Everything below asks the touch state for a push
+ * and a set of buttons exactly as it asks the keyboard, and adds the two --
+ * so a tablet with a keyboard uses both without a mode, and a desktop with
+ * `?touch=1` gets the controls over a game that still answers to WASD. There
+ * is no "mobile version" of the input path, which is the only way to be sure
+ * the two do not drift.
+ *
+ * Null when the device has no coarse pointer. See wantsTouch: it asks the
+ * BROWSER whether the primary pointer is a finger rather than sniffing a name,
+ * because a name is wrong for whatever shipped last month.
+ */
+const touch = wantsTouch(params) ? mountTouch() : null
+if (touch) {
+  document.documentElement.classList.add('dnp-touch-on')
+  // The two bindings with no button to label them. Shown until the first
+  // touch and then gone: a legend that stays is a legend in the way, and the
+  // first touch is proof it was read or proof it was not needed.
+  const hint = document.getElementById('touchhelp')
+  if (hint) {
+    hint.hidden = false
+    const dismiss = () => {
+      hint.style.opacity = '0'
+      setTimeout(() => { hint.hidden = true }, 500)
+      removeEventListener('pointerdown', dismiss)
+    }
+    addEventListener('pointerdown', dismiss, { once: true, passive: true })
+    setTimeout(dismiss, 8000)
+  }
+}
+
+/** Which protocol bit each touch button holds down. */
+const TOUCH_BITS = {
+  jump: BUTTON.JUMP,
+  dash: BUTTON.DASH,
+  use: BUTTON.INTERACT,
+  attack: BUTTON.ATTACK_PRIMARY
+}
 
 const MAP_URL = params.get('map') ?? '/maps/test.dnpm'
 const SPAWN = params.get('spawn') ?? 'start'
@@ -950,9 +1001,20 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight)
   resizeCamera(cam3, innerWidth / innerHeight, viewHeight)
 })
-addEventListener('wheel', (e) => {
-  viewHeight = Math.min(140, Math.max(8, viewHeight * (e.deltaY > 0 ? 1.1 : 1 / 1.1)))
+/**
+ * Zoom by a factor, clamped.
+ *
+ * One function because there are two ways in now -- a wheel and a pinch -- and
+ * they must land on the same number with the same limits. Two copies of a
+ * clamp is how one of them ends up able to zoom into the floor.
+ */
+function zoomBy (factor) {
+  viewHeight = Math.min(140, Math.max(8, viewHeight * factor))
   resizeCamera(cam3, innerWidth / innerHeight, viewHeight)
+}
+
+addEventListener('wheel', (e) => {
+  zoomBy(e.deltaY > 0 ? 1.1 : 1 / 1.1)
 }, { passive: true })
 
 // --- input -----------------------------------------------------------------
@@ -983,6 +1045,16 @@ function currentInput () {
   if (held.has('KeyD') || held.has('ArrowRight')) mx += 1
   if (held.has('KeyA') || held.has('ArrowLeft')) mx -= 1
 
+  // THE STICK IS ADDED, not substituted. A key and a thumb pushing the same
+  // way must not double the speed, which is what the clamp below is for --
+  // and it is the clamp the keyboard's own diagonal already needed, so there
+  // is one of it rather than one per input.
+  if (touch) {
+    const push = touch.state.move2d()
+    mx += push.x
+    my += push.y
+  }
+
   const len = Math.hypot(mx, my)
   if (len > 1) { mx /= len; my /= len }
 
@@ -1001,6 +1073,7 @@ function currentInput () {
   // Left mouse would be the obvious binding and is not wired yet: the canvas
   // has no pointer capture, so a click would leave the page rather than swing.
   if (held.has('KeyF')) buttons |= BUTTON.ATTACK_PRIMARY
+  if (touch) buttons |= touch.state.buttons(TOUCH_BITS)
 
   // Held across a stop, so letting go of the keys leaves the agent facing where
   // it was walking rather than snapping east. See aimFor.
@@ -1123,6 +1196,19 @@ function frame (now) {
 
   if (held.has('KeyQ')) yaw -= 1.5 * dt
   if (held.has('KeyR')) yaw += 1.5 * dt
+  if (touch) {
+    // TAKEN once per frame, which zeroes them. A drag accumulates between
+    // frames and is applied whole; reading without clearing would turn by the
+    // same drag every frame until the thumb moved again, which is a camera
+    // that spins when you stop touching it.
+    yaw += touch.state.takeYaw()
+    const pinch = touch.state.takeZoom()
+    // Pixels of pinch to a zoom factor. Exponential rather than linear so that
+    // the same finger movement is the same proportional change however far in
+    // you already are -- a linear step is imperceptible when zoomed out and a
+    // lurch when zoomed in.
+    if (pinch !== 0) zoomBy(Math.exp(pinch * 0.004))
+  }
 
   acc += dt
   // Bounded, so a backgrounded tab does not return and run ten thousand ticks

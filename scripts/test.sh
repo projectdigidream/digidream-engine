@@ -301,6 +301,19 @@ else
   # arithmetic, and arithmetic is worth asserting rather than screenshotting.
   node client/test/mapgeom.test.js | tail -2
   node client/test/camera.test.js | tail -2
+  # TOUCH, which is arithmetic and a state machine: where the stick's origin
+  # is, what counts as a push, who owns which finger. The claims worth having
+  # are the ones with a wrong answer you could ship -- pushing your thumb up
+  # must walk you up (the DOM's y grows downward), a thumb resting on the glass
+  # must not walk, a corner must not be 41% faster than a straight push, and a
+  # CANCELLED pointer must stop you. That last one is the phone's version of
+  # main.js clearing `held` on blur, and on a phone it is not an edge case: a
+  # call, a notification, the app backgrounded mid-jump.
+  #
+  # It also asserts the stick and the keyboard hand the SAME world vector to
+  # camera.js -- one implementation of "a push on screen is a direction in the
+  # world", with a control that the comparison can fail.
+  node client/test/touch.test.js | tail -2
   node client/test/entities.test.js | tail -2
   node client/test/lighting.test.js | tail -2
   node client/test/shadows.test.js | tail -2
