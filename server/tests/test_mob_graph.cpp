@@ -197,6 +197,34 @@ for name, d in pairs(mobs.defs) do
           if ge.lua_index ~= i then
             note("%s.%s seq %d: lua_index %d", name, sname, i, ge.lua_index)
           end
+          -- WHICH ACTIONS THE LOOP RUNS ITSELF. Six of them write state the
+          -- C++ runtime owns -- vars, animation, aim, which state it is in --
+          -- and everything else is handed back to Lua by `lua_index`. Getting
+          -- that classification wrong is silent in both directions: an action
+          -- claimed here and not implemented does nothing, and one handed back
+          -- that should have run here writes a var nobody reads.
+          local OWN = { ['goto'] = true, set_var = true, add_var = true,
+                        set_cooldown = true, set_anim = true, face = true }
+          local want_act = OWN[le.action] and le.action or 'lua'
+          if ge.action ~= want_act then
+            note("%s.%s seq %d: runs as '%s', should be '%s'",
+                 name, sname, i, ge.action, want_act)
+          end
+          -- The arguments of the ones it runs, so a set_cooldown compiled with
+          -- the wrong number of ticks fails here rather than as a monster that
+          -- fires twice as often.
+          if le.action == 'set_var' or le.action == 'add_var' or le.action == 'set_cooldown' then
+            local want = le.value or le.by or le.ticks or 0
+            if ge.i ~= want then
+              note("%s.%s seq %d: %s arg %d vs %d", name, sname, i, le.action, ge.i, want)
+            end
+            if le.var ~= nil and ge.var < 0 then
+              note("%s.%s seq %d: var '%s' got no slot", name, sname, i, le.var)
+            end
+          end
+          if le.action == 'set_anim' and ge.i ~= (le.anim or -1) then
+            note("%s.%s seq %d: anim %d vs %s", name, sname, i, ge.i, tostring(le.anim))
+          end
           if le.action == "goto" and ge.goto_state ~= le.state then
             note("%s.%s seq %d: goto '%s' vs '%s'", name, sname, i,
                  tostring(ge.goto_state), tostring(le.state))

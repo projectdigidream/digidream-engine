@@ -282,16 +282,66 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                     size_t n = 0;
                     const char* act = opt_str(L, e, "action", n);
                     if (act != nullptr) {
-                        if (streq(act, n, "goto")) {
-                            lua_pop(L, 1);
+                        // The six the loop runs itself, because they write
+                        // state it owns. Everything else keeps Act::Lua and is
+                        // called back by `lua_index` at the tick it comes due.
+                        if (streq(act, n, "goto"))              se.id = Act::Goto;
+                        else if (streq(act, n, "set_var"))      se.id = Act::SetVar;
+                        else if (streq(act, n, "add_var"))      se.id = Act::AddVar;
+                        else if (streq(act, n, "set_cooldown")) se.id = Act::SetCooldown;
+                        else if (streq(act, n, "set_anim"))     se.id = Act::SetAnim;
+                        else if (streq(act, n, "face"))         se.id = Act::Face;
+                        // THE ESCAPE HATCH GOES TO THE SLOW PATH, whole.
+                        // `lua` may write anything -- a mob's vars, its aim,
+                        // its state -- and this runtime owns all three. Running
+                        // the kind here and letting an arbitrary chunk write
+                        // behind it would be two owners of one number.
+                        else if (streq(act, n, "lua") && k.supported()) {
+                            k.unsupported.assign("lua (action)");
+                        }
+                        lua_pop(L, 1);
+
+                        switch (se.id) {
+                        case Act::Goto: {
                             size_t sn2 = 0;
                             const char* to = opt_str(L, e, "state", sn2);
                             if (to != nullptr) {
-                                se.goto_state = static_cast<i16>(g.state_by_name(k, to, sn2));
+                                se.state = static_cast<i16>(g.state_by_name(k, to, sn2));
                                 lua_pop(L, 1);
                             }
-                        } else {
-                            lua_pop(L, 1);
+                            break;
+                        }
+                        case Act::SetVar:
+                        case Act::AddVar:
+                        case Act::SetCooldown: {
+                            size_t vn = 0;
+                            const char* v = opt_str(L, e, "var", vn);
+                            if (v != nullptr) {
+                                se.var = static_cast<i16>(g.var_slot(k, v, vn));
+                                lua_pop(L, 1);
+                            }
+                            // One integer serves all three; their argument
+                            // names are distinct so reading each in turn cannot
+                            // collide.
+                            se.i = opt_int(L, e, "value",
+                                   opt_int(L, e, "by",
+                                   opt_int(L, e, "ticks", 0)));
+                            break;
+                        }
+                        case Act::SetAnim:
+                            se.i = opt_int(L, e, "anim", -1);
+                            break;
+                        case Act::Face: {
+                            size_t tn2 = 0;
+                            const char* to = opt_str(L, e, "towards", tn2);
+                            // mobs.lua defaults `towards` to "target" and acts
+                            // only on that value; anything else leaves the aim.
+                            se.at_target = (to == nullptr) || streq(to, tn2, "target");
+                            if (to != nullptr) lua_pop(L, 1);
+                            break;
+                        }
+                        case Act::Lua:
+                            break;
                         }
                     }
                     g.sequence.push_back(se);

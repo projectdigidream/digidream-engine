@@ -168,8 +168,15 @@ int l_mobs_graph(lua_State* L) {
             lua_createtable(L, 0, 3);
             lua_pushnumber(L, e.at);        lua_setfield(L, -2, "at");
             lua_pushnumber(L, e.lua_index); lua_setfield(L, -2, "lua_index");
-            if (e.goto_state >= 0) {
-                lua_pushstring(L, g.str(g.states[k.first_state + e.goto_state].name));
+            static const char* const ACT_NAME[] = {
+                "set_var", "add_var", "set_cooldown", "set_anim", "goto", "face", "lua",
+            };
+            lua_pushstring(L, ACT_NAME[static_cast<u8>(e.id)]);
+            lua_setfield(L, -2, "action");
+            lua_pushnumber(L, e.i);   lua_setfield(L, -2, "i");
+            lua_pushnumber(L, e.var); lua_setfield(L, -2, "var");
+            if (e.state >= 0) {
+                lua_pushstring(L, g.str(g.states[k.first_state + e.state].name));
                 lua_setfield(L, -2, "goto_state");
             }
             lua_rawseti(L, -2, qi + 1);

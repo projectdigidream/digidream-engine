@@ -93,16 +93,38 @@ struct Transition {
     u16 cond_count = 0;
 };
 
-// A sequence entry stays a POINTER INTO LUA: `at`, plus the 1-based index of
-// the entry in that state's `sequence` array. When it comes due, C++ asks Lua
-// to run exactly that entry. Nothing about what the action DOES crosses.
+// The six actions the loop runs itself.
+//
+// NOT A SECOND IMPLEMENTATION of the vocabulary: these are exactly the ones
+// that write state this runtime owns -- a mob's vars, its animation, its aim,
+// which state it is in -- and there is nowhere else for them to write it. Every
+// other action stays in maps/scripts/mobs.lua and is called back at the tick it
+// would have fired, because what `spawn` or `damage_area` does is about the
+// world rather than about the mob, and one implementation of each is the point.
+enum class Act : u8 {
+    SetVar,
+    AddVar,
+    SetCooldown,
+    SetAnim,
+    Goto,
+    Face,
+    // Everything else: handed to Lua by its index in the state's `sequence`.
+    Lua,
+};
+
+// A sequence entry. `at` is a DEADLINE relative to entering the state, not a
+// countdown -- a mob nobody is near costs nothing between its own decisions --
+// and `lua_index` is the 1-based index of the entry in that state's `sequence`
+// array, so an action that stays in Lua can be named without anything about
+// what it DOES having to cross.
 struct SeqEntry {
     i32 at = 0;
     u16 lua_index = 0;
-    // `goto` is the one action the decision loop has to understand, because it
-    // stops the rest of the sequence and changes state -- run_due's return
-    // value. Resolved here so the common case needs no call into Lua at all.
-    i16 goto_state = -1;
+    Act id = Act::Lua;
+    i16 var = -1;          // set_var / add_var / set_cooldown
+    i32 i = 0;             // value / by / ticks / anim
+    i16 state = -1;        // goto
+    bool at_target = true; // face: `towards`, which only has one interesting value
 };
 
 struct State {
