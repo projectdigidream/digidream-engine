@@ -1018,8 +1018,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                          e.sector, static_cast<double>(e.depth.raw) / 4294967296.0);
         }
         // An episode ends when the geometry lets go, so escaping and being
-        // caught again reports twice.
-        for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+        // caught again reports twice. To the high-water mark: a slot that was
+        // never active was never crushed either, and this runs every tick.
+        for (u32 i = 0; i < L.world.agent_high_water(); ++i) {
             if (!now[i] && L.crush_seen[i]) {
                 std::fprintf(stderr, "[srv] tick %u: agent %u released after %u ticks\n",
                              L.world.tick(), i, L.world.tick() - L.crush_reported_tick[i]);

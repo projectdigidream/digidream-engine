@@ -446,6 +446,25 @@ public:
     void set_tick(u32 t) noexcept { tick_ = t; }
     u32 capacity() const noexcept { return MAX_AGENTS; }
 
+    // One past the highest agent slot ever used, for callers OUTSIDE core that
+    // scan the agent space every tick.
+    //
+    // The server's Lua bindings do exactly that -- dnp.players() and
+    // dnp.entities() walk it once a tick apiece -- and an AgentState is several
+    // hundred bytes, so a full sweep of MAX_AGENTS touches hundreds of
+    // kilobytes to find one player. That was tolerable at 384 slots and is not
+    // at 1024.
+    //
+    // Safe for the same reason it is inside core: slots at or above the mark
+    // have NEVER been active, and every such loop already skips `!active`. It
+    // is a bound on the search, never on the answer. It does not shrink, and
+    // hash() deliberately does not use it -- see agent_high_water_.
+    u32 agent_high_water() const noexcept { return agent_high_water_; }
+
+    // The same, for the prop half of the entity index space. A prop loop runs
+    // from MAX_AGENTS to this rather than to MAX_ENTITIES.
+    u32 prop_high_water() const noexcept { return MAX_AGENTS + prop_high_water_; }
+
     // Entity generation, incremented every time a slot is reused. This is what
     // makes protocol R8 real: without it a recycled index looks like the same
     // entity to a client, which inherits the previous occupant's interpolation

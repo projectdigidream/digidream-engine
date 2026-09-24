@@ -823,7 +823,7 @@ int l_dnp_entities(lua_State* L) {
     // Ascending index order, always. Any order would be deterministic on its
     // own, but a script iterating entities must see the same order the server's
     // own loops use, or a replay of the command log stops matching.
-    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+    for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
         if (!ctx.world->agent(i).active) continue;
         push_entity(L, ctx, i);
         lua_rawseti(L, -2, ++n);
@@ -849,7 +849,12 @@ int l_dnp_players(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     lua_newtable(L);
     int n = 0;
-    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+    // To the high-water mark, not to MAX_AGENTS. This runs once a tick per
+    // level from mobs.lua's on_tick, and an AgentState is several hundred
+    // bytes: at 1024 slots the full sweep reads most of a megabyte to find the
+    // one agent that is a person. It showed up as 11% of all Lua time with a
+    // thousand monsters on the level, for a call made once a tick.
+    for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
         const sim::AgentState& a = ctx.world->agent(i);
         if (!a.active || a.kind != 0) continue;
         push_entity(L, ctx, i);
@@ -866,7 +871,7 @@ int l_dnp_players(lua_State* L) {
 int l_dnp_player_count(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     int n = 0;
-    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+    for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
         const sim::AgentState& a = ctx.world->agent(i);
         if (a.active && a.kind == 0) ++n;
     }
@@ -1061,7 +1066,7 @@ int l_dnp_props(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     lua_newtable(L);
     int n = 0;
-    for (u32 e = sim::MAX_AGENTS; e < sim::MAX_ENTITIES; ++e) {
+    for (u32 e = sim::MAX_AGENTS; e < ctx.world->prop_high_water(); ++e) {
         if (!ctx.world->prop(e).active) continue;
         push_prop(L, ctx, e);
         lua_rawseti(L, -2, ++n);
@@ -1130,13 +1135,13 @@ int l_dnp_hitscan(lua_State* L) {
         best = entity;
     };
 
-    for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+    for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
         if (i == static_cast<u32>(a) || !ctx.world->agent(i).active) continue;
         const sim::AgentState& e = ctx.world->agent(i);
         consider(fx2{e.pos.x, e.pos.y}, ctx.world->params(i).radius,
                  e.pos.z, e.pos.z + ctx.world->params(i).height, static_cast<i32>(i));
     }
-    for (u32 e = sim::MAX_AGENTS; e < sim::MAX_ENTITIES; ++e) {
+    for (u32 e = sim::MAX_AGENTS; e < ctx.world->prop_high_water(); ++e) {
         if (!ctx.world->prop(e).active) continue;
         const sim::PropState& p = ctx.world->prop(e);
         consider(fx2{p.pos.x, p.pos.y}, p.radius, p.pos.z, p.pos.z + p.height,
