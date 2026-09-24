@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <thread>
@@ -340,6 +341,65 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         for (auto& [id, s] : sessions) {
             if (s.hello_done && s.level == li) send_param_update(L, id, agent, false, &field_id, 1);
         }
+    }
+
+    // --- where a tick goes -----------------------------------------------------
+    //
+    // WHY THIS EXISTS AT ALL. "Some ticks are taking way too long" was reported
+    // against a number measured on an Android emulator, and the native server
+    // was answering `0 stalls` on the same level. There was no way to ask where
+    // the time went without patching `stall_warn_us` and rebuilding, which is
+    // what had to be done by hand to find out.
+    //
+    // Three phases, because they are the three things that scale differently
+    // with the number of monsters: Lua decides, physics resolves, and the
+    // snapshot encodes. A total alone says a tick was late; it does not say
+    // which of the three to look at, and guessing has cost this repository time
+    // before -- see the stall detector's own comment in lua/vm.cpp.
+    //
+    // OFF BY DEFAULT and gated on one branch. `now_us()` is a syscall on some
+    // platforms and this runs per tick per level; a measurement that changes
+    // what it measures is worse than none.
+    struct Perf {
+        u32 every = 0;          // ticks per report; 0 disables the whole thing
+        u32 ticks = 0;
+        u64 lua_us = 0;
+        u64 step_us = 0;
+        u64 snap_us = 0;
+        u64 worst_total_us = 0;
+    };
+    Perf perf{};
+
+    static u64 now_us() {
+        using namespace std::chrono;
+        return static_cast<u64>(
+            duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
+    }
+
+    // Called once per tick, after send_snapshots, with the snapshot cost.
+    void perf_report(u64 snap_us) {
+        if (perf.every == 0) return;
+        perf.snap_us += snap_us;
+        const u64 total = perf.lua_us + perf.step_us + perf.snap_us;
+        if (++perf.ticks < perf.every) return;
+
+        // Agents, not entity slots: the question is how many BODIES the tick
+        // resolved, and MAX_AGENTS says nothing about that.
+        u32 agents = 0;
+        for (u32 li = 0; li < level_count(); ++li) {
+            for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
+                if (level(li).world.agent(i).active) ++agents;
+            }
+        }
+        const double n = static_cast<double>(perf.ticks);
+        std::fprintf(stderr,
+                     "[perf] %u ticks  agents %u  lua %.0f us  step %.0f us  snap %.0f us"
+                     "  total %.0f us of %u  worst %llu us\n",
+                     perf.ticks, agents,
+                     perf.lua_us / n, perf.step_us / n, perf.snap_us / n,
+                     total / n, 1000000u / sim::TICK_RATE_HZ,
+                     static_cast<unsigned long long>(perf.worst_total_us));
+        perf = Perf{perf.every, 0, 0, 0, 0, 0};
     }
 
     // A stand-in for Lua, kept only so PARAM_UPDATE replication can be tested
@@ -1184,6 +1244,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // Lua runs OUTSIDE world.step(), always. The client predicts by running
         // the same step; anything Lua did has to reach it as replicated state,
         // never as a second implementation of physics.
+        const u64 t_lua0 = perf.every ? now_us() : 0;
         if (L.vm.is_open()) {
             L.vm.begin_tick();
             // Timers and per-tick logic run BEFORE the step, in the same place
@@ -1191,6 +1252,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // what a snapshot reports must be what the tick actually ran with.
             L.vm.call_hook("on_tick", L.world.tick());
         }
+        if (perf.every) perf.lua_us += now_us() - t_lua0;
         // After the callbacks, before the step: what the tick runs with is what
         // the snapshot will report.
         refresh_effect_params(li);
@@ -1201,15 +1263,20 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // physics never observes an entity moving underneath it mid-resolution.
         flush_lua_commands(L);
 
+        const u64 t_step0 = perf.every ? now_us() : 0;
         L.world.step();
+        if (perf.every) perf.step_us += now_us() - t_step0;
+
         refresh_nav_if_stale(L);
         report_crushes(L);
         dispatch_events(L);
 
+        const u64 t_lua1 = perf.every ? now_us() : 0;
         if (L.vm.is_open()) {
             // Post-step callbacks see the world the tick produced.
             L.vm.call_hook("on_post_tick", L.world.tick());
         }
+        if (perf.every) perf.lua_us += now_us() - t_lua1;
         // Flush 2, before snapshots: a consequence and the state it acted on
         // ride the same snapshot rather than arriving a frame apart.
         flush_lua_commands(L);
@@ -1821,6 +1888,20 @@ int main(int argc, char** argv) {
     u32 script_count = 0;
     bool strict_scripts = false;
     bool no_scripts = false;
+
+    // ALSO FROM THE ENVIRONMENT, and that is the point of them.
+    //
+    // The things that most need measuring are launched by something else: the
+    // edge tests spawn the server with their own argument list, run_stack.sh
+    // builds one, and the Android shell builds one in Java. Making these
+    // flags-only would mean editing each of those to ask a question, and the
+    // APK is the one where that is hardest and the answer matters most.
+    //
+    // A flag still wins, so a command line remains the last word.
+    const char* env_perf = std::getenv("DNP_PERF");
+    const char* env_stall = std::getenv("DNP_LUA_STALL_US");
+    u32  perf_every = env_perf ? static_cast<u32>(std::atoi(env_perf)) : 0;
+    u32  lua_stall_us = env_stall ? static_cast<u32>(std::atoi(env_stall)) : 0;
     const char* props_path = nullptr;      // --props wins over any module
     constexpr u32 MAX_MODULES = 16;
     const char* module_dirs[MAX_MODULES]{};
@@ -1858,10 +1939,23 @@ int main(int argc, char** argv) {
             no_scripts = true;
         } else if (std::strcmp(argv[i], "--script-trust") == 0 && i + 1 < argc) {
             strict_scripts = std::strcmp(argv[++i], "strict") == 0;
+        } else if (std::strcmp(argv[i], "--perf") == 0 && i + 1 < argc) {
+            // Report where each tick went, every N ticks. See Server::Perf.
+            perf_every = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--lua-stall-us") == 0 && i + 1 < argc) {
+            // The stall detector's threshold, which was a compile-time constant.
+            //
+            // Measuring the ordinary per-tick Lua cost meant editing vm.hpp and
+            // rebuilding, because the detector only prints above the threshold
+            // and the default is 4000 us -- a level well inside budget reports
+            // nothing at all, which is correct for an operator and useless for
+            // anybody asking "how much does a monster cost".
+            lua_stall_us = static_cast<u32>(std::atoi(argv[++i]));
         }
     }
 
     Server srv;
+    srv.perf.every = perf_every;
     srv.param_test = want_param_test;
     if (spawn_tag_arg) {
         srv.spawn_tag = spawn_tag_arg;
@@ -1997,6 +2091,7 @@ int main(int argc, char** argv) {
     }
     if (!no_scripts && (script_count > 0 || any_map_scripts)) {
         srv.vm_config.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
+        if (lua_stall_us > 0) srv.vm_config.stall_warn_us = lua_stall_us;
         srv.scripts_enabled = true;
         // Stated at startup, deliberately. Under the default profile a script
         // can reach the filesystem, databases and native libraries, and the
@@ -2039,8 +2134,23 @@ int main(int argc, char** argv) {
         if (!srv.link.poll(static_cast<int>(wait))) break;
 
         if (Clock::now() >= next_tick) {
+            // The WHOLE tick, measured from out here, so the report cannot
+            // quietly omit a phase that was added later: if lua + step + snap
+            // stops adding up to this, something is being done that nothing is
+            // counting, and the report says so by not summing.
+            const u64 t_tick0 = srv.perf.every ? Server::now_us() : 0;
             srv.tick();
-            if (++tick_counter % srv.snapshot_divisor == 0) srv.send_snapshots();
+            u64 snap_us = 0;
+            if (++tick_counter % srv.snapshot_divisor == 0) {
+                const u64 t_snap0 = srv.perf.every ? Server::now_us() : 0;
+                srv.send_snapshots();
+                if (srv.perf.every) snap_us = Server::now_us() - t_snap0;
+            }
+            if (srv.perf.every) {
+                const u64 whole = Server::now_us() - t_tick0;
+                if (whole > srv.perf.worst_total_us) srv.perf.worst_total_us = whole;
+                srv.perf_report(snap_us);
+            }
 
             next_tick += TICK_PERIOD;
             // If the loop fell far behind (a long stall, a debugger break), do
