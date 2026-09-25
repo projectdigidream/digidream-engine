@@ -27,6 +27,7 @@ import {
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
+import { PathView } from './render/paths.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
@@ -773,6 +774,21 @@ rebuildSwing(readSwingShape(world, agent))
 // has BEEN is the part you can actually look at.
 const swingTrail = SHOW_SWING ? new SwingTrail({ THREE, scene }) : null
 
+// Camera paths, drawn. OPT-IN, unlike the swing view beside it: a map may hold
+// sixteen paths and each is a spline sampled every frame it moves. That is
+// nothing beside a level's geometry and it is not nothing beside zero, and the
+// only person who wants it is one authoring a shot.
+const SHOW_PATHS = params.get('paths') === '1'
+const pathView = SHOW_PATHS ? new PathView({ THREE, scene }) : null
+if (pathView) {
+  pathView.setPaths(camPaths, (q) => ({ x: toThreeX(q.x), y: toThreeY(q.z), z: toThreeZ(q.y) }))
+  // Which sectors move in the mode a camera path must not be bolted to. Built
+  // from the motion type the client already has to look at: a discrete mover's
+  // offset is STREAMED every snapshot, so a path riding one judders at the
+  // snapshot rate rather than at the frame rate.
+  pathView.setDiscrete(motionSets.filter((m) => m.motionType !== 1).map((m) => m.sector))
+}
+
 // Which way the agent is looking, and how far it can reach to work a door.
 // On by default because it is the only way to see either; ?arrow=0 hides it.
 const SHOW_ARROW = params.get('arrow') !== '0'
@@ -1497,6 +1513,7 @@ function frame (now) {
     if (camPathIndex >= 0) {
       const p = camPaths[camPathIndex]
       const moved = refreshPathPositions(map, p)
+      if (pathView && moved) pathView.update(new Set([p.index]))
       if (!camPathSpline || moved) {
         // THREE space, because that is the space `subject` is in and the space
         // the eye is written back into. Safe to convert first rather than last:
@@ -1517,6 +1534,19 @@ function frame (now) {
         camPathSpline.id = p.tag
       }
     }
+  }
+
+  // The overlay redraws any path whose points moved, not just the one the
+  // camera is on -- an author wants to see a path riding a lift whether or not
+  // the shot is currently using it. Only when it is switched on at all.
+  if (pathView) {
+    const moved = new Set()
+    for (const p of camPaths) {
+      if (p.index === camPathIndex) continue   // already refreshed above
+      if (refreshPathPositions(map, p)) moved.add(p.index)
+    }
+    if (moved.size) pathView.update(moved)
+    pathView.setActive(camPathTag)
   }
 
   // The agent's facing, so the camera can aim AHEAD of it rather than at it.
