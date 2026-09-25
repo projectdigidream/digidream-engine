@@ -49,10 +49,14 @@ while [[ $# -gt 0 ]]; do
     --out)    OUT_BASE="$2"; shift 2 ;;
     --name)   APP_NAME="$2"; shift 2 ;;
     --id)     APP_ID="$2"; shift 2 ;;
+    # The level editor in the same app (docs/STUDIO.md): the studio pages, the
+    # map compiler as wasm, and the runtime Lua it bakes against.
+    --studio) STUDIO=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+STUDIO="${STUDIO:-0}"
 
 [[ ${#MODULES[@]} -gt 0 ]] || { echo "usage: $0 --module <name> [--module <name>...]" >&2; exit 2; }
 
@@ -122,7 +126,7 @@ if [[ -n "$STASH" ]]; then
 fi
 
 # The shell.
-cp app/main.js app/preload.cjs app/static.js app/relay.js \
+cp app/main.js app/preload.cjs app/static.js app/relay.js app/studio_files.js \
    app/ensure-electron.cjs "$OUT/app/"
 
 # THE LINK FRAMING, COPIED rather than reimplemented or imported across a
@@ -195,6 +199,28 @@ cp client/node_modules/three/build/three.module.js "$OUT/client/vendor/three/"
 [[ -f client/node_modules/three/build/three.core.js ]] && \
   cp client/node_modules/three/build/three.core.js "$OUT/client/vendor/three/"
 
+# --- the studio, when asked for -------------------------------------------------
+#
+# The same files the dev server serves at /studio/, plus the runtime Lua and
+# the two vocabularies under studio/runtime/, which is where the studio bakes
+# and validates against. app/main.js opens /studio/ instead of the game when
+# game.json says so, and seeds the modules into the writable tree.
+if [[ $STUDIO -eq 1 ]]; then
+  [[ -f studio/wasm/dist/mapc.mjs ]] || {
+    echo "[app] no studio map compiler at studio/wasm/dist/mapc.mjs" >&2
+    echo "      run: source emsdk/emsdk_env.sh && ./scripts/build_mapc_wasm.sh" >&2
+    exit 1; }
+  mkdir -p "$OUT/studio/wasm/dist" "$OUT/studio/runtime"
+  cp studio/index.html "$OUT/studio/"
+  cp -R studio/src "$OUT/studio/src"
+  cp -R studio/vendor "$OUT/studio/vendor"
+  cp studio/wasm/dist/mapc.mjs studio/wasm/dist/mapc.wasm "$OUT/studio/wasm/dist/"
+  for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua trigger_vocab.json mob_vocab.json; do
+    cp "maps/scripts/$f" "$OUT/studio/runtime/"
+  done
+  echo "[app] studio staged"
+fi
+
 # --- what this app IS ---------------------------------------------------------
 #
 # Generated, and read by app/main.js at startup. A manifest rather than a
@@ -206,6 +232,7 @@ cat > "$OUT/game.json" <<EOF
   "name": $(printf '%s' "$APP_NAME" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
   "id": "$APP_ID",
   "modules": $MODULES_JSON,
+  "studio": $([[ $STUDIO -eq 1 ]] && echo true || echo false),
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "platform": "$(uname -s)-$(uname -m)"
 }
@@ -240,7 +267,7 @@ cat > "$OUT/package.json" <<EOF
     "appId": "dev.dnp.$APP_ID",
     "productName": $(printf '%s' "$APP_NAME" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
     "directories": { "output": "dist" },
-    "files": ["app/**", "client/**", "game.json"],
+    "files": ["app/**", "client/**", "studio/**", "game.json"],
     "extraResources": [
       { "from": "bin", "to": "bin" },
       { "from": "assets", "to": "assets" },

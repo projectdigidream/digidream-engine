@@ -40,10 +40,12 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises'
+import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startStatic } from './static.js'
 import { Relay } from './relay.js'
+import { studioFiles } from './studio_files.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 // The staged game tree sits beside the shell. scripts/build_app.sh lays it out.
@@ -56,6 +58,17 @@ let serverProc = null
 let relay = null
 let win = null
 let statics = null
+
+// THE WRITABLE GAME TREE (docs/STUDIO.md). A packaged app's own files are
+// read-only, so what the studio writes goes under the user's data directory
+// in the same modules/<id>/ layout, and the server is pointed there. The
+// bundled modules are seeded into it so the server, the static server and the
+// studio all see one tree; a module the user made is never touched.
+const GAME_RW = join(app.getPath('userData'), 'game')
+const files = studioFiles(GAME_RW)
+// Set while a play-test restarts the server, so its exit is not mistaken for
+// a crash by the handler below.
+let restarting = false
 
 /**
  * A free TCP port for the link between the shell and the game server.
@@ -84,12 +97,19 @@ function serverBinary () {
   return join(GAME, 'bin', name)
 }
 
-function spawnServer (linkPort) {
+function spawnServer (linkPort, extra = {}) {
   const bin = serverBinary()
   if (!existsSync(bin)) throw new Error(`no game server at ${bin}`)
 
   const args = ['--port', String(linkPort)]
-  for (const m of manifest.modules) args.push('--module', join(GAME, 'modules', m))
+  // With the studio, the bundled modules are the SEEDED copies: one tree, so
+  // a module the studio rewrote is the one the server loads, and no catalogue
+  // is loaded twice (an id collision refuses to start).
+  const bundledRoot = manifest.studio ? join(GAME_RW, 'modules') : join(GAME, 'modules')
+  const roots = new Set(manifest.modules.map((m) => join(bundledRoot, m)))
+  for (const m of extra.modules ?? []) roots.add(m)
+  for (const m of roots) args.push('--module', m)
+  if (extra.map) args.push('--map', extra.map, '--spawn', 'start')
 
   // cwd is the GAME directory, not wherever the app was launched from. The
   // server resolves assets/props.txt and modules/ against its working
@@ -118,7 +138,7 @@ function spawnServer (linkPort) {
     // The server going away is not something to paper over: without it there
     // is no game, and a window that keeps rendering a frozen world while
     // saying nothing is the failure the edge already learned to report.
-    if (!app.isQuiting) {
+    if (!app.isQuiting && !restarting) {
       dialog.showErrorBox('The game server stopped',
         `It exited with ${code ?? sig}. Check the console for what it said.`)
       app.quit()
@@ -127,11 +147,49 @@ function spawnServer (linkPort) {
   return p
 }
 
+// Stop the running server and start another, for a play-test on what the
+// studio just wrote. A fresh port each time: the old process may hold the
+// last one for a moment after it is gone.
+async function restartServer (extra) {
+  restarting = true
+  relay?.stop()
+  if (serverProc && serverProc.exitCode === null) {
+    await new Promise((resolve) => { serverProc.once('exit', resolve); serverProc.kill() })
+  }
+  const linkPort = await freePort()
+  serverProc = spawnServer(linkPort, extra)
+  relay = new Relay({ port: linkPort, log })
+  relay.start((msg) => { if (win && !win.isDestroyed()) win.webContents.send('dnp:down', msg) })
+  restarting = false
+}
+
+// Told AFTER the page is loaded, so the listener registered by net_local.js
+// is certainly in place. Sending it earlier would be a race the client could
+// only lose silently -- it would wait forever for a link that was already up.
+function announceWhenUp () {
+  const announce = () => { if (win && !win.isDestroyed()) win.webContents.send('dnp:ready') }
+  if (relay.open) announce()
+  else relay.upstream.once('connected', announce)
+}
+
+/** The studio's Play: serve the module it wrote, then show the game. */
+async function launch ({ module, map }) {
+  if (!(await files.exists(`${module}/maps/${map}`))) throw new Error(`no such level: ${module}/maps/${map}`)
+  const modDir = join(GAME_RW, module)
+  await restartServer({ modules: [modDir], map: join(modDir, 'maps', map) })
+  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
+  announceWhenUp()
+  return true
+}
+
 async function start () {
+  if (manifest.studio) {
+    if (await files.seed(join(GAME, 'modules'), manifest.builtAt ?? 'unknown')) log(`seeded ${GAME_RW}`)
+  }
   const linkPort = await freePort()
   serverProc = spawnServer(linkPort)
 
-  statics = await startStatic({ root: GAME, modules: manifest.modules, log })
+  statics = await startStatic({ root: GAME, modules: manifest.modules, rwRoot: manifest.studio ? GAME_RW : null, log })
 
   relay = new Relay({ port: linkPort, log })
   relay.start((msg) => { if (win && !win.isDestroyed()) win.webContents.send('dnp:down', msg) })
@@ -170,14 +228,33 @@ async function start () {
   ipcMain.on('dnp:up', (_e, kind, bytes) => relay?.send(kind, bytes))
   ipcMain.on('dnp:close', () => relay?.stop())
 
-  await win.loadURL(`http://127.0.0.1:${statics.port}/`)
+  // The studio's seven calls (app/preload.cjs). Files stay under GAME_RW --
+  // studio_files.js refuses anything else -- and the two dialogs are the
+  // platform's own.
+  ipcMain.handle('dnp:studio', async (_e, op, a, b) => {
+    switch (op) {
+      case 'writeFile': return files.writeFile(a, b)
+      case 'readFile': return files.readFile(a)
+      case 'listFiles': return files.listFiles(a ?? '')
+      case 'deleteFile': return files.deleteFile(a)
+      case 'launch': return launch(a ?? {})
+      case 'share': {
+        const r = await dialog.showSaveDialog(win, { defaultPath: a })
+        if (r.canceled || !r.filePath) return false
+        await writeFileAsync(r.filePath, b)
+        return true
+      }
+      case 'importFile': {
+        const r = await dialog.showOpenDialog(win, { properties: ['openFile'] })
+        if (r.canceled || !r.filePaths[0]) return null
+        return { name: basename(r.filePaths[0]), bytes: new Uint8Array(await readFileAsync(r.filePaths[0])) }
+      }
+      default: throw new Error(`unknown studio call: ${op}`)
+    }
+  })
 
-  // Told AFTER the page is loaded, so the listener registered by net_local.js
-  // is certainly in place. Sending it earlier would be a race the client could
-  // only lose silently -- it would wait forever for a link that was already up.
-  const announce = () => win.webContents.send('dnp:ready')
-  if (relay.open) announce()
-  else relay.upstream.once('connected', announce)
+  await win.loadURL(`http://127.0.0.1:${statics.port}${manifest.studio ? '/studio/' : '/'}`)
+  announceWhenUp()
 }
 
 app.whenReady().then(start).catch((e) => {

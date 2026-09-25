@@ -41,6 +41,7 @@ OUT_BASE="build/app"
 APP_ID=""
 PACKAGE=0
 FORCE=0
+STUDIO=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --out)     OUT_BASE="$2"; PASS+=(--out "$2"); shift 2 ;;
     --package) PACKAGE=1; shift ;;
     --force)   FORCE=1; shift ;;
+    --studio)  STUDIO=1; PASS+=(--studio); shift ;;
     -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -92,6 +94,14 @@ if [[ $FORCE -eq 1 || ! -f client/wasm/dist/dnp_core.mjs ]]; then
   ./scripts/build_wasm.sh
 else
   echo "[make] wasm core present (--force to rebuild)"
+fi
+
+# --- the studio's map compiler, as wasm --------------------------------------
+if [[ $STUDIO -eq 1 && ( $FORCE -eq 1 || ! -f studio/wasm/dist/mapc.mjs ) ]]; then
+  step "studio map compiler (wasm)"
+  ./scripts/build_mapc_wasm.sh
+elif [[ $STUDIO -eq 1 ]]; then
+  echo "[make] studio map compiler present (--force to rebuild)"
 fi
 
 # --- three.js ----------------------------------------------------------------

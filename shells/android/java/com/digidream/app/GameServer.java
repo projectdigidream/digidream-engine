@@ -9,6 +9,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.List;
 
 /**
  * The authoritative server, running inside this app, and a byte pipe to it.
@@ -32,6 +33,10 @@ import java.net.Socket;
  * server/edge/src/framing.js}, shared with the edge and the desktop relay. A
  * Java copy of it would be a second implementation of a wire format, which is
  * the one thing a wire format must never have.
+ *
+ * <p>STARTED MORE THAN ONCE. The studio's Play stops the server and starts it
+ * again on the level just written, so {@link #stop()} leaves this in a state
+ * {@link #start} accepts, and {@link #connect} begins a fresh reader.
  */
 final class GameServer {
   private static final String TAG = "digidream";
@@ -63,22 +68,28 @@ final class GameServer {
   }
 
   /**
-   * Start the server on {@code port}, serving {@code module} and {@code map}.
+   * Start the server on {@code port}, serving {@code modules} and {@code map}.
+   *
+   * <p>Several modules, in order, exactly as the desktop shell passes them:
+   * catalogues are concatenated and a collision refuses to start, which is the
+   * server's check to make and not this class's.
    *
    * <p>Its output is forwarded to logcat under the app's tag, unchanged. That
    * is the only diagnostic there is when a level will not load -- the server
    * names the script and the line -- and dropping it would turn every content
    * error into a black screen.
    */
-  void start(File exe, File workDir, int port, File module, File map) throws IOException {
-    ProcessBuilder pb = new ProcessBuilder(
-        exe.getAbsolutePath(),
-        "--port", String.valueOf(port),
-        "--module", module.getAbsolutePath(),
-        "--map", map.getAbsolutePath(),
-        "--spawn", "start");
+  void start(File exe, File workDir, int port, List<File> modules, File map) throws IOException {
+    List<String> cmd = new java.util.ArrayList<>();
+    cmd.add(exe.getAbsolutePath());
+    cmd.add("--port"); cmd.add(String.valueOf(port));
+    for (File m : modules) { cmd.add("--module"); cmd.add(m.getAbsolutePath()); }
+    cmd.add("--map"); cmd.add(map.getAbsolutePath());
+    cmd.add("--spawn"); cmd.add("start");
+    ProcessBuilder pb = new ProcessBuilder(cmd);
     pb.directory(workDir);
     pb.redirectErrorStream(true);
+    stopped = false;
     process = pb.start();
 
     Thread log = new Thread(() -> {
@@ -113,6 +124,10 @@ final class GameServer {
     long deadline = System.currentTimeMillis() + timeoutMs;
     IOException last = null;
     while (System.currentTimeMillis() < deadline) {
+      if (process != null && !process.isAlive()) {
+        throw new IOException("the game server exited while starting (exit " + process.exitValue()
+            + "); see logcat -s digidream");
+      }
       try {
         socket = new Socket(InetAddress.getByName("127.0.0.1"), port);
         // The input bundles are tens of bytes at 60 Hz and every one of them
@@ -129,9 +144,10 @@ final class GameServer {
     }
     if (socket == null) throw last != null ? last : new IOException("no link socket");
 
+    final Socket mine = socket;
     reader = new Thread(() -> {
       byte[] buf = new byte[64 * 1024];
-      try (InputStream is = socket.getInputStream()) {
+      try (InputStream is = mine.getInputStream()) {
         int n;
         while (!stopped && (n = is.read(buf)) > 0) sink.onBytes(buf, n);
         if (!stopped) sink.onClosed("the game server stopped");
@@ -154,12 +170,18 @@ final class GameServer {
     }
   }
 
-  void stop() {
+  synchronized void stop() {
     stopped = true;
     try { if (socket != null) socket.close(); } catch (IOException ignored) { }
+    socket = null;
+    out = null;
     // DESTROYED, not asked. The server has no shutdown message on the link --
     // an edge disappearing is a normal thing for it -- and an orphaned copy
     // holding the port is why the game would not start a second time.
-    if (process != null) process.destroy();
+    if (process != null) {
+      process.destroy();
+      try { process.waitFor(); } catch (InterruptedException ignored) { }
+      process = null;
+    }
   }
 }

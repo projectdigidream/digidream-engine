@@ -35,5 +35,19 @@ contextBridge.exposeInMainWorld('dnp', {
   /** @param cb called as ({ kind, data }) with kind control|datagram|close */
   onMessage: (cb) => ipcRenderer.on('dnp:down', (_e, msg) => cb(msg)),
 
-  close: () => ipcRenderer.send('dnp:close')
+  close: () => ipcRenderer.send('dnp:close'),
+
+  // THE STUDIO'S SEVEN CALLS (docs/STUDIO.md), the same names every shell
+  // publishes. Still message pipes: no path is resolved and no file is
+  // opened on this side of the boundary -- app/studio_files.js does that,
+  // under the one directory it is allowed to.
+  studio: {
+    writeFile: (path, bytes) => ipcRenderer.invoke('dnp:studio', 'writeFile', path, bytes),
+    readFile: (path) => ipcRenderer.invoke('dnp:studio', 'readFile', path),
+    listFiles: (prefix) => ipcRenderer.invoke('dnp:studio', 'listFiles', prefix),
+    deleteFile: (path) => ipcRenderer.invoke('dnp:studio', 'deleteFile', path),
+    launch: (opts) => ipcRenderer.invoke('dnp:studio', 'launch', opts),
+    share: (name, bytes) => ipcRenderer.invoke('dnp:studio', 'share', name, bytes),
+    importFile: (accept) => ipcRenderer.invoke('dnp:studio', 'importFile', accept)
+  }
 })

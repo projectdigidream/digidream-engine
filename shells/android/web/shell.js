@@ -109,10 +109,15 @@
     // does for a new WebTransport session. Without it the server has never
     // heard of us and every frame we send is addressed to a session that does
     // not exist -- which it drops in silence.
-    const info = new TextEncoder().encode(JSON.stringify({ path: '/dnp' }))
-    native.up(b64encode(encodeLinkFrame(LINK.SESSION_OPEN, SESSION, info)))
-    open = true
-    log('link up')
+    //
+    // NOT from the studio's page: it edits, it does not play, and a session
+    // it opened would sit on the server until Play replaced it.
+    if (!location.pathname.startsWith('/studio')) {
+      const info = new TextEncoder().encode(JSON.stringify({ path: '/dnp' }))
+      native.up(b64encode(encodeLinkFrame(LINK.SESSION_OPEN, SESSION, info)))
+      open = true
+      log('link up')
+    }
   }).catch((e) => {
     log('shell failed: ' + (e && e.message))
     throw e
@@ -140,6 +145,40 @@
       closed = true
       open = false
       try { native.close() } catch (e) {}
+    }
+  }
+
+  // THE STUDIO'S SEVEN CALLS (docs/STUDIO.md), the same names app/preload.cjs
+  // publishes. Each is one JavaScript-interface call that answers later
+  // through __dnpStudioReply, because two of them open a system dialog and
+  // none should block the page. Bytes cross as base64, like the link's.
+  //
+  // ponytail: whole files as one base64 string each way; chunk them if a
+  // pack ever gets big enough for evaluateJavascript to mind.
+  if (typeof native.studio === 'function') {
+    const pending = new Map()
+    let seq = 0
+    window.__dnpStudioReply = (id, ok, result) => {
+      const p = pending.get(id)
+      if (!p) return
+      pending.delete(id)
+      if (ok) p.resolve(result)
+      else p.reject(new Error(String(result)))
+    }
+    const call = (op, args) => new Promise((resolve, reject) => {
+      const id = String(++seq)
+      pending.set(id, { resolve, reject })
+      try { native.studio(id, op, JSON.stringify(args ?? {})) } catch (e) { pending.delete(id); reject(e) }
+    })
+    window.dnp.studio = {
+      writeFile: (path, bytes) => call('writeFile', { path, data: b64encode(new Uint8Array(bytes)) }),
+      readFile: (path) => call('readFile', { path }).then((r) => (r == null ? null : b64decode(r))),
+      listFiles: (prefix) => call('listFiles', { prefix: prefix ?? '' }),
+      deleteFile: (path) => call('deleteFile', { path }),
+      launch: (opts) => call('launch', opts),
+      share: (name, bytes) => call('share', { name, data: b64encode(new Uint8Array(bytes)) }),
+      importFile: (accept) => call('importFile', { accept: accept ?? '' })
+        .then((r) => (r ? { name: r.name, bytes: b64decode(r.data) } : null))
     }
   }
 })()

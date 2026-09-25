@@ -2,7 +2,11 @@ package com.digidream.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.OpenableColumns;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -17,14 +21,22 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URLConnection;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -70,6 +82,21 @@ public final class MainActivity extends Activity {
   private final GameServer server = new GameServer();
   private WebView web;
   private File gameDir;
+  private File exe;
+  /** The module the build shipped; the studio's own live beside it under gameDir/modules. */
+  private String bundledModule;
+  /** Whether the build staged the studio (start.txt's `studio=1`): opens it first, serves its modules. */
+  private boolean studio;
+  /** What the build wrote to start.txt, kept for the missing-page report. */
+  private Props start;
+
+  // The two studio calls that need the platform's own picker or share sheet
+  // answer through onActivityResult; the request they came from waits here.
+  private static final int REQ_SHARE = 1;
+  private static final int REQ_IMPORT = 2;
+  private String pendingShareId;
+  private byte[] pendingShareBytes;
+  private String pendingImportId;
 
   @Override
   @SuppressLint("SetJavaScriptEnabled")
@@ -101,7 +128,17 @@ public final class MainActivity extends Activity {
     web.setWebViewClient(new WebViewClient() {
       @Override
       public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
-        return serve(req.getUrl().toString());
+        WebResourceResponse res = serve(req.getUrl().toString());
+        // THE PAGE ITSELF IS NEVER A BARE 404. WebView shows one as "web page
+        // not available, ERR_HTTP_RESPONSE_CODE_FAILURE", which names neither
+        // the page nor the build, and a phone that was handed an APK has no
+        // logcat to ask. So a missing page is answered with a page that says
+        // what was asked, what the build wrote to start.txt, and what the APK
+        // holds: a screenshot of it is a bug report.
+        if (req.isForMainFrame() && res != null && res.getStatusCode() == 404) {
+          return bytes("text/html", missingPage(req.getUrl().toString()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        return res;
       }
     });
     web.addJavascriptInterface(new Bridge(), "dnpNative");
@@ -123,7 +160,7 @@ public final class MainActivity extends Activity {
       gameDir = new File(getFilesDir(), "game");
       unpack("game", gameDir);
 
-      File exe = new File(getApplicationInfo().nativeLibraryDir, "libdnpserver.so");
+      exe = new File(getApplicationInfo().nativeLibraryDir, "libdnpserver.so");
       if (!exe.exists()) throw new IOException("no server binary at " + exe);
 
       // WHICH MODULE AND WHICH LEVEL, from the file the build wrote.
@@ -137,27 +174,24 @@ public final class MainActivity extends Activity {
       // ALL 32 LEVELS ARE IN THE APK regardless. The staging copies the whole
       // module, which is 2.1 MB of baked geometry for the lot, so this names a
       // starting point rather than deciding what shipped.
-      Props start = Props.read(new File(gameDir, "start.txt"));
-      File module = new File(gameDir, "modules/" + start.need("module"));
+      start = Props.read(new File(gameDir, "start.txt"));
+      bundledModule = start.need("module");
+      studio = "1".equals(start.get("studio"));
+      File module = new File(gameDir, "modules/" + bundledModule);
       File map = new File(module, "maps/" + start.need("map"));
       if (!map.exists()) throw new IOException("no such level: " + map);
-      int port = GameServer.freePort();
-      Log.i(TAG, "starting server on 127.0.0.1:" + port);
-      server.start(exe, gameDir, port, module, map);
-      server.connect(port, 20000, new GameServer.Sink() {
-        @Override public void onBytes(byte[] data, int length) {
-          down(Base64.encodeToString(Arrays.copyOf(data, length), Base64.NO_WRAP));
-        }
-        @Override public void onClosed(String reason) {
-          ui.post(() -> web.evaluateJavascript(
-              "window.__dnpClosed && window.__dnpClosed(" + quote(reason) + ")", null));
-        }
-      });
+      List<File> modules = new ArrayList<>();
+      modules.add(module);
+      startServer(modules, map);
 
       // ONLY NOW is the page loaded. The client decides its transport at
       // module scope and sends its hello immediately, so a page that started
       // before the link was up would ask an empty socket to let it in.
-      ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1"));
+      //
+      // With the studio, the studio comes first; its Play button is what
+      // loads the game page (see launch()).
+      final String page = studio ? "/studio/" : "/index.html?touch=1";
+      ui.post(() -> web.loadUrl(ORIGIN + page));
     } catch (Exception e) {
       Log.e(TAG, "boot failed", e);
       final String msg = String.valueOf(e.getMessage());
@@ -169,14 +203,225 @@ public final class MainActivity extends Activity {
     }
   }
 
+  /** Start the server on a fresh port and connect the link to it. */
+  private void startServer(List<File> modules, File map) throws IOException {
+    int port = GameServer.freePort();
+    Log.i(TAG, "starting server on 127.0.0.1:" + port + " for " + map);
+    server.start(exe, gameDir, port, modules, map);
+    server.connect(port, 20000, new GameServer.Sink() {
+      @Override public void onBytes(byte[] data, int length) {
+        down(Base64.encodeToString(Arrays.copyOf(data, length), Base64.NO_WRAP));
+      }
+      @Override public void onClosed(String reason) {
+        ui.post(() -> web.evaluateJavascript(
+            "window.__dnpClosed && window.__dnpClosed(" + quote(reason) + ")", null));
+      }
+    });
+  }
+
   /** Bytes from the server, handed to the page as base64. */
   private void down(String b64) {
     ui.post(() -> web.evaluateJavascript(
         "window.__dnpDown && window.__dnpDown('" + b64 + "')", null));
   }
 
-  /** What the page can call. Four methods, all of them a byte pipe. */
+  // --- the studio's calls -----------------------------------------------------
+
+  /** A path under the writable game tree, or an exception. Never `..`. */
+  private File rwFile(String rel) throws IOException {
+    if (rel == null || rel.isEmpty() || rel.startsWith("/") || rel.contains("\\") || rel.contains("\0")) {
+      throw new IOException("refused path: " + rel);
+    }
+    for (String seg : rel.split("/")) {
+      if (seg.isEmpty() || seg.equals(".") || seg.equals("..")) throw new IOException("refused path: " + rel);
+    }
+    return new File(gameDir, rel);
+  }
+
+  /** The studio's modules: every directory under gameDir/modules but the bundled one. */
+  private List<File> userModules() {
+    List<File> out = new ArrayList<>();
+    File[] kids = gameDir == null ? null : new File(gameDir, "modules").listFiles();
+    if (kids == null) return out;
+    Arrays.sort(kids);
+    for (File k : kids) if (k.isDirectory() && !k.getName().equals(bundledModule)) out.add(k);
+    return out;
+  }
+
+  private static byte[] readAllBytes(InputStream in) throws IOException {
+    ByteArrayOutputStream bo = new ByteArrayOutputStream();
+    byte[] buf = new byte[64 * 1024];
+    int n;
+    while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+    return bo.toByteArray();
+  }
+
+  /** Answer a studio call on the page: window.__dnpStudioReply(id, ok, result). */
+  private void reply(String id, boolean ok, String resultJson) {
+    final String js = "window.__dnpStudioReply && window.__dnpStudioReply("
+        + JSONObject.quote(id) + "," + ok + "," + resultJson + ")";
+    ui.post(() -> web.evaluateJavascript(js, null));
+  }
+
+  /**
+   * One studio call, off the UI thread. The seven names every shell
+   * implements (docs/STUDIO.md); bytes travel as base64 because a JavaScript
+   * interface carries strings.
+   */
+  private void studioCall(String id, String op, JSONObject a) {
+    try {
+      switch (op) {
+        case "writeFile": {
+          File f = rwFile(a.getString("path"));
+          f.getParentFile().mkdirs();
+          try (OutputStream os = new FileOutputStream(f)) {
+            os.write(Base64.decode(a.getString("data"), Base64.NO_WRAP));
+          }
+          reply(id, true, "true");
+          return;
+        }
+        case "readFile": {
+          File f = rwFile(a.getString("path"));
+          if (!f.isFile()) { reply(id, true, "null"); return; }
+          try (InputStream in = new FileInputStream(f)) {
+            reply(id, true, JSONObject.quote(Base64.encodeToString(readAllBytes(in), Base64.NO_WRAP)));
+          }
+          return;
+        }
+        case "listFiles": {
+          String prefix = a.optString("prefix", "");
+          File base = prefix.isEmpty() ? gameDir : rwFile(prefix);
+          JSONArray out = new JSONArray();
+          listInto(base, prefix.replaceAll("/$", ""), out);
+          reply(id, true, out.toString());
+          return;
+        }
+        case "deleteFile": {
+          reply(id, true, String.valueOf(rwFile(a.getString("path")).delete()));
+          return;
+        }
+        case "launch": {
+          launch(a.getString("module"), a.getString("map"));
+          reply(id, true, "true");
+          return;
+        }
+        case "share": {
+          pendingShareId = id;
+          pendingShareBytes = Base64.decode(a.getString("data"), Base64.NO_WRAP);
+          Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+          i.addCategory(Intent.CATEGORY_OPENABLE);
+          i.setType("application/zip");
+          i.putExtra(Intent.EXTRA_TITLE, a.getString("name"));
+          ui.post(() -> startActivityForResult(i, REQ_SHARE));
+          return;
+        }
+        case "importFile": {
+          pendingImportId = id;
+          Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+          i.addCategory(Intent.CATEGORY_OPENABLE);
+          i.setType("*/*");
+          ui.post(() -> startActivityForResult(i, REQ_IMPORT));
+          return;
+        }
+        default:
+          reply(id, false, JSONObject.quote("unknown studio call: " + op));
+      }
+    } catch (Exception e) {
+      Log.w(TAG, "studio " + op + " failed", e);
+      reply(id, false, JSONObject.quote(String.valueOf(e.getMessage())));
+    }
+  }
+
+  private static void listInto(File dir, String rel, JSONArray out) {
+    File[] kids = dir.listFiles();
+    if (kids == null) return;
+    Arrays.sort(kids);
+    for (File k : kids) {
+      String r = rel.isEmpty() ? k.getName() : rel + "/" + k.getName();
+      if (k.isDirectory()) listInto(k, r, out); else out.put(r);
+    }
+  }
+
+  /**
+   * The studio's Play: stop the server, start it on the module just written,
+   * and show the game with a way back.
+   *
+   * <p>The bundled module comes along for its catalogue and art; the studio's
+   * module comes after it, exactly as the desktop shell orders them.
+   */
+  private void launch(String module, String map) throws IOException {
+    File modDir = rwFile(module);
+    File mapFile = new File(modDir, "maps/" + map);
+    if (!mapFile.isFile()) throw new IOException("no such level: " + module + "/maps/" + map);
+    server.stop();
+    List<File> modules = new ArrayList<>();
+    File bundled = new File(gameDir, "modules/" + bundledModule);
+    modules.add(bundled);
+    if (!modDir.getCanonicalPath().equals(bundled.getCanonicalPath())) modules.add(modDir);
+    startServer(modules, mapFile);
+    ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1&studio=1"));
+  }
+
+  @Override
+  protected void onActivityResult(int req, int result, Intent data) {
+    super.onActivityResult(req, result, data);
+    Uri uri = result == RESULT_OK && data != null ? data.getData() : null;
+    if (req == REQ_SHARE) {
+      final String id = pendingShareId;
+      final byte[] bytes = pendingShareBytes;
+      pendingShareId = null; pendingShareBytes = null;
+      if (id == null) return;
+      if (uri == null) { reply(id, true, "false"); return; }
+      new Thread(() -> {
+        try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+          os.write(bytes);
+          reply(id, true, "true");
+        } catch (Exception e) {
+          reply(id, false, JSONObject.quote(String.valueOf(e.getMessage())));
+        }
+      }, "dnp-share").start();
+    } else if (req == REQ_IMPORT) {
+      final String id = pendingImportId;
+      pendingImportId = null;
+      if (id == null) return;
+      if (uri == null) { reply(id, true, "null"); return; }
+      new Thread(() -> {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+          String name = "file";
+          try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+              int col = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+              if (col >= 0) name = c.getString(col);
+            }
+          }
+          JSONObject o = new JSONObject();
+          o.put("name", name);
+          o.put("data", Base64.encodeToString(readAllBytes(in), Base64.NO_WRAP));
+          reply(id, true, o.toString());
+        } catch (Exception e) {
+          reply(id, false, JSONObject.quote(String.valueOf(e.getMessage())));
+        }
+      }, "dnp-import").start();
+    }
+  }
+
+  /** What the page can call: a byte pipe, and the studio's calls. */
   private final class Bridge {
+    /**
+     * A studio call. Answered later through window.__dnpStudioReply(id, ok,
+     * result), because two of the seven open a system dialog and none of them
+     * should run on the WebView's thread.
+     */
+    @JavascriptInterface
+    public void studio(String id, String op, String argsJson) {
+      new Thread(() -> {
+        JSONObject a;
+        try { a = new JSONObject(argsJson == null || argsJson.isEmpty() ? "{}" : argsJson); }
+        catch (Exception e) { reply(id, false, JSONObject.quote("bad arguments")); return; }
+        studioCall(id, op, a);
+      }, "dnp-studio").start();
+    }
+
     /** Raw bytes upstream, base64 because a JS interface carries strings. */
     @JavascriptInterface
     public void up(String b64) {
@@ -242,7 +487,10 @@ public final class MainActivity extends Activity {
     String path = url.substring(ORIGIN.length() + 1);
     int q = path.indexOf('?');
     if (q >= 0) path = path.substring(0, q);
-    if (path.isEmpty()) path = "index.html";
+    // A directory is its index.html, as tools/devserver.js and app/static.js
+    // have it: /studio/ is the studio's page. Without this the WebView asked
+    // the APK for a directory, got a 404, and showed it as a page error.
+    if (path.isEmpty() || path.endsWith("/")) path += "index.html";
 
     // NO `..`, EVER. This serves out of the APK rather than out of a world of
     // files, so there is not much to reach -- but a path check that only holds
@@ -253,6 +501,18 @@ public final class MainActivity extends Activity {
     String type = TYPES.get(ext);
     if (type == null) type = URLConnection.guessContentTypeFromName(path);
     if (type == null) type = "application/octet-stream";
+
+    // THE STUDIO'S MODULES, from the writable tree, first -- the same
+    // per-file rule as everywhere else, with the two catalogues concatenated
+    // and the texture index merged (app/static.js does the same).
+    if (studio && gameDir != null) {
+      try {
+        WebResourceResponse fromTree = serveFromTree(path, type);
+        if (fromTree != null) return fromTree;
+      } catch (IOException e) {
+        Log.w(TAG, "serving " + path + " from the game tree failed: " + e.getMessage());
+      }
+    }
 
     try {
       InputStream in = getAssets().open("web/" + path);
@@ -274,9 +534,117 @@ public final class MainActivity extends Activity {
     }
   }
 
+  /** The page shown instead of a 404 on the main frame: what was asked, what the build said, what the APK holds. */
+  private String missingPage(String url) {
+    StringBuilder b = new StringBuilder("<body style='background:#0b0d12;color:#cfe3ff;font:13px monospace;padding:16px'>");
+    b.append("<b>Digidream has no page at</b><br>").append(esc(url)).append("<br><br>");
+    b.append("start.txt: ").append(start == null ? "(not read yet)" : esc(start.toString())).append("<br><br>");
+    for (String dir : new String[] {"web", "web/studio"}) {
+      String names;
+      try {
+        String[] l = getAssets().list(dir);
+        names = l == null || l.length == 0 ? "(nothing)" : String.join(" ", l);
+      } catch (IOException e) {
+        names = String.valueOf(e.getMessage());
+      }
+      b.append(esc(dir)).append("/: ").append(esc(names)).append("<br>");
+    }
+    return b.append("</body>").toString();
+  }
+
   private static WebResourceResponse notFound() {
     return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found",
         new HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
+  }
+
+  private WebResourceResponse bytes(String type, byte[] body) {
+    WebResourceResponse res = new WebResourceResponse(type, "utf-8", new ByteArrayInputStream(body));
+    Map<String, String> headers = new HashMap<>();
+    headers.put("Access-Control-Allow-Origin", "*");
+    res.setResponseHeaders(headers);
+    return res;
+  }
+
+  private byte[] assetBytes(String path) {
+    try (InputStream in = getAssets().open("web/" + path)) { return readAllBytes(in); }
+    catch (IOException e) { return null; }
+  }
+
+  /**
+   * What the studio's modules add to what the APK has, or null to fall
+   * through to the APK.
+   */
+  private WebResourceResponse serveFromTree(String path, String type) throws IOException {
+    List<File> mods = userModules();
+    if (mods.isEmpty()) return null;
+    if (path.equals("props.txt") || path.equals("animations.txt")) {
+      ByteArrayOutputStream bo = new ByteArrayOutputStream();
+      byte[] base = assetBytes(path);
+      if (base != null) bo.write(base);
+      for (File m : mods) {
+        File f = new File(m, "assets/" + path);
+        if (!f.isFile()) continue;
+        bo.write(("\n# --- " + m.getName() + " ---\n").getBytes("utf-8"));
+        try (InputStream in = new FileInputStream(f)) { bo.write(readAllBytes(in)); }
+      }
+      return bytes("text/plain", bo.toByteArray());
+    }
+    // The music index likewise: one table for the client, keyed by map hash,
+    // the union of every module's (app/static.js does the same).
+    if (path.equals("music/index.json")) {
+      try {
+        JSONObject out = new JSONObject();
+        List<byte[]> sources = new ArrayList<>();
+        for (File m : mods) {
+          File f = new File(m, "assets/music/index.json");
+          if (f.isFile()) try (InputStream in = new FileInputStream(f)) { sources.add(readAllBytes(in)); }
+        }
+        byte[] base = assetBytes(path);
+        if (base != null) sources.add(base);
+        for (byte[] src : sources) {
+          JSONObject j = new JSONObject(new String(src, "utf-8"));
+          for (java.util.Iterator<String> it = j.keys(); it.hasNext();) { String k = it.next(); if (!out.has(k)) out.put(k, j.get(k)); }
+        }
+        return bytes("application/json", out.toString().getBytes("utf-8"));
+      } catch (org.json.JSONException e) {
+        throw new IOException("bad music index: " + e.getMessage());
+      }
+    }
+    if (path.equals("textures/index.json")) {
+      try {
+        JSONObject sizes = new JSONObject();
+        JSONObject cutout = new JSONObject();
+        List<byte[]> sources = new ArrayList<>();
+        for (File m : mods) {
+          File f = new File(m, "assets/textures/index.json");
+          if (f.isFile()) try (InputStream in = new FileInputStream(f)) { sources.add(readAllBytes(in)); }
+        }
+        byte[] base = assetBytes(path);
+        if (base != null) sources.add(base);
+        for (byte[] src : sources) {
+          JSONObject j = new JSONObject(new String(src, "utf-8"));
+          JSONObject s = j.optJSONObject("sizes");
+          JSONObject c = j.optJSONObject("cutout");
+          if (s != null) for (java.util.Iterator<String> it = s.keys(); it.hasNext();) { String k = it.next(); if (!sizes.has(k)) sizes.put(k, s.get(k)); }
+          if (c != null) for (java.util.Iterator<String> it = c.keys(); it.hasNext();) { String k = it.next(); if (!cutout.has(k)) cutout.put(k, c.get(k)); }
+        }
+        JSONObject out = new JSONObject();
+        out.put("sizes", sizes);
+        out.put("cutout", cutout);
+        return bytes("application/json", out.toString().getBytes("utf-8"));
+      } catch (org.json.JSONException e) {
+        throw new IOException("bad texture index: " + e.getMessage());
+      }
+    }
+    if (path.startsWith("textures/") || path.startsWith("sprites/") || path.startsWith("music/")) {
+      for (File m : mods) {
+        File f = new File(m, "assets/" + path);
+        if (f.isFile()) {
+          try (InputStream in = new FileInputStream(f)) { return bytes(type, readAllBytes(in)); }
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -401,6 +769,11 @@ public final class MainActivity extends Activity {
       }
       return p;
     }
+
+    /** Optional: null when the build did not write it. */
+    String get(String key) { return kv.get(key); }
+
+    @Override public String toString() { return kv.toString(); }
 
     /** Refused loudly. A missing key here is a build that did not finish. */
     String need(String key) throws IOException {

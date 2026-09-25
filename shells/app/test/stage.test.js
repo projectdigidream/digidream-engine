@@ -63,7 +63,7 @@ const doom = join(OUT, 'doom2')
 // and a missing preload fails at launch with a blank window.
 const REQUIRED = [
   'game.json', 'package.json',
-  'app/main.js', 'app/preload.cjs', 'app/static.js', 'app/relay.js',
+  'app/main.js', 'app/preload.cjs', 'app/static.js', 'app/relay.js', 'app/studio_files.js',
   'app/framing.js', 'app/upstream.js',
   'bin/dnp-server',
   'assets/props.txt',
@@ -125,6 +125,24 @@ check(declared.length === 0,
       `the engine catalogue declares no props or sprites (${declared.length})`)
 check(/^vfx\s/m.test(engineCat),
       'but does still carry what the engine itself authored (the tracers)')
+
+// --- the studio, only when asked for --------------------------------------------
+//
+// An app built without --studio must not carry the editor: the control comes
+// first, on the shootrange app just staged, and then the same module is
+// staged again with the studio.
+console.log('\n--- the studio ---')
+check(!existsSync(join(range, 'studio')), 'CONTROL: without --studio the app has no studio in it')
+if (!existsSync(join(ROOT, 'studio', 'wasm', 'dist', 'mapc.mjs'))) {
+  console.log('  (studio wasm not built -- scripts/build_mapc_wasm.sh -- staging with --studio is not checked)')
+} else {
+  stage(['--module', 'shootrange', '--studio', '--out', 'build/app-test'])
+  const NEEDED = ['studio/index.html', 'studio/src/main.js', 'studio/vendor/tsprite.js', 'studio/wasm/dist/mapc.wasm', 'studio/wasm/dist/mapc.mjs',
+                  'studio/runtime/triggers.lua', 'studio/runtime/mobs.lua', 'studio/runtime/trigger_vocab.json', 'studio/runtime/mob_vocab.json']
+  const gone = NEEDED.filter((f) => !existsSync(join(range, f)))
+  check(gone.length === 0, `--studio stages the studio, its compiler and its runtime${gone.length ? ': missing ' + gone.join(', ') : ''}`)
+  check(JSON.parse(readFileSync(join(range, 'game.json'), 'utf8')).studio === true, 'and game.json says so')
+}
 
 // --- refusals -----------------------------------------------------------------
 //

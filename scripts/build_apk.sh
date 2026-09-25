@@ -2,7 +2,7 @@
 #
 # One module, one APK: the engine, a level and the server, on a phone.
 #
-#   ./scripts/build_apk.sh                 # doom2, map01, debug-signed
+#   ./scripts/build_apk.sh                 # doom2, its first map, debug-signed
 #   ./scripts/build_apk.sh --module doom2 --map map05.dnpm
 #
 # WHAT IS IN IT. The same client the browser loads, the same authoritative
@@ -27,19 +27,29 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 MODULE="doom2"
-MAP="map01.dnpm"
+MAP=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --module) MODULE="$2"; shift 2 ;;
     --map) MAP="$2"; shift 2 ;;
+    # The level editor in the same app (docs/STUDIO.md).
+    --studio) STUDIO=1; shift ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
+STUDIO="${STUDIO:-0}"
 MODULE_DIR="$ROOT/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[apk] no such module: modules/$MODULE" >&2; exit 2; }
-[[ -f "$MODULE_DIR/maps/$MAP" ]] || {
+[[ $STUDIO -eq 0 || -f "$ROOT/studio/wasm/dist/mapc.mjs" ]] || {
+  echo "[apk] --studio needs the map compiler as wasm: run scripts/build_mapc_wasm.sh" >&2; exit 2; }
+# No --map: the module's first baked map, in name order -- which is the level
+# the server starts a progression on anyway.
+if [[ -z "$MAP" ]]; then
+  MAP="$(ls "$MODULE_DIR/maps/"*.dnpm 2>/dev/null | sort | head -1 | xargs -n1 basename 2>/dev/null || true)"
+fi
+[[ -n "$MAP" && -f "$MODULE_DIR/maps/$MAP" ]] || {
   echo "[apk] modules/$MODULE/maps/$MAP is not there. Baked maps in that module:" >&2
   ls "$MODULE_DIR/maps/"*.dnpm 2>/dev/null | xargs -n1 basename >&2 || true
   exit 2; }
@@ -217,6 +227,13 @@ cp "$MODULE_DIR/assets/props.txt" "$G/modules/$MODULE/assets/" 2>/dev/null || tr
 # are for and what scripts/check_map_scripts.sh guards. A baked map without
 # the scripts it declares kills the server at startup.
 cp -R "$MODULE_DIR/maps" "$G/modules/$MODULE/"
+# With the studio, the module's documents and pictures too: the studio imports
+# the shipped module from this tree on first launch (docs/STUDIO.md), and a
+# module without its sheets and textures would import as an empty one.
+if [[ $STUDIO -eq 1 ]]; then
+  [[ -f "$MODULE_DIR/module.studio.json" ]] && cp "$MODULE_DIR/module.studio.json" "$G/modules/$MODULE/"
+  [[ -d "$MODULE_DIR/assets" ]] && cp -R "$MODULE_DIR/assets/." "$G/modules/$MODULE/assets/"
+fi
 # WHICH MODULE AND WHICH LEVEL, stated where the app can read it.
 #
 # MainActivity used to hold both as constants, so this script's --map argument
@@ -227,7 +244,24 @@ cat > "$G/start.txt" <<EOF
 # Written by scripts/build_apk.sh. Read by MainActivity at first launch.
 module=$MODULE
 map=$MAP
+studio=$STUDIO
+built=$(date '+%Y-%m-%d %H:%M')
 EOF
+
+# THE STUDIO, when asked for: its pages, the map compiler as wasm, and the
+# runtime Lua and vocabularies it bakes and validates against -- under
+# web/studio/, which is where the page fetches them from (docs/STUDIO.md).
+if [[ $STUDIO -eq 1 ]]; then
+  mkdir -p "$W/studio/wasm/dist" "$W/studio/runtime"
+  cp "$ROOT/studio/index.html" "$W/studio/"
+  cp -R "$ROOT/studio/src" "$W/studio/src"
+  cp -R "$ROOT/studio/vendor" "$W/studio/vendor"
+  cp "$ROOT/studio/wasm/dist/mapc.mjs" "$ROOT/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
+  for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua trigger_vocab.json mob_vocab.json; do
+    cp "$ROOT/maps/scripts/$f" "$W/studio/runtime/"
+  done
+  echo "[apk] studio   staged"
+fi
 
 # Nothing the server will not open. A .map is the authored source and an
 # .editor.json is the editor's sidecar; both are megabytes of nothing here.
