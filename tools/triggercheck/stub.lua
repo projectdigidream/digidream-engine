@@ -29,6 +29,8 @@ dnp = {
   ui_close = function() end,
   ui_set = function() end,
   camera = function() end,
+  level_camera = function() end,
+  music = function() end,
   vfx = function() return false end,
   random = function(lo) return lo end,
 }

@@ -441,6 +441,24 @@ trigger_vocab = {
             "through the level is not yanked along because a faster player " ..
             "found the switch." },
 
+    { name = "music",
+      args = { { name = "cue", type = "string",
+                 doc = "A cue of this map's soundtrack, by name. `default` is the one " ..
+                       "the map starts with; the rest are what the module's " ..
+                       "assets/music/index.json lists for the map." },
+               { name = "fade", type = "int", optional = true,
+                 doc = "Milliseconds of crossfade; 800 when omitted." },
+               { name = "at", type = "enum", values = {"next_bar", "loop_end", "now"},
+                 optional = true,
+                 doc = "When the change lands: on the next bar of what is playing " ..
+                       "(the default), when its loop ends, or at once." },
+               { name = "everyone", type = "bool", optional = true,
+                 doc = "Every player in the level, rather than the event's player." } },
+      doc = "Changes which cue of the map's soundtrack plays. The client resolves " ..
+            "the name from the map's manifest; cues cut from one parent track " ..
+            "crossfade into each other, unrelated tracks swap. Not remembered: a " ..
+            "player joining later starts on `default`." },
+
     { name = "ui_open",
       args = { { name = "panel", type = "string",
                  doc = "The key of an entry in the trigger table's `panels`. " ..
@@ -455,11 +473,13 @@ trigger_vocab = {
     { name = "camera",
       args = { { name = "field", type = "enum",
                  values = {"distance", "pitch", "smoothing", "max_accel",
-                           "lead", "lead_smoothing", "deadzone_x", "deadzone_y"} },
+                           "lead", "lead_smoothing", "deadzone_x", "deadzone_y",
+                           "yaw", "lock_yaw", "lock_zoom"} },
                { name = "value", type = "fx" } },
-      doc = "How the camera follows, for whoever is watching this entity. " ..
-            "Never where it is: the camera is the client's, and Lua " ..
-            "configures and triggers it only." },
+      doc = "How the camera follows, for whoever is watching this entity, and " ..
+            "where it stands: `yaw` and `pitch` in turns, `distance` in units, " ..
+            "`lock_yaw`/`lock_zoom` 1 or 0. Never where it is: the camera is " ..
+            "the client's, and Lua configures and triggers it only." },
 
     { name = "vfx",
       args = { { name = "kind",  type = "int" },

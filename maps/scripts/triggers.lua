@@ -511,6 +511,19 @@ ACT.change_map = function(args)
   return EV.entity:change_map(args.level) == true
 end
 
+ACT.music = function(args)
+  -- The event's player, or everyone in the level. A cue for a player-less
+  -- event (a timer, a monster's death with nobody near) is nothing to send,
+  -- and saying so is what `false` is for.
+  local who = nil
+  if not args.everyone then
+    if EV.entity == nil then return false end
+    who = EV.entity
+  end
+  dnp.music(who, args.cue, args.fade, args.at)
+  return true
+end
+
 ACT.ui_open = function(args)
   if EV.entity == nil then return false end
   local panel = M.panels[args.panel]

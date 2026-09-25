@@ -165,6 +165,9 @@ dnp = {
   camera = function(e, t)
     for k, v in pairs(t) do note(("camera %s %s"):format(k, tostring(v))) end
   end,
+  music = function(e, cue, fade, at)
+    note(("music %s %s %s %s"):format(e and tostring(e.i) or "all", cue, tostring(fade), tostring(at)))
+  end,
   vfx = function(kind, pos, dir, param) note(("vfx %d"):format(kind)); return true end,
 }
 )LUA";
@@ -661,6 +664,36 @@ triggers.load{ name = 'gate', triggers = {
     CHECK(f.truth("triggers.is_enabled('the switch') == false"));
     f.fire("on_interact", 5, {"ENT(0)", "2", "SEC(0)"});
     CHECK(f.truth("triggers.counter('used') == 1"));
+}
+
+static void test_music_reaches_the_player_or_everyone() {
+    std::printf("triggers: a music cue goes to the event's player, or to everyone\n");
+
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+triggers.load{ name = 'music', triggers = {
+  { name = 'fight starts', event = 'on_attack',
+    actions = { { a = 'music', cue = 'fight' },
+                { a = 'music', cue = 'calm', fade = 200, at = 'now', everyone = true } } },
+} }
+)LUA"));
+
+    f.fire("on_attack", 1, {"ENT(0)", "ENT(1)"});
+    CHECK_MSG(f.truth("logged('music 0 fight nil nil')"), "the default is the event's player, with the binding's defaults");
+    CHECK_MSG(f.truth("logged('music all calm 200 now')"), "everyone=true sends to nobody in particular");
+
+    // CONTROL: the vocabulary refuses a moment it does not know. A fresh
+    // fixture, because one map holds one table and a second load is refused
+    // for that reason alone.
+    Fixture g;
+    CHECK(g.open());
+    g.exec(R"LUA(
+BAD = triggers.load{ name = 'bad', triggers = {
+  { name = 'x', event = 'on_attack', actions = { { a = 'music', cue = 'fight', at = 'someday' } } },
+} }
+)LUA");
+    CHECK_MSG(g.truth("BAD == false"), "at='someday' is not a moment the vocabulary knows");
 }
 
 static void test_who_selects_between_the_two_handles() {
@@ -1250,6 +1283,7 @@ int main(int argc, char** argv) {
     test_run_is_bounded();
     test_enable_and_disable();
     test_who_selects_between_the_two_handles();
+    test_music_reaches_the_player_or_everyone();
     test_a_tag_addresses_every_sector_carrying_it();
     test_an_exact_fraction_is_the_number_it_names();
     test_a_wait_can_run_from_when_a_sector_settles();

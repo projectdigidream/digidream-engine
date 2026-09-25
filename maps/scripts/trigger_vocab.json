@@ -348,6 +348,40 @@
     {
       "args": [
         {
+          "doc": "A cue of this map's soundtrack, by name. `default` is the one the map starts with; the rest are what the module's assets/music/index.json lists for the map.",
+          "name": "cue",
+          "type": "string"
+        },
+        {
+          "doc": "Milliseconds of crossfade; 800 when omitted.",
+          "name": "fade",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "When the change lands: on the next bar of what is playing (the default), when its loop ends, or at once.",
+          "name": "at",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "next_bar",
+            "loop_end",
+            "now"
+          ]
+        },
+        {
+          "doc": "Every player in the level, rather than the event's player.",
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "doc": "Changes which cue of the map's soundtrack plays. The client resolves the name from the map's manifest; cues cut from one parent track crossfade into each other, unrelated tracks swap. Not remembered: a player joining later starts on `default`.",
+      "name": "music"
+    },
+    {
+      "args": [
+        {
           "doc": "The key of an entry in the trigger table's `panels`. A panel is a layout, and a layout is data an editor draws -- it is not an argument list.",
           "name": "panel",
           "type": "string"
@@ -379,7 +413,10 @@
             "lead",
             "lead_smoothing",
             "deadzone_x",
-            "deadzone_y"
+            "deadzone_y",
+            "yaw",
+            "lock_yaw",
+            "lock_zoom"
           ]
         },
         {
@@ -387,7 +424,7 @@
           "type": "fx"
         }
       ],
-      "doc": "How the camera follows, for whoever is watching this entity. Never where it is: the camera is the client's, and Lua configures and triggers it only.",
+      "doc": "How the camera follows, for whoever is watching this entity, and where it stands: `yaw` and `pitch` in turns, `distance` in units, `lock_yaw`/`lock_zoom` 1 or 0. Never where it is: the camera is the client's, and Lua configures and triggers it only.",
       "name": "camera"
     },
     {
