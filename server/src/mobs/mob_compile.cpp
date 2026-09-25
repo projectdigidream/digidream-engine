@@ -100,6 +100,10 @@ Cond cond_by_name(const char* s, size_t n) {
     if (streq(s, n, "prop_within"))    return Cond::PropWithin;
     if (streq(s, n, "count_within"))   return Cond::CountWithin;
     if (streq(s, n, "stuck"))          return Cond::Stuck;
+    if (streq(s, n, "can_reach"))      return Cond::CanReach;
+    if (streq(s, n, "ally_in_front"))  return Cond::AllyInFront;
+    if (streq(s, n, "target_above"))   return Cond::TargetAbove;
+    if (streq(s, n, "target_below"))   return Cond::TargetBelow;
     return Cond::Unsupported;
 }
 
@@ -450,7 +454,10 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                                     lua_pop(L, 1);
                                 }
                                 cc.negate = opt_bool(L, c, "negate", false);
-                                opt_fx(L, c, "distance", cc.f);
+                                // `by` on the height pair uses the same fx
+                                // slot as `distance`; no condition carries
+                                // both, so reading each in turn cannot clash.
+                                if (!opt_fx(L, c, "distance", cc.f)) opt_fx(L, c, "by", cc.f);
                                 // One integer covers every condition that takes
                                 // one; they are mutually exclusive by argument
                                 // name, so reading each in turn cannot collide.

@@ -270,10 +270,16 @@ bool steer_target(MobRuntime& rt, const sim::World& w, const nav::NavGraph* grap
 
         static u32 path[nav::MAX_NAV_NODES];
         static bool jumps[nav::MAX_NAV_NODES];
+        // AGAINST THE SAME BUDGET dnp.find_path spends. Going straight to
+        // nav::find_path is what this did, and with a handful of monsters
+        // nothing is ever refused -- so the difference would have shown up
+        // only on a level with enough of them for the Lua runtime to start
+        // giving up while this one did not.
+        m.route_len = 0;
+        if (rt.ctx != nullptr && !rt.ctx->take_path_budget(tick)) return true;
         const nav::PathResult r =
             nav::find_path(*w.map(), *graph, q, static_cast<u32>(here),
                            static_cast<u32>(there), body, path, nav::MAX_NAV_NODES, jumps);
-        m.route_len = 0;
         if (r.status == nav::PathStatus::Ok || r.status == nav::PathStatus::SameSector) {
             u32 n = r.length;
             if (n > MAX_ROUTE) { n = MAX_ROUTE; ++rt.routes_truncated; }
@@ -485,7 +491,7 @@ void think(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
 
     const Kind& k = rt.graph.kinds[static_cast<u32>(m.kind)];
     const State& st = rt.graph.states[k.first_state + m.state];
-    EvalWorld ev{&w, tick, rt.rng, &rt.graph, &rt.mobs, rt.props};
+    EvalWorld ev{&w, tick, rt.rng, &rt.graph, &rt.mobs, rt.props, rt.nav, rt.ctx};
     const i32* vars = rt.vars.empty() ? nullptr : &rt.vars[m.first_var];
 
     for (u16 i = 0; i < st.trans_count; ++i) {

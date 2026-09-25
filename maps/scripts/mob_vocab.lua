@@ -289,6 +289,54 @@ mob_vocab = {
       doc = "At least this many mobs of that kind are within reach. A monster " ..
             "that only charges in a group, or one that panics alone." },
 
+    -- --------------------------------------------------- the costly three
+    --
+    -- Each of these asks the ENGINE something rather than reading a number a
+    -- mob already has: a path search, a ray, a height comparison. `can_reach`
+    -- and `ally_in_front` belong behind a cheaper condition in the same
+    -- `when`, the way `target_visible` already does -- conditions evaluate in
+    -- declaration order and stop at the first false, which is why the order
+    -- in a transition is worth thinking about.
+
+    { name = "can_reach",
+      args = {},
+      doc = "A route to the target exists for a body this size. A monster " ..
+            "that cannot get to you should give up and do something else " ..
+            "rather than press into the wall between you forever -- which is " ..
+            "what `move = chase` does, indefinitely, with nothing reporting " ..
+            "it.\n" ..
+            "COSTS AN A* and the engine refuses past sixty-four a tick, so a " ..
+            "level of monsters all asking on the same tick would have most of " ..
+            "them silently answered no. Put a `target_within` in front of it " ..
+            "and a `cooldown_ready` beside it." },
+
+    { name = "ally_in_front",
+      args = { { name = "arc", type = "int", optional = true,
+                 doc = "Degrees either side of facing. Default 12 -- the " ..
+                       "width a shot actually occupies, not a field of view." },
+               { name = "distance", type = "fx", optional = true,
+                 doc = "How far to look. Default the mob's own sight." },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind counts as an ally. Absent means any " ..
+                       "mob, which is usually what is meant." } },
+      doc = "Another mob is standing in the line this one would shoot along. " ..
+            "In Doom hitting it is a FEATURE -- infighting is most of what " ..
+            "makes a crowded room interesting -- so this is not wired in " ..
+            "anywhere by default. It is here for everything that is not Doom, " ..
+            "where a squad that shoots its own back is a bug." },
+
+    { name = "target_above",
+      args = { { name = "by", type = "fx", optional = true,
+                 doc = "How much higher it has to be. Default zero." } },
+      doc = "The target's feet are above this mob's by at least `by`. A flyer " ..
+            "matching height, or a melee monster declining to swing at " ..
+            "somebody on a balcony -- reach is a 3D question and " ..
+            "`target_within` deliberately is not." },
+
+    { name = "target_below",
+      args = { { name = "by", type = "fx", optional = true } },
+      doc = "The other way round." },
+
     { name = "stuck",
       args = { { name = "ticks", type = "int", optional = true,
                  doc = "How long it must have been getting nowhere. Default " ..

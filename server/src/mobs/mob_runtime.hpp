@@ -113,6 +113,11 @@ struct EvalWorld {
     const MobGraph* graph = nullptr;
     const std::vector<Mob>* mobs = nullptr;
     const lua::PropCatalogueView* props = nullptr;
+    // For can_reach, the one condition that asks the engine to SEARCH rather
+    // than to look -- and the context with it, because the search is spent
+    // against the same per-tick budget dnp.find_path spends.
+    const nav::NavGraph* nav = nullptr;
+    lua::WorldContext* ctx = nullptr;
 };
 
 // Does this transition's `when` hold? AND over the list, in declaration order,
@@ -156,6 +161,9 @@ struct MobRuntime {
     lua::CommandQueue*   commands = nullptr;
     Rng*                 rng = nullptr;
     const lua::PropCatalogueView* props = nullptr;
+    // For the per-tick path budget, which this loop spends alongside
+    // dnp.find_path -- see WorldContext::take_path_budget.
+    lua::WorldContext*   ctx = nullptr;
 
     std::vector<Mob> mobs;
     std::vector<i32> vars;                 // flat, per-mob ranges

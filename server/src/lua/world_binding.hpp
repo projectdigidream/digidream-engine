@@ -108,10 +108,17 @@ struct UiSink {
     // Camera settings for whoever is watching this agent (design §4.1: the
     // camera is the client's, and Lua configures and triggers it).
     virtual void set_camera(u32 level, u32 agent, const proto::CameraSet& c) = 0;
+    // The level's camera defaults: sent to everyone who joins it, and at once
+    // to whoever is already there. What a map's Lua says with dnp.level_camera.
+    virtual void set_level_camera(u32 level, const proto::CameraSet& c) = 0;
     // A side's picture changes -- a switch thrown. Broadcast to everyone in the
     // level and remembered, because a switch thrown before you arrived is part
     // of the world you are arriving in.
     virtual void set_side_texture(u32 level, const proto::SideTexture& t) = 0;
+    // The map's music changes cue, for whoever is watching `agent` -- or for
+    // everyone in the level when it is negative. Not remembered: a cue is a
+    // moment, and a player joining later starts on the map's default cue.
+    virtual void music(u32 level, i32 agent, const proto::MusicCue& m) = 0;
 };
 
 struct WorldContext {
@@ -143,6 +150,24 @@ struct WorldContext {
     // core/ has no idea Lua exists.
     u32               path_budget_tick = 0xFFFFFFFFu;
     u32               path_budget_used = 0;
+
+    // Ask for a path, against that budget. Returns false when the budget is
+    // spent, which is a refusal and not "no route" -- the two are different
+    // facts and a caller that conflates them reports a shut door.
+    //
+    // HERE rather than inside dnp.find_path, because the C++ mob loop asks for
+    // paths too and was going straight to nav::find_path. One budget with two
+    // spenders and only one of them counting is a behaviour difference that
+    // appears only at scale: with a handful of monsters nothing is ever
+    // refused, and with a level of them the Lua runtime starts giving up while
+    // the C++ one does not.
+    static constexpr u32 PATHS_PER_TICK = 64;
+    bool take_path_budget(u32 now) {
+        if (now != path_budget_tick) { path_budget_tick = now; path_budget_used = 0; }
+        if (path_budget_used >= PATHS_PER_TICK) return false;
+        ++path_budget_used;
+        return true;
+    }
     MapChangeSink*    map_changes = nullptr;
     UiSink*           ui = nullptr;
     LevelListSink*    levels = nullptr;

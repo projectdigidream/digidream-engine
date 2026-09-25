@@ -697,6 +697,58 @@
       "name": "count_within"
     },
     {
+      "args": [],
+      "doc": "A route to the target exists for a body this size. A monster that cannot get to you should give up and do something else rather than press into the wall between you forever -- which is what `move = chase` does, indefinitely, with nothing reporting it.\nCOSTS AN A* and the engine refuses past sixty-four a tick, so a level of monsters all asking on the same tick would have most of them silently answered no. Put a `target_within` in front of it and a `cooldown_ready` beside it.",
+      "name": "can_reach"
+    },
+    {
+      "args": [
+        {
+          "doc": "Degrees either side of facing. Default 12 -- the width a shot actually occupies, not a field of view.",
+          "name": "arc",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How far to look. Default the mob's own sight.",
+          "name": "distance",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "Only this kind counts as an ally. Absent means any mob, which is usually what is meant.",
+          "name": "mob",
+          "optional": true,
+          "type": "mob"
+        }
+      ],
+      "doc": "Another mob is standing in the line this one would shoot along. In Doom hitting it is a FEATURE -- infighting is most of what makes a crowded room interesting -- so this is not wired in anywhere by default. It is here for everything that is not Doom, where a squad that shoots its own back is a bug.",
+      "name": "ally_in_front"
+    },
+    {
+      "args": [
+        {
+          "doc": "How much higher it has to be. Default zero.",
+          "name": "by",
+          "optional": true,
+          "type": "fx"
+        }
+      ],
+      "doc": "The target's feet are above this mob's by at least `by`. A flyer matching height, or a melee monster declining to swing at somebody on a balcony -- reach is a 3D question and `target_within` deliberately is not.",
+      "name": "target_above"
+    },
+    {
+      "args": [
+        {
+          "name": "by",
+          "optional": true,
+          "type": "fx"
+        }
+      ],
+      "doc": "The other way round.",
+      "name": "target_below"
+    },
+    {
       "args": [
         {
           "doc": "How long it must have been getting nowhere. Default 16 -- two of its own decisions.",

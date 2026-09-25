@@ -1320,18 +1320,17 @@ int l_dnp_ui_set(lua_State* L) {
 // script that wants a longer lead should not have to restate the pitch.
 static const char* const CAMERA_FIELD_NAMES[] = {
     "distance", "pitch", "smoothing", "max_accel",
-    "lead", "lead_smoothing", "deadzone_x", "deadzone_y"
+    "lead", "lead_smoothing", "deadzone_x", "deadzone_y",
+    // Where the camera stands around the subject, and whether the player may
+    // turn or zoom it away from there (docs/protocol.md §11.1, fields 8..10).
+    "yaw", "lock_yaw", "lock_zoom"
 };
 
-int l_dnp_camera(lua_State* L) {
-    WorldContext& ctx = ctx_of(L);
-    const i32 a = resolve(L, ctx, check_handle(L, 1));
-    if (a < 0 || ctx.ui == nullptr) return 0;
-    luaL_checktype(L, 2, LUA_TTABLE);
-
-    proto::CameraSet c;
+// The fields a Lua table names, in thousandths. Shared by dnp.camera and
+// dnp.level_camera, which differ only in whom the settings are for.
+static void read_camera_table(lua_State* L, int idx, proto::CameraSet& c) {
     for (u8 id = 0; id < static_cast<u8>(sizeof(CAMERA_FIELD_NAMES) / sizeof(char*)); ++id) {
-        lua_getfield(L, 2, CAMERA_FIELD_NAMES[id]);
+        lua_getfield(L, idx, CAMERA_FIELD_NAMES[id]);
         if (!lua_isnil(L, -1)) {
             // THOUSANDTHS on the wire. A camera is not simulation state, so it
             // does not need fx -- but it does need a fixed scale, or a script
@@ -1345,7 +1344,31 @@ int l_dnp_camera(lua_State* L) {
         }
         lua_pop(L, 1);
     }
+}
+
+int l_dnp_camera(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.ui == nullptr) return 0;
+    luaL_checktype(L, 2, LUA_TTABLE);
+    proto::CameraSet c;
+    read_camera_table(L, 2, c);
     if (c.count > 0) ctx.ui->set_camera(ctx.level, static_cast<u32>(a), c);
+    return 0;
+}
+
+// dnp.level_camera{ yaw = 0.125, pitch = 0.05, distance = 30, lock_yaw = 1 }
+//
+// The camera for everyone who joins this level, as the map's Lua says at load:
+// the same fields dnp.camera takes, kept by the server and sent on join, and
+// at once to whoever is already here. A script that wants one player's camera
+// to differ says so with dnp.camera afterwards.
+int l_dnp_level_camera(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    proto::CameraSet c;
+    read_camera_table(L, 1, c);
+    if (c.count > 0 && ctx.ui != nullptr) ctx.ui->set_level_camera(ctx.level, c);
     return 0;
 }
 
@@ -1408,6 +1431,38 @@ int l_dnp_set_side_texture(lua_State* L) {
     t.field = f;
     if (!ui_text(L, 3, t.name, "texture name")) return 0;
     ctx.ui->set_side_texture(ctx.level, t);
+    return 0;
+}
+
+// dnp.music(entity_or_nil, cue [, fade_ms [, at]])
+//
+// A cue change for whoever is watching `entity`, or for everyone in the level
+// when it is nil. The client resolves the NAME to a track from its manifest
+// (client/src/audio/music.js, cue), so the wire carries the name and nothing
+// else. `at` is "next_bar" (the default), "loop_end" or "now"; anything else
+// is a script error, said at once, because a cue landing at some other time
+// than asked is the kind of wrong nobody reports.
+//
+// A stale handle is the usual defined no-op; a monster's handle finds no
+// session and sends nothing, which is not an error either.
+int l_dnp_music(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (ctx.ui == nullptr) return 0;
+    i32 agent = -1;
+    if (!lua_isnoneornil(L, 1)) {
+        agent = resolve(L, ctx, check_handle(L, 1));
+        if (agent < 0) return 0;
+    }
+    proto::MusicCue m;
+    if (!ui_text(L, 2, m.cue, "cue name")) return 0;
+    const lua_Number fade = lua_isnoneornil(L, 3) ? 800 : luaL_checknumber(L, 3);
+    m.fade_ms = static_cast<u16>(fade < 0 ? 0 : (fade > 65535 ? 65535 : fade));
+    const char* at = lua_isnoneornil(L, 4) ? "next_bar" : luaL_checkstring(L, 4);
+    if (std::strcmp(at, "next_bar") == 0)      m.at = proto::MusicAt::NextBar;
+    else if (std::strcmp(at, "loop_end") == 0) m.at = proto::MusicAt::LoopEnd;
+    else if (std::strcmp(at, "now") == 0)      m.at = proto::MusicAt::Now;
+    else return luaL_error(L, "dnp.music: `at` is next_bar, loop_end or now, not '%s'", at);
+    ctx.ui->music(ctx.level, agent, m);
     return 0;
 }
 
@@ -1653,15 +1708,13 @@ int l_dnp_find_path(lua_State* L) {
     // refusal is explicit and says why, rather than being a mystery stall.
     // PER LEVEL, on the context -- see WorldContext::path_budget_tick for what
     // a process-wide static did instead.
-    constexpr u32 PATHS_PER_TICK = 64;
-    const u32 now = ctx.world->tick();
-    if (now != ctx.path_budget_tick) { ctx.path_budget_tick = now; ctx.path_budget_used = 0; }
-    if (ctx.path_budget_used >= PATHS_PER_TICK) {
+    // ONE BUDGET, and it lives on the context because the C++ mob loop spends
+    // it too -- see WorldContext::take_path_budget.
+    if (!ctx.take_path_budget(ctx.world->tick())) {
         lua_pushnil(L);
         lua_pushliteral(L, "path budget");
         return 2;
     }
-    ++ctx.path_budget_used;
 
     const i32 from = static_cast<i32>(luaL_checknumber(L, 1));
     const i32 to   = static_cast<i32>(luaL_checknumber(L, 2));
@@ -1751,8 +1804,10 @@ const luaL_Reg DNP_FUNCS[] = {
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},
     {"camera", l_dnp_camera},
+    {"level_camera", l_dnp_level_camera},
     {"side_texture", l_dnp_side_texture},
     {"set_side_texture", l_dnp_set_side_texture},
+    {"music", l_dnp_music},
     {"ui_set", l_dnp_ui_set},
     {"ui_close", l_dnp_ui_close},
     {"prop", l_dnp_prop},

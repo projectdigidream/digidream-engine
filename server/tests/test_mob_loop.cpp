@@ -343,6 +343,56 @@ int main(int argc, char** argv) {
         std::printf("  an unsupported kind is refused outright, not half-tracked\n");
     }
 
+    // --- the height pair, at heights chosen rather than hoped for -----------
+    //
+    // target_above and target_below are a comparison between two feet, and
+    // maps/mobvocab.map cannot reliably produce one: the monsters converge on
+    // a stationary player and end up on its floor, so the fixture reaches
+    // `peer_down` once in fourteen seconds and `peer_up` never. An edge that
+    // does not fire proves nothing about the condition on it -- which is the
+    // trap this whole fixture was rebuilt around -- so these two are checked
+    // here instead, where the positions are set rather than waited for.
+    {
+        Mob probe;
+        probe.entity = mob_e;
+        probe.kind = 0;
+        probe.has_tp = true;
+        probe.p = fx3{F(0), F(0), F(10)};
+        EvalWorld ev{&world, 100, nullptr, &rt.graph, &rt.mobs, nullptr, nullptr, nullptr};
+
+        const auto ask = [&](Cond id, fx by, fx target_z) {
+            Condition c;
+            c.id = id;
+            c.f = by;
+            probe.tp = fx3{F(0), F(0), target_z};
+            return evaluate(rt.graph, rt.graph.kinds[0], probe, c, ev, nullptr);
+        };
+
+        // Three units above, asking for two: yes above, no below.
+        CHECK(ask(Cond::TargetAbove, F(2), F(13)));
+        CHECK(!ask(Cond::TargetBelow, F(2), F(13)));
+        // Three below, the other way round.
+        CHECK(!ask(Cond::TargetAbove, F(2), F(7)));
+        CHECK(ask(Cond::TargetBelow, F(2), F(7)));
+        // EXACTLY the threshold counts, which is what `by` reads as
+        // everywhere else in the vocabulary: at least this much.
+        CHECK(ask(Cond::TargetAbove, F(2), F(12)));
+        CHECK(ask(Cond::TargetBelow, F(2), F(8)));
+        // And one short of it does not -- the control for the comparison
+        // being a comparison rather than a sign test.
+        CHECK(!ask(Cond::TargetAbove, F(2), F(11)));
+        CHECK(!ask(Cond::TargetBelow, F(2), F(9)));
+        // Level ground with no threshold: neither, and both, is wrong. `by`
+        // absent means zero, so level satisfies both by the >= rule.
+        CHECK(ask(Cond::TargetAbove, fx::zero(), F(10)));
+        CHECK(ask(Cond::TargetBelow, fx::zero(), F(10)));
+        // No target is no answer, whatever the heights say.
+        probe.has_tp = false;
+        CHECK(!ask(Cond::TargetAbove, F(2), F(13)));
+        CHECK(!ask(Cond::TargetBelow, F(2), F(7)));
+        std::printf("  the height pair, at set heights: above/below/level/absent\n");
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

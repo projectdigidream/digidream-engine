@@ -30,6 +30,8 @@
 
 #include <cstring>
 
+#include "dnp/nav/navgraph.hpp"
+
 namespace dnp::server::mobs {
 
 namespace {
@@ -68,7 +70,6 @@ bool can_see(const sim::World& w, u32 from_a, u32 to_a) {
 bool evaluate(const MobGraph& g, const Kind& k, const Mob& m,
               const Condition& c, const EvalWorld& w, const i32* vars) {
     (void)g;
-    (void)k;
     const sim::World& world = *w.world;
 
     switch (c.id) {
@@ -184,6 +185,75 @@ bool evaluate(const MobGraph& g, const Kind& k, const Mob& m,
             if (++found >= want) return true;
         }
         return false;
+    }
+
+    case Cond::TargetAbove:
+        // The FEET, both of them, which is what `by` is measured between.
+        return m.has_tp && (m.tp.z - m.p.z) >= c.f;
+
+    case Cond::TargetBelow:
+        return m.has_tp && (m.p.z - m.tp.z) >= c.f;
+
+    case Cond::AllyInFront: {
+        // The line this mob would SHOOT along, which is its body's facing --
+        // not its aim. Turning is a rate, so the two differ for as long as it
+        // is coming round, and a shot leaves along the body.
+        if (w.mobs == nullptr || w.graph == nullptr) return false;
+        const Kind& mine = *&k;
+        fx reach = c.f;
+        if (reach.raw == 0) {
+            if (!mine.has_sight) return false;
+            reach = mine.sight;
+        }
+        const u128 r_sq = static_cast<u128>(static_cast<i128>(reach.raw) * reach.raw);
+        const i32 arc = c.i != 0 ? c.i : 12;
+        const i64 half = static_cast<i64>(arc) * 4294967296ll / 360;
+        const u32 have = world.agent(m.entity).facing.raw;
+        for (const Mob& o : *w.mobs) {
+            if (o.kind < 0 || o.entity == m.entity || o.dead) continue;
+            if (!world.agent(o.entity).active) continue;
+            if (c.name != NO_NAME) {
+                const Kind& ok = w.graph->kinds[static_cast<u32>(o.kind)];
+                if (ok.name != c.name) continue;
+            }
+            const fx3 q = world.agent(o.entity).pos;
+            const fx dx = q.x - m.p.x;
+            const fx dy = q.y - m.p.y;
+            if (len_sq_raw(fx2{dx, dy}) > r_sq) continue;
+            i64 d = static_cast<i64>(fx_atan2(dy, dx).raw) - static_cast<i64>(have);
+            while (d > 2147483647LL) d -= 4294967296LL;
+            while (d < -2147483648LL) d += 4294967296LL;
+            if (d < 0) d = -d;
+            if (d <= half) return true;
+        }
+        return false;
+    }
+
+    case Cond::CanReach: {
+        // A ROUTE EXISTS for a body this size. The expensive one: an A* per
+        // ask, against the same sixty-four-a-tick budget dnp.find_path spends,
+        // because one budget with two spenders and only one of them counting
+        // is a difference that appears only at scale.
+        if (!m.has_tp || m.target < 0 || w.nav == nullptr || w.ctx == nullptr) return false;
+        const geom::MapData* map = world.map();
+        if (map == nullptr) return false;
+        const i32 here = world.agent(m.entity).mv.sector;
+        const i32 there = world.agent(static_cast<u32>(m.target)).mv.sector;
+        if (here < 0 || there < 0) return false;
+        if (here == there) return true;
+        if (!w.ctx->take_path_budget(w.tick)) return false;
+
+        nav::NavBody body;
+        body.radius = world.params(m.entity).radius;
+        body.height = world.params(m.entity).height;
+        body.jump_height = k.jump_height;
+        static nav::NavQuery query;          // tens of kilobytes; never a local
+        static u32 path[nav::MAX_NAV_NODES];
+        const nav::PathResult r =
+            nav::find_path(*map, *w.nav, query, static_cast<u32>(here),
+                           static_cast<u32>(there), body, path, nav::MAX_NAV_NODES);
+        return r.status == nav::PathStatus::Ok ||
+               r.status == nav::PathStatus::SameSector;
     }
 
     case Cond::Stuck: {

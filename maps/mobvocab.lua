@@ -71,6 +71,24 @@ mobs.load{
           -- turn over a run.
           transitions = {
             { to = 'look',  when = { { cond = 'has_target', negate = true } } },
+            -- THE HEIGHT PAIR HIGH IN THE LIST, because this terrain's floors
+            -- run 1.5 to 8.5 and a monster is only a unit above or below you
+            -- while it is crossing between them. Behind the chance-gated edges
+            -- it never got a turn, and an edge that never fires proves nothing
+            -- about the condition on it.
+            { to = 'peer_up',   when = { { cond = 'target_above', by = '0.35' },
+                                         { cond = 'chance', percent = 50 } } },
+            { to = 'peer_down', when = { { cond = 'target_below', by = '0.35' },
+                                         { cond = 'chance', percent = 50 } } },
+            -- CAN_REACH, NOT NEGATED. This map is connected, so "no route"
+            -- cannot be produced in it and an edge waiting for one would never
+            -- fire -- which would leave the A* unexercised in both runtimes
+            -- and the budget they share unspent. Asked the other way up it
+            -- runs the search, every think this edge is reached, in both.
+            { to = 'giveup', when = { { cond = 'target_within', distance = '20' },
+                                      { cond = 'cooldown_ready', var = 'ready' },
+                                      { cond = 'can_reach' },
+                                      { cond = 'chance', percent = 15 } } },
             -- PRESSED INTO GEOMETRY AND GOING NOWHERE: back off and wander
             -- rather than grind. High in the list because it is the one edge
             -- here that is about a failure -- a mob that cannot move is not
@@ -88,7 +106,21 @@ mobs.load{
             { to = 'strike', when = { { cond = 'target_within', distance = '12' },
                                       { cond = 'target_visible' },
                                       { cond = 'target_in_front', arc = 20 },
+                                      -- Not through a neighbour. In Doom
+                                      -- hitting one is a feature; here it is
+                                      -- what this condition exists to refuse.
+                                      { cond = 'ally_in_front', arc = 14,
+                                        distance = '12', negate = true },
                                       { cond = 'cooldown_ready', var = 'ready' } } },
+            -- Cheap gates FIRST, then the search. The vocabulary says so and
+            -- this is what it looks like: a distance and a cooldown before an
+            -- A* that the engine refuses past sixty-four a tick.
+            -- EACH TO ITS OWN STATE, again. Pointing two conditions at one
+            -- destination is what made `prop_within` unprovable the first
+            -- time: the trace shows the state and says nothing about which
+            -- edge took it there, so a condition that is always false reads
+            -- exactly like one that works.
+
             { to = 'guard',  when = { { cond = 'prop_within', distance = '8',
                                         prop = 'barrel' },
                                       { cond = 'chance', percent = 35 } } },
@@ -156,6 +188,14 @@ mobs.load{
             { at = 4, action = 'alert_nearby', radius = '24', mob = 'dervish' },
           },
         },
+
+        -- One per costly condition, so the decision trace names which fired.
+        giveup    = { anim = 1, move = 'wander', face = 'movement',
+                      ticks = 20, ticks_jitter = 8, next = 'look',
+                      sequence = { { at = 0, action = 'set_angle', var = 'wander',
+                                     towards = 'random' } } },
+        peer_up   = { anim = 1, move = 'stop', face = 'target', ticks = 10, next = 'stalk' },
+        peer_down = { anim = 1, move = 'stop', face = 'target', ticks = 10, next = 'stalk' },
 
         pain = { anim = 3, move = 'stop', face = 'hold', ticks = 8, next = 'stalk' },
         death = { anim = 4, move = 'stop', face = 'hold', solid = false,

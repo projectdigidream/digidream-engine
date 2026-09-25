@@ -69,6 +69,10 @@ enum class Cond : u8 {
     PropWithin,
     CountWithin,
     Stuck,
+    CanReach,
+    AllyInFront,
+    TargetAbove,
+    TargetBelow,
     // Everything below is NOT evaluated here. A graph that uses one runs in
     // Lua, and MobRuntime says so out loud.
     Unsupported,

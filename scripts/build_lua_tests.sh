@@ -68,6 +68,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # half the conditions ask the world something, and a double would be a second
 # answer to all of it. Needs core, which the graph test does not.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/src/lua/world_binding.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
         "$ROOT/server/src/mobs/mob_runtime.cpp" \

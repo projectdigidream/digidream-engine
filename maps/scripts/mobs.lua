@@ -890,6 +890,61 @@ end
 -- decides every THINK-th tick and its position between decisions is the
 -- mover's business. `m.was` and `m.was_at` are written by the runtime on each
 -- think, so this is a comparison rather than a query.
+-- THE COSTLY THREE. Each asks the engine rather than reading a number.
+
+function conds.can_reach(m)
+  if m.tp == nil or m.target == nil or not m.target:valid() then return false end
+  local here = m.e:sector()
+  local there = m.target:sector()
+  if here == nil or there == nil then return false end
+  if here == there then return true end
+  local r = m.e:param("radius")
+  local h = m.e:param("height")
+  -- find_path answers nil when it is refused as well as when there is no
+  -- route, and the two are different facts. Refused is reported rather than
+  -- mistaken for unreachable: a monster that gave up because the budget was
+  -- full would look exactly like one that gave up because a door was shut.
+  local route, why = dnp.find_path(here, there, r, h, m.def.jump_height)
+  if route ~= nil then return true end
+  if why == "path budget" and M.on_path_refused then M.on_path_refused(m) end
+  return false
+end
+
+function conds.ally_in_front(m, c)
+  local arc = c.arc or 12
+  local reach = c.distance or m.def.sight
+  if reach == nil then return false end
+  local d2max = reach * reach
+  local have = m.e:facing()
+  local half = arc * 4294967296 / 360
+  for idx, o in pairs(live) do
+    if idx ~= m.idx and not o.dead and o.e:valid() and
+       (c.mob == nil or o.def.name == c.mob) then
+      local q = o.e:pos()
+      local dx, dy = q.x - m.p.x, q.y - m.p.y
+      if dx * dx + dy * dy <= d2max then
+        local want = dnp.atan2(dy, dx)
+        local d = want - have
+        while d > 2147483647 do d = d - 4294967296 end
+        while d < -2147483648 do d = d + 4294967296 end
+        if d < 0 then d = -d end
+        if d <= half then return true end
+      end
+    end
+  end
+  return false
+end
+
+function conds.target_above(m, c)
+  if m.tp == nil then return false end
+  return m.tp.z - m.p.z >= (c.by or ZERO)
+end
+
+function conds.target_below(m, c)
+  if m.tp == nil then return false end
+  return m.p.z - m.tp.z >= (c.by or ZERO)
+end
+
 function conds.stuck(m, c)
   if m.still_since == nil then return false end
   return dnp.tick() - m.still_since >= (c.ticks or 16)
