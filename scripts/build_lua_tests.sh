@@ -91,3 +91,15 @@ clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
         -o "$OUT/test_lua_shootrange"
 
 echo "[lua-tests] $OUT/trigger_vocab_json $OUT/triggercheck"
+
+# The server started twice in one process, for the shells that host it on a
+# thread (docs/IOS.md). Built only once main.cpp exports dnp_server_run --
+# the patch the server workstream applies -- so this script does not fail
+# for everyone in the meantime.
+if grep -q 'int dnp_server_run' "$ROOT/server/src/main.cpp"; then
+  clang++ "${FLAGS[@]}" -Wno-unused-parameter "${RANGE_SRCS[@]}" \
+          "$ROOT/server/src/net/link.cpp" "$ROOT/server/src/main.cpp" \
+          "$ROOT/server/tests/test_server_run.cpp" "${LINK[@]}" -lpthread \
+          -o "$OUT/test_server_run"
+  echo "[lua-tests] $OUT/test_server_run"
+fi
