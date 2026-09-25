@@ -358,7 +358,6 @@ if (LIVE) {
       // client's own camera and nothing about it is predicted or replicated
       // back.
       else if (m.type === MSG.CAMERA_SET) {
-        console.log(`[camera] ${m.fields.map((f) => `${CAMERA_FIELD[f.id] ?? f.id}=${f.value}`).join(' ')}`)
         for (const f of m.fields) {
           const name = CAMERA_FIELD[f.id]
           if (!name) continue          // a setting this client does not know
