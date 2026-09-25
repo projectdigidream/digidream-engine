@@ -127,3 +127,76 @@ export function readMap (map) {
 
   return { points, sectors, sides, tris, textures, lights }
 }
+
+// --- camera paths (design §4.1) ---------------------------------------------
+//
+// Read apart from readMap, because paths have a lifetime readMap's results do
+// not: a path bolted to a moving sector has NEW POINT POSITIONS EVERY TICK, and
+// the structure around them never changes. So the structure is read once and
+// the positions are refreshed in place.
+
+/**
+ * Every camera path's structure, and its points as of now.
+ *
+ * Engine space, not THREE space. buildSpline works in whatever space it is
+ * given and toThreeX/Y/Z is a signed permutation -- linear, an isometry -- so
+ * the curve and its arc length commute with it, and converting once at the end
+ * is identical to converting first. client/test/spline.test.js asserts exactly
+ * that, with a nonlinear map as the control.
+ */
+export function readPaths (map) {
+  const out = []
+  const n = map.pathCount
+  for (let i = 0; i < n; i++) {
+    const info = map.pathInfo(i)
+    if (!info) continue
+    out.push({
+      index: i,
+      tag: info.tag,
+      flags: info.flags,
+      loop: info.loop,
+      count: info.count,
+      curveLength: info.curveLength,
+      pos: map.pathPoints(i),
+      anchors: map.pathAnchors(i),
+      // The other half of the double buffer in refreshPathPositions. Allocated
+      // on its first call, then reused for the life of the map.
+      _spare: undefined
+    })
+  }
+  return out
+}
+
+/**
+ * Re-read one path's live point positions, in place. Returns whether any moved.
+ *
+ * The return value is the point of the function. A static path is the common
+ * case by a wide margin, and rebuilding its arc-length table sixty times a
+ * second for a set of numbers that did not change is exactly the waste
+ * client/src/mapmovers.js exists to record having made once already.
+ *
+ * Reading is cheap; what this guards is the SPLINE REBUILD downstream.
+ */
+export function refreshPathPositions (map, path) {
+  // DOUBLE-BUFFERED, because pathPoints rewrites its target in place: reading
+  // into the array we already hold would destroy the only copy of the previous
+  // positions, and there would be nothing left to compare against. So the two
+  // arrays swap roles each call and neither is allocated after the first.
+  const prev = path.pos
+  const next = map.pathPoints(path.index, path._spare)
+  path._spare = prev
+  path.pos = next
+  if (prev === undefined || prev.length !== next.length) return true
+  for (let i = 0; i < next.length; i++) if (next[i] !== prev[i]) return true
+  return false
+}
+
+/** The first path with this tag, or -1. */
+export function pathIndexForTag (paths, tag) {
+  // FIRST match. Tags are not unique and nothing enforces it -- mapc will
+  // happily bake two paths tagged 5 -- so the rule is written down here, tested
+  // against a map that actually contains the ambiguity, and kept the same as
+  // every other tag lookup in the engine.
+  for (let i = 0; i < paths.length; i++) if (paths[i].tag === tag) return i
+  return -1
+}

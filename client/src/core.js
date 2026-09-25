@@ -26,6 +26,16 @@ export const IDX = {
   GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19
 }
 
+// A camera path's header, mirroring PATH32_* in client/wasm/bindings.cpp. Its
+// own four slots and its own scratch buffer: a path's points are up to 3x256
+// i64, which the agent buffer above is nowhere near, and widening that one
+// would put a rarely-read field beside what the predictor touches every tick.
+const PATH32_LEN = 4
+export const PATH32 = { FIRST: 0, COUNT: 1, TAG: 2, FLAGS: 3 }
+
+// map.hpp's path_flag::LOOP.
+export const PATH_LOOP = 1
+
 export class Core {
   /**
    * The engine's interact reach, in world units.
@@ -67,11 +77,30 @@ export class Core {
       throw new Error(`[core] agent buffer layout mismatch: wasm wants ` +
                       `${want64}x64/${want32}x32, JS has ${BUF64_LEN}x64/${BUF32_LEN}x32`)
     }
+    // The same hazard, the same check, for the camera path header -- four slots
+    // that cannot over-read, but CAN be read in the wrong order if one side
+    // swaps tag and flags. That presents as a camera addressing the wrong path.
+    const wantPath32 = M._dnp_path32_len()
+    if (wantPath32 !== PATH32_LEN) {
+      throw new Error(`[core] path buffer layout mismatch: wasm wants ` +
+                      `${wantPath32}x32, JS has ${PATH32_LEN}x32`)
+    }
     this.buf64 = M._malloc(BUF64_LEN * 8)
     this.buf32 = M._malloc(BUF32_LEN * 4)
     this.argbuf = M._malloc(8)
+    // Lazily, because most sessions never read a path and this is 6 KiB.
+    this.pathbuf64 = 0
+    this.pathbuf32 = 0
     this._buffer = null
     this._views = null
+  }
+
+  /** Scratch big enough for any one path's points. Allocated on first use. */
+  ensurePathBuffers () {
+    if (this.pathbuf64) return
+    const n = this.M._dnp_map_max_path_points()
+    this.pathbuf64 = this.M._malloc(n * 3 * 8)
+    this.pathbuf32 = this.M._malloc(Math.max(n, PATH32_LEN) * 4)
   }
 
   // Heap views are invalidated whenever wasm memory grows -- the underlying
@@ -160,6 +189,72 @@ export class WasmMap {
   get textureScale () {
     this.core.M._dnp_map_texture_scale(this.ptr, this.core.buf64)
     return Number(this.core.views.i64[this.core.buf64 / 8]) / 4294967296
+  }
+
+  // --- camera paths (design §4.1) -------------------------------------------
+  //
+  // Structure and live point positions. Nothing that EVALUATES a path: the
+  // camera rides a curve through these points and client/src/spline.js owns
+  // that, which is also what lets the curve be tested with no wasm at all.
+
+  get pathCount () { return this.core.M._dnp_map_path_count(this.ptr) }
+
+  /** Header for one path, or null if the index is out of range. */
+  pathInfo (i) {
+    const c = this.core
+    c.ensurePathBuffers()
+    if (!c.M._dnp_map_path_info(this.ptr, i, c.pathbuf32, c.pathbuf64)) return null
+    const u = c.views.u32
+    const b = c.pathbuf32 / 4
+    const flags = u[b + PATH32.FLAGS]
+    return {
+      index: i,
+      first: u[b + PATH32.FIRST],
+      count: u[b + PATH32.COUNT],
+      tag: u[b + PATH32.TAG],
+      flags,
+      loop: (flags & PATH_LOOP) !== 0,
+      // Arc length of the CURVE, baked by tools/mapc. What a script divides a
+      // speed into to time a flythrough, since the engine has no completion
+      // event -- so it is the client's job to ride at the speed that makes the
+      // number true, not to recompute it.
+      curveLength: Number(c.views.i64[c.pathbuf64 / 8]) / 4294967296
+    }
+  }
+
+  /**
+   * LIVE positions of one path's points, as a flat Float64Array of x,y,z in
+   * ENGINE space.
+   *
+   * Live, not authored: sector motion rewrites these every tick, which is the
+   * whole reason a camera path can be bolted to a lift. Read once at load and
+   * the path stops moving -- see refreshPathPositions in mapdata.js, which is
+   * the caller that gets this right.
+   *
+   * `into` is reused across frames when given, since the common case is
+   * rewriting the same path's points 60 times a second.
+   */
+  pathPoints (i, into = null) {
+    const c = this.core
+    c.ensurePathBuffers()
+    const n = c.M._dnp_map_path_points(this.ptr, i, c.pathbuf64, c.M._dnp_map_max_path_points())
+    const out = (into && into.length === n * 3) ? into : new Float64Array(n * 3)
+    const v = c.views.i64
+    const b = c.pathbuf64 / 8
+    for (let k = 0; k < n * 3; k++) out[k] = Number(v[b + k]) / 4294967296
+    return out
+  }
+
+  /** Anchor sector per point, or -1. For the debug overlay; the camera never asks. */
+  pathAnchors (i) {
+    const c = this.core
+    c.ensurePathBuffers()
+    const n = c.M._dnp_map_path_anchors(this.ptr, i, c.pathbuf32, c.M._dnp_map_max_path_points())
+    const out = new Int32Array(n)
+    const u = c.views.u32
+    const b = c.pathbuf32 / 4
+    for (let k = 0; k < n; k++) out[k] = u[b + k] | 0
+    return out
   }
 
   /** Content hash, as BigInt. Must equal WELCOME.map_hash. */

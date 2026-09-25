@@ -69,6 +69,21 @@ constexpr int BUF32_ATK_LEFT  = 18;
 constexpr int BUF32_ATK_CD    = 19;
 constexpr int BUF32_LEN       = 20;
 
+// A camera path's header (design 4.1). Its OWN four slots, not appended to the
+// agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
+// which the shared scratch buffer is nowhere near big enough for, and growing
+// that buffer to fit would put a rarely-read field next to the one the
+// predictor touches every tick.
+//
+// Four slots will not over-read. What the length check exists to catch is the
+// other failure: C++ swapping tag and flags while JS keeps reading the old
+// order, which is a path silently addressed by the wrong number.
+constexpr int PATH32_FIRST = 0;
+constexpr int PATH32_COUNT = 1;
+constexpr int PATH32_TAG   = 2;
+constexpr int PATH32_FLAGS = 3;
+constexpr int PATH32_LEN   = 4;
+
 }  // namespace
 
 extern "C" {
@@ -805,6 +820,99 @@ int dnp_map_add_rail_link(geom::MapStorage* m, unsigned rail, unsigned waypoint,
     return m->add_rail_link(rail, static_cast<u16>(waypoint), to_rail,
                             static_cast<u16>(to_waypoint)) ? 1 : 0;
 }
+
+// --- camera paths (design 4.1) ----------------------------------------------
+//
+// The only geometry in the map whose reader is the CLIENT. Rails have write
+// bindings here because the editor bakes them; paths need both halves, because
+// the camera has to read one every frame.
+//
+// What is exposed is the points and nothing else. There is no dnp_map_path_at
+// or dnp_map_path_nearest, and that is the design rather than an omission: the
+// camera rides a Catmull-Rom through these points, and a query answered on the
+// POLYLINE would be answering about a different curve -- nearest-on-polyline
+// can fall in a different segment from nearest-on-curve, and chord length is
+// shorter than arc length through every bend. client/src/spline.js owns all of
+// it, which also keeps that arithmetic testable without a wasm build at all.
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_add_path(geom::MapStorage* m, unsigned tag, unsigned flags,
+                          const long long* curve_length64) {
+    return m->add_path(static_cast<u16>(tag), static_cast<u8>(flags),
+                       fx::from_raw(curve_length64[0]));
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_path_point(geom::MapStorage* m, unsigned path, const long long* pos64,
+                           int anchor) {
+    return m->add_path_point(path,
+                             fx3{fx::from_raw(pos64[0]), fx::from_raw(pos64[1]),
+                                 fx::from_raw(pos64[2])}, anchor) ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_path_count(const geom::MapStorage* m) {
+    return m->view().path_count;
+}
+
+// out32: [first_point, point_count, tag, flags]; out64[0]: curve_length raw.
+// Returns 1, or 0 for an index out of range, having written nothing.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_path_info(const geom::MapStorage* m, unsigned path,
+                      unsigned* out32, long long* out64) {
+    const geom::MapData v = m->view();
+    if (path >= v.path_count) return 0;
+    const geom::Path& p = v.path(path);
+    out32[PATH32_FIRST] = p.first_point;
+    out32[PATH32_COUNT] = p.point_count;
+    out32[PATH32_TAG]   = p.tag;
+    out32[PATH32_FLAGS] = p.flags;
+    out64[0] = p.curve_length.raw;
+    return 1;
+}
+
+// LIVE point positions for one path, as x,y,z triples of raw fx. `cap` is in
+// TRIPLES; returns triples written, truncating rather than overrunning.
+//
+// Live, not authored, because sector motion rewrites these every tick -- which
+// is the whole reason a camera path can be bolted to a lift. A caller that
+// reads once at load and never again has a path that stops moving.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_path_points(const geom::MapStorage* m, unsigned path,
+                             long long* out64, unsigned cap) {
+    const geom::MapData v = m->view();
+    if (path >= v.path_count) return 0;
+    const geom::Path& p = v.path(path);
+    const unsigned n = p.point_count < cap ? p.point_count : cap;
+    for (unsigned i = 0; i < n; ++i) {
+        const geom::PathPoint& q = v.path_point(p.first_point + i);
+        out64[i * 3 + 0] = q.pos.x.raw;
+        out64[i * 3 + 1] = q.pos.y.raw;
+        out64[i * 3 + 2] = q.pos.z.raw;
+    }
+    return n;
+}
+
+// The anchor sector per point, or -1. For the debug OVERLAY only: it colours a
+// path riding a scripted-discrete mover differently, because such a path's
+// points arrive over the network at the snapshot rate and judder. The camera
+// itself never asks.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_path_anchors(const geom::MapStorage* m, unsigned path,
+                              int* out32, unsigned cap) {
+    const geom::MapData v = m->view();
+    if (path >= v.path_count) return 0;
+    const geom::Path& p = v.path(path);
+    const unsigned n = p.point_count < cap ? p.point_count : cap;
+    for (unsigned i = 0; i < n; ++i) out32[i] = v.path_point(p.first_point + i).anchor;
+    return n;
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_max_path_points() { return geom::MAX_MAP_PATH_POINTS; }
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_path32_len() { return PATH32_LEN; }
 
 // --- staged shape edits (design 3.1.1) -------------------------------------
 //

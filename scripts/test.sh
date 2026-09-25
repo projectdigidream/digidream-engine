@@ -356,6 +356,11 @@ else
   # polyline would look right in every screenshot, so most of this file is the
   # control that says it bends.
   node client/test/spline.test.js | tail -2
+  # And the same curve fed the points a .map file actually holds, through the
+  # wasm module the client predicts with. The claim it alone can make: the arc
+  # length tools/mapc baked into the file is the one this client rides at, which
+  # is what every cutscene's timing rests on.
+  node client/test/paths.test.js | tail -2
   # TOUCH, which is arithmetic and a state machine: where the stick's origin
   # is, what counts as a push, who owns which finger. The claims worth having
   # are the ones with a wrong answer you could ship -- pushing your thumb up
