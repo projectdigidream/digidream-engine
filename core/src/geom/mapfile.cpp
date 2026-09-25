@@ -10,6 +10,8 @@ constexpr size_t SIDE_BYTES  = 9;    // u16 + u16 + i32 + u8
 constexpr size_t WAYPOINT_BYTES = 28;   // i32 + three fxraw
 constexpr size_t RAIL_BYTES     = 7;    // u16 + u16 + u16 + u8
 constexpr size_t LINK_BYTES     = 8;    // four u16
+constexpr size_t PATH_POINT_BYTES = 28; // i32 + three fxraw, as a waypoint
+constexpr size_t PATH_BYTES       = 15; // u16 + u16 + u16 + u8 + fxraw
 }  // namespace
 
 bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
@@ -28,6 +30,8 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.u32v(store.rail_count());
     w.u32v(store.waypoint_count());
     w.u32v(store.rail_link_count());
+    w.u32v(store.path_count());
+    w.u32v(store.path_point_count());
     w.u32v(store.texture_count());
     w.u32v(store.light_count());
     w.u32v(store.script_count());
@@ -110,6 +114,25 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u16v(l.to_waypoint);
     }
 
+    // Camera paths: points first, then the paths that index them, so the loader
+    // can validate every range against a count it already has. Same order and
+    // same authored-not-live rule as the rails above.
+    for (u32 i = 0; i < m.path_point_count; ++i) {
+        const PathPoint& p = m.path_point(i);
+        w.i32v(p.anchor);
+        w.fxraw(p.base.x);
+        w.fxraw(p.base.y);
+        w.fxraw(p.base.z);
+    }
+    for (u32 i = 0; i < m.path_count; ++i) {
+        const Path& p = m.path(i);
+        w.u16v(p.first_point);
+        w.u16v(p.point_count);
+        w.u16v(p.tag);
+        w.u8v(p.flags);
+        w.fxraw(p.curve_length);
+    }
+
     // Rendering attributes, last: a reader that only wants geometry -- the
     // server's collision code, the nav graph, a diff tool -- can stop at the
     // section it cares about, and the file is laid out so that costs a seek
@@ -178,6 +201,8 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u32 rail_count = r.u32v();
     const u32 waypoint_count = r.u32v();
     const u32 rail_link_count = r.u32v();
+    const u32 path_count = r.u32v();
+    const u32 path_point_count = r.u32v();
     const u32 texture_count = r.u32v();
     const u32 light_count = r.u32v();
     const u32 script_count = r.u32v();
@@ -209,6 +234,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         side_count > MAX_MAP_SIDES || tri_index_count > MAX_MAP_TRI_IDX ||
         spawn_count > MAX_MAP_SPAWNS || rail_count > MAX_MAP_RAILS ||
         waypoint_count > MAX_MAP_WAYPOINTS || rail_link_count > MAX_MAP_RAIL_LINKS ||
+        path_count > MAX_MAP_PATHS || path_point_count > MAX_MAP_PATH_POINTS ||
         texture_count > MAX_MAP_TEXTURES || light_count > MAX_MAP_LIGHTS ||
         script_count > MAX_MAP_SCRIPTS) {
         store.clear();
@@ -507,6 +533,73 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             }
         }
     }
+
+    // --- camera paths --------------------------------------------------------
+    //
+    // Validated exactly as the rails above are, and on separate arrays, so a
+    // malformed path can never reach the ranges the simulation reads.
+    const size_t path_points_at = r.pos();
+    if (!r.skip(static_cast<size_t>(path_point_count) * PATH_POINT_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+    const size_t paths_at = r.pos();
+    if (!r.skip(static_cast<size_t>(path_count) * PATH_BYTES)) {
+        store.clear(); return MapLoadStatus::Truncated;
+    }
+    // Where the next section begins. The rail block above gets away without
+    // this because links are its last subsection; here the last thing read is
+    // the points, which sit BEFORE the paths, so the position has to be put
+    // back deliberately rather than left wherever the reads ended.
+    const size_t after_paths = r.pos();
+
+    {
+        struct PendingPath { u16 first, count, tag; u8 flags; fx length; };
+        PendingPath paths[MAX_MAP_PATHS];
+        r.seek(paths_at);
+        u32 covered = 0;
+        for (u32 i = 0; i < path_count; ++i) {
+            paths[i].first = r.u16v();
+            paths[i].count = r.u16v();
+            paths[i].tag = r.u16v();
+            paths[i].flags = r.u8v();
+            paths[i].length = r.fxraw();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            if (static_cast<u32>(paths[i].first) + paths[i].count > path_point_count) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+            if (paths[i].first != covered) { store.clear(); return MapLoadStatus::BadIndex; }
+            covered += paths[i].count;
+            // A negative arc length is not a path anything can ride: it divides
+            // the wrong way in every duration a script computes from it. Zero is
+            // allowed -- a path whose points coincide is degenerate, not hostile.
+            if (paths[i].length < fx::zero()) { store.clear(); return MapLoadStatus::BadIndex; }
+        }
+        if (covered != path_point_count) { store.clear(); return MapLoadStatus::BadIndex; }
+
+        r.seek(path_points_at);
+        u32 next_pp = 0;
+        for (u32 i = 0; i < path_count; ++i) {
+            const u32 idx = store.add_path(paths[i].tag, paths[i].flags, paths[i].length);
+            if (idx != i) { store.clear(); return MapLoadStatus::BadIndex; }
+            for (u16 k = 0; k < paths[i].count; ++k) {
+                const i32 anchor = r.i32v();
+                const fx x = r.fxraw();
+                const fx y = r.fxraw();
+                const fx z = r.fxraw();
+                if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+                if (anchor != NO_SECTOR &&
+                    (anchor < 0 || static_cast<u32>(anchor) >= sector_count)) {
+                    store.clear(); return MapLoadStatus::BadIndex;
+                }
+                if (!store.add_path_point(i, fx3{x, y, z}, anchor)) {
+                    store.clear(); return MapLoadStatus::BadIndex;
+                }
+                ++next_pp;
+            }
+        }
+        if (next_pp != path_point_count) { store.clear(); return MapLoadStatus::BadIndex; }
+    }
+    r.seek(after_paths);
 
     // --- rendering attributes ------------------------------------------------
     //

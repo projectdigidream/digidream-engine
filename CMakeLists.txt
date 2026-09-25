@@ -115,6 +115,10 @@ add_executable(test_rail core/tests/test_rail.cpp)
 target_link_libraries(test_rail PRIVATE dnp_core)
 add_test(NAME rail COMMAND test_rail)
 
+add_executable(test_path core/tests/test_path.cpp)
+target_link_libraries(test_path PRIVATE dnp_core)
+add_test(NAME path COMMAND test_path)
+
 add_executable(mapc tools/mapc/main.cpp)
 target_link_libraries(mapc PRIVATE dnp_core)
 

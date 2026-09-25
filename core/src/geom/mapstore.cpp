@@ -15,6 +15,8 @@ void MapStorage::clear() noexcept {
     rail_count_ = 0;
     waypoint_count_ = 0;
     rail_link_count_ = 0;
+    path_count_ = 0;
+    path_point_count_ = 0;
     texture_count_ = 0;
     light_count_ = 0;
     hole_count_ = 0;
@@ -160,6 +162,34 @@ bool MapStorage::add_rail_link(u32 rail, u16 waypoint, u32 to_rail, u16 to_waypo
     l.waypoint = waypoint;
     l.to_rail = static_cast<u16>(to_rail);
     l.to_waypoint = to_waypoint;
+    return true;
+}
+
+u32 MapStorage::add_path(u16 tag, u8 flags, fx curve_length) noexcept {
+    if (path_count_ >= MAX_MAP_PATHS) return MAX_MAP_PATHS;
+    Path& p = paths_[path_count_];
+    p = Path{};
+    p.first_point = static_cast<u16>(path_point_count_);
+    p.point_count = 0;
+    p.tag = tag;
+    p.flags = flags;
+    p.curve_length = curve_length;
+    return path_count_++;
+}
+
+bool MapStorage::add_path_point(u32 path, fx3 pos, i32 anchor) noexcept {
+    if (path >= path_count_) return false;
+    // Same rule as add_waypoint, for the same reason: only the most recently
+    // started path may grow, or its point range stops being contiguous.
+    if (path != path_count_ - 1) return false;
+    if (path_point_count_ >= MAX_MAP_PATH_POINTS) return false;
+
+    PathPoint& pp = path_points_[path_point_count_++];
+    pp = PathPoint{};
+    pp.anchor = anchor;
+    pp.base = pos;
+    pp.pos = pos;   // live from the moment it exists, as a waypoint is
+    ++paths_[path].point_count;
     return true;
 }
 
@@ -467,6 +497,10 @@ MapData MapStorage::view() const noexcept {
     m.waypoint_count = waypoint_count_;
     m.rail_links = rail_links_;
     m.rail_link_count = rail_link_count_;
+    m.paths = paths_;
+    m.path_count = path_count_;
+    m.path_points = path_points_;
+    m.path_point_count = path_point_count_;
     m.holes = holes_;
     m.hole_loop_count = hole_count_;
 
@@ -564,6 +598,31 @@ u64 MapStorage::hash() const noexcept {
     for (u32 i = 0; i < rail_link_count_; ++i) {
         const RailLink& l = rail_links_[i];
         h.u32v(l.rail); h.u32v(l.waypoint); h.u32v(l.to_rail); h.u32v(l.to_waypoint);
+    }
+
+    // Camera paths, by their AUTHORED positions -- the same rule as waypoints
+    // above, and for the same reason.
+    //
+    // Hashed at all because WELCOME.map_hash answers "did we parse the same
+    // file", and the client is the ONLY reader of these: if its points differed
+    // from the server's, nothing else in the system would ever notice. That
+    // makes the hash the entire agreement, not a backstop to one.
+    //
+    // curve_length is hashed with them because it is a field in the file. The
+    // format's fuzz test asserts there are no don't-care bytes, so a number
+    // written and not hashed is a bit an attacker can flip in silence -- and
+    // this one sets how long a cutscene runs.
+    h.u32v(path_count_);
+    h.u32v(path_point_count_);
+    for (u32 i = 0; i < path_count_; ++i) {
+        const Path& p = paths_[i];
+        h.u32v(p.first_point); h.u32v(p.point_count);
+        h.u32v(p.tag); h.byte(p.flags);
+        h.fxv(p.curve_length);
+    }
+    for (u32 i = 0; i < path_point_count_; ++i) {
+        h.i32v(path_points_[i].anchor);
+        h.vec3(path_points_[i].base);
     }
 
     // Rendering attributes ARE hashed, even though they never reach the

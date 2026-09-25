@@ -161,6 +161,25 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
         if (mi < 0) continue;
         p.pos = p.base + motions_[static_cast<u32>(mi)].offset;
     }
+
+    // Camera path points (design §4.1), by the same rule again.
+    //
+    // This loop is the ONLY work the simulation does for camera paths, and it
+    // is what earns them a place in the map rather than in a script: a path
+    // bolted to a lift rides it, drift-free, because base + offset is a pure
+    // function of the tick. A path held in Lua and sent to the client could not
+    // do that without streaming its points.
+    //
+    // A second loop rather than one over both: the arrays are separate, which
+    // is the whole point of map.hpp's split, and fusing them would be the first
+    // place that separation started to erode.
+    for (u32 i = 0; i < map.path_point_count(); ++i) {
+        geom::PathPoint& p = map.path_point_mut(i);
+        if (p.anchor < 0 || static_cast<u32>(p.anchor) >= geom::MAX_MAP_SECTORS) continue;
+        const i16 mi = motion_of_sector_[p.anchor];
+        if (mi < 0) continue;
+        p.pos = p.base + motions_[static_cast<u32>(mi)].offset;
+    }
     // Writing a point marks the broadphase stale, so it is rebuilt here rather
     // than left for a query to discover. Only when something actually moved
     // horizontally: a lift travelling straight up does not change any

@@ -62,6 +62,8 @@
 // next vertex, which is how sectors are actually drawn. Numbers are decimal and
 // are converted to fixed point exactly, via a rational, never through a double.
 //
+#include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -167,6 +169,126 @@ struct PendingVertex {
     SideRender render{};
 };
 
+// --- camera path arc length (design §4.1) -----------------------------------
+//
+// A PORT of client/src/spline.js, and it has to stay one.
+//
+// The camera rides a centripetal Catmull-Rom through a path's points, and that
+// curve is the client's: core does not implement it, deliberately, because a
+// camera is never hashed and a curve in fixed point would buy nothing. But the
+// SERVER needs one number out of it -- how long the path is -- because the
+// engine has no completion event and a cutscene therefore times its own
+// flythrough in advance, exactly as COND.sector_at_rest times a door.
+//
+// So the length is computed here, once, and baked into the map. If this drifts
+// from spline.js every cinematic ends at the wrong moment and nothing says why,
+// which is why ALPHA and SAMPLES below are written as the same numbers that
+// file exports and why a test compares the two answers on a real map.
+//
+// Doubles, because tools/ is outside the no-floats guard and this is authoring
+// arithmetic: the result is quantised to fx on the way into the file, and the
+// thing it is used for is measured in whole ticks.
+constexpr double PATH_ALPHA = 0.5;
+constexpr int    PATH_SAMPLES_PER_SEGMENT = 64;
+constexpr double PATH_KNOT_FLOOR = 1e-9;
+
+struct Dv3 { double x, y, z; };
+
+// fx <-> double, spelled out here rather than added to fx itself. The no-floats
+// guard keeps core/include integer-only on purpose, and a to_double() sitting
+// on fx is an invitation to use it somewhere that matters. Q32.32, so the scale
+// is 2^32 exactly and both directions are a multiply.
+constexpr double FX_SCALE = 4294967296.0;   // fx::ONE
+
+double fx_to_d(fx v) { return static_cast<double>(v.raw) / FX_SCALE; }
+
+fx d_to_fx(double v) {
+    // Round rather than truncate, and clamp: a length is a magnitude, and a
+    // path long enough to overflow i64 at 2^-32 resolution is four billion
+    // units of camera track.
+    const double scaled = v * FX_SCALE;
+    if (scaled <= -9.2233720368547758e18) return fx::min();
+    if (scaled >= 9.2233720368547758e18) return fx::max();
+    return fx::from_raw(static_cast<i64>(std::llround(scaled)));
+}
+
+Dv3 dv(fx3 p) {
+    return Dv3{fx_to_d(p.x), fx_to_d(p.y), fx_to_d(p.z)};
+}
+
+double dv_dist(const Dv3& a, const Dv3& b) {
+    const double dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+Dv3 dv_lerp_knot(const Dv3& a, const Dv3& b, double ta, double tb, double t) {
+    const double d = tb - ta;
+    const double w = d == 0.0 ? 0.0 : (t - ta) / d;
+    return Dv3{a.x + (b.x - a.x) * w, a.y + (b.y - a.y) * w, a.z + (b.z - a.z) * w};
+}
+
+// Barry-Goldman, matching spline.js. Written as three rounds of interpolation
+// rather than a basis matrix because the matrix form is only valid for UNIFORM
+// knots -- using it with a centripetal knot sequence is the usual way a
+// "centripetal" implementation turns out not to be one.
+Dv3 path_eval(const Dv3& p0, const Dv3& p1, const Dv3& p2, const Dv3& p3,
+              double t0, double t1, double t2, double t3, double t) {
+    const Dv3 a1 = dv_lerp_knot(p0, p1, t0, t1, t);
+    const Dv3 a2 = dv_lerp_knot(p1, p2, t1, t2, t);
+    const Dv3 a3 = dv_lerp_knot(p2, p3, t2, t3, t);
+    const Dv3 b1 = dv_lerp_knot(a1, a2, t0, t2, t);
+    const Dv3 b2 = dv_lerp_knot(a2, a3, t1, t3, t);
+    return dv_lerp_knot(b1, b2, t1, t2, t);
+}
+
+// Arc length of the curve through `pts`, by chords over a uniform sampling in
+// the curve parameter -- the same approximation, at the same resolution, that
+// the client's arc-length table is built from.
+double path_curve_length(const std::vector<fx3>& pts, bool loop) {
+    const size_t n = pts.size();
+    if (n < 2) return 0.0;
+    const bool looped = loop && n >= 3;
+    const size_t segs = looped ? n : n - 1;
+
+    std::vector<Dv3> p;
+    p.reserve(n);
+    for (const fx3& q : pts) p.push_back(dv(q));
+
+    double total = 0.0;
+    for (size_t s = 0; s < segs; ++s) {
+        Dv3 c0, c1, c2, c3;
+        if (looped) {
+            c0 = p[(s + n - 1) % n]; c1 = p[s % n];
+            c2 = p[(s + 1) % n];     c3 = p[(s + 2) % n];
+        } else {
+            // Reflected phantom control points at the ends, as spline.js does:
+            // p(-1) = p0 + (p0 - p1). Duplicating the endpoint instead gives a
+            // zero knot delta and a curve that begins by standing still.
+            c0 = (s == 0) ? Dv3{2 * p[0].x - p[1].x, 2 * p[0].y - p[1].y, 2 * p[0].z - p[1].z}
+                          : p[s - 1];
+            c1 = p[s];
+            c2 = p[s + 1];
+            c3 = (s + 2 < n) ? p[s + 2]
+                             : Dv3{2 * p[n - 1].x - p[n - 2].x,
+                                   2 * p[n - 1].y - p[n - 2].y,
+                                   2 * p[n - 1].z - p[n - 2].z};
+        }
+        const double k01 = std::max(std::pow(dv_dist(c0, c1), PATH_ALPHA), PATH_KNOT_FLOOR);
+        const double k12 = std::max(std::pow(dv_dist(c1, c2), PATH_ALPHA), PATH_KNOT_FLOOR);
+        const double k23 = std::max(std::pow(dv_dist(c2, c3), PATH_ALPHA), PATH_KNOT_FLOOR);
+        const double t0 = 0.0, t1 = k01, t2 = t1 + k12, t3 = t2 + k23;
+
+        Dv3 prev = path_eval(c0, c1, c2, c3, t0, t1, t2, t3, t1);
+        for (int i = 1; i <= PATH_SAMPLES_PER_SEGMENT; ++i) {
+            const double u = static_cast<double>(i) / PATH_SAMPLES_PER_SEGMENT;
+            const Dv3 q = path_eval(c0, c1, c2, c3, t0, t1, t2, t3, t1 + (t2 - t1) * u);
+            total += dv_dist(prev, q);
+            prev = q;
+        }
+    }
+    return total;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -198,6 +320,17 @@ int main(int argc, char** argv) {
     int  rail_start_line = 0;
     u32  cur_rail = 0;
     u32  rail_waypoints = 0;
+
+    // A camera path is buffered rather than streamed into the store, because
+    // its curve_length is a property of ALL its points and the store wants that
+    // number when the path is created. So the block is collected and committed
+    // at `end`.
+    bool in_path = false;
+    int  path_start_line = 0;
+    u16  path_tag = 0;
+    u8   path_flags = 0;
+    std::vector<fx3> path_pts;
+    std::vector<i32> path_anchors;
 
     // Junctions are collected and resolved at the end, because a rail may name
     // one declared later in the file -- the same reason sector neighbours are.
@@ -313,6 +446,27 @@ int main(int argc, char** argv) {
                 err(lineno, "hole has %zu vertices; need at least 3",
                     pending_holes.back().size());
                 pending_holes.pop_back();
+            }
+        } else if (tok[0] == "end" && in_path) {
+            in_path = false;
+            if (path_pts.size() < 2) {
+                err(path_start_line, "path has %zu point(s); need at least 2", path_pts.size());
+                continue;
+            }
+            // The curve's length, not the polyline's, computed HERE because the
+            // curve belongs to the client and the number belongs to the server.
+            // See path_curve_length above for why that split exists.
+            const double len = path_curve_length(path_pts, (path_flags & path_flag::LOOP) != 0);
+            const u32 pi = store.add_path(path_tag, path_flags, d_to_fx(len));
+            if (pi >= MAX_MAP_PATHS) {
+                err(path_start_line, "too many paths (max %u)", MAX_MAP_PATHS);
+                continue;
+            }
+            for (size_t i = 0; i < path_pts.size(); ++i) {
+                if (!store.add_path_point(pi, path_pts[i], path_anchors[i])) {
+                    err(path_start_line, "could not add path point (too many, or path out of order)");
+                    break;
+                }
             }
         } else if (tok[0] == "end" && in_rail) {
             in_rail = false;
@@ -486,6 +640,26 @@ int main(int argc, char** argv) {
                 }
             }
             if (!store.add_light(l)) err(lineno, "too many lights (max %u)", MAX_MAP_LIGHTS);
+        } else if (tok[0] == "path") {
+            // A CAMERA path (design §4.1), and deliberately not a rail: a rail
+            // is what §7.4 carries an entity along, and nothing about junctions
+            // or wire-hanging means anything to a camera. See map.hpp.
+            if (in_sector) { err(lineno, "path inside a sector; missing 'end'?"); continue; }
+            if (in_rail || in_path) { err(lineno, "path inside a path or rail; missing 'end'?"); continue; }
+            in_path = true;
+            path_start_line = lineno;
+            path_tag = 0;
+            path_flags = 0;
+            path_pts.clear();
+            path_anchors.clear();
+            for (size_t i = 1; i < tok.size(); ++i) {
+                if (tok[i] == "loop") { path_flags |= path_flag::LOOP; }
+                else if (tok[i] == "tag" && i + 1 < tok.size()) {
+                    path_tag = static_cast<u16>(std::atoi(tok[++i].c_str()));
+                } else {
+                    err(lineno, "unknown path attribute '%s'", tok[i].c_str());
+                }
+            }
         } else if (tok[0] == "rail" || tok[0] == "wire") {
             if (in_sector) { err(lineno, "rail inside a sector; missing 'end'?"); continue; }
             if (in_rail) { err(lineno, "rail inside a rail; missing 'end'?"); continue; }
@@ -505,7 +679,11 @@ int main(int argc, char** argv) {
             cur_rail = store.add_rail(rtag, flags);
             if (cur_rail >= MAX_MAP_RAILS) err(lineno, "too many rails");
         } else if (tok[0] == "waypoint") {
-            if (!in_rail) { err(lineno, "waypoint outside a rail"); continue; }
+            // One keyword for both blocks. A path's points ARE waypoints -- the
+            // same anchored, sector-relative point, and the same word an author
+            // already knows -- so which container is open decides where it goes
+            // rather than making them learn a second spelling.
+            if (!in_rail && !in_path) { err(lineno, "waypoint outside a rail or path"); continue; }
             if (tok.size() < 4) { err(lineno, "waypoint needs x y z"); continue; }
             fx x, y, z;
             if (!parse_fx(tok[1], x) || !parse_fx(tok[2], y) || !parse_fx(tok[3], z)) {
@@ -533,6 +711,15 @@ int main(int argc, char** argv) {
             if (anchor != NO_SECTOR &&
                 (anchor < 0 || static_cast<u32>(anchor) >= store.view().sector_count)) {
                 err(lineno, "waypoint anchor %d is not a sector", anchor);
+                continue;
+            }
+            if (in_path) {
+                if (path_pts.size() >= MAX_MAP_PATH_POINTS) {
+                    err(lineno, "too many path points (max %u)", MAX_MAP_PATH_POINTS);
+                    continue;
+                }
+                path_pts.push_back(fx3{x, y, z});
+                path_anchors.push_back(anchor);
                 continue;
             }
             if (!store.add_waypoint(cur_rail, fx3{x, y, z}, anchor)) {
@@ -571,6 +758,7 @@ int main(int argc, char** argv) {
 
     if (in_sector) err(lineno, "unterminated sector (missing 'end')");
     if (in_rail) err(lineno, "unterminated rail (missing 'end')");
+    if (in_path) err(lineno, "unterminated path (missing 'end')");
 
     for (const PendingLink& l : links) {
         if (!store.add_rail_link(l.rail, static_cast<u16>(l.wp), l.to_rail,
@@ -848,12 +1036,34 @@ int main(int argc, char** argv) {
             std::printf("%s: script %s\n", argv[2], base.c_str());
         }
     }
+    // The copies are part of the deliverable, so a missing one fails the bake
+    // the same way a bad sector does -- and takes the output with it, because
+    // a .dnpm whose scripts are absent loads perfectly and does nothing.
+    if (g_errors > 0) {
+        std::remove(argv[2]);
+        std::fprintf(stderr, "%d error(s); output removed\n", g_errors);
+        return 1;
+    }
 
     std::printf("%s: %u sectors, %u points, %u sides, %u triangles, %u spawns, "
-                "%u rails (%u waypoints, %u junctions) -> %zu bytes (hash %016llX)\n",
+                "%u rails (%u waypoints, %u junctions), %u camera paths (%u points) "
+                "-> %zu bytes (hash %016llX)\n",
                 argv[2], m.sector_count, m.point_count, m.side_count,
                 m.tri_index_count / 3, store.spawn_count(),
                 store.rail_count(), store.waypoint_count(), store.rail_link_count(),
+                store.path_count(), store.path_point_count(),
                 w.size(), static_cast<unsigned long long>(store.hash()));
+
+    // The baked arc length, per path, because it is the one number in the file
+    // an author cannot check by looking at what they typed -- it is the length
+    // of a CURVE through their points, always longer than the polyline, and it
+    // is what `cam_path_speed` is divided into to time a cutscene.
+    for (u32 i = 0; i < store.path_count(); ++i) {
+        const Path& p = m.path(i);
+        std::printf("  path tag %u: %u points%s, curve length %.4f\n",
+                    p.tag, p.point_count,
+                    (p.flags & path_flag::LOOP) ? ", loop" : "",
+                    fx_to_d(p.curve_length));
+    }
     return 0;
 }

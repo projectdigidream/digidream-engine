@@ -43,6 +43,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_turning"
 "./build/$HOST_ARCH/test_nav"
 "./build/$HOST_ARCH/test_rail"
+"./build/$HOST_ARCH/test_path"
 
 # The map compiler must round-trip the authored map: mapc bakes it, and the
 # loader re-triangulates and compares, so this also proves the compiler and the
@@ -50,6 +51,10 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/test.map  "build/$HOST_ARCH/test.dnpm"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
+# Camera paths (design §4.1). The only map that has any, and the fixture the
+# client's path tests load: a static path, one on a parametric lift, a loop, a
+# two-point minimum, a duplicated tag, and one on the discrete mover.
+"./build/$HOST_ARCH/mapc" maps/campath.map "build/$HOST_ARCH/campath.dnpm"
 # The studio's starter module, written by the studio's own emitter from its
 # documents (docs/STUDIO.md): if this map stops baking, the studio's .map
 # writer has drifted from mapc's grammar.

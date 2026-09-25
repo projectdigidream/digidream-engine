@@ -30,6 +30,10 @@ inline constexpr u32 MAX_MAP_SPAWNS  = 64;
 inline constexpr u32 MAX_MAP_RAILS      = 64;
 inline constexpr u32 MAX_MAP_WAYPOINTS  = 512;
 inline constexpr u32 MAX_MAP_RAIL_LINKS = 64;
+// Camera paths (design §4.1). Far smaller than the rail budget on purpose: a
+// map has a handful of scripted shots, not a network of track.
+inline constexpr u32 MAX_MAP_PATHS       = 16;
+inline constexpr u32 MAX_MAP_PATH_POINTS = 256;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
 inline constexpr u32 MAX_MAP_TEXTURES   = 256;
 inline constexpr u32 MAX_MAP_LIGHTS     = 128;
@@ -124,6 +128,24 @@ public:
     // the same shape as point_mut(): a rail on a moving platform is the corner
     // points of that platform, one level up.
     RailWaypoint& waypoint_mut(u32 i) noexcept { return waypoints_[i]; }
+
+    // --- camera paths (design §4.1) ---
+    //
+    // Same append-then-fill discipline as rails, and separate arrays for the
+    // reason map.hpp gives: a path is cosmetic and a rail is simulated, and the
+    // contiguity rule that protects the second should not be loosened for the
+    // first.
+    //
+    // `curve_length` is the arc length of the CURVE through these points, which
+    // only the client knows how to draw -- tools/mapc computes it at bake and
+    // passes it in here.
+    u32 add_path(u16 tag, u8 flags, fx curve_length) noexcept;
+    bool add_path_point(u32 path, fx3 pos, i32 anchor) noexcept;
+
+    u32 path_count() const noexcept { return path_count_; }
+    u32 path_point_count() const noexcept { return path_point_count_; }
+
+    PathPoint& path_point_mut(u32 i) noexcept { return path_points_[i]; }
 
     // --- spawns ---
     bool add_spawn(const char* tag, u32 tag_len, fx3 pos) noexcept;
@@ -307,6 +329,11 @@ private:
     u32          rail_count_ = 0;
     u32          waypoint_count_ = 0;
     u32          rail_link_count_ = 0;
+
+    Path      paths_[MAX_MAP_PATHS]{};
+    PathPoint path_points_[MAX_MAP_PATH_POINTS]{};
+    u32       path_count_ = 0;
+    u32       path_point_count_ = 0;
 };
 
 }  // namespace dnp::geom

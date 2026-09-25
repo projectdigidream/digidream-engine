@@ -1,0 +1,128 @@
+# Camera paths (design §4.1), and the cases a camera path can be in.
+#
+# The geometry is phase3.map's, and deliberately so: it already contains the two
+# kinds of moving sector, and a camera path's one interesting relationship with
+# the simulation is which of them it is bolted to. What this map adds is the
+# `path` blocks, which exist nowhere else.
+#
+#   sector 0   the yard: static ground, where the static paths live
+#   sector 1   a parametric lift. Rises 3 units on a fixed schedule, so a client
+#              computes its position for any tick from parameters sent once --
+#              which is what makes a path anchored here predictable.
+#   sector 2   a scripted-discrete mover. Its offset is STREAMED every snapshot
+#              and has no closed form, so a path anchored here judders at the
+#              snapshot rate. Authored on purpose, as the thing the overlay
+#              colours differently and docs/MAP_AUTHOR.md tells you not to do.
+#   sector 3   a crusher, unused by the paths; it keeps the geometry identical
+#              to phase3 so the two can be compared.
+#
+#   y
+#   ^   +--------+--------+
+#   |   |   2    |   3    |   discrete mover | crusher
+#   |   +--------+--------+
+#   |   |   0    |   1    |   yard | parametric lift
+#   |   +--------+--------+
+#   +-------------------------> x
+
+sector floor 0 ceil 12 tag 1
+  vertex  0   0   wall
+  vertex 20   0   neighbor 1
+  vertex 20  20   neighbor 2
+  vertex  0  20   wall
+end
+
+# tag 100+N: a parametric lift rising N units.
+sector floor 0 ceil 12 tag 103
+  vertex 20   0   wall
+  vertex 40   0   wall
+  vertex 40  20   neighbor 3
+  vertex 20  20   neighbor 0
+end
+
+# tag 400+N: a scripted-discrete mover with N units of range.
+sector floor 0 ceil 12 tag 402
+  vertex  0  20   neighbor 0
+  vertex 20  20   neighbor 3
+  vertex 20  40   wall
+  vertex  0  40   wall
+end
+
+# tag 200+N: a crusher whose ceiling drops N units.
+sector floor 0 ceil 12 tag 211
+  vertex 20  20   neighbor 1
+  vertex 40  20   wall
+  vertex 40  40   wall
+  vertex 20  40   neighbor 2
+end
+
+spawn yard      10 10 0
+spawn lift      30 10 0
+spawn drifter   10 30 0
+spawn crusher   30 30 0
+
+# --- camera paths -----------------------------------------------------------
+#
+# `waypoint` is the same word a rail uses, because it is the same thing: an
+# anchored, sector-relative point. Which block is open decides where it goes.
+#
+# A path is NOT a rail. Rails are §7.4's -- simulated, hashed, ridden by an
+# entity, branching at junctions Lua chooses between. Nothing here branches and
+# nothing in the simulation reads any of it.
+
+# 1: STATIC, and bent. Chords of 16 and 6 meeting at a right angle -- the shape
+# that separates a curve from its polyline most sharply, so this is the path the
+# arc-length agreement between mapc and spline.js is measured on.
+path tag 1
+  waypoint  2  2 1
+  waypoint 18  2 1
+  waypoint 18  8 1
+end
+
+# 2: ANCHORED TO THE PARAMETRIC LIFT (sector 1, x 20..40 y 0..20). Every point
+# rides it, so the path translates rigidly and predictably. This is the case
+# that earns camera paths a place in the map file rather than in a script.
+path tag 2
+  waypoint 24  4 1
+  waypoint 36  4 1
+  waypoint 36 16 1
+end
+
+# 3: A LOOP. Four points around the yard, so a flythrough set going on it never
+# clamps and a full lap returns exactly to its start.
+path tag 3 loop
+  waypoint  3  3 6
+  waypoint 17  3 6
+  waypoint 17 17 6
+  waypoint  3 17 6
+end
+
+# 4: TWO POINTS. The minimum a path can be, and a straight line -- the control
+# for the arc-length test, because smoothing that lengthened this one would be
+# measuring something other than arc length.
+path tag 4
+  waypoint  2 12 2
+  waypoint 18 12 2
+end
+
+# 5 and 6, BOTH TAGGED 5. Tags are not unique and nothing enforces it, so the
+# rule has to be written down and tested rather than assumed: first match wins,
+# which is the lower index. Without a map that contains the ambiguity, a
+# pathIndexForTag that returned the LAST match would pass every other test.
+path tag 5
+  waypoint  4 24 1
+  waypoint 16 24 1
+end
+
+path tag 5
+  waypoint  4 36 1
+  waypoint 16 36 1
+end
+
+# 7: ANCHORED TO THE DISCRETE MOVER (sector 2, x 0..20 y 20..40). The path whose
+# points arrive over the network at half the tick rate. Authored so the failure
+# mode has a fixture rather than only a warning in the docs.
+path tag 7
+  waypoint  6 26 1
+  waypoint 14 26 1
+  waypoint 14 34 1
+end

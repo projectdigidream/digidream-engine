@@ -163,6 +163,52 @@ struct RailLink {
     u16 to_waypoint = 0;
 };
 
+// Camera paths (design §4.1).
+//
+// The same idea as a rail's waypoints -- an anchored, sector-relative point --
+// and deliberately NOT a rail. A rail is what §7.4 carries an entity along:
+// simulated, hashed, gated by ControllerMode, and branching at junctions that
+// Lua chooses between. A camera path is none of that. Nothing in core or the
+// server ever reads one; the client's camera does, at frame rate, and the
+// camera is never hashed and never predicted.
+//
+// Sharing the rail arrays was the obvious move and is the wrong one. Rails must
+// cover the waypoint array exactly and contiguously -- mapfile.cpp refuses a
+// file where they do not -- so a path taking a slice of it means loosening the
+// invariant that protects the simulated half for the sake of the cosmetic one.
+// They are cheap; they get their own.
+//
+// Points are SECTOR-RELATIVE for the same reason waypoints are: a camera path
+// bolted to a lift simply moves, and nothing that reads one needs a case for it.
+namespace path_flag {
+inline constexpr u8 LOOP = 1u << 0;   // the last point joins back to the first
+}  // namespace path_flag
+
+struct PathPoint {
+    i32 anchor = NO_SECTOR;   // sector it rides, or NO_SECTOR for world-fixed
+    fx3 base{};               // as authored
+    fx3 pos{};                // live: base + the anchor's current offset
+};
+
+struct Path {
+    u16 first_point = 0;
+    u16 point_count = 0;
+    u16 tag = 0;
+    u8  flags = 0;
+
+    // Arc length of the CURVE the client draws through these points, baked by
+    // tools/mapc. Not the polyline's length, which is shorter through every
+    // bend.
+    //
+    // It is here because the engine has no completion event of any kind: a
+    // cutscene learns its flythrough has finished by arithmetic done in advance,
+    // exactly as COND.sector_at_rest does for a door. That arithmetic needs the
+    // length of the path the camera actually rides, and the curve is the
+    // client's -- core deliberately does not implement it. So the one number the
+    // server needs out of that curve is computed once, at bake, and carried.
+    fx curve_length{};
+};
+
 // ---------------------------------------------------------------------------
 // Rendering attributes (design §3.1, §4).
 //
@@ -342,6 +388,10 @@ struct MapData {
     u32                 waypoint_count   = 0;
     const RailLink*     rail_links       = nullptr;
     u32                 rail_link_count  = 0;
+    const Path*         paths            = nullptr;
+    u32                 path_count       = 0;
+    const PathPoint*    path_points      = nullptr;
+    u32                 path_point_count = 0;
     const PolyLoop*     holes            = nullptr;
     u32                 hole_loop_count  = 0;
 
@@ -353,6 +403,8 @@ struct MapData {
     const Rail& rail(u32 i) const noexcept { return rails[i]; }
     const RailWaypoint& waypoint(u32 i) const noexcept { return waypoints[i]; }
     const RailLink& rail_link(u32 i) const noexcept { return rail_links[i]; }
+    const Path& path(u32 i) const noexcept { return paths[i]; }
+    const PathPoint& path_point(u32 i) const noexcept { return path_points[i]; }
     const PolyLoop& hole(u32 i) const noexcept { return holes[i]; }
 };
 
