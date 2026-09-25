@@ -99,6 +99,7 @@ Cond cond_by_name(const char* s, size_t n) {
     if (streq(s, n, "mob_within"))     return Cond::MobWithin;
     if (streq(s, n, "prop_within"))    return Cond::PropWithin;
     if (streq(s, n, "count_within"))   return Cond::CountWithin;
+    if (streq(s, n, "stuck"))          return Cond::Stuck;
     return Cond::Unsupported;
 }
 

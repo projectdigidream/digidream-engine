@@ -186,6 +186,15 @@ bool evaluate(const MobGraph& g, const Kind& k, const Mob& m,
         return false;
     }
 
+    case Cond::Stuck: {
+        // How long the anchor has stood. `ticks` defaults to 16 -- two of the
+        // mob's own decisions -- and a zero means absent, as everywhere else
+        // here: the graph carries the argument, and nobody asks for zero.
+        if (!m.has_anchor) return false;
+        const i32 within = c.i != 0 ? c.i : 16;
+        return static_cast<i64>(w.tick) - static_cast<i64>(m.still_since) >= within;
+    }
+
     case Cond::PropWithin: {
         // Props are the other half of the entity index space and have no
         // graph; this is how a brain notices the furniture.

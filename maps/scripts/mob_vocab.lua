@@ -289,6 +289,21 @@ mob_vocab = {
       doc = "At least this many mobs of that kind are within reach. A monster " ..
             "that only charges in a group, or one that panics alone." },
 
+    { name = "stuck",
+      args = { { name = "ticks", type = "int", optional = true,
+                 doc = "How long it must have been getting nowhere. Default " ..
+                       "16 -- two of its own decisions." } },
+      doc = "It has been trying to move and has not. The classic monster " ..
+            "grinding into a corner -- pathing gets it near, geometry stops " ..
+            "it, and nothing in the graph can tell, because `move = chase` " ..
+            "looks identical whether it is working or not.\n" ..
+            "ONE NUMBER, and the distance is not a second: the runtime keeps " ..
+            "an anchor and moves it whenever the body gets a quarter unit " ..
+            "away, so `ticks` is how long that anchor has stood still. The " ..
+            "first version took a distance too and could never be true -- the " ..
+            "anchor was rewritten every think, so the window it measured was " ..
+            "always exactly one think long." },
+
     { name = "target_is",
       args = { { name = "kind", type = "enum",
                  values = { "player", "mob", "prop" } } },
@@ -526,6 +541,30 @@ mob_vocab = {
             "does this automatically and unconditionally; this is how a graph " ..
             "decides for itself -- retaliate only below half health, or only " ..
             "when the attacker is closer than what it is already chasing." },
+
+    { name = "wake",
+      args = { { name = "radius", type = "fx", optional = true,
+                 doc = "Wake every dormant mob within this far as well. " ..
+                       "Absent wakes only itself." },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind, when a radius is given." } },
+      doc = "Stop being dormant. `dormant` is set when a mob is placed and " ..
+            "until now nothing could change it -- so an ambush was a room of " ..
+            "monsters that either all started awake or never woke at all." },
+
+    { name = "sleep",
+      args = {},
+      doc = "Go dormant: no decisions, no movement, no cost beyond existing. " ..
+            "What a spawner's children do until the fight reaches them." },
+
+    { name = "alert_nearby",
+      args = { { name = "radius", type = "fx" },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind. Absent means any." } },
+      doc = "Hand this mob's target to everything near it, waking what is " ..
+            "dormant. Doom's noise propagation, which is most of why a room " ..
+            "reacts as a room -- without it a mob only ever learns about you " ..
+            "by seeing you itself." },
 
     { name = "target_none",
       args = {},

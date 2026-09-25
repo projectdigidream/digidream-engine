@@ -71,6 +71,20 @@ mobs.load{
           -- turn over a run.
           transitions = {
             { to = 'look',  when = { { cond = 'has_target', negate = true } } },
+            -- PRESSED INTO GEOMETRY AND GOING NOWHERE: back off and wander
+            -- rather than grind. High in the list because it is the one edge
+            -- here that is about a failure -- a mob that cannot move is not
+            -- helped by being offered four other things to do first -- and
+            -- because an edge at the bottom of a list of chance-gated ones
+            -- never fires at all, which is how the first version of this
+            -- fixture proved nothing.
+            --
+            -- `stuck` is literal: it asks whether the body got anywhere
+            -- between two decisions. A monster that spent them standing in
+            -- `strike` did not, and that is a true answer rather than a
+            -- lenient one.
+            { to = 'shrug',  when = { { cond = 'stuck', ticks = 24 },
+                                      { cond = 'chance', percent = 50 } } },
             { to = 'strike', when = { { cond = 'target_within', distance = '12' },
                                       { cond = 'target_visible' },
                                       { cond = 'target_in_front', arc = 20 },
@@ -131,6 +145,18 @@ mobs.load{
                          towards = 'away', jitter = 30 } },
         },
 
+        -- `stuck` leads here, and this is also where the ambush verbs live:
+        -- waking the sleeper placed beside the others, and shouting so the
+        -- rest of the room learns what this one is hunting.
+        shrug = {
+          anim = 1, move = 'flee', face = 'target', ticks = 14, next = 'roam',
+          sequence = {
+            { at = 0, action = 'set_angle', var = 'wander', towards = 'random' },
+            { at = 2, action = 'wake', radius = '30', mob = 'dervish' },
+            { at = 4, action = 'alert_nearby', radius = '24', mob = 'dervish' },
+          },
+        },
+
         pain = { anim = 3, move = 'stop', face = 'hold', ticks = 8, next = 'stalk' },
         death = { anim = 4, move = 'stop', face = 'hold', solid = false,
                   ticks = 60, next = 'death' },
@@ -150,4 +176,7 @@ mobs.place{
   {kind = 'dervish', x = 20, y = 30, z = 4},
   {kind = 'dervish', x = 26, y = 34, z = 4},
   {kind = 'dervish', x = 16, y = 36, z = 4},
+  -- DORMANT, so `wake` has something to wake. Until that action existed the
+  -- flag was set at placement and nothing anywhere could clear it.
+  {kind = 'dervish', x = 30, y = 26, z = 4, dormant = true},
 }

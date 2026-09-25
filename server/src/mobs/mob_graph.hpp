@@ -68,6 +68,7 @@ enum class Cond : u8 {
     MobWithin,
     PropWithin,
     CountWithin,
+    Stuck,
     // Everything below is NOT evaluated here. A graph that uses one runs in
     // Lua, and MobRuntime says so out loud.
     Unsupported,

@@ -78,9 +78,19 @@ struct Mob {
     u32  repath_at = 0;
     u32  wander = 0;
 
+    // The anchor for `stuck`: where the body last actually got to, and when.
+    // It moves when the body gets a quarter unit away from it, so "has not got
+    // anywhere for N ticks" is a subtraction. Rewriting it every think instead
+    // measures a window exactly one think long and can never be true, which is
+    // what the first version of this did.
+    fx3  anchor{};
+    u32  still_since = 0;
+    bool has_anchor = false;
+
     // Valid only within this mob's own think, exactly as mobs.lua's m.p/m.tp
     // are: fetched once at the top of its turn rather than once per condition.
     fx3  p{};
+    u32  pos_tick = 0;
     fx3  tp{};
     bool has_tp = false;
 };

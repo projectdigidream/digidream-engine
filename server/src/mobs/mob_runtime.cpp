@@ -49,6 +49,12 @@ constexpr u32 REPATH_TICKS = 30;
 // straight at a wall for reasons nothing reports.
 constexpr u32 MAX_ROUTE = 48;
 
+// How far counts as having got somewhere, for `stuck`: a quarter unit, and the
+// comparison is against a squared distance. The same number maps/scripts/
+// mobs.lua writes as fx.frac(1, 16), which is that quarter squared.
+const u128 STUCK_EPS2 =
+    static_cast<u128>(static_cast<i128>(fx::from_frac(1, 4).raw) * fx::from_frac(1, 4).raw);
+
 
 namespace {
 
@@ -552,7 +558,19 @@ void tick_mobs(MobRuntime& rt, u32 tick, ActionSink* lua) {
         // again; a zombieman's `chase` alone did it four times before it had
         // decided anything.
         m.p = w.agent(m.entity).pos;
+        m.pos_tick = tick;
         m.has_tp = false;
+
+        // THE ANCHOR, for `stuck`. It moves when the body gets STUCK_EPS away
+        // from it; `still_since` is the tick that last happened.
+        if (!m.has_anchor) {
+            m.anchor = m.p;
+            m.still_since = tick;
+            m.has_anchor = true;
+        } else {
+            const u128 moved = len_sq_raw(fx2{m.p.x - m.anchor.x, m.p.y - m.anchor.y});
+            if (moved >= STUCK_EPS2) { m.anchor = m.p; m.still_since = tick; }
+        }
         if (m.target >= 0) {
             const sim::AgentState& t = w.agent(static_cast<u32>(m.target));
             const bool gone = !t.active || w.generation(static_cast<u32>(m.target)) != m.target_gen;

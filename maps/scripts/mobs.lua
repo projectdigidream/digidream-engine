@@ -648,6 +648,16 @@ end
 -- does not need a new route at all.
 local REPATH_TICKS = 30
 
+-- How far counts as having got somewhere, for `stuck`: a quarter unit.
+--
+-- Written SQUARED, as the fraction it is, rather than as a quarter multiplied
+-- by itself -- the comparison is against a squared distance and this file is
+-- loaded by scripts/check_mobs.sh against a stub `fx` with no arithmetic on
+-- it, where a multiply at load time raises before anything can be checked.
+-- Not an argument: see the condition's own entry in mob_vocab.lua for why one
+-- number is the whole of it.
+local STUCK_EPS2 = fx.frac(1, 16)
+
 -- Steer towards the next waypoint on the route, or straight at the target if
 -- there is no route to follow.
 --
@@ -872,6 +882,17 @@ function conds.prop_within(m, c)
     end
   end
   return false
+end
+
+-- IT HAS BEEN TRYING AND HAS NOT GOT ANYWHERE.
+--
+-- Against where it was on a PREVIOUS decision, not against last tick: a mob
+-- decides every THINK-th tick and its position between decisions is the
+-- mover's business. `m.was` and `m.was_at` are written by the runtime on each
+-- think, so this is a comparison rather than a query.
+function conds.stuck(m, c)
+  if m.still_since == nil then return false end
+  return dnp.tick() - m.still_since >= (c.ticks or 16)
 end
 
 function conds.target_is(m, c)
@@ -1290,6 +1311,54 @@ function acts.target_attacker(m)
   m.target, m.target_prop = by.e, false
   m.tp = by.e:pos()
   if m.cpp then dnp.mob_set(m.idx, "target", by.idx) end
+end
+
+function acts.wake(m, a)
+  m.dormant = false
+  if m.cpp then dnp.mob_set(m.idx, "dormant", false) end
+  if a.radius == nil then return end
+  local d2 = a.radius * a.radius
+  for idx, o in pairs(live) do
+    if idx ~= m.idx and o.dormant and not o.dead and o.e:valid() and
+       (a.mob == nil or o.def.name == a.mob) then
+      local q = o.e:pos()
+      local dx, dy = q.x - m.p.x, q.y - m.p.y
+      if dx * dx + dy * dy <= d2 then
+        o.dormant = false
+        if o.cpp then dnp.mob_set(o.idx, "dormant", false) end
+      end
+    end
+  end
+end
+
+function acts.sleep(m)
+  m.dormant = true
+  if m.cpp then dnp.mob_set(m.idx, "dormant", true) end
+end
+
+-- DOOM'S NOISE PROPAGATION, which is most of why a room reacts as a room.
+-- Without it a mob only ever learns about you by seeing you itself, so a
+-- corridor of monsters wakes one at a time as you round each corner.
+function acts.alert_nearby(m, a)
+  if m.target == nil or not m.target:valid() or m.target_prop then return end
+  local d2 = a.radius * a.radius
+  for idx, o in pairs(live) do
+    if idx ~= m.idx and not o.dead and o.e:valid() and
+       (a.mob == nil or o.def.name == a.mob) then
+      local q = o.e:pos()
+      local dx, dy = q.x - m.p.x, q.y - m.p.y
+      if dx * dx + dy * dy <= d2 then
+        -- Woken AND pointed. Waking something with nothing to hunt just costs
+        -- it a think a second until it happens to see you.
+        o.dormant = false
+        o.target, o.target_prop = m.target, false
+        if o.cpp then
+          dnp.mob_set(o.idx, "dormant", false)
+          dnp.mob_set(o.idx, "target", m.target:index())
+        end
+      end
+    end
+  end
 end
 
 function acts.target_none(m)
@@ -1910,6 +1979,17 @@ function on_tick()
       -- and `sight` is what makes it cheap.
       if not m.dead then
         refresh_pos(m, tick)
+        -- THE ANCHOR, for `stuck`. It moves when the body gets a quarter unit
+        -- away from it, and `still_since` is the tick that last happened -- so
+        -- "has not got anywhere for N ticks" is a subtraction. Rewriting it
+        -- every think instead, which is what the first version did, measures a
+        -- window exactly one think long and can never be true.
+        if m.anchor == nil then
+          m.anchor, m.still_since = m.p, tick
+        else
+          local dx, dy = m.p.x - m.anchor.x, m.p.y - m.anchor.y
+          if dx * dx + dy * dy >= STUCK_EPS2 then m.anchor, m.still_since = m.p, tick end
+        end
         if target_gone(m.target) then
           local p = m.p
           local player, d2 = nearest_player(p)
