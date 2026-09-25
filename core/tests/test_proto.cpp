@@ -7,6 +7,7 @@
 // hostile input, and check that the budget-filling encoder rolls back cleanly.
 //
 #include <cstdio>
+#include <cstring>
 
 #include "dnp/math/rng.hpp"
 #include "dnp/physics/params_table.hpp"
@@ -699,6 +700,83 @@ static void test_ui_event_round_trip() {
     CHECK(got.ui_id == 42 && got.widget_id == 9 && got.value == -3);
 }
 
+static void test_music_cue_round_trip() {
+    std::printf("music: a cue change survives the wire, and an unknown moment does not\n");
+    MusicCue m;
+    const char* name = "fight";
+    for (u32 i = 0; name[i]; ++i) m.cue.text[i] = name[i];
+    m.cue.len = 5;
+    m.fade_ms = 1200;
+    m.at = MusicAt::LoopEnd;
+    u8 buf[160];
+    ByteWriter w(buf, sizeof(buf));
+    encode_music_cue(w, m);
+    CHECK(w.ok());
+    ByteReader r(buf, w.size());
+    MusicCue got;
+    CHECK(decode_music_cue(r, got));
+    CHECK(got.cue.len == 5 && std::memcmp(got.cue.text, "fight", 5) == 0);
+    CHECK(got.fade_ms == 1200 && got.at == MusicAt::LoopEnd);
+
+    // CONTROL: the last byte is the moment, and 3 is not one.
+    buf[w.size() - 1] = 3;
+    ByteReader r2(buf, w.size());
+    CHECK(!decode_music_cue(r2, got));
+}
+
+// CameraSet had no test at all. It is the one message whose field ids are
+// positional across two languages with no shared header, so the two properties
+// worth pinning are that a full record survives and that an id this build has
+// never heard of survives with it -- that second one is what lets a newer
+// server configure an older client, and it was documented but never checked.
+static void test_camera_set_round_trip() {
+    std::printf("camera: a full record survives, and so does a field id we do not know\n");
+    CameraSet c;
+    c.count = static_cast<u16>(CAMERA_MAX_FIELDS);
+    for (u16 i = 0; i < c.count; ++i) {
+        c.fields[i].id = static_cast<u8>(i);
+        // Alternating sign: milli is an i32 and a zig-zag varint is where a
+        // sign is lost, so a table of positives would not notice.
+        c.fields[i].milli = (i % 2 == 0) ? static_cast<i32>(i) * 1000
+                                         : -static_cast<i32>(i) * 1000;
+    }
+    u8 buf[256];
+    ByteWriter w(buf, sizeof(buf));
+    encode_camera_set(w, c);
+    CHECK(w.ok());
+    ByteReader r(buf, w.size());
+    CameraSet got;
+    CHECK(decode_camera_set(r, got));
+    CHECK(got.count == CAMERA_MAX_FIELDS);
+    for (u16 i = 0; i < got.count; ++i) {
+        CHECK(got.fields[i].id == c.fields[i].id);
+        CHECK(got.fields[i].milli == c.fields[i].milli);
+    }
+
+    // An id far past anything this build names. docs/protocol.md §11.1 promises
+    // it is carried rather than refused -- the SKIPPING happens where the client
+    // applies, not here, and a decoder that rejected it would make that promise
+    // unkeepable.
+    CameraSet u;
+    u.count = 1;
+    u.fields[0].id = 200;
+    u.fields[0].milli = -7;
+    ByteWriter w2(buf, sizeof(buf));
+    encode_camera_set(w2, u);
+    ByteReader r2(buf, w2.size());
+    CHECK(decode_camera_set(r2, got));
+    CHECK(got.count == 1 && got.fields[0].id == 200 && got.fields[0].milli == -7);
+
+    // CONTROL: one field past the cap is refused, not clamped. Clamping would
+    // leave the reader mid-record and everything after it decodes as garbage
+    // that passed -- the same reason the UI lengths above are refused.
+    ByteWriter w3(buf, sizeof(buf));
+    w3.u16v(CAMERA_MAX_FIELDS + 1);
+    for (u32 i = 0; i <= CAMERA_MAX_FIELDS; ++i) { w3.u8v(0); w3.i32v(0); }
+    ByteReader r3(buf, w3.size());
+    CHECK(!decode_camera_set(r3, got));
+}
+
 // The decoder runs on bytes from the network, so every length in the message is
 // a number an attacker picks. Each of these is a way to be handed one.
 static void test_ui_rejects_hostile_input() {
@@ -797,6 +875,8 @@ static void test_ui_truncation_at_every_length() {
 int main() {
     test_ui_panel_round_trip();
     test_ui_event_round_trip();
+    test_music_cue_round_trip();
+    test_camera_set_round_trip();
     test_ui_rejects_hostile_input();
     test_ui_truncation_at_every_length();
     std::printf("== core/proto test suite ==\n");

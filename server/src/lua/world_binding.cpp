@@ -1330,6 +1330,11 @@ static const char* const CAMERA_FIELD_NAMES[] = {
 // dnp.level_camera, which differ only in whom the settings are for.
 static void read_camera_table(lua_State* L, int idx, proto::CameraSet& c) {
     for (u8 id = 0; id < static_cast<u8>(sizeof(CAMERA_FIELD_NAMES) / sizeof(char*)); ++id) {
+        // The array is sized for the name list, so this cannot fire today -- and
+        // that is exactly the problem it exists for. The loop is bounded by the
+        // list rather than by the buffer, so the day someone appends a name past
+        // CAMERA_MAX_FIELDS the overrun is silent and nothing here mentions it.
+        if (c.count >= proto::CAMERA_MAX_FIELDS) break;
         lua_getfield(L, idx, CAMERA_FIELD_NAMES[id]);
         if (!lua_isnil(L, -1)) {
             // THOUSANDTHS on the wire. A camera is not simulation state, so it

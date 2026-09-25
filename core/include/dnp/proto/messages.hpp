@@ -45,6 +45,11 @@ inline constexpr u8 MSG_CAMERA_SET = 0x24;
 // One field of one side changes its picture (docs/protocol.md §11.1). A switch
 // that has been thrown. Not simulation state -- never hashed, never predicted.
 inline constexpr u8 MSG_SIDE_TEXTURE = 0x25;
+// The map's music changes cue (docs/protocol.md §11.1). A name, because the
+// client owns the manifest that maps a cue to a track; the server never sees a
+// track. Not simulation state -- never hashed, never predicted, not replayed
+// to a client joining later.
+inline constexpr u8 MSG_MUSIC = 0x26;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -310,7 +315,12 @@ struct UiPanel {
 // docs/protocol.md §11.1. Not fx: a camera is never hashed and never predicted,
 // so it does not need the simulation's number type, and a thousandth of a unit
 // is finer than a pixel at any sane zoom.
-inline constexpr u32 CAMERA_MAX_FIELDS = 16;
+// Headroom, not a fit. read_camera_table() fills this array by walking its own
+// name table, so the bound that protects it is the LENGTH OF THAT LIST -- and a
+// list that grew past 16 would have overrun the array with nothing to stop it.
+// Sized well clear of the names so adding one is a one-line change again, and
+// the guard there now says so rather than leaving it to arithmetic.
+inline constexpr u32 CAMERA_MAX_FIELDS = 32;
 
 struct CameraField {
     u8  id = 0;
@@ -336,6 +346,19 @@ struct SideTexture {
 
 void encode_side_texture(ByteWriter& w, const SideTexture& t) noexcept;
 bool decode_side_texture(ByteReader& r, SideTexture& out) noexcept;
+
+// When a cue change lands (docs/protocol.md §11.1): on the next bar of what is
+// playing, when its loop ends, or at once.
+enum class MusicAt : u8 { NextBar = 0, LoopEnd = 1, Now = 2 };
+
+struct MusicCue {
+    UiText  cue{};          // a cue name from the map's music manifest
+    u16     fade_ms = 800;
+    MusicAt at = MusicAt::NextBar;
+};
+
+void encode_music_cue(ByteWriter& w, const MusicCue& m) noexcept;
+bool decode_music_cue(ByteReader& r, MusicCue& out) noexcept;
 
 struct UiEvent {
     u32 ui_id = 0;

@@ -19,6 +19,7 @@ export const MSG = {
   UI_SET: 0x23,
   CAMERA_SET: 0x24,
   SIDE_TEXTURE: 0x25,
+  MUSIC: 0x26,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -48,8 +49,16 @@ export const BUTTON = {
 // by NAME rather than by a number repeated in two files.
 export const CAMERA_FIELD = [
   'distance', 'pitch', 'smoothing', 'maxAccel',
-  'lead', 'leadSmoothing', 'deadzoneX', 'deadzoneY'
+  'lead', 'leadSmoothing', 'deadzoneX', 'deadzoneY',
+  'yaw', 'lockYaw', 'lockZoom'
 ]
+
+// The cap on fields in ONE CameraSet, mirroring proto/messages.hpp. Not the
+// number of field ids there can be -- an id is a u8 and an unknown one is
+// skipped, which is how a newer server talks to this client. Over-cap is a
+// different thing and is refused outright: the count is a length, and a length
+// this reader trusted would be a length an attacker picks.
+export const CAMERA_MAX_FIELDS = 32
 
 export const UI_KIND = {
   LABEL: 0, BUTTON: 1, SLIDER: 2, SELECT: 3, TOGGLE: 4
@@ -278,7 +287,7 @@ export function decodeControlMessage (buf) {
   // remember the scale.
   if (type === MSG.CAMERA_SET) {
     const count = r.u16()
-    if (!r.ok || count > 16) return null
+    if (!r.ok || count > CAMERA_MAX_FIELDS) return null
     const fields = []
     for (let i = 0; i < count; i++) {
       const id = r.u8()
@@ -298,6 +307,19 @@ export function decodeControlMessage (buf) {
     const b = r.bytes(n)
     if (b === null) return null
     return { type, side, field, name: new TextDecoder().decode(b) }
+  }
+
+  // The map's music changes cue (docs/protocol.md §11.1). A name: the client
+  // owns the manifest that maps it to a track.
+  if (type === MSG.MUSIC) {
+    const n = r.u16()
+    if (!r.ok || n > UI_MAX_TEXT) return null
+    const b = r.bytes(n)
+    if (b === null) return null
+    const fadeMs = r.u16()
+    const at = r.u8()
+    if (!r.ok || at > 2) return null
+    return { type, cue: new TextDecoder().decode(b), fadeMs, at: ['nextBar', 'loopEnd', 'immediate'][at] }
   }
 
   // One widget's value, in a panel already on screen (docs/protocol.md §11.1).
