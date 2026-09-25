@@ -47,6 +47,11 @@
 --   "state"   the name of a state in the same mob
 --   "mob"     the name of a mob in the same file
 --   "missile" the name of a missile in the same file
+--   "prop"    the name of a record in assets/props.txt. NOT checked by the
+--             loader, which never opens the catalogue -- that is the editor's
+--             to answer, because the editor is what holds it. `mob` and
+--             `missile` are checked precisely because they are defined in
+--             this same table and a wrong name is knowable here.
 --   "var"     the name of a per-mob variable
 --   "actions" a nested action list
 --
@@ -146,6 +151,12 @@ mob_vocab = {
     { name = "ticks", type = "int", optional = true,
       doc = "How long the state lasts. Absent means until a transition fires " ..
             "-- which is what `chase` wants and what an attack does not." },
+    { name = "ticks_jitter", type = "int", optional = true,
+      doc = "Up to this many EXTRA ticks, rolled on entry. A room of monsters " ..
+            "entering the same state on the same tick leaves it on the same " ..
+            "tick and moves as one animal, which reads as a bug even when " ..
+            "every one of them is behaving. Needs `ticks`; without one there " ..
+            "is no duration to lengthen." },
     { name = "next", type = "state", optional = true,
       doc = "Where it goes when `ticks` runs out. Absent with `ticks` set is " ..
             "a state that ends and stays, which the loader refuses." },
@@ -241,6 +252,113 @@ mob_vocab = {
 
     { name = "grounded", args = {} },
 
+    -- ---------------------------------------------------------- proximity
+    --
+    -- WHAT ELSE IS NEAR, which until these existed a mob could not ask at all.
+    -- A target was always the nearest PLAYER -- that was the only acquisition
+    -- path in the runtime -- so a monster could not guard an object, could not
+    -- notice its own kind, and could only fight another monster by being shot
+    -- by it first.
+    --
+    -- Distance is PLAN distance squared, like `target_within` and for the same
+    -- reason: a cacodemon above you is still near you, and a square root per
+    -- mob per think is work for an answer nobody reads.
+
+    { name = "mob_within",
+      args = { { name = "distance", type = "fx" },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind. Absent means any mob at all." },
+               { name = "alive", type = "bool", optional = true,
+                 doc = "Default true. False finds corpses, which is what a " ..
+                       "resurrector wants to look for before it commits to " ..
+                       "the animation." } },
+      doc = "Another mob is within reach. Itself never counts." },
+
+    { name = "prop_within",
+      args = { { name = "distance", type = "fx" },
+               { name = "prop", type = "prop", optional = true,
+                 doc = "Only this catalogue record. Absent means any prop." } },
+      doc = "A prop is within reach -- a barrel to shoot, a totem to guard, a " ..
+            "key somebody dropped. Props are not mobs and have no graph; this " ..
+            "is how a brain notices the furniture." },
+
+    { name = "count_within",
+      args = { { name = "distance", type = "fx" },
+               { name = "at_least", type = "int" },
+               { name = "mob", type = "mob", optional = true } },
+      doc = "At least this many mobs of that kind are within reach. A monster " ..
+            "that only charges in a group, or one that panics alone." },
+
+    -- --------------------------------------------------- the costly three
+    --
+    -- Each of these asks the ENGINE something rather than reading a number a
+    -- mob already has: a path search, a ray, a height comparison. `can_reach`
+    -- and `ally_in_front` belong behind a cheaper condition in the same
+    -- `when`, the way `target_visible` already does -- conditions evaluate in
+    -- declaration order and stop at the first false, which is why the order
+    -- in a transition is worth thinking about.
+
+    { name = "can_reach",
+      args = {},
+      doc = "A route to the target exists for a body this size. A monster " ..
+            "that cannot get to you should give up and do something else " ..
+            "rather than press into the wall between you forever -- which is " ..
+            "what `move = chase` does, indefinitely, with nothing reporting " ..
+            "it.\n" ..
+            "COSTS AN A* and the engine refuses past sixty-four a tick, so a " ..
+            "level of monsters all asking on the same tick would have most of " ..
+            "them silently answered no. Put a `target_within` in front of it " ..
+            "and a `cooldown_ready` beside it." },
+
+    { name = "ally_in_front",
+      args = { { name = "arc", type = "int", optional = true,
+                 doc = "Degrees either side of facing. Default 12 -- the " ..
+                       "width a shot actually occupies, not a field of view." },
+               { name = "distance", type = "fx", optional = true,
+                 doc = "How far to look. Default the mob's own sight." },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind counts as an ally. Absent means any " ..
+                       "mob, which is usually what is meant." } },
+      doc = "Another mob is standing in the line this one would shoot along. " ..
+            "In Doom hitting it is a FEATURE -- infighting is most of what " ..
+            "makes a crowded room interesting -- so this is not wired in " ..
+            "anywhere by default. It is here for everything that is not Doom, " ..
+            "where a squad that shoots its own back is a bug." },
+
+    { name = "target_above",
+      args = { { name = "by", type = "fx", optional = true,
+                 doc = "How much higher it has to be. Default zero." } },
+      doc = "The target's feet are above this mob's by at least `by`. A flyer " ..
+            "matching height, or a melee monster declining to swing at " ..
+            "somebody on a balcony -- reach is a 3D question and " ..
+            "`target_within` deliberately is not." },
+
+    { name = "target_below",
+      args = { { name = "by", type = "fx", optional = true } },
+      doc = "The other way round." },
+
+    { name = "stuck",
+      args = { { name = "ticks", type = "int", optional = true,
+                 doc = "How long it must have been getting nowhere. Default " ..
+                       "16 -- two of its own decisions." } },
+      doc = "It has been trying to move and has not. The classic monster " ..
+            "grinding into a corner -- pathing gets it near, geometry stops " ..
+            "it, and nothing in the graph can tell, because `move = chase` " ..
+            "looks identical whether it is working or not.\n" ..
+            "ONE NUMBER, and the distance is not a second: the runtime keeps " ..
+            "an anchor and moves it whenever the body gets a quarter unit " ..
+            "away, so `ticks` is how long that anchor has stood still. The " ..
+            "first version took a distance too and could never be true -- the " ..
+            "anchor was rewritten every think, so the window it measured was " ..
+            "always exactly one think long." },
+
+    { name = "target_is",
+      args = { { name = "kind", type = "enum",
+                 values = { "player", "mob", "prop" } } },
+      doc = "What it is currently hunting. Since `target_nearest` can point a " ..
+            "mob at something that is not a player, a graph that cares has to " ..
+            "be able to ask." },
+
     { name = "hurt_by_mob",
       args = {},
       doc = "What hurt it was another mob, not a player. The infighting edge." },
@@ -306,8 +424,10 @@ mob_vocab = {
     { name = "impulse",
       args = { { name = "speed", type = "fx" },
                { name = "towards", type = "enum", optional = true,
-                 values = { "target", "facing", "away" } },
-               { name = "vertical", type = "fx", optional = true } },
+                 values = { "target", "facing", "away", "random" } },
+               { name = "vertical", type = "fx", optional = true },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Degrees of random slop on the direction." } },
       doc = "A shove, in world units per second. A lost soul's charge, a leap." },
 
     { name = "spawn",
@@ -317,7 +437,12 @@ mob_vocab = {
                  doc = "Refuse if this many of that kind are already alive " ..
                        "and owned by this one. A pain elemental without a " ..
                        "budget fills the entity table." },
-               { name = "offset", type = "fx", optional = true } } },
+               { name = "offset", type = "fx", optional = true },
+               { name = "jitter", type = "fx", optional = true,
+                 doc = "Scatter each child within this radius. A spawner " ..
+                       "without one stacks its brood on a single point, where " ..
+                       "they spend their first second pushing each other " ..
+                       "apart." } } },
 
     { name = "revive",
       args = { { name = "radius", type = "fx" },
@@ -341,8 +466,21 @@ mob_vocab = {
       args = { { name = "var", type = "var" }, { name = "by", type = "int" } } },
 
     { name = "set_cooldown",
-      args = { { name = "var", type = "var" }, { name = "ticks", type = "int" } },
+      args = { { name = "var", type = "var" }, { name = "ticks", type = "int" },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Up to this many extra ticks, rolled here. Two " ..
+                       "monsters that started together stop firing in " ..
+                       "unison." } },
       doc = "Writes tick + ticks into the var, for `cooldown_ready` to read." },
+
+    { name = "var_random",
+      args = { { name = "var", type = "var" },
+               { name = "min", type = "int" },
+               { name = "max", type = "int" } },
+      doc = "Roll a number into a variable, inclusive at both ends. With " ..
+            "`var_at_least` this is weighted branching, which a single " ..
+            "`chance` cannot express: roll once, then let several transitions " ..
+            "read the same roll rather than each rolling its own." },
 
     { name = "goto",
       args = { { name = "state", type = "state" } },
@@ -350,13 +488,48 @@ mob_vocab = {
 
     { name = "face",
       args = { { name = "towards", type = "enum", optional = true,
-                 values = { "target", "movement" } } },
+                 values = { "target", "movement", "away", "angle", "var" } },
+               { name = "angle", type = "int", optional = true,
+                 doc = "Degrees, an ABSOLUTE world heading, for " ..
+                       "`towards = angle`. 0 is +x and it counts " ..
+                       "anticlockwise, which is what dnp.atan2 answers in." },
+               { name = "var", type = "var", optional = true,
+                 doc = "A per-mob variable holding a heading, for " ..
+                       "`towards = var`. Written by `set_angle`, which is how " ..
+                       "a mob turns to something it worked out earlier." },
+               { name = "offset", type = "int", optional = true,
+                 doc = "Degrees added after, signed. `towards = target` with " ..
+                       "an offset of 90 is a monster sidling across your " ..
+                       "front rather than walking into it." },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Degrees of random slop either side, added last. Draws " ..
+                       "once, off the world's own stream, exactly as " ..
+                       "`chance` does -- so it replays." } },
       -- NOT `at`. A sequence entry's own `at` is the tick it fires on, and an
       -- action argument by the same name is unreachable -- the checker caught
       -- this the first time it ran, which is the argument for having it.
       doc = "Turn to face, once, at this instant. Doom's A_FaceTarget, and " ..
             "the reason a monster's shot goes where you are rather than " ..
             "where you were when it started winding up." },
+
+    { name = "set_angle",
+      args = { { name = "var", type = "var" },
+               { name = "towards", type = "enum", optional = true,
+                 values = { "target", "facing", "away", "random", "angle" } },
+               { name = "angle", type = "int", optional = true,
+                 doc = "Degrees, for `towards = angle`." },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Degrees of random slop either side." } },
+      doc = "Work out a heading and keep it in a variable, for `face` and for " ..
+            "`move = \"wander\"` to read.\n" ..
+            "AN ANGLE IS A NUMBER, so it lives in the same per-mob variables " ..
+            "everything else does rather than in a second kind of storage: a " ..
+            "turn is 2^32 and that is exact in a double, which is why brad " ..
+            "are plain Lua numbers here and `homing` on a missile is an int.\n" ..
+            "`towards = random` is the one that makes wandering wander. " ..
+            "Without it `move = \"wander\"` reads a heading nothing ever " ..
+            "wrote and walks straight at the aim -- which it did, silently, " ..
+            "for as long as the mode has existed." },
 
     { name = "set_param",
       args = { { name = "param", type = "string" },
@@ -385,6 +558,66 @@ mob_vocab = {
       doc = "Override the state's own `anim` mid-sequence." },
 
     { name = "despawn", args = {} },
+
+    -- --------------------------------------------------------- targeting
+    --
+    -- A TARGET IS WHATEVER IT CHOSE, not "the nearest player". That sentence is
+    -- the whole point of these three: the runtime's own acquisition still
+    -- finds the nearest player when a mob has none, which is what every Doom
+    -- monster wants, and these are how anything else says otherwise.
+
+    { name = "target_nearest",
+      args = { { name = "of", type = "enum", optional = true,
+                 values = { "player", "mob", "prop", "any" },
+                 doc = "Default 'player', which is what the runtime does on " ..
+                       "its own." },
+               { name = "distance", type = "fx", optional = true,
+                 doc = "How far to look. Absent means the mob's own `sight`." },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind, when looking for a mob." },
+               { name = "prop", type = "prop", optional = true,
+                 doc = "Only this record, when looking for a prop." },
+               { name = "visible", type = "bool", optional = true,
+                 doc = "Require a clear ray. Costs one per candidate, so put " ..
+                       "a `distance` on it." } },
+      doc = "Point this mob at the nearest thing that matches, or at nothing " ..
+            "if none does." },
+
+    { name = "target_attacker",
+      args = {},
+      doc = "Turn on whatever last hurt it. The mob-level `infighting` field " ..
+            "does this automatically and unconditionally; this is how a graph " ..
+            "decides for itself -- retaliate only below half health, or only " ..
+            "when the attacker is closer than what it is already chasing." },
+
+    { name = "wake",
+      args = { { name = "radius", type = "fx", optional = true,
+                 doc = "Wake every dormant mob within this far as well. " ..
+                       "Absent wakes only itself." },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind, when a radius is given." } },
+      doc = "Stop being dormant. `dormant` is set when a mob is placed and " ..
+            "until now nothing could change it -- so an ambush was a room of " ..
+            "monsters that either all started awake or never woke at all." },
+
+    { name = "sleep",
+      args = {},
+      doc = "Go dormant: no decisions, no movement, no cost beyond existing. " ..
+            "What a spawner's children do until the fight reaches them." },
+
+    { name = "alert_nearby",
+      args = { { name = "radius", type = "fx" },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind. Absent means any." } },
+      doc = "Hand this mob's target to everything near it, waking what is " ..
+            "dormant. Doom's noise propagation, which is most of why a room " ..
+            "reacts as a room -- without it a mob only ever learns about you " ..
+            "by seeing you itself." },
+
+    { name = "target_none",
+      args = {},
+      doc = "Forget the current target. `has_target` is then false and the " ..
+            "runtime will acquire again on a later think." },
 
     { name = "lua",
       args = { { name = "code", type = "string", one_of = "body", optional = true },
