@@ -211,6 +211,14 @@ void enter(MobRuntime& rt, sim::World& w, Mob& m, i32 state, u32 tick) {
     }
     m.state = static_cast<i16>(state);
     m.entered = tick;
+    // HOW LONG THIS TIME. Rolled here because `enter` is the one place every
+    // way into a state passes through -- a transition, a goto, hurt sending it
+    // to pain, revive putting it back -- and a roll made anywhere else would
+    // be made a different number of times than the Lua makes it.
+    m.state_ticks = st.ticks;
+    if (st.ticks >= 0 && st.ticks_jitter >= 0 && rt.rng) {
+        m.state_ticks = st.ticks + random_range(*rt.rng, 0, st.ticks_jitter);
+    }
     m.seq_i = 0;
     set_anim(w, m, st.anim);
     if (st.solid >= 0) w.agent_mut(m.entity).solid = st.solid != 0;
@@ -392,10 +400,18 @@ bool run_due(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
         case Act::AddVar:
             if (e.var >= 0 && vars) vars[e.var] += e.i;
             break;
-        case Act::SetCooldown:
+        case Act::SetCooldown: {
             // An absolute tick, so a mob nobody is near is not paying to tick
             // one down.
-            if (e.var >= 0 && vars) vars[e.var] = static_cast<i32>(tick) + e.i;
+            i32 t = e.i;
+            if (e.jitter >= 0 && rt.rng) t += random_range(*rt.rng, 0, e.jitter);
+            if (e.var >= 0 && vars) vars[e.var] = static_cast<i32>(tick) + t;
+            break;
+        }
+        case Act::VarRandom:
+            if (e.var >= 0 && vars && rt.rng) {
+                vars[e.var] = random_range(*rt.rng, e.i, e.offset);
+            }
             break;
         case Act::SetAnim:
             set_anim(w, m, e.i);
@@ -477,7 +493,8 @@ void think(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
         }
     }
 
-    if (st.ticks >= 0 && static_cast<i64>(tick) - static_cast<i64>(m.entered) >= st.ticks) {
+    if (m.state_ticks >= 0 &&
+        static_cast<i64>(tick) - static_cast<i64>(m.entered) >= m.state_ticks) {
         enter(rt, w, m, st.next, tick);
     }
 }

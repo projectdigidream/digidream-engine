@@ -96,13 +96,20 @@
           "values": [
             "target",
             "facing",
-            "away"
+            "away",
+            "random"
           ]
         },
         {
           "name": "vertical",
           "optional": true,
           "type": "fx"
+        },
+        {
+          "doc": "Degrees of random slop on the direction.",
+          "name": "jitter",
+          "optional": true,
+          "type": "int"
         }
       ],
       "doc": "A shove, in world units per second. A lost soul's charge, a leap.",
@@ -127,6 +134,12 @@
         },
         {
           "name": "offset",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "Scatter each child within this radius. A spawner without one stacks its brood on a single point, where they spend their first second pushing each other apart.",
+          "name": "jitter",
           "optional": true,
           "type": "fx"
         }
@@ -208,10 +221,34 @@
         {
           "name": "ticks",
           "type": "int"
+        },
+        {
+          "doc": "Up to this many extra ticks, rolled here. Two monsters that started together stop firing in unison.",
+          "name": "jitter",
+          "optional": true,
+          "type": "int"
         }
       ],
       "doc": "Writes tick + ticks into the var, for `cooldown_ready` to read.",
       "name": "set_cooldown"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "min",
+          "type": "int"
+        },
+        {
+          "name": "max",
+          "type": "int"
+        }
+      ],
+      "doc": "Roll a number into a variable, inclusive at both ends. With `var_at_least` this is weighted branching, which a single `chance` cannot express: roll once, then let several transitions read the same roll rather than each rolling its own.",
+      "name": "var_random"
     },
     {
       "args": [
@@ -848,6 +885,12 @@
     {
       "doc": "How long the state lasts. Absent means until a transition fires -- which is what `chase` wants and what an attack does not.",
       "name": "ticks",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Up to this many EXTRA ticks, rolled on entry. A room of monsters entering the same state on the same tick leaves it on the same tick and moves as one animal, which reads as a bug even when every one of them is behaving. Needs `ticks`; without one there is no duration to lengthen.",
+      "name": "ticks_jitter",
       "optional": true,
       "type": "int"
     },

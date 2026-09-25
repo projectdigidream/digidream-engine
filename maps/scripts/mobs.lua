@@ -757,6 +757,15 @@ local function enter(m, name, tick)
   local st = m.def.states[name]
   if st == nil then return end
   m.state, m.st, m.entered = name, st, tick
+  -- HOW LONG THIS TIME. Rolled here rather than read in `think`, because
+  -- `enter` is the one place every way into a state passes through -- a
+  -- transition, a `goto`, `hurt` sending it to pain, `revive` putting it back
+  -- -- and a roll made anywhere else would be made a different number of times
+  -- in the two runtimes.
+  m.state_ticks = st.ticks
+  if st.ticks ~= nil and st.ticks_jitter then
+    m.state_ticks = st.ticks + dnp.random(0, st.ticks_jitter)
+  end
   m.seq_i = 1
   set_anim(m, st.anim)
   if st.solid ~= nil and m.e:valid() then m.e:set_solid(st.solid) end
@@ -1104,6 +1113,11 @@ function acts.impulse(m, a)
     ang = aim_at(m.e:pos(), m.target:pos())
   elseif towards == "away" then
     ang = ang + 2147483648
+  elseif towards == "random" then
+    ang = dnp.random(0, 359) * 4294967296 / 360
+  end
+  if a.jitter then
+    ang = ang + math.floor(dnp.random(-a.jitter, a.jitter) * 4294967296 / 360)
   end
   ang = wrap_brad(ang)
   local d = dnp.dir(ang)
@@ -1126,8 +1140,17 @@ function acts.spawn(m, a)
   local d = dnp.dir(m.aim or 0)
   local off = a.offset or ZERO
   for _ = 1, (a.count or 1) do
+    -- SCATTERED, per child, when asked. An angle and a distance, which is two
+    -- draws -- stated because the count is the thing that has to match if this
+    -- ever moves into the C++ loop.
+    local jx, jy = ZERO, ZERO
+    if a.jitter then
+      local jd = dnp.dir(dnp.random(0, 359) * 4294967296 / 360)
+      local frac = fx.frac(dnp.random(0, 100), 100)
+      jx, jy = jd.x * a.jitter * frac, jd.y * a.jitter * frac
+    end
     local child = M.spawn(a.mob,
-      vec3.new(p.x + d.x * off, p.y + d.y * off, p.z))
+      vec3.new(p.x + d.x * off + jx, p.y + d.y * off + jy, p.z))
     if child ~= nil and limit ~= nil then
       m.brood = m.brood or {}
       m.brood[#m.brood + 1] = child
@@ -1192,7 +1215,18 @@ end
 
 function acts.set_var(m, a)     m.vars[a.var] = a.value end
 function acts.add_var(m, a)     m.vars[a.var] = (m.vars[a.var] or 0) + a.by end
-function acts.set_cooldown(m, a) m.vars[a.var] = dnp.tick() + a.ticks end
+function acts.set_cooldown(m, a)
+  local t = a.ticks
+  -- ONE DRAW whenever the graph carries a jitter at all, even for zero -- the
+  -- two runtimes share a stream and a draw one makes and the other skips moves
+  -- every later one.
+  if a.jitter then t = t + dnp.random(0, a.jitter) end
+  m.vars[a.var] = dnp.tick() + t
+end
+
+function acts.var_random(m, a)
+  m.vars[a.var] = dnp.random(a.min, a.max)
+end
 function acts.set_anim(m, a)    set_anim(m, a.anim) end
 function acts.despawn(m)        if m.e:valid() then m.e:despawn() end end
 
@@ -1733,7 +1767,7 @@ local function think(m, tick)
     end
   end
 
-  if st.ticks ~= nil and tick - m.entered >= st.ticks then
+  if m.state_ticks ~= nil and tick - m.entered >= m.state_ticks then
     enter(m, st.next, tick)
     return
   end

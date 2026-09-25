@@ -54,6 +54,9 @@ struct Mob {
     u32  hurt_at = 0;
 
     i32  anim = -1;
+    // How long THIS entry of the current state lasts: `ticks` plus whatever
+    // `ticks_jitter` rolled on the way in. -1 for a state with no timeout.
+    i32  state_ticks = -1;
 
     // The last input actually written. set_move is sticky -- the engine keeps
     // applying the last frame -- so an unchanged decision must NOT be resent:

@@ -121,6 +121,7 @@ enum class Act : u8 {
     Goto,
     Face,
     SetAngle,
+    VarRandom,
     // Everything else: handed to Lua by its index in the state's `sequence`.
     Lua,
 };
@@ -158,6 +159,9 @@ struct State {
     Face face = Face::Target;
     i8   solid = -1;        // -1 unset, 0 false, 1 true
     i32  ticks = -1;        // -1 for "no timeout"
+    // Extra ticks, rolled on entry. -1 for absent, which is NOT zero: both
+    // runtimes draw exactly when the graph carries the field.
+    i32  ticks_jitter = -1;
     i16  next = -1;
     u16  first_trans = 0, trans_count = 0;
     u16  first_seq = 0, seq_count = 0;

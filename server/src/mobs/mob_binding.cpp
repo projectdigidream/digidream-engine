@@ -247,7 +247,7 @@ int l_mobs_graph(lua_State* L) {
             // compile-time check is cheaper than a test run.
             static const char* const ACT_NAME[] = {
                 "set_var", "add_var", "set_cooldown", "set_anim", "goto", "face",
-                "set_angle", "lua",
+                "set_angle", "var_random", "lua",
             };
             static_assert(sizeof(ACT_NAME) / sizeof(ACT_NAME[0]) ==
                               static_cast<size_t>(Act::Lua) + 1,

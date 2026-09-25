@@ -151,6 +151,12 @@ mob_vocab = {
     { name = "ticks", type = "int", optional = true,
       doc = "How long the state lasts. Absent means until a transition fires " ..
             "-- which is what `chase` wants and what an attack does not." },
+    { name = "ticks_jitter", type = "int", optional = true,
+      doc = "Up to this many EXTRA ticks, rolled on entry. A room of monsters " ..
+            "entering the same state on the same tick leaves it on the same " ..
+            "tick and moves as one animal, which reads as a bug even when " ..
+            "every one of them is behaving. Needs `ticks`; without one there " ..
+            "is no duration to lengthen." },
     { name = "next", type = "state", optional = true,
       doc = "Where it goes when `ticks` runs out. Absent with `ticks` set is " ..
             "a state that ends and stays, which the loader refuses." },
@@ -355,8 +361,10 @@ mob_vocab = {
     { name = "impulse",
       args = { { name = "speed", type = "fx" },
                { name = "towards", type = "enum", optional = true,
-                 values = { "target", "facing", "away" } },
-               { name = "vertical", type = "fx", optional = true } },
+                 values = { "target", "facing", "away", "random" } },
+               { name = "vertical", type = "fx", optional = true },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Degrees of random slop on the direction." } },
       doc = "A shove, in world units per second. A lost soul's charge, a leap." },
 
     { name = "spawn",
@@ -366,7 +374,12 @@ mob_vocab = {
                  doc = "Refuse if this many of that kind are already alive " ..
                        "and owned by this one. A pain elemental without a " ..
                        "budget fills the entity table." },
-               { name = "offset", type = "fx", optional = true } } },
+               { name = "offset", type = "fx", optional = true },
+               { name = "jitter", type = "fx", optional = true,
+                 doc = "Scatter each child within this radius. A spawner " ..
+                       "without one stacks its brood on a single point, where " ..
+                       "they spend their first second pushing each other " ..
+                       "apart." } } },
 
     { name = "revive",
       args = { { name = "radius", type = "fx" },
@@ -390,8 +403,21 @@ mob_vocab = {
       args = { { name = "var", type = "var" }, { name = "by", type = "int" } } },
 
     { name = "set_cooldown",
-      args = { { name = "var", type = "var" }, { name = "ticks", type = "int" } },
+      args = { { name = "var", type = "var" }, { name = "ticks", type = "int" },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Up to this many extra ticks, rolled here. Two " ..
+                       "monsters that started together stop firing in " ..
+                       "unison." } },
       doc = "Writes tick + ticks into the var, for `cooldown_ready` to read." },
+
+    { name = "var_random",
+      args = { { name = "var", type = "var" },
+               { name = "min", type = "int" },
+               { name = "max", type = "int" } },
+      doc = "Roll a number into a variable, inclusive at both ends. With " ..
+            "`var_at_least` this is weighted branching, which a single " ..
+            "`chance` cannot express: roll once, then let several transitions " ..
+            "read the same roll rather than each rolling its own." },
 
     { name = "goto",
       args = { { name = "state", type = "state" } },

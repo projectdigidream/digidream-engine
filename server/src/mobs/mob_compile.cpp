@@ -250,6 +250,7 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
 
         st.anim = opt_int(L, st_idx, "anim", -1);
         st.ticks = opt_int(L, st_idx, "ticks", -1);
+        st.ticks_jitter = opt_int(L, st_idx, "ticks_jitter", -1);
         {
             size_t n = 0;
             const char* s = opt_str(L, st_idx, "move", n);
@@ -299,6 +300,7 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                         else if (streq(act, n, "set_anim"))     se.id = Act::SetAnim;
                         else if (streq(act, n, "face"))         se.id = Act::Face;
                         else if (streq(act, n, "set_angle"))    se.id = Act::SetAngle;
+                        else if (streq(act, n, "var_random"))   se.id = Act::VarRandom;
                         // THE ESCAPE HATCH GOES TO THE SLOW PATH, whole.
                         // `lua` may write anything -- a mob's vars, its aim,
                         // its state -- and this runtime owns all three. Running
@@ -341,6 +343,17 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                             }
                             break;
                         }
+                        case Act::VarRandom: {
+                            size_t vn = 0;
+                            const char* v = opt_str(L, e, "var", vn);
+                            if (v != nullptr) {
+                                se.var = static_cast<i16>(g.var_slot(k, v, vn));
+                                lua_pop(L, 1);
+                            }
+                            se.i = opt_int(L, e, "min", 0);
+                            se.offset = opt_int(L, e, "max", 0);   // the other end
+                            break;
+                        }
                         case Act::SetVar:
                         case Act::AddVar:
                         case Act::SetCooldown: {
@@ -356,6 +369,7 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                             se.i = opt_int(L, e, "value",
                                    opt_int(L, e, "by",
                                    opt_int(L, e, "ticks", 0)));
+                            se.jitter = opt_int(L, e, "jitter", -1);
                             break;
                         }
                         case Act::SetAnim:

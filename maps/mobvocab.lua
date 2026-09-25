@@ -84,6 +84,8 @@ mobs.load{
             { to = 'circle', when = { { cond = 'mob_within', distance = '6',
                                         mob = 'dervish' },
                                       { cond = 'chance', percent = 35 } } },
+            -- The rolled variable, read rather than re-rolled.
+            { to = 'roam',   when = { { cond = 'var_at_least', var = 'mood', value = 7 } } },
           },
         },
 
@@ -102,7 +104,7 @@ mobs.load{
           sequence = {
             { at = 0, action = 'face', towards = 'target', jitter = 4 },
             { at = 6, action = 'hitscan', damage = 4, range = '20', spread = 3 },
-            { at = 10, action = 'set_cooldown', var = 'ready', ticks = 45 },
+            { at = 10, action = 'set_cooldown', var = 'ready', ticks = 45, jitter = 20 },
             { at = 14, action = 'set_angle', var = 'wander', towards = 'away' },
           },
         },
@@ -110,11 +112,21 @@ mobs.load{
         -- The two states the proximity conditions lead to, so the decision
         -- trace names which condition fired.
         huddle = {
-          anim = 1, move = 'strafe', face = 'target', ticks = 16, next = 'stalk',
-          sequence = { { at = 0, action = 'add_var', var = 'mood', by = 1 } },
+          -- A jittered duration, so three monsters that entered together do
+          -- not leave together and move as one animal.
+          anim = 1, move = 'strafe', face = 'target',
+          ticks = 16, ticks_jitter = 12, next = 'stalk',
+          sequence = {
+            { at = 0, action = 'add_var', var = 'mood', by = 1 },
+            -- ONE ROLL, read by two edges below. A `chance` on each would be
+            -- two rolls and two independent answers, which is a different
+            -- behaviour and not an equivalent one.
+            { at = 1, action = 'var_random', var = 'mood', min = 0, max = 9 },
+          },
         },
         guard = {
-          anim = 1, move = 'chase', face = 'target', ticks = 20, next = 'stalk',
+          anim = 1, move = 'chase', face = 'target',
+          ticks = 20, ticks_jitter = 10, next = 'stalk',
           sequence = { { at = 0, action = 'set_angle', var = 'wander',
                          towards = 'away', jitter = 30 } },
         },
