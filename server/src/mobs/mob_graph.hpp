@@ -192,6 +192,23 @@ struct Kind {
     bool supported() const { return unsupported.empty(); }
 };
 
+// Which runtime runs a vocabulary name.
+//
+// `Undeclared` is the one that matters: a name the C++ chain does not match
+// AND that is not in its declared Lua column. That is a vocabulary entry
+// nobody told this subsystem about, and without a word for it the only symptom
+// is every kind using it quietly dropping to the Lua path.
+enum class RunsIn : u8 { Cpp, Lua, Undeclared };
+
+// `why` is filled only for Lua, and points into static storage.
+RunsIn runs_in_cond(const char* name, size_t n, const char** why);
+RunsIn runs_in_action(const char* name, size_t n, const char** why);
+
+// The classifiers themselves, so a caller asking "which runtime" asks the same
+// function compile_kind asks rather than a copy of it.
+Cond cond_by_name(const char* s, size_t n);
+Act  act_by_name(const char* s, size_t n);
+
 // The compiled graph for one level's mobs.
 //
 // Flat arrays with ranges into them, because a think walks them and a tree of

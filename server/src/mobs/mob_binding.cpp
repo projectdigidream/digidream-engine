@@ -173,11 +173,29 @@ int l_mobs_graph(lua_State* L) {
     if (ki < 0) { lua_pushnil(L); return 1; }
     const Kind& k = g.kinds[static_cast<u32>(ki)];
 
+    // In Cond's own order, and the assert is why.
+    //
+    // This table was left at fourteen entries while Cond grew to twenty-two,
+    // so `mob_within` reported as "unsupported" and everything after it read
+    // PAST THE END and pushed a garbage pointer into Lua. Latent only because
+    // the one caller loads maps/mobs/doom_monsters.lua, whose monsters use no
+    // condition past index twelve -- maps/mobvocab.lua uses eight of the
+    // affected ones and never comes through here.
+    //
+    // ACT_NAME got this assert when the same thing happened to it one commit
+    // earlier. COND_NAME did not, which is the whole argument for adding it to
+    // both at once rather than to the one that just bit.
     static const char* const COND_NAME[] = {
         "has_target", "target_within", "target_visible", "target_in_front",
         "hp_below", "state_elapsed", "chance", "var_at_least", "var_is",
-        "cooldown_ready", "grounded", "was_hurt", "hurt_by_mob", "unsupported",
+        "cooldown_ready", "grounded", "was_hurt", "hurt_by_mob",
+        "mob_within", "prop_within", "count_within", "stuck",
+        "can_reach", "ally_in_front", "target_above", "target_below",
+        "unsupported",
     };
+    static_assert(sizeof(COND_NAME) / sizeof(COND_NAME[0]) ==
+                      static_cast<size_t>(Cond::Unsupported) + 1,
+                  "COND_NAME must name every Cond, in order");
     static const char* const MOVE_NAME[] = {
         "stop", "chase", "flee", "strafe", "wander", "free",
     };
@@ -435,7 +453,48 @@ int l_mobs_stats(lua_State* L) {
     return 4;
 }
 
+// dnp.mobs_runs_in("cond"|"action", name) -> "cpp" | "lua" | nil, why
+//
+// FOR THE TEST, like mobs_graph, and for the same reason: the claim that the
+// vocabulary and this subsystem know the same names is worth what the ability
+// to ask is worth. It calls the SAME classifier compile_kind calls -- a copy
+// here would agree with itself and prove nothing.
+//
+// nil is the answer that matters: a name the chain does not match and that is
+// not in the declared Lua column. That is a vocabulary entry nobody told this
+// file about, and its only other symptom is every kind using it quietly
+// dropping to the Lua path.
+//
+// It reads no graph. Which runtime runs a name is a property of the
+// vocabulary, not of a level, so this works before mobs_compile has ever run.
+int l_mobs_runs_in(lua_State* L) {
+    size_t wn = 0;
+    const char* what = luaL_checklstring(L, 1, &wn);
+    size_t n = 0;
+    const char* name = luaL_checklstring(L, 2, &n);
+
+    const char* why = nullptr;
+    RunsIn r;
+    if (wn == 4 && std::memcmp(what, "cond", 4) == 0) {
+        r = runs_in_cond(name, n, &why);
+    } else if (wn == 6 && std::memcmp(what, "action", 6) == 0) {
+        r = runs_in_action(name, n, &why);
+    } else {
+        // Raised rather than answered, because a typo here would classify
+        // every name as nil and the test would read as a total failure of the
+        // thing it is checking.
+        return luaL_error(L, "dnp.mobs_runs_in: expected 'cond' or 'action', got '%s'",
+                          what);
+    }
+
+    if (r == RunsIn::Undeclared) { lua_pushnil(L); return 1; }
+    lua_pushstring(L, r == RunsIn::Cpp ? "cpp" : "lua");
+    if (why) { lua_pushstring(L, why); return 2; }
+    return 1;
+}
+
 const luaL_Reg MOB_FUNCS[] = {
+    {"mobs_runs_in", l_mobs_runs_in},
     {"mobs_compile", l_mobs_compile},
     {"mobs_graph", l_mobs_graph},
     {"mobs_tick", l_mobs_tick},

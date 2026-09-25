@@ -78,10 +78,25 @@ bool streq(const char* s, size_t n, const char* lit) {
     return n == m && std::memcmp(s, lit, m) == 0;
 }
 
+}  // namespace
+
+// --- which runtime runs a name --------------------------------------------
+//
+// Two chains and one table, and the split between them is the point.
+//
+// The CHAINS say what this loop implements. The TABLE says what it
+// deliberately does not, and why. They are disjoint by construction -- a name
+// in the chain never reaches the table -- so their union either covers
+// mob_vocab.lua or it does not, and server/tests/test_mob_graph.cpp is what
+// asks. Before the table existed the fallback set was whatever the chains
+// happened to miss, which is not a statement anything can check: adding a
+// condition and forgetting this file silently dropped every kind using it onto
+// the Lua path.
+//
 // `target_is` asks what KIND of thing is being hunted, and the answer for a
-// prop is one Mob::target cannot represent -- see target_nearest below. Left
-// unsupported so a graph that asks runs in Lua, rather than answering "not a
-// prop" for a mob that is in fact chasing one.
+// prop is one Mob::target cannot represent -- see target_nearest in
+// compile_kind. Left unsupported so a graph that asks runs in Lua, rather than
+// answering "not a prop" for a mob that is in fact chasing one.
 Cond cond_by_name(const char* s, size_t n) {
     if (streq(s, n, "has_target"))     return Cond::HasTarget;
     if (streq(s, n, "target_within"))  return Cond::TargetWithin;
@@ -106,6 +121,88 @@ Cond cond_by_name(const char* s, size_t n) {
     if (streq(s, n, "target_below"))   return Cond::TargetBelow;
     return Cond::Unsupported;
 }
+
+// The eight this loop runs itself, because they write state it owns: a mob's
+// vars, its animation, its aim, which state it is in. Everything else is
+// Act::Lua and is called back through ActionSink at the tick it comes due.
+Act act_by_name(const char* s, size_t n) {
+    if (streq(s, n, "goto"))         return Act::Goto;
+    if (streq(s, n, "set_var"))      return Act::SetVar;
+    if (streq(s, n, "add_var"))      return Act::AddVar;
+    if (streq(s, n, "set_cooldown")) return Act::SetCooldown;
+    if (streq(s, n, "set_anim"))     return Act::SetAnim;
+    if (streq(s, n, "face"))         return Act::Face;
+    if (streq(s, n, "set_angle"))    return Act::SetAngle;
+    if (streq(s, n, "var_random"))   return Act::VarRandom;
+    return Act::Lua;
+}
+
+// WHAT THE CHAINS ABOVE DELIBERATELY OMIT, and why.
+//
+// Written down rather than left as "whatever did not match", because a set
+// defined by omission is not one anything can check -- and the reasons are
+// worth having next to the classifier, where the person adding a condition is
+// already typing.
+namespace {
+
+struct LuaOnly { const char* name; const char* why; };
+
+constexpr LuaOnly LUA_CONDS[] = {
+    {"lua",       "an arbitrary chunk may write anything this loop owns"},
+    {"target_is", "a prop target cannot live in Mob::target, which is an agent index"},
+};
+
+constexpr LuaOnly LUA_ACTIONS[] = {
+    {"lua",            "an arbitrary chunk may write anything this loop owns"},
+    {"hitscan",        "touches the world; rare, so one implementation is Lua's"},
+    {"missile",        "touches the world"},
+    {"damage",         "touches the world"},
+    {"melee",          "touches the world"},
+    {"impulse",        "touches the world"},
+    {"spawn",          "touches the world, and owns the brood budget"},
+    {"revive",         "reaches into another mob's state"},
+    {"damage_area",    "touches the world"},
+    {"set_param",      "goes through the effect stack"},
+    {"effect",         "goes through the effect stack"},
+    {"vfx",            "touches the world"},
+    {"despawn",        "touches the world"},
+    {"target_nearest", "may point at a prop, which Mob::target cannot hold"},
+    {"target_attacker","reads `hurt`'s record, which lives in Lua"},
+    {"target_none",    "writes through mob_set; rare, so it stays beside its pair"},
+    {"wake",           "writes `dormant` through mob_set; rare"},
+    {"sleep",          "writes `dormant` through mob_set; rare"},
+    {"alert_nearby",   "reaches into every mob near it"},
+};
+
+template <size_t N>
+const char* declared_lua(const LuaOnly (&table)[N], const char* s, size_t n) {
+    for (const LuaOnly& e : table) if (streq(s, n, e.name)) return e.why;
+    return nullptr;
+}
+
+}  // namespace
+
+RunsIn runs_in_cond(const char* s, size_t n, const char** why) {
+    if (why) *why = nullptr;
+    if (cond_by_name(s, n) != Cond::Unsupported) return RunsIn::Cpp;
+    if (const char* w = declared_lua(LUA_CONDS, s, n)) {
+        if (why) *why = w;
+        return RunsIn::Lua;
+    }
+    return RunsIn::Undeclared;
+}
+
+RunsIn runs_in_action(const char* s, size_t n, const char** why) {
+    if (why) *why = nullptr;
+    if (act_by_name(s, n) != Act::Lua) return RunsIn::Cpp;
+    if (const char* w = declared_lua(LUA_ACTIONS, s, n)) {
+        if (why) *why = w;
+        return RunsIn::Lua;
+    }
+    return RunsIn::Undeclared;
+}
+
+namespace {
 
 Move move_by_name(const char* s, size_t n) {
     if (s == nullptr) return Move::Stop;
@@ -295,23 +392,23 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                     size_t n = 0;
                     const char* act = opt_str(L, e, "action", n);
                     if (act != nullptr) {
-                        // The six the loop runs itself, because they write
-                        // state it owns. Everything else keeps Act::Lua and is
-                        // called back by `lua_index` at the tick it comes due.
-                        if (streq(act, n, "goto"))              se.id = Act::Goto;
-                        else if (streq(act, n, "set_var"))      se.id = Act::SetVar;
-                        else if (streq(act, n, "add_var"))      se.id = Act::AddVar;
-                        else if (streq(act, n, "set_cooldown")) se.id = Act::SetCooldown;
-                        else if (streq(act, n, "set_anim"))     se.id = Act::SetAnim;
-                        else if (streq(act, n, "face"))         se.id = Act::Face;
-                        else if (streq(act, n, "set_angle"))    se.id = Act::SetAngle;
-                        else if (streq(act, n, "var_random"))   se.id = Act::VarRandom;
+                        // WHICH RUNTIME RUNS IT is act_by_name's answer, and
+                        // it is asked here rather than decided here so that
+                        // the test can ask the same question of every name in
+                        // the vocabulary.
+                        se.id = act_by_name(act, n);
+
+                        // The two rules below are about the KIND rather than
+                        // the name, which is why they stay here: whether a
+                        // graph can run in this loop at all, not which
+                        // runtime performs one action.
+                        //
                         // THE ESCAPE HATCH GOES TO THE SLOW PATH, whole.
                         // `lua` may write anything -- a mob's vars, its aim,
-                        // its state -- and this runtime owns all three. Running
-                        // the kind here and letting an arbitrary chunk write
-                        // behind it would be two owners of one number.
-                        else if (streq(act, n, "lua") && k.supported()) {
+                        // its state -- and this runtime owns all three.
+                        // Running the kind here and letting an arbitrary chunk
+                        // write behind it would be two owners of one number.
+                        if (streq(act, n, "lua") && k.supported()) {
                             k.unsupported.assign("lua (action)");
                         }
                         // A PROP TARGET CANNOT LIVE HERE, and saying so is
@@ -325,6 +422,11 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                         // hunting a stranger, for reasons nothing reports. So
                         // a graph that can target a prop runs entirely in Lua,
                         // counted with the rest.
+                        //
+                        // PER ARGUMENT, not per name, which is the reason this
+                        // cannot be a field on the vocabulary entry: the same
+                        // action is fine when it hunts a player and is not
+                        // when it hunts a barrel.
                         else if (streq(act, n, "target_nearest") && k.supported()) {
                             lua_pop(L, 1);
                             size_t on = 0;

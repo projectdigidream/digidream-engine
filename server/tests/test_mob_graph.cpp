@@ -240,6 +240,48 @@ MISMATCHES = bad
 SEEN = seen
 )LUA";
 
+// EVERY NAME IN THE VOCABULARY IS ACCOUNTED FOR.
+//
+// The C++ loop implements some conditions and actions and deliberately leaves
+// the rest to Lua. Until this walk existed the second set was IMPLICIT -- it
+// was whatever the classifier's if-chain failed to match -- so adding a
+// condition to mob_vocab.lua and forgetting server/src/mobs/ silently dropped
+// every kind using it onto the Lua path. Reported at load, but only for kinds
+// that happen to use it, which on a fresh vocabulary entry is none.
+//
+// So the question asked of each name is three-valued: does the loop run it, is
+// it DECLARED as Lua's with a reason, or is it neither. Neither is the failure.
+static const char* const VOCAB_WALK = R"LUA(
+local bad, seen = {}, { conds = 0, actions = 0, cpp = 0, lua = 0 }
+local function note(fmt, ...) bad[#bad + 1] = string.format(fmt, ...) end
+
+local function walk(what, list, counter)
+  for _, entry in ipairs(list) do
+    local where, why = dnp.mobs_runs_in(what, entry.name)
+    seen[counter] = seen[counter] + 1
+    if where == nil then
+      note("%s '%s' is in the vocabulary and server/src/mobs/ has never heard " ..
+           "of it: implement it, or name it in LUA_%s with a reason",
+           what, entry.name, what == "cond" and "CONDS" or "ACTIONS")
+    elseif where == "cpp" then
+      seen.cpp = seen.cpp + 1
+    else
+      seen.lua = seen.lua + 1
+      -- A declared fallback with no reason is a line somebody will delete.
+      if why == nil or why == "" then
+        note("%s '%s' is declared Lua-only with no reason given", what, entry.name)
+      end
+    end
+  end
+end
+
+walk("cond", mob_vocab.conditions, "conds")
+walk("action", mob_vocab.actions, "actions")
+
+VOCAB_BAD = bad
+VOCAB_SEEN = seen
+)LUA";
+
 static bool run(Vm& vm, const char* chunk, const char* name) {
     lua_State* L = vm.state();
     vm.begin_tick();
@@ -396,6 +438,72 @@ int main(int argc, char** argv) {
             lua_pop(L, 1);
             std::printf("  control: one altered distance produces %d mismatch(es)\n", n2);
             CHECK(n2 > 0);
+        }
+    }
+
+    // --- every vocabulary name is accounted for -----------------------------
+    if (run(vm, VOCAB_WALK, "vocab")) {
+        lua_getglobal(L, "VOCAB_BAD");
+        const int nbad2 = static_cast<int>(lua_objlen(L, -1));
+        for (int i = 1; i <= nbad2 && i <= 20; ++i) {
+            lua_rawgeti(L, -1, i);
+            std::printf("  UNACCOUNTED %s\n", lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+        CHECK(nbad2 == 0);
+
+        const int nc = static_cast<int>(number_field(L, "VOCAB_SEEN", "conds"));
+        const int na = static_cast<int>(number_field(L, "VOCAB_SEEN", "actions"));
+        const int ncpp = static_cast<int>(number_field(L, "VOCAB_SEEN", "cpp"));
+        const int nlua = static_cast<int>(number_field(L, "VOCAB_SEEN", "lua"));
+        std::printf("  %d conditions and %d actions: %d run in C++, %d declared Lua's\n",
+                    nc, na, ncpp, nlua);
+        // FLOORS, not exact counts: adding a condition is not a regression,
+        // and a walk that silently found nothing is.
+        CHECK(nc >= 20);
+        CHECK(na >= 24);
+        CHECK(ncpp >= 25);
+        CHECK(nlua >= 15);
+
+        // THE CONTROL, FORWARDS. A name the C++ has never heard of must be
+        // reported, and exactly once -- exactly, because a walk that reports
+        // it three times is also reporting things that are fine.
+        if (run(vm, "mob_vocab.conditions[#mob_vocab.conditions + 1] = "
+                    "{ name = 'moon_is_full', args = {} }", "add-unknown") &&
+            run(vm, VOCAB_WALK, "vocab-after-add")) {
+            lua_getglobal(L, "VOCAB_BAD");
+            const int n2 = static_cast<int>(lua_objlen(L, -1));
+            bool named = false;
+            for (int i = 1; i <= n2; ++i) {
+                lua_rawgeti(L, -1, i);
+                if (std::strstr(lua_tostring(L, -1), "moon_is_full")) named = true;
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+            CHECK(n2 == 1);
+            CHECK(named);
+            std::printf("  control: an unknown condition is reported, once, by name\n");
+        }
+
+        // THE CONTROL, BACKWARDS. The declared column going stale is the
+        // direction a "does every name resolve" check cannot see: the
+        // vocabulary moves and the implementation does not.
+        if (run(vm, "for i = #mob_vocab.conditions, 1, -1 do "
+                    "  if mob_vocab.conditions[i].name == 'target_is' or "
+                    "     mob_vocab.conditions[i].name == 'moon_is_full' then "
+                    "    table.remove(mob_vocab.conditions, i) end end "
+                    "STILL = dnp.mobs_runs_in('cond', 'target_is')",
+                    "remove-declared")) {
+            lua_getglobal(L, "STILL");
+            const bool still_declared = lua_tostring(L, -1) != nullptr;
+            lua_pop(L, 1);
+            // It is still declared Lua-only here while no longer existing in
+            // the vocabulary -- which is exactly the drift worth catching, and
+            // is why the walk reports on the vocabulary rather than on the
+            // declaration.
+            CHECK(still_declared);
+            std::printf("  control: a declaration outliving its vocabulary entry is visible\n");
         }
     }
 
