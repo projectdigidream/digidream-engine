@@ -73,8 +73,56 @@ export const DEFAULTS = {
   // to stop, so a subject that teleports or is knocked back does not drag the
   // view with it instantly. This is the "acceleration" half of a camera that
   // has a speed.
-  maxAccel: 0
+  maxAccel: 0,
+
+  // --- camera paths (design §4.1) -------------------------------------------
+
+  // Which of CAM_MODE the camera is in. FOLLOW is everything above and nothing
+  // below; the rest need a path handed to update().
+  mode: 0,
+
+  // World units per second along the CURVE, for FLYTHROUGH. Signed: a negative
+  // speed rides backwards and looks backwards.
+  pathSpeed: 0,
+
+  // How near the subject must come for AUTO to grab the path, in world units.
+  // Zero disables attaching, which makes AUTO behave as FOLLOW.
+  pathAttach: 0,
+
+  // Rate per second of the crossfade between the free camera and the path.
+  // Applied as 1 - exp(-rate * dt), like `smoothing`.
+  pathBlend: 3,
+
+  // Ceiling on how fast the camera may SLIDE ALONG a path it is tracking, in
+  // units of arc per second. Without one, a subject that teleports -- or simply
+  // rounds a corner into view of a far part of the path -- moves the camera the
+  // length of the path in a single frame.
+  pathMaxRate: 40
 }
+
+// What the camera is doing with a path.
+//
+// FOLLOW is the camera this file has always been: a smoothed orbit around the
+// subject. The other three all keep that camera running underneath -- see
+// update() -- and differ only in what they do with a path on top.
+export const CAM_MODE = {
+  FOLLOW: 0,      // no path
+  TRACK: 1,       // position from the path, aim at the subject
+  FLYTHROUGH: 2,  // position AND aim from the path, at pathSpeed
+  AUTO: 3         // TRACK while the subject is near the path, FOLLOW otherwise
+}
+
+// AUTO detaches at this multiple of the radius it attaches at.
+//
+// Hysteresis is not a refinement here. A subject walking along the attach
+// boundary crosses it many times a second, and a camera that attached and
+// detached on the same number would flicker between two quite different places.
+const DETACH_RATIO = 1.5
+
+// How far ahead of itself a FLYTHROUGH looks when `lead` is not set. Only a
+// default: what matters is that it looks along the tangent rather than at the
+// subject, which is the whole difference between a flythrough and a track.
+const FLY_LOOKAHEAD = 8
 
 // The angle the world is viewed from, measured up from the horizontal.
 //
@@ -102,6 +150,21 @@ export class Camera {
     this.velocity = { x: 0, y: 0, z: 0 }
     this.lead = { x: 0, z: 0 }
     this._started = false
+
+    // --- path state ---
+    //
+    // `pathMix` is the whole anti-pop mechanism. The free solution above keeps
+    // running every frame even while the camera is on a path, and eye() blends
+    // between the two -- so a detach has somewhere continuous to go, and the
+    // spring is never perturbed by the path having been there.
+    this.pathAlong = 0
+    this.pathMix = 0
+    this.pathAttached = false
+    this.pathClamped = false
+    this._pathEye = null
+    this._pathLook = null
+    this._lastMode = CAM_MODE.FOLLOW
+    this._lastPathId = null
   }
 
   /** Jump straight to the subject, with no smoothing. Used on spawn. */
@@ -114,6 +177,17 @@ export class Camera {
       y: p.y + this.cfg.offset.y,
       z: p.z + this.cfg.offset.z
     }
+    // A snap is for a subject that TELEPORTED -- spawn, a map change, a void
+    // respawn -- so any path the camera was riding is about the old place.
+    // Note what this is NOT for: a detach. There the subject has not moved and
+    // both candidate eye positions are valid, so cutting is a visible bug and
+    // the crossfade is the answer. See the demonstration in camera.test.js.
+    this.pathMix = 0
+    this.pathAlong = 0
+    this.pathAttached = false
+    this.pathClamped = false
+    this._pathEye = null
+    this._pathLook = null
     this._started = true
   }
 
@@ -126,7 +200,7 @@ export class Camera {
    * exactly why the smoothing is written to be frame-rate INdependent, so the
    * one thing a player would notice is not.
    */
-  update (subject, dt, facing = null) {
+  update (subject, dt, facing = null, path = null) {
     if (!this._started) { this.snapTo(subject); return this.eye() }
 
     // THE POINT THE CAMERA AIMS AT is ahead of the subject, not on it.
@@ -237,12 +311,140 @@ export class Camera {
       this.velocity.z = dt > 0 ? (want.z - this.position.z) * k / dt : 0
     }
 
+    // The path solution, computed AFTER the free one and never instead of it.
+    this._updatePath(subject, dt, path)
+
     if (this.shake.remaining > 0) {
       this.shake.remaining = Math.max(0, this.shake.remaining - dt)
       this.shake.frame++
     }
 
     return this.eye()
+  }
+
+  /**
+   * Where the path would put the camera, and how much of that to use.
+   *
+   * Writes `_pathEye`/`_pathLook`/`pathMix` and nothing else. In particular it
+   * never touches `this.position` or `this.velocity`: those belong to the free
+   * camera, which keeps tracking the subject the whole time the path is in
+   * charge. That is what makes a detach continuous rather than a settle-in.
+   */
+  _updatePath (subject, dt, path) {
+    const mode = this.cfg.mode | 0
+    const usable = path && path.length > 0 && mode !== CAM_MODE.FOLLOW
+
+    // A ride restarts when the MODE or the PATH changes, and not merely because
+    // a CAMERA_SET arrived: re-sending `cam_path_speed` mid-flythrough must not
+    // send the camera back to the start.
+    //
+    // By id, not by object. A path bolted to a moving sector is REBUILT every
+    // time its points move, so comparing objects would restart the ride on
+    // every frame of the lift's travel. Callers set `id` to the path's tag.
+    const id = path ? (path.id !== undefined ? path.id : path) : null
+    if (mode !== this._lastMode || id !== this._lastPathId) {
+      this.pathAlong = 0
+      this.pathClamped = false
+      this.pathAttached = false
+      this._lastMode = mode
+      this._lastPathId = id
+    }
+
+    if (!usable) {
+      // Any path mode with no path must be FOLLOW exactly -- the safety net for
+      // a tag that does not resolve. The mix eases out rather than dropping, so
+      // a path disappearing mid-shot is a fade rather than a cut.
+      this.pathAttached = false
+      this._blend(0, dt)
+      return
+    }
+
+    let active = false
+    if (mode === CAM_MODE.FLYTHROUGH) {
+      this.pathAlong += this.cfg.pathSpeed * dt
+      const p = path.pointAt(this.pathAlong)
+      this.pathClamped = p.clamped
+      // Normalise, so a clamped ride does not keep accumulating `along` past
+      // the end and then take just as long to come back.
+      this.pathAlong = p.clamped
+        ? (this.cfg.pathSpeed >= 0 ? path.length : 0)
+        : this.pathAlong
+      const t = path.tangentAt(this.pathAlong)
+      const s = this.cfg.pathSpeed < 0 ? -1 : 1
+      const k = this.cfg.lead > 0 ? this.cfg.lead : FLY_LOOKAHEAD
+      this._pathEye = { x: p.x, y: p.y, z: p.z }
+      this._pathLook = { x: p.x + t.x * k * s, y: p.y + t.y * k * s, z: p.z + t.z * k * s }
+      active = true
+    } else {
+      // TRACK and AUTO. Nearest against the RAW SUBJECT, not the lead point:
+      // aiming ahead is about where the camera looks, and feeding it in here
+      // would make the camera slide along the path when you turn on the spot.
+      const opts = this.pathAttached
+        ? { from: this.pathAlong, window: this.cfg.pathMaxRate * dt + 1 }
+        : {}
+      const n = path.nearest(subject, opts)
+
+      if (mode === CAM_MODE.AUTO && this.cfg.pathAttach > 0) {
+        const d = Math.sqrt(n.distSq)
+        const r = this.cfg.pathAttach
+        active = this.pathAttached ? d <= r * DETACH_RATIO : d <= r
+      } else {
+        active = mode === CAM_MODE.TRACK
+      }
+
+      if (active) {
+        if (!this.pathAttached) {
+          // First frame on the path: go straight to the nearest point. The mix
+          // is still near zero, so the eye has not arrived yet either way, and
+          // rate-limiting from a stale `along` would crawl there instead.
+          this.pathAlong = n.along
+        } else {
+          // RATE LIMIT. A subject that teleports, or that rounds a corner into
+          // view of a far part of a doubling-back path, otherwise moves the
+          // camera the length of the path in one frame.
+          let d = n.along - this.pathAlong
+          if (path.loop) {
+            const L = path.length
+            if (d > L / 2) d -= L
+            else if (d < -L / 2) d += L
+          }
+          const lim = this.cfg.pathMaxRate * dt
+          if (d > lim) d = lim
+          else if (d < -lim) d = -lim
+          this.pathAlong += d
+        }
+        const p = path.pointAt(this.pathAlong)
+        this.pathAlong = p.clamped ? this.pathAlong : this.pathAlong
+        this._pathEye = { x: p.x, y: p.y, z: p.z }
+        // The path gives the POSITION; the subject still gives the aim, through
+        // the free solution's deadzoned, lead-offset target. So `lead` and the
+        // deadzone keep working on a tracked camera -- they simply stop
+        // affecting where it stands, which is the point of putting it on rails.
+        this._pathLook = { x: this.target.x, y: this.target.y, z: this.target.z }
+      }
+    }
+
+    this.pathAttached = active
+    this._blend(active ? 1 : 0, dt)
+  }
+
+  /** Ease pathMix toward `want`, frame-rate independently. */
+  _blend (want, dt) {
+    const k = 1 - Math.exp(-Math.max(0, this.cfg.pathBlend) * dt)
+    this.pathMix += (want - this.pathMix) * k
+    if (this.pathMix < 1e-6) this.pathMix = 0
+    if (this.pathMix > 1 - 1e-6) this.pathMix = 1
+  }
+
+  /** What the camera is doing with a path, for the HUD and for tests. */
+  get pathState () {
+    return {
+      mode: this.cfg.mode | 0,
+      along: this.pathAlong,
+      mix: this.pathMix,
+      attached: this.pathAttached,
+      clamped: this.pathClamped
+    }
   }
 
   /**
@@ -270,21 +472,41 @@ export class Camera {
     }
   }
 
-  /** Where to put the camera this frame, shake included. */
+  /** Where to put the camera this frame: free, path, or between the two. */
   eye () {
     const s = this.shakeOffset()
+    let ex = this.position.x, ey = this.position.y, ez = this.position.z
+    let lx = this.target.x, ly = this.target.y, lz = this.target.z
+
+    // THE ONLY PLACE THE PATH AND THE FREE CAMERA MEET.
+    //
+    // One crossfade covers all five transitions -- entering a path mode,
+    // leaving it, auto-attaching, auto-detaching, and the path going away
+    // because a tag stopped resolving. There is no snap anywhere in it, which
+    // is deliberate: on every one of those the subject is exactly where it was
+    // and both candidate positions are valid, so a cut would be a bug rather
+    // than a continuity fix.
+    const m = this.pathMix
+    if (m > 0 && this._pathEye && this._pathLook) {
+      ex += (this._pathEye.x - ex) * m
+      ey += (this._pathEye.y - ey) * m
+      ez += (this._pathEye.z - ez) * m
+      lx += (this._pathLook.x - lx) * m
+      ly += (this._pathLook.y - ly) * m
+      lz += (this._pathLook.z - lz) * m
+    }
+
+    // Shake is added LAST, on top of whatever the blend produced, so a rumble
+    // during a flythrough shakes the flythrough rather than dragging it back
+    // toward the free camera.
     return {
-      x: this.position.x + s.x,
-      y: this.position.y + s.y,
-      z: this.position.z + s.z,
+      x: ex + s.x,
+      y: ey + s.y,
+      z: ez + s.z,
       // The look-at point shakes WITH the eye, so a shake translates the view
       // instead of swinging it. Rotating the view around a fixed target turns a
       // rumble into a lurch, and at any real intensity it is nauseating.
-      lookAt: {
-        x: this.target.x + s.x,
-        y: this.target.y + s.y,
-        z: this.target.z + s.z
-      }
+      lookAt: { x: lx + s.x, y: ly + s.y, z: lz + s.z }
     }
   }
 }

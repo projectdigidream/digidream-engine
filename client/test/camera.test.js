@@ -2,9 +2,10 @@
 // Camera tests (design §4.1).
 //
 import {
-  Camera, DEFAULTS, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
+  Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
   ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming
 } from '../src/camera.js'
+import { buildSpline } from '../src/spline.js'
 
 let checks = 0
 let fails = 0
@@ -463,6 +464,281 @@ console.log('\n--- billboarding ---')
   check(Math.abs(Math.hypot(high.x, high.y, high.z) - 40) < 0.01 &&
         Math.abs(Math.hypot(low.x, low.y, low.z) - 40) < 0.01,
         'and both are the distance asked for')
+}
+
+// ---------------------------------------------------------------- camera paths
+//
+// The camera keeps its FREE solution running the whole time it is on a path.
+// Most of what follows is about that: the transitions, and the fact that none
+// of them is a cut.
+
+const PT = (x, y, z) => ({ x, y, z })
+const BENT = [PT(2, 2, 1), PT(18, 2, 1), PT(18, 8, 1)]
+const mkPath = (pts = BENT, opts = {}) => {
+  const s = buildSpline(pts, opts)
+  s.id = opts.id ?? 1
+  return s
+}
+const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
+
+console.log('\n--- TRACK puts the camera ON the path ---')
+{
+  const path = mkPath()
+  const c = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 1000 })
+  c.snapTo(PT(10, 0, 5))
+  let worst = 0
+  for (let i = 0; i < 200; i++) {
+    const subj = PT(2 + i * 0.08, 0, 5)
+    const e = c.update(subj, 1 / 60, null, path)
+    if (i > 30) worst = Math.max(worst, Math.sqrt(path.nearest(e).distSq))
+  }
+  check(worst < 1e-6, `every eye is on the curve (worst ${worst.toExponential(2)})`)
+
+  // CONTROL: the free camera is never on it, so the check above is measuring
+  // the path and not measuring that any camera happens to pass nearby.
+  const f = new Camera({ mode: CAM_MODE.FOLLOW })
+  f.snapTo(PT(10, 0, 5))
+  let best = Infinity
+  for (let i = 0; i < 200; i++) {
+    const subj = PT(2 + i * 0.08, 0, 5)
+    const e = f.update(subj, 1 / 60, null, path)
+    if (i > 30) best = Math.min(best, Math.sqrt(path.nearest(e).distSq))
+  }
+  check(best > 1, `CONTROL: FOLLOW never gets on it (closest ${best.toFixed(2)})`)
+}
+
+console.log('\n--- FLYTHROUGH rides at the speed it was given ---')
+{
+  const path = mkPath()
+  const c = new Camera({ mode: CAM_MODE.FLYTHROUGH, pathSpeed: 6, pathBlend: 1000 })
+  c.snapTo(PT(0, 0, 0))
+  for (let i = 0; i < 120; i++) c.update(PT(0, 0, 0), 1 / 60, null, path)
+  check(near(c.pathAlong, 12, 1e-9), `2s at 6 units/s is ${c.pathAlong.toFixed(4)} units of arc`)
+
+  // CONTROL: zero speed does not move. Without it, a ride that ignored
+  // pathSpeed and simply advanced would pass the check above at one speed.
+  const z = new Camera({ mode: CAM_MODE.FLYTHROUGH, pathSpeed: 0, pathBlend: 1000 })
+  z.snapTo(PT(0, 0, 0))
+  for (let i = 0; i < 120; i++) z.update(PT(0, 0, 0), 1 / 60, null, path)
+  check(z.pathAlong === 0, 'CONTROL: speed 0 does not move')
+
+  // A non-looping ride HOLDS at the end and says so, so a script can tell
+  // "finished" from "somewhere in the middle".
+  const e = new Camera({ mode: CAM_MODE.FLYTHROUGH, pathSpeed: 100, pathBlend: 1000 })
+  e.snapTo(PT(0, 0, 0))
+  for (let i = 0; i < 120; i++) e.update(PT(0, 0, 0), 1 / 60, null, path)
+  check(e.pathState.clamped === true, 'running off the end reports clamped')
+  check(near(e.pathAlong, path.length, 1e-9), 'and holds there rather than running on')
+
+  const ring = mkPath([PT(0, 0, 0), PT(10, 0, 0), PT(10, 10, 0), PT(0, 10, 0)], { loop: true, id: 2 })
+  const l = new Camera({ mode: CAM_MODE.FLYTHROUGH, pathSpeed: 100, pathBlend: 1000 })
+  l.snapTo(PT(0, 0, 0))
+  for (let i = 0; i < 120; i++) l.update(PT(0, 0, 0), 1 / 60, null, ring)
+  check(l.pathState.clamped === false, 'CONTROL: a looping ride never clamps')
+}
+
+console.log('\n--- FLYTHROUGH looks along the path; TRACK looks at you ---')
+{
+  const path = mkPath()
+  const subj = PT(10, 0, 30)
+
+  const f = new Camera({ mode: CAM_MODE.FLYTHROUGH, pathSpeed: 6, pathBlend: 1000 })
+  f.snapTo(subj)
+  let fe = null
+  for (let i = 0; i < 120; i++) fe = f.update(subj, 1 / 60, null, path)
+  const tan = path.tangentAt(f.pathAlong)
+  const look = { x: fe.lookAt.x - fe.x, y: fe.lookAt.y - fe.y, z: fe.lookAt.z - fe.z }
+  const lm = Math.hypot(look.x, look.y, look.z)
+  const dot = (look.x * tan.x + look.y * tan.y + look.z * tan.z) / lm
+  check(near(dot, 1, 1e-6), `the view points along the tangent (cos ${dot.toFixed(9)})`)
+
+  // Negative speed rides backwards AND looks backwards -- one sign, not two.
+  const b = new Camera({ mode: CAM_MODE.FLYTHROUGH, pathSpeed: -6, pathBlend: 1000 })
+  b.snapTo(subj)
+  let be = null
+  for (let i = 0; i < 30; i++) be = b.update(subj, 1 / 60, null, path)
+  const btan = path.tangentAt(b.pathAlong)
+  const blook = { x: be.lookAt.x - be.x, y: be.lookAt.y - be.y, z: be.lookAt.z - be.z }
+  const bm = Math.hypot(blook.x, blook.y, blook.z)
+  const bdot = (blook.x * btan.x + blook.y * btan.y + blook.z * btan.z) / bm
+  check(near(bdot, -1, 1e-6), `a negative speed looks the other way (cos ${bdot.toFixed(9)})`)
+
+  // CONTROL: TRACK on the same path aims at the subject instead, and the two
+  // answers are nowhere near each other.
+  const t = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 1000 })
+  t.snapTo(subj)
+  let te = null
+  for (let i = 0; i < 120; i++) te = t.update(subj, 1 / 60, null, path)
+  const tlook = { x: te.lookAt.x - te.x, y: te.lookAt.y - te.y, z: te.lookAt.z - te.z }
+  const tm = Math.hypot(tlook.x, tlook.y, tlook.z)
+  const tdot = (tlook.x * tan.x + tlook.y * tan.y + tlook.z * tan.z) / tm
+  check(Math.abs(tdot) < Math.cos(1 * Math.PI / 180),
+    `CONTROL: TRACK aims somewhere else entirely (cos ${tdot.toFixed(4)})`)
+  check(near(dist3(te.lookAt, subj), 0, 1e-6), 'and what it aims at is the subject')
+}
+
+console.log('\n--- AUTO attaches and detaches, with hysteresis ---')
+{
+  const path = mkPath()
+
+  // The sweep has to actually STRADDLE the boundary, so the boundary is
+  // measured rather than guessed. The curve bulges off the chord -- that is the
+  // whole point of it being a curve -- so the distance from (10, y, 1) to the
+  // path is not y minus anything, and picking a round number for the radius
+  // gives a sweep that is entirely inside or entirely outside it.
+  const subjAt = (i) => PT(10, 6 + Math.sin(i * 0.31) * 0.6, 1)
+  const ATTACH = Math.sqrt(path.nearest(PT(10, 6, 1)).distSq)
+
+  let crossings = 0
+  let prevIn = null
+  for (let i = 0; i < 400; i++) {
+    const inside = Math.sqrt(path.nearest(subjAt(i)).distSq) <= ATTACH
+    if (prevIn !== null && inside !== prevIn) crossings++
+    prevIn = inside
+  }
+  check(crossings > 10, `the sweep really does straddle the radius (${crossings} crossings)`)
+
+  const c = new Camera({ mode: CAM_MODE.AUTO, pathAttach: ATTACH, pathBlend: 1000 })
+  c.snapTo(subjAt(0))
+  let flips = 0
+  let was = false
+  for (let i = 0; i < 400; i++) {
+    c.update(subjAt(i), 1 / 60, null, path)
+    if (i > 5 && c.pathAttached !== was) flips++
+    was = c.pathAttached
+  }
+  check(flips <= 2, `hysteresis keeps the camera to ${flips} flips over the same 400 frames`)
+
+  // CONTROL: the bare radius -- what the camera would do with DETACH_RATIO at
+  // 1 -- flips on every crossing. Computed from the geometry rather than
+  // through a test hook on the camera, so the control is a property of the
+  // sweep and cannot be satisfied by a flag that does nothing.
+  check(crossings > flips * 5,
+    `CONTROL: without hysteresis the same sweep flips ${crossings} times, ${(crossings / Math.max(flips, 1)).toFixed(0)}x more`)
+}
+
+console.log('\n--- a detach is a crossfade, never a cut ---')
+{
+  const path = mkPath()
+  const run = (snapOnDetach) => {
+    const c = new Camera({ mode: CAM_MODE.AUTO, pathAttach: 4, pathBlend: 3 })
+    c.snapTo(PT(10, 1, 1))
+    let prev = null
+    let worst = 0
+    for (let i = 0; i < 400; i++) {
+      // Walk in close, sit on the path, then walk away.
+      const y = i < 150 ? 1 : 1 + (i - 150) * 0.08
+      const wasAttached = c.pathAttached
+      const e = c.update(PT(10, y, 1), 1 / 60, null, path)
+      if (snapOnDetach && wasAttached && !c.pathAttached) {
+        // THE VARIANT THIS PLAN REJECTED: treating a detach like a spawn.
+        c.snapTo(PT(10, y, 1))
+      }
+      // PER FRAME, in units, because that is what a cut is: one frame in which
+      // the picture is somewhere else. Averaged over a second it would be
+      // indistinguishable from a fast pan, which is the thing it must be
+      // distinguished from.
+      if (prev) worst = Math.max(worst, dist3(e, prev))
+      prev = e
+    }
+    return worst
+  }
+  const blended = run(false)
+  const snapped = run(true)
+  check(blended < 5, `the blend never moves the eye more than ${blended.toFixed(2)} units in a frame`)
+  check(snapped > 20,
+    `CONTROL: snapping on detach moves it ${snapped.toFixed(1)} units in one frame`)
+  check(snapped > blended * 5,
+    `which is ${(snapped / blended).toFixed(0)}x worse`)
+}
+
+console.log('\n--- a path mode with no path is FOLLOW, exactly ---')
+{
+  // The safety net for a tag that does not resolve. Not "close to FOLLOW":
+  // identical, frame by frame, or a mistyped tag is a camera that behaves
+  // subtly differently and nothing says so.
+  const a = new Camera({ mode: CAM_MODE.TRACK, pathAttach: 4 })
+  const b = new Camera({ mode: CAM_MODE.FOLLOW })
+  a.snapTo(PT(0, 0, 0)); b.snapTo(PT(0, 0, 0))
+  let identical = true
+  for (let i = 0; i < 200; i++) {
+    const s = PT(i * 0.1, Math.sin(i * 0.05) * 3, 0)
+    const ea = a.update(s, 1 / 60, null, null)
+    const eb = b.update(s, 1 / 60, null)
+    if (dist3(ea, eb) !== 0 || dist3(ea.lookAt, eb.lookAt) !== 0) identical = false
+  }
+  check(identical, 'bit-for-bit identical to FOLLOW with no path')
+
+  // CONTROL: hand it a path and they diverge, so the check above is not merely
+  // observing that two default cameras agree.
+  const path = mkPath()
+  const c = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 1000 })
+  const d = new Camera({ mode: CAM_MODE.FOLLOW })
+  c.snapTo(PT(0, 0, 0)); d.snapTo(PT(0, 0, 0))
+  let diverged = false
+  for (let i = 0; i < 200; i++) {
+    const s = PT(i * 0.1, Math.sin(i * 0.05) * 3, 0)
+    const ec = c.update(s, 1 / 60, null, path)
+    const ed = d.update(s, 1 / 60, null)
+    if (dist3(ec, ed) > 1) diverged = true
+  }
+  check(diverged, 'CONTROL: with a path they differ')
+}
+
+console.log('\n--- the free camera stays warm underneath ---')
+{
+  // Why a detach has somewhere continuous to go. The free solution keeps
+  // tracking the subject for the whole time the path is in charge, so leaving
+  // the path is a fade to a camera that is already in the right place -- not
+  // one that starts catching up from wherever it was abandoned.
+  const path = mkPath()
+  const c = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 1000 })
+  c.snapTo(PT(0, 0, 0))
+  const subj = PT(40, 0, 40)
+  for (let i = 0; i < 300; i++) c.update(subj, 1 / 60, null, path)
+
+  const ref = new Camera({ mode: CAM_MODE.FOLLOW })
+  ref.snapTo(PT(0, 0, 0))
+  for (let i = 0; i < 300; i++) ref.update(subj, 1 / 60, null)
+
+  check(dist3(c.position, ref.position) < 1e-9,
+    'the free solution ran identically the whole time it was overridden')
+  check(dist3(c.eye(), c.position) > 1, 'even though the eye was somewhere else entirely')
+}
+
+console.log('\n--- shake replaces rather than sums ---')
+{
+  // Already true, never wired to anything. The property worth pinning before
+  // it gets a wire field: two shakes a frame apart must not shake twice as
+  // hard, or a script with a loop throws the camera off the map.
+  const c = new Camera()
+  c.snapTo(PT(0, 0, 0))
+  c.screenShake(2, 0.5)
+  let peak = 0
+  for (let i = 0; i < 6; i++) {
+    c.screenShake(2, 0.5)
+    const e = c.update(PT(0, 0, 0), 1 / 60, null)
+    peak = Math.max(peak, dist3(e, c.position))
+  }
+  check(peak <= 2 * Math.sqrt(3) + 1e-9, `six overlapping shakes peak at ${peak.toFixed(3)}, not 12`)
+
+  // And it decays to nothing rather than ringing on.
+  for (let i = 0; i < 120; i++) c.update(PT(0, 0, 0), 1 / 60, null)
+  check(dist3(c.eye(), c.position) === 0, 'and it decays to exactly zero')
+}
+
+console.log('\n--- the blend does not depend on the frame rate ---')
+{
+  const path = mkPath()
+  const at = (hz) => {
+    const c = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 4 })
+    c.snapTo(PT(10, 2, 1))
+    for (let i = 0; i < hz; i++) c.update(PT(10, 2, 1), 1 / hz, null, path)
+    return c.pathMix
+  }
+  const a = at(30), b = at(60), d = at(144)
+  check(Math.abs(a - b) < 0.01 && Math.abs(b - d) < 0.01,
+    `one second of blend is the same at 30/60/144 Hz (${a.toFixed(4)}, ${b.toFixed(4)}, ${d.toFixed(4)})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
