@@ -460,6 +460,26 @@ bool decode_side_texture(ByteReader& r, SideTexture& out) noexcept {
     return true;
 }
 
+void encode_music_cue(ByteWriter& w, const MusicCue& m) noexcept {
+    encode_text(w, m.cue);
+    w.u16v(m.fade_ms);
+    w.u8v(static_cast<u8>(m.at));
+}
+
+bool decode_music_cue(ByteReader& r, MusicCue& out) noexcept {
+    MusicCue m;
+    if (!decode_text(r, m.cue)) return false;
+    m.fade_ms = r.u16v();
+    const u8 at = r.u8v();
+    // An unknown moment is refused rather than defaulted, as a side field is:
+    // the sender and this reader disagree about the protocol, and a cue that
+    // lands at some other time than asked is the quieter of the two failures.
+    if (!r.ok() || at > static_cast<u8>(MusicAt::Now)) return false;
+    m.at = static_cast<MusicAt>(at);
+    out = m;
+    return true;
+}
+
 void encode_ui_event(ByteWriter& w, const UiEvent& e) noexcept {
     w.u32v(e.ui_id);
     w.u16v(e.widget_id);

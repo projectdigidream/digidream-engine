@@ -86,6 +86,10 @@ struct Level {
     // the event to know the state would show every returning player a different
     // wall. Same reasoning as the sector motions re-sent on join.
     std::vector<proto::SideTexture> side_textures;
+    // The level's camera defaults (dnp.level_camera), sent to everyone who
+    // joins. Not simulation state; one CAMERA_SET per joining client.
+    proto::CameraSet camera;
+    bool             has_camera = false;
     // Cached basename, filled by Server::level_name. Mutable state on a const
     // accessor is a smell; the alternative is either a std::string returned by
     // value across a C API boundary or a second copy of the parsing.
@@ -721,6 +725,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // And the switches already thrown in this level. A wall that changed
         // before you arrived is part of the world you are arriving in.
         for (const auto& t : L.side_textures) send_side_texture(s, t);
+        // And the level's camera, if its script set one: the angle the map was
+        // made for, and whether it may be turned away from.
+        if (L.has_camera) send_camera(s, L.camera);
         // And the movement parameters. FULL, because a client arriving in a
         // level has no history to patch (docs/protocol.md 8.4). Sent before the
         // first snapshot so it is never predicting with rules it has not been
@@ -1502,6 +1509,22 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     void set_camera(u32 level_index, u32 agent, const proto::CameraSet& c) override {
         Session* s = session_for(level_index, agent);
         if (s == nullptr) return;
+        send_camera(*s, c);
+    }
+
+    void set_level_camera(u32 level_index, const proto::CameraSet& c) override {
+        if (level_index >= level_count()) return;
+        Level& L = level(level_index);
+        L.camera = c;
+        L.has_camera = true;
+        std::fprintf(stderr, "[srv] level %u: camera set by the map (%u field(s))\n", level_index, c.count);
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (s.has_agent && s.level == level_index) send_camera(s, c);
+        }
+    }
+
+    void send_camera(Session& s, const proto::CameraSet& c) {
         u8 buf[256];
         ByteWriter w(buf, sizeof(buf));
         const size_t len_pos = w.mark();
@@ -1515,7 +1538,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
         buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
         buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
-        link.send_control(s->id, buf, end);
+        link.send_control(s.id, buf, end);
     }
 
     void close_ui(u32 level_index, u32 agent, u32 ui_id) override {
