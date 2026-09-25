@@ -1310,8 +1310,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // and hashing on the far side of that would fold one tick's decisions
         // into the next tick's number.
         if (hash_trace && L.world.tick() % hash_trace == 0) {
-            std::fprintf(stderr, "[hash] %u %u %016llX\n", li, L.world.tick(),
-                         static_cast<unsigned long long>(L.world.hash()));
+            // The RNG's own state alongside the world's, because the two
+            // mob runtimes share one stream and the commonest way for them to
+            // part is a draw one makes and the other does not. That shows up
+            // here a tick or more BEFORE it shows up in behaviour, which is
+            // the difference between reading a cause and guessing at one.
+            std::fprintf(stderr, "[hash] %u %u %016llX %016llX\n", li, L.world.tick(),
+                         static_cast<unsigned long long>(L.world.hash()),
+                         static_cast<unsigned long long>(L.ctx.rng.state()));
             // AND THE AGENTS THEMSELVES, because a hash says two runs differ
             // and never says how. Raw fixed-point, not decimals: the question
             // is exactness and a printed double would round the difference

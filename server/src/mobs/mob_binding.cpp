@@ -239,9 +239,18 @@ int l_mobs_graph(lua_State* L) {
             lua_createtable(L, 0, 3);
             lua_pushnumber(L, e.at);        lua_setfield(L, -2, "at");
             lua_pushnumber(L, e.lua_index); lua_setfield(L, -2, "lua_index");
+            // In Act's own order, and the assert is why: adding a value in
+            // the middle silently shifted `lua` off the end of this table and
+            // every Lua-path action reported as nil. The graph test said so
+            // immediately, which is the argument for having it -- but a
+            // compile-time check is cheaper than a test run.
             static const char* const ACT_NAME[] = {
-                "set_var", "add_var", "set_cooldown", "set_anim", "goto", "face", "lua",
+                "set_var", "add_var", "set_cooldown", "set_anim", "goto", "face",
+                "set_angle", "lua",
             };
+            static_assert(sizeof(ACT_NAME) / sizeof(ACT_NAME[0]) ==
+                              static_cast<size_t>(Act::Lua) + 1,
+                          "ACT_NAME must name every Act, in order");
             lua_pushstring(L, ACT_NAME[static_cast<u8>(e.id)]);
             lua_setfield(L, -2, "action");
             lua_pushnumber(L, e.i);   lua_setfield(L, -2, "i");

@@ -231,12 +231,73 @@
           "type": "enum",
           "values": [
             "target",
-            "movement"
+            "movement",
+            "away",
+            "angle",
+            "var"
           ]
+        },
+        {
+          "doc": "Degrees, an ABSOLUTE world heading, for `towards = angle`. 0 is +x and it counts anticlockwise, which is what dnp.atan2 answers in.",
+          "name": "angle",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "A per-mob variable holding a heading, for `towards = var`. Written by `set_angle`, which is how a mob turns to something it worked out earlier.",
+          "name": "var",
+          "optional": true,
+          "type": "var"
+        },
+        {
+          "doc": "Degrees added after, signed. `towards = target` with an offset of 90 is a monster sidling across your front rather than walking into it.",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Degrees of random slop either side, added last. Draws once, off the world's own stream, exactly as `chance` does -- so it replays.",
+          "name": "jitter",
+          "optional": true,
+          "type": "int"
         }
       ],
       "doc": "Turn to face, once, at this instant. Doom's A_FaceTarget, and the reason a monster's shot goes where you are rather than where you were when it started winding up.",
       "name": "face"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "towards",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "target",
+            "facing",
+            "away",
+            "random",
+            "angle"
+          ]
+        },
+        {
+          "doc": "Degrees, for `towards = angle`.",
+          "name": "angle",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Degrees of random slop either side.",
+          "name": "jitter",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "Work out a heading and keep it in a variable, for `face` and for `move = \"wander\"` to read.\nAN ANGLE IS A NUMBER, so it lives in the same per-mob variables everything else does rather than in a second kind of storage: a turn is 2^32 and that is exact in a double, which is why brad are plain Lua numbers here and `homing` on a missile is an int.\n`towards = random` is the one that makes wandering wander. Without it `move = \"wander\"` reads a heading nothing ever wrote and walks straight at the aim -- which it did, silently, for as long as the mode has existed.",
+      "name": "set_angle"
     },
     {
       "args": [

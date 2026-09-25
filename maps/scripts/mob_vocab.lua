@@ -350,13 +350,48 @@ mob_vocab = {
 
     { name = "face",
       args = { { name = "towards", type = "enum", optional = true,
-                 values = { "target", "movement" } } },
+                 values = { "target", "movement", "away", "angle", "var" } },
+               { name = "angle", type = "int", optional = true,
+                 doc = "Degrees, an ABSOLUTE world heading, for " ..
+                       "`towards = angle`. 0 is +x and it counts " ..
+                       "anticlockwise, which is what dnp.atan2 answers in." },
+               { name = "var", type = "var", optional = true,
+                 doc = "A per-mob variable holding a heading, for " ..
+                       "`towards = var`. Written by `set_angle`, which is how " ..
+                       "a mob turns to something it worked out earlier." },
+               { name = "offset", type = "int", optional = true,
+                 doc = "Degrees added after, signed. `towards = target` with " ..
+                       "an offset of 90 is a monster sidling across your " ..
+                       "front rather than walking into it." },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Degrees of random slop either side, added last. Draws " ..
+                       "once, off the world's own stream, exactly as " ..
+                       "`chance` does -- so it replays." } },
       -- NOT `at`. A sequence entry's own `at` is the tick it fires on, and an
       -- action argument by the same name is unreachable -- the checker caught
       -- this the first time it ran, which is the argument for having it.
       doc = "Turn to face, once, at this instant. Doom's A_FaceTarget, and " ..
             "the reason a monster's shot goes where you are rather than " ..
             "where you were when it started winding up." },
+
+    { name = "set_angle",
+      args = { { name = "var", type = "var" },
+               { name = "towards", type = "enum", optional = true,
+                 values = { "target", "facing", "away", "random", "angle" } },
+               { name = "angle", type = "int", optional = true,
+                 doc = "Degrees, for `towards = angle`." },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Degrees of random slop either side." } },
+      doc = "Work out a heading and keep it in a variable, for `face` and for " ..
+            "`move = \"wander\"` to read.\n" ..
+            "AN ANGLE IS A NUMBER, so it lives in the same per-mob variables " ..
+            "everything else does rather than in a second kind of storage: a " ..
+            "turn is 2^32 and that is exact in a double, which is why brad " ..
+            "are plain Lua numbers here and `homing` on a missile is an int.\n" ..
+            "`towards = random` is the one that makes wandering wander. " ..
+            "Without it `move = \"wander\"` reads a heading nothing ever " ..
+            "wrote and walks straight at the aim -- which it did, silently, " ..
+            "for as long as the mode has existed." },
 
     { name = "set_param",
       args = { { name = "param", type = "string" },

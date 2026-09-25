@@ -291,6 +291,7 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                         else if (streq(act, n, "set_cooldown")) se.id = Act::SetCooldown;
                         else if (streq(act, n, "set_anim"))     se.id = Act::SetAnim;
                         else if (streq(act, n, "face"))         se.id = Act::Face;
+                        else if (streq(act, n, "set_angle"))    se.id = Act::SetAngle;
                         // THE ESCAPE HATCH GOES TO THE SLOW PATH, whole.
                         // `lua` may write anything -- a mob's vars, its aim,
                         // its state -- and this runtime owns all three. Running
@@ -331,13 +332,29 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                         case Act::SetAnim:
                             se.i = opt_int(L, e, "anim", -1);
                             break;
-                        case Act::Face: {
+                        case Act::Face:
+                        case Act::SetAngle: {
                             size_t tn2 = 0;
                             const char* to = opt_str(L, e, "towards", tn2);
-                            // mobs.lua defaults `towards` to "target" and acts
-                            // only on that value; anything else leaves the aim.
-                            se.at_target = (to == nullptr) || streq(to, tn2, "target");
-                            if (to != nullptr) lua_pop(L, 1);
+                            se.towards = Towards::Target;
+                            if (to != nullptr) {
+                                if (streq(to, tn2, "facing"))        se.towards = Towards::Facing;
+                                else if (streq(to, tn2, "away"))     se.towards = Towards::Away;
+                                else if (streq(to, tn2, "random"))   se.towards = Towards::Random;
+                                else if (streq(to, tn2, "angle"))    se.towards = Towards::Angle;
+                                else if (streq(to, tn2, "var"))      se.towards = Towards::Var;
+                                else if (streq(to, tn2, "movement")) se.towards = Towards::Movement;
+                                lua_pop(L, 1);
+                            }
+                            se.i = opt_int(L, e, "angle", 0);
+                            se.offset = opt_int(L, e, "offset", 0);
+                            se.jitter = opt_int(L, e, "jitter", -1);
+                            size_t vn2 = 0;
+                            const char* v2 = opt_str(L, e, "var", vn2);
+                            if (v2 != nullptr) {
+                                se.var = static_cast<i16>(g.var_slot(k, v2, vn2));
+                                lua_pop(L, 1);
+                            }
                             break;
                         }
                         case Act::Lua:

@@ -204,7 +204,8 @@ for name, d in pairs(mobs.defs) do
           -- claimed here and not implemented does nothing, and one handed back
           -- that should have run here writes a var nobody reads.
           local OWN = { ['goto'] = true, set_var = true, add_var = true,
-                        set_cooldown = true, set_anim = true, face = true }
+                        set_cooldown = true, set_anim = true, face = true,
+                        set_angle = true }
           local want_act = OWN[le.action] and le.action or 'lua'
           if ge.action ~= want_act then
             note("%s.%s seq %d: runs as '%s', should be '%s'",

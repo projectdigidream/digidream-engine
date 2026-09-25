@@ -163,6 +163,12 @@ struct MobRuntime {
 };
 
 
+// The heading an action asks for, or false when there is none. Shared by
+// `face` and `set_angle`: they ask the same question, and having asked it
+// twice is how two spellings of "towards" drift apart.
+bool heading_for(MobRuntime& rt, const sim::World& w, const Mob& m,
+                 const SeqEntry& e, const i32* vars, i64& out);
+
 // Where an action this loop does not run goes.
 //
 // An INTERFACE rather than a direct call into Lua, for the reason every

@@ -82,7 +82,73 @@ Nearest nearest_player(const sim::World& w, fx3 from) {
     return best;
 }
 
+// A turn is 2^32, and that is exact in a double -- which is why every angle
+// that crosses into Lua is a plain number rather than an fx. Degrees are ints
+// and the conversion is `deg * 2^32 / 360` IN THAT ORDER, so the truncation is
+// the one maps/scripts/mobs.lua performs on the same integers.
+i64 degrees_to_brad(i32 deg) {
+    // FLOOR, not truncate, and the difference is only visible for NEGATIVE
+    // degrees -- which is exactly what a jitter of +/- n produces half the
+    // time. C++ integer division rounds toward zero and Lua's math.floor
+    // rounds toward negative infinity, so -7 degrees came out one brad apart
+    // and the two runtimes' monsters walked very slightly different lines.
+    //
+    // Found by tools/mobdiff on the fixture written for these actions: a
+    // 0.017-unit difference in one monster's Y after 163 ticks, which no
+    // behaviour test would ever have called wrong.
+    const i64 n = static_cast<i64>(deg) * 4294967296ll;
+    return (n >= 0) ? n / 360 : -(((-n) + 359) / 360);
+}
+
+// dnp.random(lo, hi) is next_range(lo, hi + 1), and that is what this has to
+// be: the two runtimes draw from one stream and a different draw is a
+// different simulation from that point on.
+i32 random_range(Rng& rng, i32 lo, i32 hi) {
+    if (hi < lo) return lo;
+    return lo + static_cast<i32>(rng.next_below(static_cast<u32>(hi - lo) + 1));
+}
+
 }  // namespace
+
+// The heading an action asks for, or false when there is none -- which is a
+// mob told to face a target it does not have, and is a no-op rather than an
+// error. Shared by `face` and `set_angle`, as it is in the Lua.
+bool heading_for(MobRuntime& rt, const sim::World& w, const Mob& m,
+                 const SeqEntry& e, const i32* vars, i64& out) {
+    switch (e.towards) {
+    case Towards::Angle:
+        out = degrees_to_brad(e.i);
+        return true;
+    case Towards::Var:
+        if (e.var < 0 || !vars) return false;
+        out = vars[e.var];
+        return true;
+    case Towards::Random:
+        // Off the world's own stream, exactly as `chance` is: "random" in a
+        // simulation means reproducibly arbitrary, not unpredictable to us.
+        if (!rt.rng) return false;
+        out = (static_cast<i64>(random_range(*rt.rng, 0, 359)) * 4294967296ll) / 360;
+        return true;
+    case Towards::Facing:
+        out = w.agent(m.entity).facing.raw;
+        return true;
+    case Towards::Away:
+        if (m.has_tp) {
+            out = static_cast<i64>(fx_atan2(m.tp.y - m.p.y, m.tp.x - m.p.x).raw) + 2147483648ll;
+        } else {
+            out = static_cast<i64>(m.aim) + 2147483648ll;
+        }
+        return true;
+    case Towards::Movement:
+        out = m.aim;
+        return true;
+    case Towards::Target:
+        if (!m.has_tp) return false;
+        out = fx_atan2(m.tp.y - m.p.y, m.tp.x - m.p.x).raw;
+        return true;
+    }
+    return false;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -264,7 +330,15 @@ void drive(MobRuntime& rt, sim::World& w, const nav::NavGraph* graph,
     u32 ang = walk_aim;
     if (st.move == Move::Flee) ang = aim + 2147483648u;
     else if (st.move == Move::Strafe) ang = aim + 1073741824u;
-    else if (st.move == Move::Wander) ang = m.wander;
+    else if (st.move == Move::Wander) {
+        // The `wander` variable, which `set_angle` writes. Before that action
+        // existed nothing wrote it anywhere and this mode walked straight at
+        // the aim, identical to `charge`.
+        const Kind& kk = rt.graph.kinds[static_cast<u32>(m.kind)];
+        const i32 slot = rt.graph.var_slot(kk, "wander", 6);
+        const i32* vv = rt.vars.empty() ? nullptr : &rt.vars[m.first_var];
+        ang = (slot >= 0 && vv) ? static_cast<u32>(vv[slot]) : aim;
+    }
 
     // HELD, not tapped. The engine's jump is edge-triggered off the button, so
     // holding it while approaching the ledge means the hop happens on the tick
@@ -326,12 +400,30 @@ bool run_due(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
         case Act::SetAnim:
             set_anim(w, m, e.i);
             break;
-        case Act::Face:
-            if (e.at_target && m.has_tp) {
-                m.aim = fx_atan2(m.tp.y - m.p.y, m.tp.x - m.p.x).raw;
-                set_move(w, m, m.mx, m.my, m.aim, m.buttons);
+        case Act::Face: {
+            i64 h = 0;
+            if (!heading_for(rt, w, m, e, vars, h)) break;
+            h += degrees_to_brad(e.offset);
+            if (e.jitter >= 0 && rt.rng) {
+                // ONE DRAW, whenever the graph carries a jitter argument, even
+                // for zero degrees. maps/scripts/mobs.lua draws on exactly the
+                // same condition; a draw one runtime makes and the other skips
+                // moves every later one in the stream.
+                h += degrees_to_brad(random_range(*rt.rng, -e.jitter, e.jitter));
             }
+            m.aim = static_cast<u32>(h & 0xFFFFFFFFll);
+            set_move(w, m, m.mx, m.my, m.aim, m.buttons);
             break;
+        }
+        case Act::SetAngle: {
+            i64 h = 0;
+            if (!heading_for(rt, w, m, e, vars, h)) break;
+            if (e.jitter >= 0 && rt.rng) {
+                h += degrees_to_brad(random_range(*rt.rng, -e.jitter, e.jitter));
+            }
+            if (e.var >= 0 && vars) vars[e.var] = static_cast<i32>(h & 0xFFFFFFFFll);
+            break;
+        }
         case Act::Goto:
             enter(rt, w, m, e.state, tick);
             return true;

@@ -108,9 +108,15 @@ enum class Act : u8 {
     SetAnim,
     Goto,
     Face,
+    SetAngle,
     // Everything else: handed to Lua by its index in the state's `sequence`.
     Lua,
 };
+
+// Where an angle comes from, for `face` and `set_angle`. One enum for both
+// because they ask the same question, and having asked it twice is how two
+// spellings of "towards" drift apart.
+enum class Towards : u8 { Target, Facing, Away, Random, Angle, Var, Movement };
 
 // A sequence entry. `at` is a DEADLINE relative to entering the state, not a
 // countdown -- a mob nobody is near costs nothing between its own decisions --
@@ -121,10 +127,16 @@ struct SeqEntry {
     i32 at = 0;
     u16 lua_index = 0;
     Act id = Act::Lua;
-    i16 var = -1;          // set_var / add_var / set_cooldown
-    i32 i = 0;             // value / by / ticks / anim
+    i16 var = -1;          // set_var / add_var / set_cooldown / set_angle
+    i32 i = 0;             // value / by / ticks / anim / angle, in degrees
     i16 state = -1;        // goto
-    bool at_target = true; // face: `towards`, which only has one interesting value
+    Towards towards = Towards::Target;
+    i32 offset = 0;        // face: degrees added after
+    // Degrees of random slop, or -1 for ABSENT -- which is not the same as
+    // zero. The two runtimes share one RNG stream, so a draw one makes and the
+    // other skips desynchronises every later one; both draw exactly when the
+    // GRAPH has a jitter argument, which is the same on both sides.
+    i32 jitter = -1;
 };
 
 struct State {

@@ -67,6 +67,10 @@ HOST_ARCH="$(uname -m)"
 # and by tools/mobperf/run.js, which is not part of the suite because it takes
 # a minute and answers a question rather than asserting one.
 "./build/$HOST_ARCH/mapc" maps/mobperf.map "build/$HOST_ARCH/mobperf.dnpm"
+# And the vocabulary fixture, whose monster uses the parts of the mob
+# vocabulary maps/mobs/doom_monsters.lua does not. tools/mobdiff runs it
+# through both mob runtimes and compares them tick by tick.
+"./build/$HOST_ARCH/mapc" maps/mobvocab.map "build/$HOST_ARCH/mobvocab.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_a.map "build/$HOST_ARCH/level_a.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_b.map "build/$HOST_ARCH/level_b.dnpm"
 # Floating platforms with open edges -- the only map here that is not a sealed
@@ -240,6 +244,13 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # once, in order. The control is a run with no player in the level, where
   # nothing may advance at all.
   "./build/lua/test_mob_loop" .
+  # The two mob runtimes against each other: the same scenario through each,
+  # world hash and RNG state compared at every tick. On maps/mobvocab.map,
+  # whose monster exists to use the parts of the vocabulary the Doom set does
+  # not -- wander, strafe, chance, jitter, angle offsets -- because a
+  # vocabulary entry neither runtime's fixture touches is unproven however
+  # green the run. It found three real bugs the behaviour tests could not.
+  node tools/mobdiff/run.js --ticks 600 --map "build/$HOST_ARCH/mobvocab.dnpm" | tail -2
   # The shooting range: a room with a player in the middle and hitscan monsters
   # all round it, asserting every one of them lands a shot. The ONLY test that
   # drives the real world bindings -- every other Lua test stubs `dnp` with a

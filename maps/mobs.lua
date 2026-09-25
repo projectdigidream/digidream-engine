@@ -878,13 +878,70 @@ local acts = {}
 local hurt                 -- forward: damage anything, defined below
 local launch               -- forward: fire a missile
 
-function acts.face(m, a)
-  if (a.towards or "target") == "target" then
+-- A TURN IS 2^32, and that is exact in a double, which is why every angle in
+-- this file is a plain Lua number rather than an fx. Degrees come in as ints
+-- and are converted here, in that order -- `deg * 4294967296 / 360` -- so the
+-- rounding is the same one the C++ loop does with the same integers.
+local function brad_of_degrees(deg)
+  return math.floor((deg or 0) * 4294967296 / 360)
+end
+
+-- Wrap to the 32-bit turn. Lua numbers are doubles and an angle that has had a
+-- few offsets added to it is outside the range the engine takes, which the
+-- binding would then truncate differently from the way C++ wraps.
+local function wrap_brad(a)
+  return a % 4294967296
+end
+
+-- The heading an action asks for. Shared by `face` and `set_angle` because
+-- they ask the same question and having asked it twice is how two spellings of
+-- "towards" drift apart.
+local function heading_for(m, towards, a)
+  if towards == "angle" then
+    return brad_of_degrees(a.angle)
+  elseif towards == "var" then
+    return m.vars[a.var] or 0
+  elseif towards == "random" then
+    -- Off the world's own stream, exactly as `chance` is: "random" in a
+    -- simulation means reproducibly arbitrary, not unpredictable to us.
+    return dnp.random(0, 359) * 4294967296 / 360
+  elseif towards == "facing" then
+    return m.e:facing()
+  elseif towards == "away" then
     if m.target ~= nil and m.target:valid() then
-      m.aim = aim_at(m.e:pos(), m.target:pos())
-      m.e:set_input(m.mx or ZERO, m.my or ZERO, m.aim, m.buttons or 0)
+      return wrap_brad(aim_at(m.e:pos(), m.target:pos()) + 2147483648)
     end
+    return wrap_brad((m.aim or 0) + 2147483648)
+  elseif towards == "movement" then
+    return m.aim or 0
   end
+  -- "target", and the default.
+  if m.target ~= nil and m.target:valid() then
+    return aim_at(m.e:pos(), m.target:pos())
+  end
+  return nil
+end
+
+function acts.face(m, a)
+  local h = heading_for(m, a.towards or "target", a)
+  if h == nil then return end
+  h = h + brad_of_degrees(a.offset)
+  if a.jitter then
+    -- ONE DRAW, whether or not the jitter is zero degrees -- the two runtimes
+    -- share an RNG stream and a draw one makes and the other skips
+    -- desynchronises every later one. Guarded by `a.jitter` being present at
+    -- all, which is a property of the GRAPH and so is the same on both sides.
+    h = h + brad_of_degrees(dnp.random(-a.jitter, a.jitter))
+  end
+  m.aim = wrap_brad(h)
+  m.e:set_input(m.mx or ZERO, m.my or ZERO, m.aim, m.buttons or 0)
+end
+
+function acts.set_angle(m, a)
+  local h = heading_for(m, a.towards or "target", a)
+  if h == nil then return end
+  if a.jitter then h = h + brad_of_degrees(dnp.random(-a.jitter, a.jitter)) end
+  m.vars[a.var] = math.floor(wrap_brad(h))
 end
 
 function acts.hitscan(m, a)
@@ -959,6 +1016,7 @@ function acts.impulse(m, a)
   elseif towards == "away" then
     ang = ang + 2147483648
   end
+  ang = wrap_brad(ang)
   local d = dnp.dir(ang)
   m.e:add_impulse(vec3.new(d.x * a.speed, d.y * a.speed, a.vertical or ZERO))
 end
@@ -1558,10 +1616,25 @@ local function drive(m)
     return
   end
 
-  local ang = walk_aim
-  if mode == "flee" then ang = aim + 2147483648
-  elseif mode == "strafe" then ang = aim + 1073741824
-  elseif mode == "wander" then ang = m.wander or aim
+  -- WRAPPED, every one of them. A turn is 2^32 and these are plain Lua
+  -- numbers, so `aim + 1073741824` runs past the top of the range whenever the
+  -- aim is in the last quarter turn -- and dnp.dir casts what it is given to a
+  -- u32, where a value outside the range is not a wrap but undefined. It was
+  -- never noticed because no monster in maps/mobs/doom_monsters.lua uses
+  -- `flee` or `strafe`; the C++ loop does the same addition in u32 arithmetic,
+  -- which DOES wrap, and the two runtimes then walked different directions for
+  -- a quarter of all aims. Found by tools/mobdiff on a graph written to use
+  -- the modes Doom's monsters do not.
+  local ang = wrap_brad(walk_aim)
+  if mode == "flee" then ang = wrap_brad(aim + 2147483648)
+  elseif mode == "strafe" then ang = wrap_brad(aim + 1073741824)
+  -- WANDER READS A VARIABLE, and until `set_angle` existed nothing ever wrote
+  -- one -- `m.wander` was read here and assigned nowhere in the file, so this
+  -- mode walked straight at the aim, identical to `charge`, for as long as it
+  -- had existed. The variable is named `wander` by convention: a state that
+  -- wants to wander sets it with `set_angle{ var = "wander", towards =
+  -- "random" }` and the direction is then the author's, not this runtime's.
+  elseif mode == "wander" then ang = wrap_brad(m.vars.wander or m.wander or aim)
   end
 
   -- A WORLD direction, not "forward". move_x/move_y are world axes: the client

@@ -92,7 +92,11 @@ async function run (label, env) {
   const srv = spawn(SERVER, [
     '--port', String(port), '--map', MAP, '--spawn', 'start', '--props', PROPS,
     '--test-player', '--hash-trace', String(EVERY)
-  ], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } })
+  ], { stdio: ['ignore', 'pipe', 'pipe'],
+       // The state-change trace as well, from the SAME run whose hashes are
+       // being compared. Correlating it from a separate run is how a
+       // divergence at tick 122 gets read against a hash that diverged at 163.
+       env: { ...process.env, DNP_MOB_TRACE: '1', ...env } })
 
   let log = ''
   srv.stdout.on('data', (d) => { log += d })
@@ -116,8 +120,10 @@ async function run (label, env) {
   }
 
   const hashes = new Map()
-  for (const m of log.matchAll(/^\[hash\] (\d+) (\d+) ([0-9A-F]+)$/gm)) {
+  const rng = new Map()
+  for (const m of log.matchAll(/^\[hash\] (\d+) (\d+) ([0-9A-F]+) ([0-9A-F]+)$/gm)) {
     hashes.set(`${m[1]}:${m[2]}`, m[3])
+    rng.set(`${m[1]}:${m[2]}`, m[4])
   }
   // Per-agent detail, keyed the same way, so a divergence can be read rather
   // than merely detected.
@@ -126,10 +132,20 @@ async function run (label, env) {
     agents.set(`${m[1]}:${m[2]}:${m[3]}`,
                { x: m[4], y: m[5], z: m[6], facing: m[7], anim: m[8], sector: m[9] })
   }
+  // Every state change, in order. The runtime tag is stripped: which runtime
+  // made a decision is not the question, what it decided is.
+  const decisions = [...log.matchAll(/\[mobenter\] (\d+) (\d+) (\w+)/g)]
+    .map((m) => `${m[1]} ${m[2]} ${m[3]}`)
+  // A tracked mob's entry is printed twice -- once by the Lua wrapper that
+  // delegates and once by the loop it delegated to -- so consecutive
+  // duplicates are one decision.
+  const dedup = decisions.filter((v, i) => v !== decisions[i - 1])
   const census = /mobs: placed (\d+) on the C\+\+ loop, (\d+) on the Lua path/.exec(log)
   return {
     hashes,
+    rng,
     agents,
+    decisions: dedup,
     cpp: census ? Number(census[1]) : 0,
     lua: census ? Number(census[2]) : 0,
     log
@@ -211,6 +227,25 @@ check(cpp.hashes.size > 10, `there are hashes to compare (${cpp.hashes.size})`)
 const distinct = new Set([...cpp.hashes.values()]).size
 check(distinct > 5, `the world changed over the run (${distinct} distinct hashes)`)
 
+// WHERE THE RNG PARTS, which is usually before where the world does: the two
+// runtimes share one stream, and a draw one makes and the other skips moves
+// every later one. Reported first because it is the cause and the world
+// divergence is the symptom.
+{
+  const keys = [...cpp.rng.keys()].filter((k) => lua.rng.has(k))
+  keys.sort((x, y) => {
+    const [lx, tx] = x.split(':').map(Number)
+    const [ly, ty] = y.split(':').map(Number)
+    return lx - ly || tx - ty
+  })
+  const bad = keys.find((k) => cpp.rng.get(k) !== lua.rng.get(k))
+  if (bad) {
+    console.log(`\n  the RNG streams part at ${bad}: ` +
+                `${cpp.rng.get(bad)} vs ${lua.rng.get(bad)}`)
+  }
+  check(!bad, 'the two runtimes draw from the RNG identically')
+}
+
 const d = firstDivergence(cpp, lua)
 if (d) {
   const [level, tick] = d.at.split(':')
@@ -256,6 +291,36 @@ if (d) {
                                  diff.map((f) => `${f} ${x[f]} vs ${y[f]}`).join(', '))
   }
 }
+// THE DECISIONS, which is where a divergence is readable. A hash says the
+// worlds differ; this says which mob went somewhere one runtime did not send
+// it, and at which tick.
+{
+  const a = cpp.decisions
+  const b = lua.decisions
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  // Only where BOTH still have entries: past the end of the shorter one there
+  // is nothing to disagree with.
+  if (i < a.length && i < b.length) {
+    console.log(`\n  first differing decision, entry ${i}:`)
+    for (let k = Math.max(0, i - 2); k < Math.min(Math.max(a.length, b.length), i + 3); k++) {
+      const mark = a[k] === b[k] ? ' ' : '*'
+      console.log(`   ${mark}  cpp: ${a[k] ?? '-'}` + ' '.repeat(Math.max(1, 24 - String(a[k] ?? '-').length)) +
+                  `lua: ${b[k] ?? '-'}`)
+    }
+  }
+  // A DIAGNOSTIC, NOT A CHECK. The run ends with SIGKILL, and whatever the
+  // server had buffered on stderr dies with it -- so a short trace means the
+  // log was cut, not that a runtime stopped deciding. Asserting on it would be
+  // asserting on how much output survived being killed, which is a flake
+  // waiting to be deleted. The hash comparison below is the claim; this is
+  // what makes a failure of it readable.
+  if (a.length !== b.length) {
+    console.log(`    (${a.length} vs ${b.length} decisions logged; the trace is ` +
+                'cut by the kill at the end of a run, so only the order matters)')
+  }
+}
+
 check(d === null, 'the two runtimes produce the same world, tick by tick')
 
 console.log(`\nmobdiff: ${checks} checks, ${fails} failures`)
