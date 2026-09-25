@@ -50,6 +50,10 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/test.map  "build/$HOST_ARCH/test.dnpm"
 "./build/$HOST_ARCH/mapc" maps/crush.map  "build/$HOST_ARCH/crush.dnpm"
 "./build/$HOST_ARCH/mapc" maps/phase3.map "build/$HOST_ARCH/phase3.dnpm"
+# The studio's starter module, written by the studio's own emitter from its
+# documents (docs/STUDIO.md): if this map stops baking, the studio's .map
+# writer has drifted from mapc's grammar.
+"./build/$HOST_ARCH/mapc" modules/starter/maps/first.map "build/$HOST_ARCH/starter_first.dnpm"
 ./scripts/check_map_scripts.sh
 
 # Every mob table loads clean, and every deliberately broken one is refused.
@@ -257,6 +261,10 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # table, and four bugs this phase came from a stub being more generous than
   # the engine and one from a parameter setter that never existed.
   "./build/lua/test_lua_shootrange"
+  # The server hosted on a thread and restarted with a different module, the
+  # way the phone shells play-test (docs/IOS.md). Present only once main.cpp
+  # exports dnp_server_run; the control is a run whose stop flag is never set.
+  [[ -x ./build/lua/test_server_run ]] && ./build/lua/test_server_run . | tail -2
   # The editor's trigger-table WRITER, checked by the runtime that has to read
   # it. It runs here rather than beside the other editor tests because its
   # oracle is build/lua/triggercheck, which is built one line above -- and a
@@ -271,6 +279,15 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # assertion runs the resulting graph through the runtime, so "the editor can
   # build it" means the engine takes it.
   node editor/test/triggeredit.test.js | tail -2
+  # The studio's trigger writer and its presets, through the same runtime: a
+  # door, a lift, a switch, a teleport, an ambush, an exit and a crusher must
+  # all load, and the control strips the staleness guards the emitter writes
+  # beside every side index -- the runtime must then refuse the table.
+  node studio/test/lua_emit.test.js | tail -2
+  # And its monsters, through tools/mobcheck: a brain the cards wrote loads,
+  # and a corpse with no death state is refused by the studio and the runtime
+  # alike. The body half is read back by the client's own catalogue parser.
+  node studio/test/mobs.test.js | tail -2
 else
   echo "  skip lua tests (run: scripts/setup_luajit.sh)"
 fi
@@ -329,6 +346,11 @@ else
   # arithmetic, and arithmetic is worth asserting rather than screenshotting.
   node client/test/mapgeom.test.js | tail -2
   node client/test/camera.test.js | tail -2
+  # The camera's path curve. Pure arithmetic, and the half of the path feature
+  # that has no other way to be checked: a curve that quietly returned its
+  # polyline would look right in every screenshot, so most of this file is the
+  # control that says it bends.
+  node client/test/spline.test.js | tail -2
   # TOUCH, which is arithmetic and a state machine: where the stick's origin
   # is, what counts as a push, who owns which finger. The claims worth having
   # are the ones with a wrong answer you could ship -- pushing your thumb up
@@ -369,6 +391,9 @@ else
   node client/test/vfx.test.js | tail -2
   # Panels: the client's decoder against real bytes from the C++ encoder.
   node client/test/ui.test.js | tail -2
+  # The MUSIC message: a cue name, a fade and a moment survive the wire as the
+  # server writes them, and a moment the protocol does not know is refused.
+  node client/test/proto_music.test.js | tail -2
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | tail -2
   # The synth: instruments, a baked track, and audio that is not silence.
@@ -382,6 +407,39 @@ else
   # was doing at the time. Guards the dirty check that stops the map being
   # re-derived sixty times a second once a level's first door has opened.
   node client/test/renderbudget.test.js | tail -2
+  # THE STUDIO (docs/STUDIO.md). Its compiler is mapc built to wasm, and the
+  # first claim is that a bake on the device is a bake on the workstation:
+  # byte for byte, over the map corpus, against the native binary. Then the
+  # adjacency it derives -- shared walls, split T-junctions, platforms, pits --
+  # read back through the engine's own loader, with the control that an
+  # unsplit T-junction names no neighbour; the side indices its trigger writer
+  # relies on, checked edge by edge; and the pack, against unzip.
+  if command -v em++ >/dev/null 2>&1; then
+    ./scripts/build_mapc_wasm.sh >/dev/null
+  fi
+  node studio/test/bake.test.js | tail -2
+  node studio/test/topology.test.js | tail -2
+  node studio/test/mapfmt.test.js | tail -2
+  node studio/test/pack.test.js | tail -2
+  # A .tsprite composed by ThreeSprite's own runtime (vendored) into the atlas
+  # the client draws: checked by the client's parser and by tools/tsprite's
+  # project-versus-atlas comparison.
+  node studio/test/sheets.test.js | tail -2
+  # The brain as a graph: every way the runtime leaves a state is an arrow,
+  # and the automatic arrangement places every state, initial first.
+  node studio/test/graph.test.js | tail -2
+  # A prop's body and picture through the client's catalogue parser; deleting
+  # or renaming one follows it into every map's placements.
+  node studio/test/props.test.js | tail -2
+  # A map's music is filed under the hash the client computes for it, and a
+  # cue that names a missing track is said, not silently dropped.
+  node studio/test/music.test.js | tail -2
+  # modules/starter is generated from its documents; a checked-in copy that
+  # the emitter would write differently is a stale one.
+  node studio/tools/emit_module.mjs modules/starter --check | tail -1
+  # The studio in a real browser: opt-in (DNP_STUDIO_PAGE_TEST=1 with a dev
+  # server up), skipped loudly otherwise.
+  node studio/test/page.test.js | tail -2
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
@@ -418,6 +476,10 @@ else
   # Electron's IPC pipe stubbed. See app/test/local_transport.test.js for why
   # that is the right seam.
   node app/test/stage.test.js | tail -2
+  # The studio's writable game tree: files land under it and nowhere else --
+  # seven escaping paths are the control -- and seeding the bundled modules
+  # never touches one the user made.
+  node app/test/studio_files.test.js | tail -2
   node app/test/local_transport.test.js 2>/dev/null | tail -2
   # And the app under a REAL Electron. Opt-in (DNP_APP_LAUNCH_TEST=1): it is a
   # window, a GPU process and a ~150 MB dependency. Worth having anyway --
