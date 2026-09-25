@@ -100,6 +100,27 @@ export function paintPlaceholder (ctx, name, { pixels = PIXELS } = {}) {
  * number that cannot be guessed: a Doom map converted at 1/48 wants 48, because
  * a 64-pixel Doom texture covers 64 Doom units and therefore 64/48 of ours.
  */
+/**
+ * How every wall and floor picture is sampled.
+ *
+ * Shared setup, so a frame loaded for an animation is configured exactly like
+ * one loaded for a material -- and like one the studio loads for its preview.
+ * They are the same pictures on the same walls; two code paths differing by a
+ * filter setting would show as a texture that changes appearance the moment it
+ * starts moving, or the moment a level is played rather than edited.
+ */
+export function configureTexture (THREE, tex) {
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.colorSpace = THREE.NoColorSpace
+  tex.magFilter = THREE.NearestFilter
+  // Mipmaps off. Doom art is 64 to 128 pixels and reads as mush the moment
+  // it is filtered down; nearest with no mips is what it was drawn for.
+  tex.minFilter = THREE.NearestFilter
+  tex.generateMipmaps = false
+  tex.flipY = false
+  return tex
+}
+
 export async function loadRealTextures (THREE, names, materials, {
   baseUrl = '/textures', pxPerUnit = 32, extra = [],
   // Called as each picture arrives, with (done, total). Optional, and a
@@ -120,21 +141,7 @@ export async function loadRealTextures (THREE, names, materials, {
   const loader = new THREE.TextureLoader()
   let loaded = 0
 
-  // Shared setup, so a frame loaded for an animation is configured exactly like
-  // one loaded for a material. They are the same pictures on the same walls;
-  // two code paths differing by a filter setting would show as a texture that
-  // changes appearance the moment it starts moving.
-  const configure = (tex) => {
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-    tex.colorSpace = THREE.NoColorSpace
-    tex.magFilter = THREE.NearestFilter
-    // Mipmaps off. Doom art is 64 to 128 pixels and reads as mush the moment
-    // it is filtered down; nearest with no mips is what it was drawn for.
-    tex.minFilter = THREE.NearestFilter
-    tex.generateMipmaps = false
-    tex.flipY = false
-    return tex
-  }
+  const configure = (tex) => configureTexture(THREE, tex)
 
   // ANIMATION FRAMES the map never names.
   //

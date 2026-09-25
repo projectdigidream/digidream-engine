@@ -118,6 +118,11 @@ const MOUNTS = [
   // soundtrack (modules/doom2/assets/music) and the per-file rule above finds
   // it first, exactly as it does for sprites.
   ['/music/', join(ROOT, 'assets', 'music')],
+  // The studio (docs/STUDIO.md), and the runtime Lua plus vocabularies it
+  // bakes and validates against. The runtime mount comes first because the
+  // studio mount would otherwise claim the prefix.
+  ['/studio/runtime/', join(ROOT, 'maps', 'scripts')],
+  ['/studio/', join(ROOT, 'studio')],
   // NOTE: /maps/ is NOT a plain mount -- see findMap below.
   ['/', join(ROOT, 'client')]
 ]

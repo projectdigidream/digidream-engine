@@ -110,6 +110,15 @@
      landed. */
   #health .fill { height: 100%; width: 100%; background: #5fbf6a; }
   #status { top: 50%; left: 0; right: 0; text-align: center; color: #9db4d4; font-size: 14px; }
+  /* The way back to the studio, only when the studio sent us here (?studio=1).
+     A plain link: the studio is a page on the same origin. */
+  #studio-back {
+    position: fixed; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
+    z-index: 60; padding: 10px 14px; border-radius: 8px; text-decoration: none;
+    background: rgba(27,34,48,.85); color: #cfe3ff; border: 1px solid rgba(207,227,255,.28);
+    font: 600 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: auto;
+  }
+  #studio-back[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -132,6 +141,12 @@
     <div>drag anywhere to turn &nbsp;·&nbsp; pinch to zoom</div>
     <div class="dim">thumb in the bottom-left corner to move</div>
   </div>
+  <a id="studio-back" href="/studio/" hidden>◀ Studio</a>
+  <script>
+    if (new URLSearchParams(location.search).get('studio')) {
+      document.getElementById('studio-back').hidden = false
+    }
+  </script>
 
   <!--
     An import map rather than a bundler. The client is plain ES modules and the
