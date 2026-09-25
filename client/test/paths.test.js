@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { Core } from '../src/core.js'
 import { readPaths, refreshPathPositions, pathIndexForTag } from '../src/mapdata.js'
 import { buildSpline } from '../src/spline.js'
+import { Camera, CAM_MODE } from '../src/camera.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -216,6 +217,57 @@ console.log('\n--- the overlay can tell which paths ride an unpredictable sector
 
   const one = byTag(1)
   check(Array.from(one.anchors).every((a) => a === 0), 'CONTROL: tag 1 is anchored to the static yard')
+}
+
+console.log('\n--- the glue: a camera ends up on the path an author typed ---')
+{
+  // What main.js does between readPaths and camera.update, written out here
+  // because it is the one step with no home of its own -- and because it is
+  // where the SPACES meet. The map is z-up engine space; the camera works in
+  // y-up THREE space; toThreeX/Y/Z is (x, y, z) -> (x, z, -y). Getting that
+  // wrong puts the camera on a path at right angles to the authored one, which
+  // no test of either half would notice.
+  const toThree = (p) => ({ x: p.x, y: p.z, z: -p.y })
+  const toEngine = (p) => ({ x: p.x, y: -p.z, z: p.y })
+
+  const authored = byTag(1)
+  const enginePts = pts(authored)
+  const spline = buildSpline(enginePts.map(toThree), { loop: authored.loop })
+  spline.id = authored.tag
+
+  // The conversion is an isometry, so the curve the camera rides is the same
+  // length as the one mapc baked. If it were not, every cutscene on this path
+  // would be timed against a different curve from the one it flies.
+  check(near(spline.length, authored.curveLength, 1e-6),
+    `the converted spline is the same length as the baked one (${spline.length.toFixed(4)})`)
+
+  const c = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 1000 })
+  const engineSubject = { x: 10, y: 6, z: 1 }
+  c.snapTo(toThree(engineSubject))
+  let eye = null
+  for (let i = 0; i < 200; i++) eye = c.update(toThree(engineSubject), 1 / 60, null, spline)
+
+  // Convert the eye back and ask the ENGINE-space curve where it is. Round
+  // trip, so a conversion that was wrong in a self-consistent way still fails.
+  const engineSpline = buildSpline(enginePts, { loop: authored.loop })
+  const back = toEngine(eye)
+  const d = Math.sqrt(engineSpline.nearest(back).distSq)
+  check(d < 1e-6, `the eye lands on the authored path in engine space (off by ${d.toExponential(2)})`)
+
+  // z is the axis that would survive a wrong permutation unnoticed on this
+  // path, since it is the only one the three points agree on.
+  check(near(back.z, 1, 1e-6), `and at the authored height z=1 (got ${back.z.toFixed(6)})`)
+
+  // CONTROL: skipping the conversion -- building the spline from engine points
+  // and handing it a THREE-space subject -- does NOT land on the path. Without
+  // this, the check above passes for any code that happens to put the camera
+  // somewhere on a curve.
+  const wrong = new Camera({ mode: CAM_MODE.TRACK, pathBlend: 1000 })
+  wrong.snapTo(toThree(engineSubject))
+  let we = null
+  for (let i = 0; i < 200; i++) we = wrong.update(toThree(engineSubject), 1 / 60, null, engineSpline)
+  const wd = Math.sqrt(engineSpline.nearest(toEngine(we)).distSq)
+  check(wd > 1, `CONTROL: skipping the conversion misses by ${wd.toFixed(2)} units`)
 }
 
 console.log(`\npaths: ${checks} checks, ${fails} failures`)

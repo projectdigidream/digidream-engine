@@ -15,7 +15,7 @@
 //
 import * as THREE from 'three'
 import { Core } from './core.js'
-import { readMap, fxToFloat } from './mapdata.js'
+import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
 import {
@@ -23,9 +23,10 @@ import {
   makeFacingArrow, aimFacingArrow
 } from './render/scene.js'
 import {
-  Camera, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
+  Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
   DEFAULT_DISTANCE
 } from './camera.js'
+import { buildSpline } from './spline.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
@@ -258,6 +259,30 @@ let ui = null
 let closedWhy = null
 // A map change in flight: the new WELCOME, and the map arriving behind it.
 let pendingWelcome = null
+// The camera state CAMERA_SET writes, declared HERE for the reason
+// pendingWelcome is: the local transport hands over the messages a join already
+// produced the moment the handler is registered, which is before this module
+// has reached the camera code below. A `let` further down is in its dead zone
+// then, and one assignment threw away the whole message. The Camera object
+// itself is made later, so its settings wait in camCfgPending until it is.
+let camOverrideDistance = null   // set by CAMERA_SET, or null for "whatever the zoom implies"
+let camOverridePitch = null
+// A map may lock the camera's yaw or zoom (CAMERA_SET lock_yaw, lock_zoom): a
+// level made for one angle is not a level to be looked at from another.
+let camLockYaw = false
+let camLockZoom = false
+let yaw = START_YAW
+// Camera paths (design 4.1). The TAG, not an index: inserting a path earlier in
+// a .map file renumbers every index after it, and would silently repoint every
+// camera in the level. Resolved to a spline inside the frame loop, where the
+// map certainly exists -- a level's CAMERA_SET arrives on join, possibly before
+// the map is parsed and certainly before `camera` is made.
+let camPathTag = -1
+let camPaths = []
+let camPathSpline = null
+let camPathIndex = -1
+const camCfgPending = {}
+let cameraReady = false
 let movingMap = null
 const motionSets = []
 const pendingSnapshots = []
@@ -311,6 +336,12 @@ if (LIVE) {
       else if (m.type === MSG.UI_CLOSE) ui.close(m.uiId)
       // A switch was thrown, here or before we arrived. Purely visual: what the
       // switch DID travels as sector motion, exactly as it did before.
+      // The map's music changes cue. The name is resolved here, from the
+      // manifest playMapMusic already loaded for this map (docs/protocol.md
+      // §11.1); a cue the map did not ship is said by music.cue, not fatal.
+      else if (m.type === MSG.MUSIC) {
+        music.cue(m.cue, { fadeMs: m.fadeMs, at: m.at }).catch((e) => console.warn(`[music] ${e.message}`))
+      }
       else if (m.type === MSG.SIDE_TEXTURE) {
         const sector = view.setSideTexture(m.side, m.field, m.name.toUpperCase(),
                                            { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
@@ -326,12 +357,20 @@ if (LIVE) {
       // client's own camera and nothing about it is predicted or replicated
       // back.
       else if (m.type === MSG.CAMERA_SET) {
+        console.log(`[camera] ${m.fields.map((f) => `${CAMERA_FIELD[f.id] ?? f.id}=${f.value}`).join(' ')}`)
         for (const f of m.fields) {
           const name = CAMERA_FIELD[f.id]
           if (!name) continue          // a setting this client does not know
           if (name === 'distance') camOverrideDistance = f.value
           else if (name === 'pitch') camOverridePitch = f.value
-          else camera.cfg[name] = f.value
+          // Where the camera stands and whether the player may move it: the
+          // map's choice (docs/protocol.md §11.1, fields 8..10). Yaw arrives in
+          // turns, like pitch.
+          else if (name === 'yaw') yaw = f.value * Math.PI * 2
+          else if (name === 'lockYaw') camLockYaw = f.value >= 0.5
+          else if (name === 'lockZoom') camLockZoom = f.value >= 0.5
+          else if (cameraReady) camera.cfg[name] = f.value
+          else camCfgPending[name] = f.value
         }
       }
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
@@ -409,6 +448,10 @@ if (!ok) {
 }
 
 let mapData = readMap(map)
+// Camera paths, read once: their STRUCTURE never changes, only their point
+// positions, which refreshPathPositions re-reads per frame for the one path the
+// camera is actually on.
+camPaths = readPaths(map)
 let world = core.createWorld({ map })
 
 if (LIVE && welcome && map.hash !== welcome.mapHash) {
@@ -474,6 +517,46 @@ if (LIVE) {
       to: { x: 0n, y: 0n, z: BigInt(Math.round(rise * 4294967296)) },
       startTick: 0, durationTicks: 240, loopMode: 2
     })) movers.push(i)
+  }
+
+  // A camera path, in solo mode, for the same reason ?movers= exists: there is
+  // no CAMERA_SET without a server, so without this the whole feature cannot be
+  // tried by hand at all -- and "does it feel right" is not a question a test
+  // answers.
+  //
+  //   ?cam=track:1           keep the point on path tag 1 nearest the player
+  //   ?cam=flythrough:2@6    ride path tag 2 at 6 units a second
+  //   ?cam=auto:1@r8         attach to path tag 1 within 8 units, else follow
+  //
+  // Tags, not indices, exactly as the wire field is.
+  const camSpec = params.get('cam')
+  if (camSpec) {
+    const m = /^(follow|track|flythrough|auto):(-?\d+)(?:@(r?)([\d.]+))?$/.exec(camSpec.trim())
+    if (!m) {
+      console.warn(`[solo] bad ?cam= -- want track:<tag>, flythrough:<tag>@<speed>, auto:<tag>@r<radius>`)
+    } else {
+      const [, mode, tagRaw, isRadius, numRaw] = m
+      camPathTag = Number(tagRaw)
+      // Into camCfgPending, NOT onto camera.cfg: this block runs while the
+      // module is still setting up and `camera` is made a few hundred lines
+      // below, so touching it here is the temporal dead zone this file's
+      // comment at the top already records losing a message to.
+      camCfgPending.mode = { follow: CAM_MODE.FOLLOW, track: CAM_MODE.TRACK,
+                             flythrough: CAM_MODE.FLYTHROUGH, auto: CAM_MODE.AUTO }[mode]
+      const n = numRaw === undefined ? null : Number(numRaw)
+      if (n !== null) {
+        if (isRadius) camCfgPending.pathAttach = n
+        else camCfgPending.pathSpeed = n
+      }
+      // A usable default, so `auto:1` without a radius attaches to something
+      // rather than silently behaving as FOLLOW.
+      if (camCfgPending.mode === CAM_MODE.AUTO && !(camCfgPending.pathAttach > 0)) {
+        camCfgPending.pathAttach = 8
+      }
+      console.log(`[solo] camera ${mode} on path tag ${camPathTag}` +
+                  (camCfgPending.pathSpeed ? ` at ${camCfgPending.pathSpeed} u/s` : '') +
+                  (camCfgPending.pathAttach ? ` within ${camCfgPending.pathAttach}u` : ''))
+    }
   }
 }
 
@@ -908,6 +991,12 @@ function adoptMap (bytes, w) {
   }
   map = loaded.map
   mapData = readMap(map)
+  // A new map's paths are different paths, and the tag the camera holds may not
+  // exist in it. Dropping the resolved index forces the lookup to run again and
+  // to warn if it does not.
+  camPaths = readPaths(map)
+  camPathIndex = -1
+  camPathSpline = null
 
   world = core.createWorld({ map })
   spawn = map.spawnForTag(SPAWN)
@@ -984,16 +1073,17 @@ function adoptMap (bytes, w) {
 let viewHeight = START_ZOOM
 const cam3 = makeCamera(PROJECTION, innerWidth / innerHeight, viewHeight, FOV)
 const camera = new Camera()
+// Settings that arrived before the camera existed (see camCfgPending).
+Object.assign(camera.cfg, camCfgPending)
+cameraReady = true
 
 // Under perspective, zooming MOVES the camera; under orthographic it reshapes
 // the frustum and the position is irrelevant to framing. One number drives
 // both.
-// Set by CAMERA_SET, or null for "whatever the zoom implies". Kept apart from
-// camera.cfg because distance and pitch describe where the camera sits rather
-// than how it follows, and the offset is recomputed from them every frame as
-// yaw and zoom change.
-let camOverrideDistance = null
-let camOverridePitch = null
+// camOverrideDistance and camOverridePitch (declared beside pendingWelcome, see
+// there) are kept apart from camera.cfg because distance and pitch describe
+// where the camera sits rather than how it follows, and the offset is
+// recomputed from them every frame as yaw and zoom change.
 const camDistance = () =>
   camOverrideDistance ?? distanceFor(cam3, viewHeight, DEFAULT_DISTANCE)
 
@@ -1009,6 +1099,7 @@ addEventListener('resize', () => {
  * clamp is how one of them ends up able to zoom into the floor.
  */
 function zoomBy (factor) {
+  if (camLockZoom) return
   viewHeight = Math.min(140, Math.max(8, viewHeight * factor))
   resizeCamera(cam3, innerWidth / innerHeight, viewHeight)
 }
@@ -1023,8 +1114,6 @@ const held = new Set()
 addEventListener('keydown', (e) => { held.add(e.code); if (e.code === 'Space') e.preventDefault() })
 addEventListener('keyup', (e) => held.delete(e.code))
 addEventListener('blur', () => held.clear())
-
-let yaw = START_YAW
 
 // The last direction the agent was actually pointed. Brad 0 is due east, not
 // "unset", so this starts there and every idle tick repeats whatever came last.
@@ -1194,14 +1283,16 @@ function frame (now) {
     movingMap = null
   }
 
-  if (held.has('KeyQ')) yaw -= 1.5 * dt
-  if (held.has('KeyR')) yaw += 1.5 * dt
+  if (!camLockYaw && held.has('KeyQ')) yaw -= 1.5 * dt
+  if (!camLockYaw && held.has('KeyR')) yaw += 1.5 * dt
   if (touch) {
     // TAKEN once per frame, which zeroes them. A drag accumulates between
     // frames and is applied whole; reading without clearing would turn by the
     // same drag every frame until the thumb moved again, which is a camera
-    // that spins when you stop touching it.
-    yaw += touch.state.takeYaw()
+    // that spins when you stop touching it. Taken even when locked, so the
+    // drag does not pile up and land the moment the lock lifts.
+    const dyaw = touch.state.takeYaw()
+    if (!camLockYaw) yaw += dyaw
     const pinch = touch.state.takeZoom()
     // Pixels of pinch to a zoom factor. Exponential rather than linear so that
     // the same finger movement is the same proportional change however far in
@@ -1387,10 +1478,51 @@ function frame (now) {
   camera.cfg.offset = cameraOffset(
     yaw, camDistance(),
     camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2)
+  // The camera path this tag names, rebuilt only when its points have moved.
+  //
+  // Resolved HERE rather than where CAMERA_SET is applied, because a level's
+  // camera settings arrive on join -- before the map is necessarily parsed.
+  // Rebuilding is gated on refreshPathPositions reporting a change: a static
+  // path is the overwhelming common case, and a spline's arc-length table is
+  // the expensive part, not the reading.
+  if (camPathTag < 0) {
+    camPathSpline = null
+    camPathIndex = -1
+  } else {
+    if (camPathIndex < 0 || camPaths[camPathIndex]?.tag !== camPathTag) {
+      camPathIndex = pathIndexForTag(camPaths, camPathTag)
+      camPathSpline = null
+      if (camPathIndex < 0) console.warn(`[camera] no path tagged ${camPathTag}`)
+    }
+    if (camPathIndex >= 0) {
+      const p = camPaths[camPathIndex]
+      const moved = refreshPathPositions(map, p)
+      if (!camPathSpline || moved) {
+        // THREE space, because that is the space `subject` is in and the space
+        // the eye is written back into. Safe to convert first rather than last:
+        // toThreeX/Y/Z is a signed permutation, so it is linear and an
+        // isometry, and both the curve and its arc length commute with it --
+        // asserted in spline.test.js, with a nonlinear map as the control.
+        const pts = []
+        for (let i = 0; i < p.pos.length; i += 3) {
+          pts.push({
+            x: toThreeX(p.pos[i]),
+            y: toThreeY(p.pos[i + 2]),
+            z: toThreeZ(p.pos[i + 1])
+          })
+        }
+        camPathSpline = buildSpline(pts, { loop: p.loop })
+        // By TAG, so the camera does not read a rebuilt path as a different
+        // one and restart a flythrough on every frame of a lift's travel.
+        camPathSpline.id = p.tag
+      }
+    }
+  }
+
   // The agent's facing, so the camera can aim AHEAD of it rather than at it.
   // facingDirection already returns three-space -- it is the same vector the
   // debug arrow is drawn along -- so converting again would negate z twice.
-  const eye = camera.update(subject, dt, facingDirection(a.facing))
+  const eye = camera.update(subject, dt, facingDirection(a.facing), camPathSpline)
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
 
@@ -1484,6 +1616,19 @@ function frame (now) {
   // which put it at module scope reading a const declared in the function --
   // "musicLine is not defined", on the first frame.
   if (musicLine) hud.textContent += `\nmusic ${musicLine}`
+
+  // The camera path, when there is one. `mix` is the part worth watching: it
+  // is the crossfade between the free camera and the path, so an attach or a
+  // detach is visible as a number easing rather than as a cut you have to
+  // catch by eye.
+  if (camPathSpline) {
+    const ps = camera.pathState
+    hud.textContent +=
+      `\npath ${camPathTag} along ${ps.along.toFixed(1)}/${camPathSpline.length.toFixed(1)}` +
+      ` mix ${ps.mix.toFixed(2)}${ps.attached ? '' : ' (free)'}${ps.clamped ? ' clamped' : ''}`
+  } else if (camPathTag >= 0) {
+    hud.textContent += `\npath ${camPathTag} UNRESOLVED`
+  }
 
   // The capture. One line a second, comma-separated, headed once -- a minute of
   // this from a real GPU is a baseline somebody can paste into a commit message
