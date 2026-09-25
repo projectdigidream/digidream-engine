@@ -463,7 +463,7 @@ void think(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
 
     const Kind& k = rt.graph.kinds[static_cast<u32>(m.kind)];
     const State& st = rt.graph.states[k.first_state + m.state];
-    EvalWorld ev{&w, tick, rt.rng};
+    EvalWorld ev{&w, tick, rt.rng, &rt.graph, &rt.mobs, rt.props};
     const i32* vars = rt.vars.empty() ? nullptr : &rt.vars[m.first_var];
 
     for (u16 i = 0; i < st.trans_count; ++i) {

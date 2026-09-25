@@ -379,6 +379,58 @@
     {
       "args": [
         {
+          "doc": "Default 'player', which is what the runtime does on its own.",
+          "name": "of",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "player",
+            "mob",
+            "prop",
+            "any"
+          ]
+        },
+        {
+          "doc": "How far to look. Absent means the mob's own `sight`.",
+          "name": "distance",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "Only this kind, when looking for a mob.",
+          "name": "mob",
+          "optional": true,
+          "type": "mob"
+        },
+        {
+          "doc": "Only this record, when looking for a prop.",
+          "name": "prop",
+          "optional": true,
+          "type": "prop"
+        },
+        {
+          "doc": "Require a clear ray. Costs one per candidate, so put a `distance` on it.",
+          "name": "visible",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "doc": "Point this mob at the nearest thing that matches, or at nothing if none does.",
+      "name": "target_nearest"
+    },
+    {
+      "args": [],
+      "doc": "Turn on whatever last hurt it. The mob-level `infighting` field does this automatically and unconditionally; this is how a graph decides for itself -- retaliate only below half health, or only when the attacker is closer than what it is already chasing.",
+      "name": "target_attacker"
+    },
+    {
+      "args": [],
+      "doc": "Forget the current target. `has_target` is then false and the runtime will acquire again on a later think.",
+      "name": "target_none"
+    },
+    {
+      "args": [
+        {
           "name": "code",
           "one_of": "body",
           "optional": true,
@@ -510,6 +562,78 @@
     {
       "args": [],
       "name": "grounded"
+    },
+    {
+      "args": [
+        {
+          "name": "distance",
+          "type": "fx"
+        },
+        {
+          "doc": "Only this kind. Absent means any mob at all.",
+          "name": "mob",
+          "optional": true,
+          "type": "mob"
+        },
+        {
+          "doc": "Default true. False finds corpses, which is what a resurrector wants to look for before it commits to the animation.",
+          "name": "alive",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "doc": "Another mob is within reach. Itself never counts.",
+      "name": "mob_within"
+    },
+    {
+      "args": [
+        {
+          "name": "distance",
+          "type": "fx"
+        },
+        {
+          "doc": "Only this catalogue record. Absent means any prop.",
+          "name": "prop",
+          "optional": true,
+          "type": "prop"
+        }
+      ],
+      "doc": "A prop is within reach -- a barrel to shoot, a totem to guard, a key somebody dropped. Props are not mobs and have no graph; this is how a brain notices the furniture.",
+      "name": "prop_within"
+    },
+    {
+      "args": [
+        {
+          "name": "distance",
+          "type": "fx"
+        },
+        {
+          "name": "at_least",
+          "type": "int"
+        },
+        {
+          "name": "mob",
+          "optional": true,
+          "type": "mob"
+        }
+      ],
+      "doc": "At least this many mobs of that kind are within reach. A monster that only charges in a group, or one that panics alone.",
+      "name": "count_within"
+    },
+    {
+      "args": [
+        {
+          "name": "kind",
+          "type": "enum",
+          "values": [
+            "player",
+            "mob",
+            "prop"
+          ]
+        }
+      ],
+      "doc": "What it is currently hunting. Since `target_nearest` can point a mob at something that is not a player, a graph that cares has to be able to ask.",
+      "name": "target_is"
     },
     {
       "args": [],

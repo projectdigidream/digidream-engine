@@ -55,6 +55,7 @@ MobRuntime& runtime_of(lua_State* L) {
         rt.nav = c->nav;
         rt.commands = c->commands;
         rt.rng = &c->rng;
+        rt.props = c->props;
     }
     return rt;
 }

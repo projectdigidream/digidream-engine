@@ -47,6 +47,11 @@
 --   "state"   the name of a state in the same mob
 --   "mob"     the name of a mob in the same file
 --   "missile" the name of a missile in the same file
+--   "prop"    the name of a record in assets/props.txt. NOT checked by the
+--             loader, which never opens the catalogue -- that is the editor's
+--             to answer, because the editor is what holds it. `mob` and
+--             `missile` are checked precisely because they are defined in
+--             this same table and a wrong name is knowable here.
 --   "var"     the name of a per-mob variable
 --   "actions" a nested action list
 --
@@ -241,6 +246,50 @@ mob_vocab = {
 
     { name = "grounded", args = {} },
 
+    -- ---------------------------------------------------------- proximity
+    --
+    -- WHAT ELSE IS NEAR, which until these existed a mob could not ask at all.
+    -- A target was always the nearest PLAYER -- that was the only acquisition
+    -- path in the runtime -- so a monster could not guard an object, could not
+    -- notice its own kind, and could only fight another monster by being shot
+    -- by it first.
+    --
+    -- Distance is PLAN distance squared, like `target_within` and for the same
+    -- reason: a cacodemon above you is still near you, and a square root per
+    -- mob per think is work for an answer nobody reads.
+
+    { name = "mob_within",
+      args = { { name = "distance", type = "fx" },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind. Absent means any mob at all." },
+               { name = "alive", type = "bool", optional = true,
+                 doc = "Default true. False finds corpses, which is what a " ..
+                       "resurrector wants to look for before it commits to " ..
+                       "the animation." } },
+      doc = "Another mob is within reach. Itself never counts." },
+
+    { name = "prop_within",
+      args = { { name = "distance", type = "fx" },
+               { name = "prop", type = "prop", optional = true,
+                 doc = "Only this catalogue record. Absent means any prop." } },
+      doc = "A prop is within reach -- a barrel to shoot, a totem to guard, a " ..
+            "key somebody dropped. Props are not mobs and have no graph; this " ..
+            "is how a brain notices the furniture." },
+
+    { name = "count_within",
+      args = { { name = "distance", type = "fx" },
+               { name = "at_least", type = "int" },
+               { name = "mob", type = "mob", optional = true } },
+      doc = "At least this many mobs of that kind are within reach. A monster " ..
+            "that only charges in a group, or one that panics alone." },
+
+    { name = "target_is",
+      args = { { name = "kind", type = "enum",
+                 values = { "player", "mob", "prop" } } },
+      doc = "What it is currently hunting. Since `target_nearest` can point a " ..
+            "mob at something that is not a player, a graph that cares has to " ..
+            "be able to ask." },
+
     { name = "hurt_by_mob",
       args = {},
       doc = "What hurt it was another mob, not a player. The infighting edge." },
@@ -420,6 +469,42 @@ mob_vocab = {
       doc = "Override the state's own `anim` mid-sequence." },
 
     { name = "despawn", args = {} },
+
+    -- --------------------------------------------------------- targeting
+    --
+    -- A TARGET IS WHATEVER IT CHOSE, not "the nearest player". That sentence is
+    -- the whole point of these three: the runtime's own acquisition still
+    -- finds the nearest player when a mob has none, which is what every Doom
+    -- monster wants, and these are how anything else says otherwise.
+
+    { name = "target_nearest",
+      args = { { name = "of", type = "enum", optional = true,
+                 values = { "player", "mob", "prop", "any" },
+                 doc = "Default 'player', which is what the runtime does on " ..
+                       "its own." },
+               { name = "distance", type = "fx", optional = true,
+                 doc = "How far to look. Absent means the mob's own `sight`." },
+               { name = "mob", type = "mob", optional = true,
+                 doc = "Only this kind, when looking for a mob." },
+               { name = "prop", type = "prop", optional = true,
+                 doc = "Only this record, when looking for a prop." },
+               { name = "visible", type = "bool", optional = true,
+                 doc = "Require a clear ray. Costs one per candidate, so put " ..
+                       "a `distance` on it." } },
+      doc = "Point this mob at the nearest thing that matches, or at nothing " ..
+            "if none does." },
+
+    { name = "target_attacker",
+      args = {},
+      doc = "Turn on whatever last hurt it. The mob-level `infighting` field " ..
+            "does this automatically and unconditionally; this is how a graph " ..
+            "decides for itself -- retaliate only below half health, or only " ..
+            "when the attacker is closer than what it is already chasing." },
+
+    { name = "target_none",
+      args = {},
+      doc = "Forget the current target. `has_target` is then false and the " ..
+            "runtime will acquire again on a later think." },
 
     { name = "lua",
       args = { { name = "code", type = "string", one_of = "body", optional = true },

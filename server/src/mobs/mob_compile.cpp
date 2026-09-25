@@ -78,6 +78,10 @@ bool streq(const char* s, size_t n, const char* lit) {
     return n == m && std::memcmp(s, lit, m) == 0;
 }
 
+// `target_is` asks what KIND of thing is being hunted, and the answer for a
+// prop is one Mob::target cannot represent -- see target_nearest below. Left
+// unsupported so a graph that asks runs in Lua, rather than answering "not a
+// prop" for a mob that is in fact chasing one.
 Cond cond_by_name(const char* s, size_t n) {
     if (streq(s, n, "has_target"))     return Cond::HasTarget;
     if (streq(s, n, "target_within"))  return Cond::TargetWithin;
@@ -92,6 +96,9 @@ Cond cond_by_name(const char* s, size_t n) {
     if (streq(s, n, "grounded"))       return Cond::Grounded;
     if (streq(s, n, "was_hurt"))       return Cond::WasHurt;
     if (streq(s, n, "hurt_by_mob"))    return Cond::HurtByMob;
+    if (streq(s, n, "mob_within"))     return Cond::MobWithin;
+    if (streq(s, n, "prop_within"))    return Cond::PropWithin;
+    if (streq(s, n, "count_within"))   return Cond::CountWithin;
     return Cond::Unsupported;
 }
 
@@ -300,6 +307,28 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                         else if (streq(act, n, "lua") && k.supported()) {
                             k.unsupported.assign("lua (action)");
                         }
+                        // A PROP TARGET CANNOT LIVE HERE, and saying so is
+                        // better than letting it.
+                        //
+                        // Mob::target is an AGENT index; a prop is the other
+                        // half of the entity index space. Lua's
+                        // target_nearest would hand this runtime a prop index
+                        // through mob_set, where it would be read as whichever
+                        // agent happens to share the number -- a monster
+                        // hunting a stranger, for reasons nothing reports. So
+                        // a graph that can target a prop runs entirely in Lua,
+                        // counted with the rest.
+                        else if (streq(act, n, "target_nearest") && k.supported()) {
+                            lua_pop(L, 1);
+                            size_t on = 0;
+                            const char* of = opt_str(L, e, "of", on);
+                            const bool props = of != nullptr &&
+                                               (streq(of, on, "prop") || streq(of, on, "any"));
+                            if (of != nullptr) lua_pop(L, 1);
+                            if (props) k.unsupported.assign("target_nearest of a prop");
+                            // Pushed again so the common pop below balances.
+                            lua_pushnil(L);
+                        }
                         lua_pop(L, 1);
 
                         switch (se.id) {
@@ -423,6 +452,29 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
                                         lua_pop(L, 1);
                                     }
                                 }
+                                // A mob kind or a catalogue record. Interned
+                                // rather than resolved: a mob name means a
+                                // kind in this same graph, and a prop name
+                                // means a record in a file this subsystem
+                                // never opens -- so both stay names and the
+                                // comparison is by name at evaluation.
+                                {
+                                    size_t nn = 0;
+                                    const char* nm = opt_str(L, c, "mob", nn);
+                                    if (nm == nullptr) nm = opt_str(L, c, "prop", nn);
+                                    if (nm != nullptr) {
+                                        cc.name = g.intern(nm, nn);
+                                        lua_pop(L, 1);
+                                    }
+                                }
+                                if (field(L, c, "alive")) {
+                                    cc.flag = lua_toboolean(L, -1) != 0;
+                                    lua_pop(L, 1);
+                                }
+                                // `at_least` reuses the integer, and is read
+                                // after the others so a condition carrying
+                                // both cannot collide -- none does.
+                                cc.i = opt_int(L, c, "at_least", cc.i);
                                 g.conditions.push_back(cc);
                                 ++tt.cond_count;
                             }

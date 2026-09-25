@@ -21,6 +21,7 @@
 #include "dnp/sim/world.hpp"
 #include "dnp/nav/navgraph.hpp"
 #include "lua/commands.hpp"
+#include "lua/world_binding.hpp"
 
 struct lua_State;
 
@@ -91,6 +92,14 @@ struct EvalWorld {
     const sim::World* world = nullptr;
     u32  tick = 0;
     Rng* rng = nullptr;       // only `chance` touches it
+    // The proximity conditions need to know what else is here: the graph, to
+    // name a mob's kind, and the runtime's live set to walk. The catalogue is
+    // for `prop_within`, which compares a record's NAME -- a number in a
+    // script is a number somebody has to look up in a file the script does not
+    // mention.
+    const MobGraph* graph = nullptr;
+    const std::vector<Mob>* mobs = nullptr;
+    const lua::PropCatalogueView* props = nullptr;
 };
 
 // Does this transition's `when` hold? AND over the list, in declaration order,
@@ -133,6 +142,7 @@ struct MobRuntime {
     const nav::NavGraph* nav = nullptr;
     lua::CommandQueue*   commands = nullptr;
     Rng*                 rng = nullptr;
+    const lua::PropCatalogueView* props = nullptr;
 
     std::vector<Mob> mobs;
     std::vector<i32> vars;                 // flat, per-mob ranges

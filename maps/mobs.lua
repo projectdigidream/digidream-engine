@@ -183,6 +183,23 @@ local function check_value(a, v, where, owner)
              tostring(v), table.concat(a.values, ", "))
   elseif a.type == "fx" then
     return as_fx(v, where, a.name)
+  elseif a.type == "prop" then
+    -- A NAME IN assets/props.txt, and this file cannot check that it is one.
+    --
+    -- The catalogue is what the SERVER and the CLIENT read; the mob runtime
+    -- never opens it, and dnp.spawn_enemy resolves a name against it at spawn
+    -- time. So the loader checks the only thing it can -- that it is a name at
+    -- all -- and whether the record exists is the editor's to answer, because
+    -- the editor is the one holding the catalogue. It already does: a body
+    -- with no catalogue record is reported beside the mob that names it.
+    --
+    -- Deliberately NOT the same as `mob` and `missile`, which ARE checked,
+    -- because those are defined in this very table and a wrong name there is
+    -- knowable here.
+    if type(v) ~= "string" then
+      complain("%s: `%s` must be the name of a prop in assets/props.txt",
+               where, a.name)
+    end
   end
   return v
 end
@@ -280,8 +297,14 @@ local function check_action_list(list, where, mob)
         complain("%s: 'spawn' names mob '%s', which is not defined", at,
                  tostring(a.mob))
       end
+      -- Every action that NAMES a variable, not just the three that write an
+      -- integer into one. `set_angle` writes a heading and `face` reads one,
+      -- and both were introduced without being added here -- so a typo'd var
+      -- name in either was accepted silently and the mob then turned to a
+      -- heading that was always zero.
       if a.action == "set_var" or a.action == "add_var" or
-         a.action == "set_cooldown" then
+         a.action == "set_cooldown" or a.action == "set_angle" or
+         a.action == "face" then
         if mob and a.var and (mob.vars == nil or mob.vars[a.var] == nil) then
           complain("%s: `var` is '%s', which this mob does not declare in " ..
                    "`vars`. Declaring it is what gives it a starting value " ..
@@ -786,6 +809,72 @@ end
 function conds.has_target(m)     return m.tp ~= nil end
 function conds.grounded(m)       return m.e:grounded() end
 
+-- ------------------------------------------------------------- proximity
+--
+-- PLAN distance squared throughout, like target_within: no root, no vertical
+-- term. All four walk `live` or `dnp.props()` -- there is no spatial index
+-- over entities on the script side, and building one here would be a second
+-- answer to a question core/ already has a grid for. They are bounded by a
+-- distance the author writes, and the vocabulary says to put one on anything
+-- that also raycasts.
+
+local function near_mobs(m, dist, kind, alive, fn)
+  local d2 = dist * dist
+  for idx, o in pairs(live) do
+    if idx ~= m.idx and o.e:valid() and
+       (kind == nil or o.def.name == kind) and
+       (alive == false or not o.dead) then
+      local q = o.e:pos()
+      local dx, dy = q.x - m.p.x, q.y - m.p.y
+      if dx * dx + dy * dy <= d2 then
+        if fn(o, dx * dx + dy * dy) then return true end
+      end
+    end
+  end
+  return false
+end
+
+function conds.mob_within(m, c)
+  -- `alive` defaults TRUE: a corpse is still an entity and still in `live`,
+  -- because that is what lets `revive` find it -- so a condition that counted
+  -- them by default would have a monster reacting to a room of bodies.
+  local alive = c.alive
+  if alive == nil then alive = true end
+  return near_mobs(m, c.distance, c.mob, alive, function() return true end)
+end
+
+function conds.count_within(m, c)
+  local n = 0
+  local want = c.at_least or 1
+  near_mobs(m, c.distance, c.mob, true, function()
+    n = n + 1
+    return n >= want          -- stop as soon as the answer cannot change
+  end)
+  return n >= want
+end
+
+function conds.prop_within(m, c)
+  local d2 = c.distance * c.distance
+  for _, p in ipairs(dnp.props() or {}) do
+    if p:valid() and (c.prop == nil or p:name() == c.prop) then
+      local q = p:pos()
+      local dx, dy = q.x - m.p.x, q.y - m.p.y
+      if dx * dx + dy * dy <= d2 then return true end
+    end
+  end
+  return false
+end
+
+function conds.target_is(m, c)
+  if m.target == nil or not m.target:valid() then return false end
+  local kind = c.kind
+  if kind == "prop" then return m.target_prop == true end
+  if m.target_prop then return false end
+  local other = live[m.target:index()]
+  if kind == "mob" then return other ~= nil end
+  return other == nil        -- "player": an agent that is not one of ours
+end
+
 function conds.target_within(m, c)
   if m.tp == nil then return false end
   local dx, dy = m.tp.x - m.p.x, m.tp.y - m.p.y
@@ -1107,6 +1196,73 @@ function acts.set_cooldown(m, a) m.vars[a.var] = dnp.tick() + a.ticks end
 function acts.set_anim(m, a)    set_anim(m, a.anim) end
 function acts.despawn(m)        if m.e:valid() then m.e:despawn() end end
 
+-- ------------------------------------------------------------- targeting
+
+-- A TARGET IS WHATEVER IT CHOSE. The runtime's own acquisition still finds the
+-- nearest player when a mob has none -- which is what every Doom monster wants
+-- -- and these are how a graph says otherwise.
+--
+-- `m.target_prop` is what tells the two apart afterwards. A prop handle and an
+-- entity handle are different userdata types and only one of them answers
+-- `hp`, which is exactly the distinction `hurt` already has to make; recording
+-- it here means nothing downstream has to guess from the handle.
+function acts.target_nearest(m, a)
+  local of = a.of or "player"
+  local reach = a.distance or m.def.sight
+  local d2max = reach ~= nil and (reach * reach) or nil
+  local best, bd2, is_prop = nil, nil, false
+
+  local function consider(e, prop)
+    if not e:valid() then return end
+    local q = e:pos()
+    local dx, dy = q.x - m.p.x, q.y - m.p.y
+    local d2 = dx * dx + dy * dy
+    if d2max ~= nil and d2 > d2max then return end
+    if bd2 ~= nil and d2 >= bd2 then return end
+    -- THE RAY LAST, because it is the expensive one and a nearer candidate
+    -- found later would have wasted it. Only ever cast for the thing that is
+    -- currently winning.
+    if a.visible and not prop and not dnp.can_see(m.e, e) then return end
+    best, bd2, is_prop = e, d2, prop
+  end
+
+  if of == "player" or of == "any" then
+    for i = 1, #players do consider(players[i], false) end
+  end
+  if of == "mob" or of == "any" then
+    for idx, o in pairs(live) do
+      if idx ~= m.idx and not o.dead and (a.mob == nil or o.def.name == a.mob) then
+        consider(o.e, false)
+      end
+    end
+  end
+  if of == "prop" or of == "any" then
+    for _, p in ipairs(dnp.props() or {}) do
+      if a.prop == nil or p:name() == a.prop then consider(p, true) end
+    end
+  end
+
+  m.target = best
+  m.target_prop = is_prop
+  m.tp = best ~= nil and best:pos() or nil
+  if m.cpp then dnp.mob_set(m.idx, "target", best ~= nil and best:index() or nil) end
+end
+
+function acts.target_attacker(m)
+  -- `hurt` records it; this is what makes retaliating a DECISION rather than
+  -- the mob-level `infighting` field's unconditional reflex.
+  local by = m.hurt_by
+  if by == nil or not by.e:valid() or by.dead then return end
+  m.target, m.target_prop = by.e, false
+  m.tp = by.e:pos()
+  if m.cpp then dnp.mob_set(m.idx, "target", by.idx) end
+end
+
+function acts.target_none(m)
+  m.target, m.target_prop, m.tp = nil, false, nil
+  if m.cpp then dnp.mob_set(m.idx, "target", nil) end
+end
+
 function acts.goto(m, a)
   enter(m, a.state, dnp.tick())
   return true                              -- stop the rest of the sequence
@@ -1353,6 +1509,10 @@ function hurt(target, amount, by)
   m.hp = m.hp - amount
   m.hurt_at = dnp.tick()
   m.hurt_by_mob = by ~= nil
+  -- WHO, not just whether. `hurt_by_mob` answers the condition; this is what
+  -- `target_attacker` needs, and keeping only the boolean is why retaliating
+  -- could not be a decision before.
+  m.hurt_by = by
   -- MIRRORED, because the C++ loop owns the copy its conditions read. `hp` is
   -- what `hp_below` tests and the pain edge is what `was_hurt` and
   -- `hurt_by_mob` test, so a mob the loop owns would otherwise be hurt here

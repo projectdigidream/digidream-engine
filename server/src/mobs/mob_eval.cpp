@@ -28,6 +28,8 @@
 #include "dnp/math/trig.hpp"
 #include "dnp/physics/collide.hpp"
 
+#include <cstring>
+
 namespace dnp::server::mobs {
 
 namespace {
@@ -157,6 +159,53 @@ bool evaluate(const MobGraph& g, const Kind& k, const Mob& m,
 
     case Cond::HurtByMob:
         return m.hurt_by_mob;
+
+    case Cond::MobWithin:
+    case Cond::CountWithin: {
+        // PLAN distance squared, like target_within and for the same reason.
+        // Itself never counts.
+        if (w.mobs == nullptr || w.graph == nullptr) return false;
+        const u128 r_sq = static_cast<u128>(static_cast<i128>(c.f.raw) * c.f.raw);
+        const i32 want = (c.id == Cond::CountWithin) ? (c.i > 0 ? c.i : 1) : 1;
+        i32 found = 0;
+        for (const Mob& o : *w.mobs) {
+            if (o.kind < 0 || o.entity == m.entity) continue;
+            if (!world.agent(o.entity).active) continue;
+            // `alive` defaults true; count_within never counts corpses.
+            if ((c.id == Cond::CountWithin || c.flag) && o.dead) continue;
+            if (c.name != NO_NAME) {
+                const Kind& ok = w.graph->kinds[static_cast<u32>(o.kind)];
+                if (ok.name != c.name) continue;
+            }
+            const fx3 q = world.agent(o.entity).pos;
+            const u128 d_sq = len_sq_raw(fx2{q.x - m.p.x, q.y - m.p.y});
+            if (d_sq > r_sq) continue;
+            // Stop as soon as the answer cannot change.
+            if (++found >= want) return true;
+        }
+        return false;
+    }
+
+    case Cond::PropWithin: {
+        // Props are the other half of the entity index space and have no
+        // graph; this is how a brain notices the furniture.
+        const u128 r_sq = static_cast<u128>(static_cast<i128>(c.f.raw) * c.f.raw);
+        const char* want = (c.name != NO_NAME && w.graph) ? w.graph->str(c.name) : nullptr;
+        for (u32 e = sim::MAX_AGENTS; e < world.prop_high_water(); ++e) {
+            const sim::PropState& p = world.prop(e);
+            if (!p.active) continue;
+            if (want != nullptr) {
+                // BY NAME, because a number in a script is a number somebody
+                // has to look up in a file the script does not mention.
+                if (w.props == nullptr) continue;
+                const char* have = w.props->name_of(p.kind);
+                if (have == nullptr || std::strcmp(have, want) != 0) continue;
+            }
+            const u128 d_sq = len_sq_raw(fx2{p.pos.x - m.p.x, p.pos.y - m.p.y});
+            if (d_sq <= r_sq) return true;
+        }
+        return false;
+    }
 
     case Cond::Unsupported:
         // Unreachable: a kind with one of these never runs here. Answering

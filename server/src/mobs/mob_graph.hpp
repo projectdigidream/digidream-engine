@@ -65,6 +65,9 @@ enum class Cond : u8 {
     Grounded,
     WasHurt,
     HurtByMob,
+    MobWithin,
+    PropWithin,
+    CountWithin,
     // Everything below is NOT evaluated here. A graph that uses one runs in
     // Lua, and MobRuntime says so out loud.
     Unsupported,
@@ -85,7 +88,16 @@ struct Condition {
     i32  i = 0;
     // Which of the mob's var slots, for the three that name one. -1 otherwise.
     i16  var = -1;
+    // A mob kind or a catalogue record, for the proximity conditions. An index
+    // into MobGraph::strings, or NO_NAME.
+    u32  name = 0xFFFFFFFFu;
+    // `alive` on mob_within, which defaults TRUE: a corpse is still an entity,
+    // because that is what lets `revive` find it, so counting them by default
+    // would have a monster reacting to a room of bodies.
+    bool flag = true;
 };
+
+inline constexpr u32 NO_NAME = 0xFFFFFFFFu;
 
 struct Transition {
     u16 to = 0;            // state index within the kind
