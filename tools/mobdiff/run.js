@@ -36,17 +36,22 @@
 // C++ loop owned could never flinch. Silently -- a monster that does not
 // flinch looks like a monster with a low pain chance.
 //
-// MEASURED, at 1000 monsters on maps/mobperf.map, three alternating runs each,
-// microseconds of Lua per awake mob per tick:
+// MEASURED, at 1000 monsters on maps/mobperf.map, alternating runs,
+// microseconds of Lua per awake mob per tick, two sessions:
 //
-//     C++ loop   3.33  3.00  2.74
-//     Lua        3.80  4.21  4.01
+//     C++ loop   3.33  3.00  2.74   |  2.99  3.53  2.80
+//     Lua        3.80  4.21  4.01   |  3.41  4.24  3.63
 //
-// A quarter off, and the two groups do not overlap -- which is the bar the JIT
-// measurement failed and this one has to clear to mean anything. Not the 7x a
-// naive reading of the profile suggested, because the actions, the missiles,
-// the corpses and the player refresh are all still Lua and are a large part of
-// that column.
+// PAIRED is the comparison that holds: the runs alternate, so each C++ run has
+// a Lua run beside it under the same conditions, and the C++ loop won all six
+// pairs. Unpaired, the second session's ranges touch -- so the honest figure is
+// 12-20% off the decision cost, not the quarter the first session alone
+// suggested and not the 7x a profile of the Lua path suggests.
+//
+// And not microseconds. The dormant physics step on this workstation measured
+// 1473 us one day and 2827 us another on byte-identical physics, with the
+// determinism hash unmoved. Anything quoted in absolute time is a fact about
+// the machine.
 //
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
