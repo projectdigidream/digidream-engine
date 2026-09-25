@@ -50,7 +50,13 @@ export const BUTTON = {
 export const CAMERA_FIELD = [
   'distance', 'pitch', 'smoothing', 'maxAccel',
   'lead', 'leadSmoothing', 'deadzoneX', 'deadzoneY',
-  'yaw', 'lockYaw', 'lockZoom'
+  'yaw', 'lockYaw', 'lockZoom',
+  // Camera paths and shake (design §4.1, ids 11..17). IN ID ORDER, and appended
+  // only: this array's index is the wire id, mirrored by hand from
+  // CAMERA_FIELD_NAMES in server/src/lua/world_binding.cpp with no shared
+  // header between them. client/test/proto_camera.test.js compares the two.
+  'mode', 'path', 'pathSpeed', 'pathAttach', 'pathBlend',
+  'shake', 'shakeTime'
 ]
 
 // The cap on fields in ONE CameraSet, mirroring proto/messages.hpp. Not the

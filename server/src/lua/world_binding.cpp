@@ -1323,7 +1323,20 @@ static const char* const CAMERA_FIELD_NAMES[] = {
     "lead", "lead_smoothing", "deadzone_x", "deadzone_y",
     // Where the camera stands around the subject, and whether the player may
     // turn or zoom it away from there (docs/protocol.md §11.1, fields 8..10).
-    "yaw", "lock_yaw", "lock_zoom"
+    "yaw", "lock_yaw", "lock_zoom",
+    // Camera paths and shake (design §4.1, fields 11..17). APPENDED, and the
+    // reason is the whole contract of this array: its INDEX is the wire id, so
+    // a name inserted rather than appended silently repoints every field after
+    // it -- a map asking for a longer lead would get a different pitch, in
+    // every level already shipped.
+    //
+    // cam_path carries a TAG. An untagged path defaults to tag 0, so 0 is a
+    // legal path and cannot mean "none"; negative does.
+    "cam_mode", "cam_path", "cam_path_speed", "cam_path_attach", "cam_path_blend",
+    // Edge-triggered, unlike everything above it: a shake is an event, not a
+    // setting, and the client fires one when the field ARRIVES rather than
+    // holding it. See docs/protocol.md §11.1.
+    "cam_shake", "cam_shake_time"
 };
 
 // The fields a Lua table names, in thousandths. Shared by dnp.camera and
@@ -1374,6 +1387,41 @@ int l_dnp_level_camera(lua_State* L) {
     proto::CameraSet c;
     read_camera_table(L, 1, c);
     if (c.count > 0 && ctx.ui != nullptr) ctx.ui->set_level_camera(ctx.level, c);
+    return 0;
+}
+
+// dnp.path_length(tag) -> units along the curve, or nil
+//
+// HOW A CUTSCENE KNOWS WHEN ITS SHOT ENDS.
+//
+// The engine has no completion event of any kind -- every hook it calls is a
+// physics or input fact -- so a script learns that a flythrough has finished
+// the way COND.sector_at_rest learns a door has stopped: by arithmetic done in
+// advance. `run_after{ ticks = path_length(1) / speed * TICK_RATE }` is the
+// whole mechanism.
+//
+// The number is the arc length of the CURVE the client rides, not of the
+// polyline in the map, and the two differ through every bend. It is baked by
+// tools/mapc rather than computed here, because the curve is the client's and
+// core deliberately does not implement one -- so this reads the field rather
+// than answering the question itself.
+//
+// nil, not 0, for a tag that is not in the map. Zero is a legal length: a path
+// whose points coincide is degenerate rather than absent, and a script dividing
+// by the difference should see the difference.
+int l_dnp_path_length(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 tag = static_cast<u32>(luaL_checkinteger(L, 1));
+    if (ctx.map_store == nullptr) return 0;
+    const geom::MapData m = ctx.map_store->view();
+    for (u32 i = 0; i < m.path_count; ++i) {
+        // FIRST match. Tags are not unique and mapc does not enforce it, so the
+        // rule is the same one every other tag lookup here uses.
+        if (m.path(i).tag == tag) {
+            lua_pushnumber(L, static_cast<double>(m.path(i).curve_length.raw) / 4294967296.0);
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -1810,6 +1858,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"ui_open", l_dnp_ui_open},
     {"camera", l_dnp_camera},
     {"level_camera", l_dnp_level_camera},
+    {"path_length", l_dnp_path_length},
     {"side_texture", l_dnp_side_texture},
     {"set_side_texture", l_dnp_set_side_texture},
     {"music", l_dnp_music},

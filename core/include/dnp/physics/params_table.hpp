@@ -85,6 +85,11 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     // table's ORDER is the wire format, and the struct's order is not. Putting
     // it next to its neighbour shifted the id of every parameter after it.
     DNP_PARAM(turn_speed,           ParamType::Fx),     // 28
+    // Appended for the same reason turn_speed was, and with the same warning:
+    // this table's ORDER is the wire format. input_scale sits beside turn_speed
+    // in the struct because that is where it belongs to a reader; it sits last
+    // HERE because that is the only place a new id can go.
+    DNP_PARAM(input_scale,          ParamType::Fx),     // 29
 };
 
 #undef DNP_PARAM
@@ -101,7 +106,7 @@ inline constexpr u16 PARAM_COUNT = static_cast<u16>(sizeof(PARAM_TABLE) / sizeof
 //
 // If this fires: add the new field to PARAM_TABLE (at the END -- ids are a wire
 // contract) and update the number here.
-static_assert(sizeof(MoveParams) == 280,
+static_assert(sizeof(MoveParams) == 288,
               "MoveParams changed. Append the new field(s) to PARAM_TABLE in this "
               "file -- appending is safe, reordering breaks the wire format -- "
               "then update this size. See docs/protocol.md 8.4.");

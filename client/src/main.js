@@ -370,8 +370,26 @@ if (LIVE) {
           else if (name === 'yaw') yaw = f.value * Math.PI * 2
           else if (name === 'lockYaw') camLockYaw = f.value >= 0.5
           else if (name === 'lockZoom') camLockZoom = f.value >= 0.5
+          // Which path, by TAG. Held rather than resolved: this message can
+          // arrive on join, before the map is parsed and certainly before the
+          // Camera exists, so the frame loop does the lookup where both do.
+          else if (name === 'path') camPathTag = Math.round(f.value)
+          else if (name === 'shake' || name === 'shakeTime') { /* below */ }
           else if (cameraReady) camera.cfg[name] = f.value
           else camCfgPending[name] = f.value
+        }
+
+        // SHAKE IS EDGE-TRIGGERED, and it is the only field in this message
+        // that is. Every other one is a setting, and re-sending it must change
+        // nothing; a shake is an event, and re-sending it must shake again.
+        //
+        // Fired after the whole record is applied rather than while walking it,
+        // so the order of the two fields inside one message does not matter --
+        // a sender need not remember to put the duration first.
+        const shake = m.fields.find((f) => CAMERA_FIELD[f.id] === 'shake')
+        if (shake && cameraReady) {
+          const t = m.fields.find((f) => CAMERA_FIELD[f.id] === 'shakeTime')
+          camera.screenShake(shake.value, (t ? t.value : 300) / 1000)
         }
       }
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)

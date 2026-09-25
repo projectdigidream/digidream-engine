@@ -65,7 +65,12 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
 
     // Aim direction, shared by dash and the ranged grapple.
     const fx2 facing = fx_dir(cmd.aim);
-    const fx2 wish = cmd.move;
+    // Scaled HERE, once, before anything reads it -- so a frozen player is
+    // frozen for walking, flying, dashing and the ground/air accel alike rather
+    // than in whichever of them somebody remembered. At zero, has_wish goes
+    // false and wish_dir falls back to `facing`, which is the right answer: a
+    // player who cannot move still faces where they were aiming.
+    const fx2 wish = cmd.move * p.input_scale;
     const bool has_wish = wish.x.raw != 0 || wish.y.raw != 0;
     const fx2 wish_dir = has_wish ? normalize(wish) : facing;
 

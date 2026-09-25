@@ -478,8 +478,62 @@ static void test_determinism() {
     }
 }
 
+// --------------------------------------------------------------- input_scale
+
+static void test_input_scale_takes_the_controls_away() {
+    std::printf("ability: input_scale is how a cutscene takes the controls\n");
+    Room room;
+
+    // A script cannot drive a player -- set_input refuses one -- so freezing has
+    // to be a RULE rather than an instruction. This is that rule, and the test
+    // is a pair: the same input, the same ticks, one parameter apart.
+    const MoveCommand walk = C(0, fx::one(), fx::zero());
+
+    Agent free_;
+    free_.run(room.map, walk, 60);
+    const fx moved = free_.pos.x - F(20);
+    CHECK(moved > F(2));
+
+    Agent frozen;
+    frozen.p.input_scale = fx::zero();
+    frozen.run(room.map, walk, 60);
+    CHECK(frozen.pos.x == F(20));
+    CHECK(frozen.pos.y == F(20));
+    std::printf("  a free body walked %.2f units; a frozen one did not move at all\n",
+                static_cast<double>(moved.raw) / 4294967296.0);
+
+    // Half is half, not off: it is a scale rather than a flag, so a script can
+    // slow a player rather than only stopping them.
+    Agent slowed;
+    slowed.p.input_scale = fx::from_frac(1, 2);
+    slowed.run(room.map, walk, 60);
+    const fx half = slowed.pos.x - F(20);
+    CHECK(half > fx::zero() && half < moved);
+
+    // CONTROL on the direction: a frozen body still FACES where it was aiming.
+    // At scale zero the wish vector is empty, and the code falls back to the aim
+    // -- which is what makes a cutscene's subject keep looking the right way
+    // rather than snapping to due east.
+    Agent aimed;
+    aimed.p.input_scale = fx::zero();
+    MoveCommand look = C(0, fx::one(), fx::zero());
+    look.aim = brad{BRAD_QUARTER};
+    aimed.run(room.map, look, 30);
+    CHECK(aimed.pos.x == F(20) && aimed.pos.y == F(20));
+
+    // And it gates MOVEMENT only. A frozen body still jumps, which is the
+    // documented limit of this parameter rather than an oversight: suppressing
+    // buttons means the server dropping them and the client predicting the
+    // same, and a camera does not need that.
+    Agent jumper;
+    jumper.p.input_scale = fx::zero();
+    jumper.step(room.map, C(act::JUMP));
+    CHECK(jumper.vel.z > fx::zero());
+}
+
 int main() {
     std::printf("== core/physics ability suite ==\n");
+    test_input_scale_takes_the_controls_away();
     test_multi_jump();
     test_dash();
     test_hover();

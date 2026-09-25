@@ -361,6 +361,10 @@ else
   # length tools/mapc baked into the file is the one this client rides at, which
   # is what every cutscene's timing rests on.
   node client/test/paths.test.js | tail -2
+  # CAMERA_SET's field ids are positional across C++ and JavaScript with no
+  # shared header. Getting them out of step changes the pitch when a map asks
+  # for a lead, in every level already shipped, and nothing else would notice.
+  node client/test/proto_camera.test.js | tail -2
   # TOUCH, which is arithmetic and a state machine: where the stick's origin
   # is, what counts as a push, who owns which finger. The claims worth having
   # are the ones with a wrong answer you could ship -- pushing your thumb up

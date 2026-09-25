@@ -56,6 +56,28 @@ struct MoveParams {
     // a turn fraction and a brad are the same number and the conversion cannot
     // pick up a factor of pi.
     fx turn_speed    = fx::from_int(4);
+
+    // What the movement stick is multiplied by before anything reads it.
+    //
+    // For CINEMATICS. A script cannot drive a player -- set_input refuses one,
+    // deliberately, because a script that could write a player's input could
+    // walk them into a pit and no amount of prediction would survive it -- so
+    // taking the controls away has to be a RULE rather than an instruction, and
+    // rules are what this table is.
+    //
+    // One knob rather than zeroing move_speed, jump_impulse, turn_speed and
+    // max_jumps in turn, and a parameter rather than a client-side lock,
+    // because parameters replicate with an epoch: the client predicts a frozen
+    // player exactly, for free, and a stale set is already classified as
+    // params-stale rather than as a misprediction (docs/protocol.md 8.4).
+    //
+    // It gates MOVEMENT, not buttons. A frozen player can still attack and use;
+    // a cutscene that must suppress those zeroes attack_reach alongside.
+    // Stopping the button bits properly would mean the server dropping them and
+    // the client predicting the same, which is a larger change than a camera
+    // needs.
+    fx input_scale   = fx::one();
+
     u8 max_jumps     = 2;      // generalises to any count; "double jump" is a value
 
     // --- climbing (§7.1.1) ---
