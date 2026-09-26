@@ -60,6 +60,9 @@ local by_name = {}     -- trigger name -> trigger
 local state = {}
 local sectors_by_tag = {}   -- tag -> { sector, ... }, built once at load
 local busy = {}        -- sector index -> the tick its motion settles
+-- One shared empty list, so the hot path allocates nothing for a trigger that
+-- has no sequence -- which is nearly all of them.
+local EMPTY = {}
 local timers = {}      -- pending run_after: { tick, trigger, ev }
 local open_panels = {} -- agent index -> panel name -> ui_id
 -- Custom code, compiled once at LOAD. Keyed by the action table itself, so
@@ -524,6 +527,32 @@ ACT.music = function(args)
   return true
 end
 
+ACT.screen = function(args)
+  -- The event's player, or everyone in the level -- the same rule as `music`,
+  -- and for the same reason: a fade for a player-less event is nothing to send.
+  local who = nil
+  if not args.everyone then
+    if EV.entity == nil then return false end
+    who = EV.entity
+  end
+  -- Only the fields the author gave. A table built from every field would send
+  -- a `letterbox = 0` with every fade and raise the bars nobody asked for.
+  local t = {}
+  -- The author's numbers, unscaled. dnp.screen multiplies by a thousand on the
+  -- way to the wire and the client divides by it again, so what arrives is what
+  -- was written: an opacity in 0..1 and a duration in milliseconds. Same
+  -- convention as `camera` beside it -- pre-scaling here would have been a
+  -- second one, and the two would have disagreed by a factor of a thousand in
+  -- whichever field somebody read from the other's example.
+  if args.fade ~= nil then t.fade = (as_fx(args.fade) * fx.int(1000)).int / 1000 end
+  if args.fade_ms ~= nil then t.fade_ms = args.fade_ms end
+  if args.letterbox ~= nil then t.letterbox = (as_fx(args.letterbox) * fx.int(1000)).int / 1000 end
+  if args.letterbox_ms ~= nil then t.letterbox_ms = args.letterbox_ms end
+  if next(t) == nil then return false end
+  dnp.screen(who, t)
+  return true
+end
+
 ACT.ui_open = function(args)
   if EV.entity == nil then return false end
   local panel = M.panels[args.panel]
@@ -700,10 +729,43 @@ run_one = function(t)
   EV.running = t.name
 
   local any = false
-  local list = t.actions
+  local list = t.actions or EMPTY
   for i = 1, #list do
     local a = list[i]
     if ACT[a.a](a) then any = true end
+  end
+
+  -- The sequence. `when` is a DEADLINE measured from this firing, not a
+  -- countdown -- the mob vocabulary's rule, under a different word because
+  -- `music` already owns `at` here.
+  --
+  -- A beat due now runs NOW rather than next tick: when = 0 means "with the rest
+  -- of this trigger", and pushing it through the queue would put the first
+  -- frame of every cutscene one tick after the thing that started it.
+  local seq = t.sequence or EMPTY
+  if #seq > 0 then
+    local now = dnp.tick()
+    for i = 1, #seq do
+      local b = seq[i]
+      if b.when <= 0 then
+        if ACT[b.a](b) then any = true end
+      else
+        -- The event is CAPTURED, exactly as run_after captures it and for the
+        -- same reason: EV is reused, so by the time a beat fires it describes
+        -- some other event entirely.
+        timers[#timers + 1] = {
+          tick = now + b.when,
+          action = b,
+          entity = EV.entity, target = EV.target, side = EV.side, sector = EV.sector,
+          crush_kind = EV.crush_kind,
+          ui_id = EV.ui_id, widget_id = EV.widget_id, value = EV.value,
+        }
+        -- Queuing IS doing something. A `once` cutscene whose first beat is at
+        -- tick 30 must still be spent, or it restarts on every event until one
+        -- of its beats happens to report true.
+        any = true
+      end
+    end
   end
 
   EV.running = previous
@@ -745,7 +807,12 @@ local function drain_timers(tick)
       EV.entity, EV.target, EV.side, EV.sector = d.entity, d.target, d.side, d.sector
       EV.crush_kind = d.crush_kind
       EV.ui_id, EV.widget_id, EV.value = d.ui_id, d.widget_id, d.value
-      run_one(d.trigger)
+      -- A sequence beat is ONE action, already validated and with no conditions
+      -- of its own: the trigger's conditions were checked when it fired, and
+      -- re-checking them here would mean a cutscene that stops halfway because
+      -- the player walked out of the sector that started it.
+      if d.action ~= nil then ACT[d.action.a](d.action)
+      else run_one(d.trigger) end
       clear_event()
     else
       timers[#timers + 1] = d
@@ -849,6 +916,20 @@ end
 -- directions are checked, because only checking one leaves the other free.
 local function check_vocabulary_matches_implementation(cond_v, act_v)
   local bad = 0
+  -- `when` belongs to a sequence beat and to nothing else. An action declaring
+  -- an argument by that name would declare one no author could reach inside a
+  -- sequence -- a Lua table cannot hold the key twice -- and the failure would
+  -- be a silently ignored argument rather than an error. Checked here, at load,
+  -- because this is the file that knows the reservation exists.
+  for name, spec in pairs(act_v) do
+    for _, arg in ipairs(spec.args or {}) do
+      if arg.name == "when" then
+        bad = bad + 1
+        say("action '%s' declares an argument 'when', which a sequence beat "
+            .. "reserves for its own tick", name)
+      end
+    end
+  end
   for name in pairs(cond_v) do
     if COND[name] == nil then
       bad = bad + 1
@@ -992,7 +1073,18 @@ local function check_args(spec, given, where, problems)
   -- Arguments the vocabulary does not know about. Almost always a typo, and a
   -- silently ignored one is a trigger that looks configured and is not.
   for k in pairs(given) do
-    if k ~= "c" and k ~= "a" and k ~= "negate" and k ~= "kind" then
+    -- `when` is RESERVED: on a sequence beat it is the tick the beat fires on,
+    -- so no action may declare an argument by that name -- one would be
+    -- unreachable inside a sequence, because a Lua table cannot hold the key
+    -- twice. Enforced below rather than trusted, since "free today" is not the
+    -- same as safe.
+    --
+    -- NOT `at`, which the mob vocabulary uses for this and which would have been
+    -- the consistent choice: `music` already has an `at` argument -- next_bar,
+    -- loop_end, now -- and music is exactly what a cutscene wants to change.
+    -- A colliding name is a correctness problem and an inconsistent one is a
+    -- learning cost, so this takes the learning cost.
+    if k ~= "c" and k ~= "a" and k ~= "negate" and k ~= "kind" and k ~= "when" then
       local known = false
       for _, arg in ipairs(spec.args) do if arg.name == k then known = true end end
       if not known then
@@ -1179,8 +1271,20 @@ end
 -- fires -- the same failure an unknown action argument would be, one level up.
 local TRIGGER_FIELDS = {
   name = true, event = true, conditions = true, actions = true,
-  once = true, enabled = true,
+  once = true, enabled = true, sequence = true,
 }
+
+-- Both lists as one, for the checks that apply to every action a trigger holds.
+-- Written out rather than reached for twice, so a check added later cannot be
+-- added to one and forgotten on the other.
+local function concat_lists(a, b)
+  if b == nil or #b == 0 then return a or {} end
+  if a == nil or #a == 0 then return b end
+  local out = {}
+  for i = 1, #a do out[#out + 1] = a[i] end
+  for i = 1, #b do out[#out + 1] = b[i] end
+  return out
+end
 
 function M.load(data)
   -- A SECOND table is refused, not merged and not silently preferred.
@@ -1268,7 +1372,18 @@ function M.load(data)
       end
     end
 
-    for _, a in ipairs(t.actions or {}) do
+    -- A sequence's beats ARE actions -- same vocabulary, same checks -- plus a
+    -- tick to fire on. Validated in the same loop so a beat cannot be the one
+    -- kind of action nobody checked.
+    for _, b in ipairs(t.sequence or {}) do
+      if type(b.when) ~= "number" or b.when ~= math.floor(b.when) or b.when < 0 then
+        problems[#problems + 1] =
+          ("%s: a sequence beat needs `when`, a whole number of ticks from the "
+           .. "trigger firing, not '%s'"):format(where, tostring(b.when))
+      end
+    end
+
+    for _, a in ipairs(concat_lists(t.actions, t.sequence)) do
       local spec = act_v[a.a]
       if spec == nil then
         problems[#problems + 1] = ("%s: no action named '%s'"):format(where, tostring(a.a))
@@ -1296,7 +1411,8 @@ function M.load(data)
       end
     end
 
-    if (t.actions == nil or #t.actions == 0) then
+    if (t.actions == nil or #t.actions == 0)
+       and (t.sequence == nil or #t.sequence == 0) then
       problems[#problems + 1] = ("%s: has no actions"):format(where)
     end
 

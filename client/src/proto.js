@@ -20,6 +20,7 @@ export const MSG = {
   CAMERA_SET: 0x24,
   SIDE_TEXTURE: 0x25,
   MUSIC: 0x26,
+  SCREEN_SET: 0x27,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -65,6 +66,11 @@ export const CAMERA_FIELD = [
 // different thing and is refused outright: the count is a length, and a length
 // this reader trusted would be a length an attacker picks.
 export const CAMERA_MAX_FIELDS = 32
+
+// docs/protocol.md §11.1's screen field table: the curtain and the letterbox
+// bars. Same record shape as CAMERA_SET and applied the same way, by NAME.
+export const SCREEN_FIELD = ['fade', 'fadeMs', 'letterbox', 'letterboxMs']
+export const SCREEN_MAX_FIELDS = 16
 
 export const UI_KIND = {
   LABEL: 0, BUTTON: 1, SLIDER: 2, SELECT: 3, TOGGLE: 4
@@ -291,6 +297,19 @@ export function decodeControlMessage (buf) {
   // Camera settings for this client (docs/protocol.md §11.1). Values arrive in
   // thousandths of their unit; converted here so nothing downstream has to
   // remember the scale.
+  // The curtain and the bars (design §4.1). Thousandths, like the camera's.
+  if (type === MSG.SCREEN_SET) {
+    const count = r.u16()
+    if (!r.ok || count > SCREEN_MAX_FIELDS) return null
+    const fields = []
+    for (let i = 0; i < count; i++) {
+      const id = r.u8()
+      const milli = r.i32()
+      fields.push({ id, value: milli / 1000 })
+    }
+    return r.ok ? { type, fields } : null
+  }
+
   if (type === MSG.CAMERA_SET) {
     const count = r.u16()
     if (!r.ok || count > CAMERA_MAX_FIELDS) return null

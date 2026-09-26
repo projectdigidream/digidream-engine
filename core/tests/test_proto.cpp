@@ -777,6 +777,31 @@ static void test_camera_set_round_trip() {
     CHECK(!decode_camera_set(r3, got));
 }
 
+static void test_screen_set_round_trip() {
+    std::printf("screen: the curtain and the bars survive the wire\n");
+    ScreenSet sc;
+    sc.count = 4;
+    for (u16 i = 0; i < 4; ++i) { sc.fields[i].id = static_cast<u8>(i); sc.fields[i].milli = 250 * (i + 1); }
+    u8 buf[128];
+    ByteWriter w(buf, sizeof(buf));
+    encode_screen_set(w, sc);
+    CHECK(w.ok());
+    ByteReader r(buf, w.size());
+    ScreenSet got;
+    CHECK(decode_screen_set(r, got));
+    CHECK(got.count == 4);
+    for (u16 i = 0; i < 4; ++i) {
+        CHECK(got.fields[i].id == i && got.fields[i].milli == 250 * (i + 1));
+    }
+
+    // CONTROL: over the cap is refused rather than clamped, as CameraSet's is.
+    ByteWriter w2(buf, sizeof(buf));
+    w2.u16v(SCREEN_MAX_FIELDS + 1);
+    for (u32 i = 0; i <= SCREEN_MAX_FIELDS; ++i) { w2.u8v(0); w2.i32v(0); }
+    ByteReader r2(buf, w2.size());
+    CHECK(!decode_screen_set(r2, got));
+}
+
 // The decoder runs on bytes from the network, so every length in the message is
 // a number an attacker picks. Each of these is a way to be handed one.
 static void test_ui_rejects_hostile_input() {
@@ -877,6 +902,7 @@ int main() {
     test_ui_event_round_trip();
     test_music_cue_round_trip();
     test_camera_set_round_trip();
+    test_screen_set_round_trip();
     test_ui_rejects_hostile_input();
     test_ui_truncation_at_every_length();
     std::printf("== core/proto test suite ==\n");

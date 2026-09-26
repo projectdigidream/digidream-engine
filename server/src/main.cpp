@@ -1506,6 +1506,37 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         link.send_control(s.id, buf, end);
     }
 
+    void screen(u32 level_index, i32 agent, const proto::ScreenSet& sc) override {
+        if (level_index >= level_count()) return;
+        // Not remembered, for the same reason a music cue is not: a fade is a
+        // moment inside a cutscene, and a player who joins halfway through one
+        // should arrive at a screen they can see out of rather than at a black
+        // rectangle nothing will ever lift.
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (!s.has_agent || s.level != level_index) continue;
+            if (agent >= 0 && s.agent != static_cast<u32>(agent)) continue;
+            send_screen(s, sc);
+        }
+    }
+
+    void send_screen(Session& s, const proto::ScreenSet& sc) {
+        u8 buf[256];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_SCREEN_SET);
+        proto::encode_screen_set(w, sc);
+        if (!w.ok()) return;
+        const size_t end = w.size();
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        buf[len_pos]     = static_cast<u8>(body & 0xFF);
+        buf[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        buf[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        buf[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+        link.send_control(s.id, buf, end);
+    }
+
     void set_camera(u32 level_index, u32 agent, const proto::CameraSet& c) override {
         Session* s = session_for(level_index, agent);
         if (s == nullptr) return;

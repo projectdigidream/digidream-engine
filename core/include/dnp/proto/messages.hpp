@@ -50,6 +50,10 @@ inline constexpr u8 MSG_SIDE_TEXTURE = 0x25;
 // track. Not simulation state -- never hashed, never predicted, not replayed
 // to a client joining later.
 inline constexpr u8 MSG_MUSIC = 0x26;
+// The screen itself: a black curtain and letterbox bars (docs/protocol.md
+// §11.1). For cinematics. Not simulation state -- never hashed, never
+// predicted, and client-local in exactly the sense the camera is.
+inline constexpr u8 MSG_SCREEN_SET = 0x27;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -359,6 +363,36 @@ struct MusicCue {
 
 void encode_music_cue(ByteWriter& w, const MusicCue& m) noexcept;
 bool decode_music_cue(ByteReader& r, MusicCue& out) noexcept;
+
+// What is drawn OVER everything: a fade to black, and letterbox bars.
+//
+// The same record shape as CameraSet, deliberately -- {u8 id, i32 milli},
+// thousandths, unknown ids skipped -- so it inherits that message's forward
+// compatibility rather than inventing a second convention for the same job. A
+// newer server can send a field this client has never heard of and the client
+// simply does not apply it.
+//
+// Values in thousandths for the same reason the camera's are: this is not
+// simulation state, it needs a fixed scale rather than fx, and a thousandth of
+// an opacity is finer than a screen can show.
+//
+// Colour is fixed black. That covers a fade and a letterbox, which is what a
+// cutscene wants; the format is extensible, so a colour can be added later
+// without a version bump or a second message.
+inline constexpr u32 SCREEN_MAX_FIELDS = 16;
+
+struct ScreenField {
+    u8  id = 0;
+    i32 milli = 0;
+};
+
+struct ScreenSet {
+    u16 count = 0;
+    ScreenField fields[SCREEN_MAX_FIELDS]{};
+};
+
+void encode_screen_set(ByteWriter& w, const ScreenSet& s) noexcept;
+bool decode_screen_set(ByteReader& r, ScreenSet& out) noexcept;
 
 struct UiEvent {
     u32 ui_id = 0;

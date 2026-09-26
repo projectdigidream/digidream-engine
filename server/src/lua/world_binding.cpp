@@ -1409,10 +1409,16 @@ int l_dnp_level_camera(lua_State* L) {
 // nil, not 0, for a tag that is not in the map. Zero is a legal length: a path
 // whose points coincide is degenerate rather than absent, and a script dividing
 // by the difference should see the difference.
+//
+// An explicit nil, and RETURN 1 -- not `return 0`, which yields no value at all.
+// The two look the same in `local n = dnp.path_length(t)` and are not the same
+// anywhere else: `print(dnp.path_length(9))` and `tostring(...)` and passing it
+// on all raise "value expected" on a call that returned nothing. Found by
+// writing exactly that line against a real map.
 int l_dnp_path_length(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const u32 tag = static_cast<u32>(luaL_checkinteger(L, 1));
-    if (ctx.map_store == nullptr) return 0;
+    if (ctx.map_store == nullptr) { lua_pushnil(L); return 1; }
     const geom::MapData m = ctx.map_store->view();
     for (u32 i = 0; i < m.path_count; ++i) {
         // FIRST match. Tags are not unique and mapc does not enforce it, so the
@@ -1422,7 +1428,8 @@ int l_dnp_path_length(lua_State* L) {
             return 1;
         }
     }
-    return 0;
+    lua_pushnil(L);
+    return 1;
 }
 
 // dnp.side_texture(side, "middle") -> name, and
@@ -1516,6 +1523,46 @@ int l_dnp_music(lua_State* L) {
     else if (std::strcmp(at, "now") == 0)      m.at = proto::MusicAt::Now;
     else return luaL_error(L, "dnp.music: `at` is next_bar, loop_end or now, not '%s'", at);
     ctx.ui->music(ctx.level, agent, m);
+    return 0;
+}
+
+// dnp.screen(entity, { fade = 1, fade_ms = 500, letterbox = 0.12 })
+//
+// What is drawn OVER everything: a black curtain and letterbox bars. The other
+// half of a cutscene, beside the camera.
+//
+// Named fields and only the ones given, exactly as dnp.camera works: a script
+// that wants to raise the bars should not have to restate the fade. `entity`
+// nil means everyone in the level, as dnp.music does.
+static const char* const SCREEN_FIELD_NAMES[] = {
+    "fade", "fade_ms", "letterbox", "letterbox_ms"
+};
+
+int l_dnp_screen(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (ctx.ui == nullptr) return 0;
+    i32 agent = -1;
+    if (!lua_isnoneornil(L, 1)) {
+        agent = resolve(L, ctx, check_handle(L, 1));
+        if (agent < 0) return 0;
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+    proto::ScreenSet sc;
+    for (u8 id = 0; id < static_cast<u8>(sizeof(SCREEN_FIELD_NAMES) / sizeof(char*)); ++id) {
+        // The bound CameraSet's loop should have had from the start. It cannot
+        // fire while the array is larger than the name list, which is exactly
+        // why it is written down rather than left to arithmetic.
+        if (sc.count >= proto::SCREEN_MAX_FIELDS) break;
+        lua_getfield(L, 2, SCREEN_FIELD_NAMES[id]);
+        if (!lua_isnil(L, -1)) {
+            const double v = lua_tonumber(L, -1);
+            sc.fields[sc.count].id = id;
+            sc.fields[sc.count].milli = static_cast<i32>(v * 1000.0 + (v >= 0 ? 0.5 : -0.5));
+            ++sc.count;
+        }
+        lua_pop(L, 1);
+    }
+    if (sc.count > 0) ctx.ui->screen(ctx.level, agent, sc);
     return 0;
 }
 
@@ -1859,6 +1906,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"camera", l_dnp_camera},
     {"level_camera", l_dnp_level_camera},
     {"path_length", l_dnp_path_length},
+    {"screen", l_dnp_screen},
     {"side_texture", l_dnp_side_texture},
     {"set_side_texture", l_dnp_set_side_texture},
     {"music", l_dnp_music},

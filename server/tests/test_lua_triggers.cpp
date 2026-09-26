@@ -549,6 +549,90 @@ triggers.load{ name = 'once', triggers = {
     CHECK(f.truth("#MOVES == 1"));
 }
 
+static void test_a_sequence_is_beats_on_one_queue() {
+    std::printf("triggers: a sequence fires its beats on their ticks, and once each\n");
+
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+triggers.load{ name = 'cut', triggers = {
+  { name = 'intro', event = 'on_interact', once = true,
+    sequence = {
+      { when = 0,  a = 'counter_add', counter = 'beat0' },
+      { when = 3,  a = 'counter_add', counter = 'beat3' },
+      { when = 10, a = 'counter_add', counter = 'beat10' },
+    } },
+} }
+)LUA"));
+
+    f.exec("TICK = 200");
+    f.fire("on_interact", 200, {"ENT(0)", "2", "SEC(0)"});
+
+    // at = 0 runs WITH the trigger, not one tick after it. A cutscene whose
+    // first frame lands a tick late is a visible hitch at the moment the player
+    // pressed the thing.
+    CHECK(f.truth("triggers.counter('beat0') == 1"));
+    CHECK(f.truth("triggers.counter('beat3') == 0"));
+    CHECK(f.truth("triggers.pending() == 2"));
+
+    for (u32 t = 201; t <= 202; ++t) f.tick(t);
+    CHECK_MSG(f.truth("triggers.counter('beat3') == 0"), "a beat must not fire early");
+
+    f.tick(203);
+    CHECK(f.truth("triggers.counter('beat3') == 1"));
+    CHECK(f.truth("triggers.counter('beat10') == 0"));
+    CHECK(f.truth("triggers.pending() == 1"));
+
+    for (u32 t = 204; t <= 209; ++t) f.tick(t);
+    CHECK(f.truth("triggers.counter('beat10') == 0"));
+    f.tick(210);
+    CHECK(f.truth("triggers.counter('beat10') == 1"));
+    CHECK(f.truth("triggers.pending() == 0"));
+
+    // Once each, not every tick after their deadline.
+    for (u32 t = 211; t <= 220; ++t) f.tick(t);
+    CHECK(f.truth("triggers.counter('beat3') == 1"));
+    CHECK(f.truth("triggers.counter('beat10') == 1"));
+
+    // `once` is SPENT by queuing, not by a beat happening to report true. A
+    // cutscene whose beats all land later would otherwise restart on every
+    // event until one of them did.
+    f.fire("on_interact", 221, {"ENT(0)", "2", "SEC(0)"});
+    CHECK_MSG(f.truth("triggers.counter('beat0') == 1"),
+              "a once-trigger with a sequence must be spent by firing it");
+    CHECK(f.truth("triggers.pending() == 0"));
+}
+
+static void test_a_sequence_does_not_recheck_its_conditions() {
+    std::printf("triggers: a sequence's conditions are checked when it fires, not per beat\n");
+
+    // The rule that makes a cutscene survivable. Conditions belong to the
+    // trigger and are tested once; a beat that re-tested them would stop a
+    // cutscene halfway because the player walked out of the sector that
+    // started it -- which is exactly what a player does when the camera takes
+    // over and their input stops mattering.
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+triggers.load{ name = 'guarded', triggers = {
+  { name = 'shot', event = 'on_interact',
+    conditions = { { c = 'sector_is', sector = 0 } },
+    sequence = { { when = 2, a = 'counter_add', counter = 'late' } } },
+} }
+)LUA"));
+
+    f.exec("TICK = 300");
+    f.fire("on_interact", 300, {"ENT(0)", "2", "SEC(0)"});
+    CHECK(f.truth("triggers.pending() == 1"));
+
+    // A different event entirely arrives before the beat is due -- one whose
+    // sector would NOT have satisfied the condition.
+    f.fire("on_interact", 301, {"ENT(0)", "2", "SEC(1)"});
+    f.tick(302);
+    CHECK_MSG(f.truth("triggers.counter('late') == 1"),
+              "the beat must fire on its deadline regardless of what happened since");
+}
+
 static void test_run_after_is_a_deadline_not_a_wait() {
     std::printf("triggers: run_after is a tick deadline; nothing suspends\n");
 
@@ -1279,6 +1363,8 @@ int main(int argc, char** argv) {
     test_a_moving_sector_refuses_a_second_start();
     test_once_is_spent_only_on_success();
     test_run_after_is_a_deadline_not_a_wait();
+    test_a_sequence_is_beats_on_one_queue();
+    test_a_sequence_does_not_recheck_its_conditions();
     test_a_deadline_queued_by_a_deadline_survives();
     test_run_is_bounded();
     test_enable_and_disable();

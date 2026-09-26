@@ -44,6 +44,32 @@
 trigger_vocab = {
   version = 1,
 
+  -- ------------------------------------------------------- trigger fields
+  --
+  -- What a trigger itself may carry, beside its conditions and actions. Named
+  -- here so an editor can offer them and the runtime can refuse a typo; the
+  -- runtime's own list is TRIGGER_FIELDS in maps/scripts/triggers.lua.
+  trigger_fields = {
+    { name = "sequence", type = "actions",
+      doc = "Actions with a tick each, for a cutscene. Every entry is an " ..
+            "ordinary action plus `when`: the number of ticks after this trigger " ..
+            "fires that it runs on. `when` is a DEADLINE, not a countdown, and " ..
+            "`when = 0` runs with the trigger's own actions rather than one " ..
+            "tick later.\n" ..
+            "`when`, not the mob vocabulary's `at`, because `music` already has " ..
+            "an `at` argument and a Lua table cannot hold the key twice -- and " ..
+            "changing the music is exactly what a cutscene wants to do. No " ..
+            "action may declare an argument called `when`; the runtime refuses " ..
+            "one at load.\n" ..
+            "Sugar over `run_after`, which is what a cutscene had to be written " ..
+            "as before: one trigger per beat, chained by hand. A sequence needs " ..
+            "no engine support and suspends nothing; the beats are deadlines on " ..
+            "the same queue `run_after` uses.\n" ..
+            "The trigger's conditions are checked when it FIRES and not again. " ..
+            "A cutscene that re-tested them would stop halfway because the " ..
+            "player walked out of the sector that started it." },
+  },
+
   -- --------------------------------------------------------------- events
   --
   -- `params` names what the engine passes, in order. A condition or action
@@ -474,12 +500,46 @@ trigger_vocab = {
       args = { { name = "field", type = "enum",
                  values = {"distance", "pitch", "smoothing", "max_accel",
                            "lead", "lead_smoothing", "deadzone_x", "deadzone_y",
-                           "yaw", "lock_yaw", "lock_zoom"} },
+                           "yaw", "lock_yaw", "lock_zoom",
+                           -- Camera paths (design 4.1). A path is authored in
+                           -- the .map file as `path tag N`; this names one.
+                           "cam_mode", "cam_path", "cam_path_speed",
+                           "cam_path_attach", "cam_path_blend",
+                           "cam_shake", "cam_shake_time"} },
                { name = "value", type = "fx" } },
       doc = "How the camera follows, for whoever is watching this entity, and " ..
             "where it stands: `yaw` and `pitch` in turns, `distance` in units, " ..
             "`lock_yaw`/`lock_zoom` 1 or 0. Never where it is: the camera is " ..
-            "the client's, and Lua configures and triggers it only." },
+            "the client's, and Lua configures and triggers it only.\n" ..
+            "`cam_mode` picks what it does with a path: 0 follow, 1 track " ..
+            "(position from the path, still aimed at the player), 2 flythrough " ..
+            "(position AND aim from the path, at `cam_path_speed` units a " ..
+            "second), 3 auto (track while the player is within " ..
+            "`cam_path_attach` units of it). `cam_path` is the path's TAG, and " ..
+            "negative means none -- an untagged path is tag 0, so 0 cannot mean " ..
+            "it. `cam_path_blend` is how fast it crossfades on and off.\n" ..
+            "`cam_shake` is the one field here that is an EVENT rather than a " ..
+            "setting: it shakes when it arrives, for `cam_shake_time` " ..
+            "milliseconds, and a second shake replaces the first rather than " ..
+            "adding to it." },
+
+    { name = "screen",
+      args = { { name = "fade", type = "fx", optional = true,
+                 doc = "Opacity of a black curtain over everything, 0 to 1." },
+               { name = "fade_ms", type = "int", optional = true,
+                 doc = "Milliseconds to reach it. 0, or absent, is at once." },
+               { name = "letterbox", type = "fx", optional = true,
+                 doc = "Height of each bar as a fraction of the screen, 0 to 0.5." },
+               { name = "letterbox_ms", type = "int", optional = true,
+                 doc = "Milliseconds to reach that height." },
+               { name = "everyone", type = "bool", optional = true,
+                 doc = "Every player in the level, rather than the event's player." } },
+      doc = "The screen itself: a fade to black, and letterbox bars. The other " ..
+            "half of a cutscene beside `camera`. Only the fields given are " ..
+            "sent, so raising the bars does not restate the fade.\n" ..
+            "Not remembered, like `music`: a player who joins halfway through a " ..
+            "cutscene arrives at a screen they can see out of rather than at a " ..
+            "black rectangle nothing will lift." },
 
     { name = "vfx",
       args = { { name = "kind",  type = "int" },

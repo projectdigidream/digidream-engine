@@ -119,6 +119,11 @@ struct UiSink {
     // everyone in the level when it is negative. Not remembered: a cue is a
     // moment, and a player joining later starts on the map's default cue.
     virtual void music(u32 level, i32 agent, const proto::MusicCue& m) = 0;
+    // The curtain and the letterbox bars, for whoever is watching `agent` -- or
+    // for everyone in the level when it is negative. Like music, not
+    // remembered: a fade is a moment in a cutscene, and a player joining
+    // halfway through one should arrive at a screen they can see out of.
+    virtual void screen(u32 level, i32 agent, const proto::ScreenSet& s) = 0;
 };
 
 struct WorldContext {

@@ -28,6 +28,7 @@ import {
 } from './camera.js'
 import { buildSpline } from './spline.js'
 import { PathView } from './render/paths.js'
+import { SCREEN_FIELD } from './proto.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
@@ -260,6 +261,12 @@ let ui = null
 let closedWhy = null
 // A map change in flight: the new WELCOME, and the map arriving behind it.
 let pendingWelcome = null
+// The cutscene overlay's three elements. Looked up once: SCREEN_SET can arrive
+// on join, and querying the DOM per message would be the same hazard the
+// camera's own settings are staged for.
+const curtainEl = document.getElementById('curtain')
+const lbTopEl = document.getElementById('lbtop')
+const lbBotEl = document.getElementById('lbbot')
 // The camera state CAMERA_SET writes, declared HERE for the reason
 // pendingWelcome is: the local transport hands over the messages a join already
 // produced the moment the handler is registered, which is before this module
@@ -389,6 +396,37 @@ if (LIVE) {
         if (shake && cameraReady) {
           const t = m.fields.find((f) => CAMERA_FIELD[f.id] === 'shakeTime')
           camera.screenShake(shake.value, (t ? t.value : 300) / 1000)
+        }
+      }
+      // The curtain and the bars (design §4.1). Pure presentation: applied to
+      // the DOM and nothing else, never predicted, never sent back. The
+      // TRANSITION carries the timing, so a two-second fade costs no per-frame
+      // work and keeps running even if the tab throttles rAF.
+      else if (m.type === MSG.SCREEN_SET) {
+        let fadeMs = null
+        let lbMs = null
+        let fade = null
+        let lb = null
+        for (const f of m.fields) {
+          const name = SCREEN_FIELD[f.id]
+          if (name === 'fade') fade = f.value
+          else if (name === 'fadeMs') fadeMs = f.value
+          else if (name === 'letterbox') lb = f.value
+          else if (name === 'letterboxMs') lbMs = f.value
+        }
+        // Duration first, then the value, or the browser animates from the old
+        // duration -- the one case where the order of two fields in one record
+        // does matter, and it is handled here rather than asked of the sender.
+        if (fade !== null) {
+          curtainEl.style.transitionDuration = `${Math.max(0, fadeMs ?? 0)}ms`
+          curtainEl.style.opacity = String(Math.max(0, Math.min(1, fade)))
+        }
+        if (lb !== null) {
+          const pct = `${Math.max(0, Math.min(50, lb * 100))}%`
+          for (const el of [lbTopEl, lbBotEl]) {
+            el.style.transitionDuration = `${Math.max(0, lbMs ?? 0)}ms`
+            el.style.height = pct
+          }
         }
       }
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)

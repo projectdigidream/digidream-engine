@@ -441,6 +441,31 @@ bool decode_camera_set(ByteReader& r, CameraSet& out) noexcept {
     return true;
 }
 
+// The same codec as CameraSet, on purpose: one convention for "a small bag of
+// named thousandths", so a reader who has understood one has understood both.
+void encode_screen_set(ByteWriter& w, const ScreenSet& s) noexcept {
+    const u16 n = s.count > SCREEN_MAX_FIELDS ? static_cast<u16>(SCREEN_MAX_FIELDS) : s.count;
+    w.u16v(n);
+    for (u16 i = 0; i < n; ++i) {
+        w.u8v(s.fields[i].id);
+        w.i32v(s.fields[i].milli);
+    }
+}
+
+bool decode_screen_set(ByteReader& r, ScreenSet& out) noexcept {
+    ScreenSet s;
+    const u16 n = r.u16v();
+    if (!r.ok() || n > SCREEN_MAX_FIELDS) return false;
+    for (u16 i = 0; i < n; ++i) {
+        s.fields[i].id = r.u8v();
+        s.fields[i].milli = r.i32v();
+    }
+    if (!r.ok()) return false;
+    s.count = n;
+    out = s;
+    return true;
+}
+
 void encode_side_texture(ByteWriter& w, const SideTexture& t) noexcept {
     w.u16v(t.side);
     w.u8v(static_cast<u8>(t.field));

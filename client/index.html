@@ -35,6 +35,12 @@
      millimetres, and the health number is the one thing a player must be able
      to read while something is shooting at them. */
   @supports (padding: env(safe-area-inset-left)) {
+    #curtain { position: fixed; inset: 0; background: #000; opacity: 0;
+               pointer-events: none; z-index: 40; transition: opacity 0s linear; }
+    .letterbox { position: fixed; left: 0; right: 0; height: 0; background: #000;
+                 pointer-events: none; z-index: 41; transition: height 0s linear; }
+    #lbtop { top: 0; }
+    #lbbot { bottom: 0; }
     #hud    { top: calc(10px + env(safe-area-inset-top));
               left: calc(12px + env(safe-area-inset-left)); }
     #help   { bottom: calc(10px + env(safe-area-inset-bottom));
@@ -122,6 +128,12 @@
 </style>
 </head>
 <body>
+  <!-- The curtain and the letterbox bars (design 4.1). Drawn OVER everything
+       and clickable through, because they are a picture rather than a control.
+       CSS transitions carry the timing, so a fade costs no per-frame JS. -->
+  <div id="curtain"></div>
+  <div id="lbtop" class="letterbox"></div>
+  <div id="lbbot" class="letterbox"></div>
   <div id="hud"></div>
   <div id="status">starting...</div>
   <div id="loading"><div class="track"><div class="fill"></div></div><div class="detail"></div></div>
