@@ -325,6 +325,42 @@ static void test_use_reaches_a_usable_prop() {
     }
 }
 
+// Which hash sees an animation state, and which must not.
+//
+// THE PAIR IS THE POINT. agent_hash is the PREDICTION comparison and a script's
+// animation choice is not something a client can reproduce -- so a hashed one
+// would make every tick after the script touched it a reported mismatch, and
+// SelfBlock carries nothing to reconcile it from. World::hash is the
+// DETERMINISM gate, which should still see it: two runs that animated
+// differently are two different runs.
+//
+// Both halves are asserted here because either alone is satisfied by a mistake.
+// "agent_hash ignores it" passes for a build that stopped hashing it anywhere;
+// "World::hash sees it" passes for the build this replaced.
+static void test_an_animation_state_is_seen_by_one_hash_and_not_the_other() {
+    std::printf("props: a script's animation state is in the gate and out of the prediction\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    w.step();
+
+    const u64 agent_before = w.agent_hash(a);
+    const u64 world_before = w.hash();
+
+    w.agent_mut(a).animation_state = 7;
+
+    CHECK(w.agent_hash(a) == agent_before);
+    CHECK(w.hash() != world_before);
+
+    // And back again, so the gate is reading the value rather than merely
+    // noticing that something was written.
+    w.agent_mut(a).animation_state = 0;
+    CHECK(w.hash() == world_before);
+}
+
 // A swing hits what is in front of it, and the arc has edges.
 //
 // Every assertion here is paired with the same swing that must NOT connect,
@@ -689,6 +725,7 @@ static void test_a_minimum_reach_makes_a_ring_rather_than_a_wedge() {
 
 int main() {
     test_props_share_the_entity_index_space();
+    test_an_animation_state_is_seen_by_one_hash_and_not_the_other();
     test_a_swing_hits_what_is_in_front_of_it();
     test_the_swing_is_not_instantaneous();
     test_the_swing_is_shaped_by_parameters();

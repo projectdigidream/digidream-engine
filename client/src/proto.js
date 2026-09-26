@@ -488,6 +488,10 @@ export function decodeSnapshot (buf) {
   // with (docs/protocol.md 8.4). Compared against the client's applied epoch to
   // tell "I am one parameter generation behind" from "the two builds disagree"
   // -- see 10.1.2. Those look identical in the hash and have opposite fixes.
+  // The observer's own animation state (design §4.1). The local agent never
+  // appears in its own entity stream, so this is the only way a script's choice
+  // of animation for the player reaches the player's own screen.
+  snap.self.animationState = r.u16()
   snap.self.paramEpoch = r.u8()
   snap.self.stateHash = r.u64()
   snap.hp = r.i32()

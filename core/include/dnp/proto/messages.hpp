@@ -245,6 +245,20 @@ struct SelfBlock {
     // can arrive before the PARAM_UPDATE that describes them. Without this byte
     // the client cannot tell "I am one generation behind" from "the two builds
     // disagree", and those have opposite fixes.
+    // The observer's own animation state (design 4.1).
+    //
+    // SelfBlock's first purely COSMETIC field, and worth a sentence because the
+    // distinction had never had to be made: this block is "what this observer
+    // needs to know about itself", not "what the hash needs". Until now the two
+    // overlapped completely, because everything per-self was simulation state.
+    //
+    // It is here because the local agent is the one body excluded from its own
+    // entity stream, so a script that animates a player would otherwise be
+    // animating the only thing on the map nobody can see. It is deliberately NOT
+    // in World::agent_hash -- see the comment there -- because a script's choice
+    // is not something the client can reproduce, and a hashed field with nothing
+    // to reconcile it from is a permanent mismatch.
+    u16    animation_state = 0;
     u8     param_epoch     = 0;
 
     u64    state_hash      = 0;

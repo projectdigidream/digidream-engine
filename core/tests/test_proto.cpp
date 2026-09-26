@@ -255,6 +255,7 @@ static void test_snapshot_roundtrip() {
         self.state_flags = static_cast<u16>(rng.next_u32() & 0x3F);
         self.anchor      = Handle::make(rng.next_below(1000), 3);
         self.jumps_used  = static_cast<u8>(rng.next_below(4));
+        self.animation_state = static_cast<u16>(rng.next_u32());
         self.state_hash  = rng.next_u64();
         const i32 hp = static_cast<i32>(rng.next_u32());
 
@@ -322,6 +323,7 @@ static void test_snapshot_roundtrip() {
         CHECK(got.self.anchor == self.anchor);
         CHECK(got.self.state_hash == self.state_hash);
         CHECK(got.self.jumps_used == self.jumps_used);
+        CHECK(got.self.animation_state == self.animation_state);
 
         CHECK(got.entity_count == written);
         for (int i = 0; i < written; ++i) {
@@ -724,6 +726,48 @@ static void test_music_cue_round_trip() {
     CHECK(!decode_music_cue(r2, got));
 }
 
+// SelfBlock's animation_state is the observer's own, and the reason it needs its
+// own check is that a field an encoder silently drops round-trips perfectly on
+// the default. So this asserts the BYTES move, not just that a zero came back.
+static void test_self_block_carries_its_animation_state() {
+    std::printf("self: the observer's own animation state reaches the wire\n");
+
+    SnapshotHeader h{};
+    h.server_tick = 7;
+
+    const auto encode = [&](u16 anim, u8* out, size_t cap) {
+        SelfBlock self{};
+        self.animation_state = anim;
+        SnapshotWriter sw(out, cap);
+        sw.begin(h, self, 100);
+        return sw.finish();
+    };
+
+    u8 buf_a[MAX_DATAGRAM_BYTES];
+    u8 buf_b[MAX_DATAGRAM_BYTES];
+    const size_t na = encode(0, buf_a, sizeof(buf_a));
+    const size_t nb = encode(9, buf_b, sizeof(buf_b));
+    CHECK(na > 0 && nb > 0);
+
+    // CONTROL. Two snapshots differing ONLY in this field must differ on the
+    // wire. An encoder that never wrote it would still decode 0 == 0 and pass a
+    // round-trip on the default, which is exactly how a dropped field hides.
+    CHECK(na == nb);
+    bool differ = false;
+    for (size_t i = 0; i < na && i < nb; ++i) if (buf_a[i] != buf_b[i]) differ = true;
+    CHECK(differ);
+
+    ByteReader r(buf_b, nb);
+    DecodedSnapshot got;
+    CHECK(decode_snapshot(r, got));
+    CHECK(got.self.animation_state == 9);
+
+    ByteReader r0(buf_a, na);
+    DecodedSnapshot zero;
+    CHECK(decode_snapshot(r0, zero));
+    CHECK(zero.self.animation_state == 0);
+}
+
 // CameraSet had no test at all. It is the one message whose field ids are
 // positional across two languages with no shared header, so the two properties
 // worth pinning are that a full record survives and that an id this build has
@@ -901,6 +945,7 @@ int main() {
     test_ui_panel_round_trip();
     test_ui_event_round_trip();
     test_music_cue_round_trip();
+    test_self_block_carries_its_animation_state();
     test_camera_set_round_trip();
     test_screen_set_round_trip();
     test_ui_rejects_hostile_input();

@@ -144,6 +144,11 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
     }
+    // The observer's OWN animation state (design 4.1). Ungated: the local agent
+    // is the one body that never appears in its own entity stream, so without
+    // this it is the only thing on the map whose scripted animation nobody can
+    // see. NOT hashed and not predicted -- see SelfBlock's own comment.
+    w.u16v(s.animation_state);
     // Which generation of the movement parameters this state was computed with
     // (docs/protocol.md 8.4). Ungated, unlike the grapple block: a client needs
     // it on EVERY snapshot, because its whole job is to answer "were we running
@@ -172,6 +177,7 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();
     }
+    s.animation_state = r.u16v();
     s.param_epoch     = r.u8v();
     s.state_hash      = r.u64v();
 }

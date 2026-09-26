@@ -1813,6 +1813,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // move -- see docs/protocol.md §5.1.
             sb.anchor          = proto::Handle{self.mv.anchor >= 0
                                      ? static_cast<u32>(self.mv.anchor) + 1u : 0u};
+            // The observer's own animation state. Every other body's reaches
+            // its watchers through an EntityBlock; this one is excluded from
+            // its own stream (see the `i == s.agent` skip below), so without
+            // this line a script animating a player animates nobody's screen.
+            sb.animation_state = world.agent(s.agent).animation_state;
             sb.param_epoch     = L.param_epoch[s.agent];
             sb.state_hash      = world.agent_hash(s.agent);
 

@@ -564,7 +564,19 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.i32v(m.anchor);
     h.boolv(m.anchored);
     h.u32v(a.kind);
-    h.u32v(a.animation_state);
+    // NOT animation_state, which moved to World::hash below.
+    //
+    // agent_hash is the PREDICTION comparison and animation_state is written
+    // only by Lua -- docs/protocol.md calls it "entirely a client-side cosmetic
+    // decision with no gameplay or hit-detection consequence", and nothing in
+    // core/ reads it. A field the client cannot reproduce makes every tick after
+    // the script touches it a reported mismatch that reconciliation cannot heal,
+    // because there is nothing in SelfBlock to heal it from. That was dormant
+    // only because nothing had ever set a PLAYER's animation state.
+    //
+    // Contrast attack_left just below, which the simulation itself reads to gate
+    // the next press -- which is exactly why that one had to be replicated
+    // instead of removed.
     h.byte(m.jumps_used);
     h.byte(m.dashes_used);
     h.boolv(m.jump_held);
@@ -584,8 +596,14 @@ u64 World::agent_hash(u32 i) const noexcept {
     // the client can reproduce. Which targets a swing has already connected
     // with is engine bookkeeping for deduplicating events the client never
     // receives -- it cannot know it, so including it would make every swing a
-    // guaranteed mismatch. They stay in World::hash, where the determinism gate
-    // still covers them.
+    // guaranteed mismatch.
+    //
+    // This comment used to end "They stay in World::hash, where the determinism
+    // gate still covers them", which was not true: the masks were hashed
+    // NOWHERE. They are now, beside animation_state below, so the sentence and
+    // the code agree. Two swings that connected with different targets are two
+    // different simulations even though every position matches, and the gate
+    // should be able to see that.
     h.fxv(m.dash_timer);
     h.fxv(m.dash_cooldown_timer);
     h.vec2(m.dash_dir);
@@ -1302,6 +1320,15 @@ u64 World::hash() const noexcept {
         // disagreement about it has to show up on the gate rather than as an
         // agent being stopped by something that is not there.
         h.boolv(agents_[i].solid);
+        // Agent fields the DETERMINISM GATE covers and the PREDICTION comparison
+        // must not. Both are things the client cannot reproduce -- a script's
+        // animation choice, and which targets a swing has already connected with
+        // -- so agent_hash excludes them and says why. They still belong to the
+        // world's state: two runs that differ here differ, and the gate is the
+        // one reader that should notice.
+        h.u32v(agents_[i].animation_state);
+        for (u64 w : agents_[i].mv.attack_hit_agents) h.u64v(w);
+        for (u64 w : agents_[i].mv.attack_hit_props) h.u64v(w);
         h.u32v(i);
         h.byte(generation_[i]);
         h.u64v(agent_hash(i));
