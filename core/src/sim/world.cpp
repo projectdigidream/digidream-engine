@@ -131,7 +131,28 @@ MoveCommand to_command(const proto::InputFrame& f) noexcept {
 
 void World::step_agent(u32 i) noexcept {
     AgentState& a = agents_[i];
-    const MoveCommand cmd = to_command(inputs_[i]);
+    MoveCommand cmd = to_command(inputs_[i]);
+
+    // AIM SNAPPED TO N DIRECTIONS, before anything reads it.
+    //
+    // Here rather than on the client, because which directions a weapon allows
+    // is a game RULE and rules are authoritative -- and because in the shared
+    // controller both sides snap identically, so the snap is predicted rather
+    // than corrected. input_scale is the same shape of decision: a replicated
+    // parameter that changes how input is INTERPRETED.
+    //
+    // Exact in brad, with no trigonometry: a turn is 2^32, so the nearest of N
+    // evenly spaced headings is a rounded division. The half-step added before
+    // dividing is what makes it round rather than floor -- without it every
+    // heading is biased anticlockwise by half a sector, which reads as aiming
+    // slightly off rather than as snapping.
+    if (const u8 n = params_[i].aim_snap; n > 1) {
+        const u64 turn = 0x100000000ull;
+        const u64 sector = turn / n;
+        const u64 aim = static_cast<u64>(cmd.aim.raw);
+        const u64 snapped = ((aim + sector / 2) / sector) * sector;
+        cmd.aim = brad(static_cast<u32>(snapped & 0xFFFFFFFFull));
+    }
 
     // Turned toward the aim at a bounded rate, not snapped to it.
     //
@@ -196,7 +217,13 @@ void World::step_agent(u32 i) noexcept {
         // it does not extend the wait and releasing it does not shorten one.
         if (a.mv.attack_cooldown_left > 0) --a.mv.attack_cooldown_left;
 
-        if (swing && !a.mv.attack_held && a.mv.attack_left == 0 &&
+        // attack_enabled is what a ranged weapon sets to zero, and it is checked
+        // HERE rather than by refusing to report the hit later: a swing that
+        // started and connected with nothing still spends a cooldown, still
+        // holds the button's edge, and still animates. The press has to do
+        // nothing at all, and the client has to predict that it does.
+        if (swing && params_[i].attack_enabled &&
+            !a.mv.attack_held && a.mv.attack_left == 0 &&
             a.mv.attack_cooldown_left == 0) {
             a.mv.attack_left = params_[i].attack_ticks == 0 ? 1 : params_[i].attack_ticks;
             for (u64& w : a.mv.attack_hit_agents) w = 0;

@@ -90,6 +90,9 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     // in the struct because that is where it belongs to a reader; it sits last
     // HERE because that is the only place a new id can go.
     DNP_PARAM(input_scale,          ParamType::Fx),     // 29
+    // Appended, like every one above: this table's ORDER is the wire format.
+    DNP_PARAM(attack_enabled,       ParamType::Bool),   // 30
+    DNP_PARAM(aim_snap,             ParamType::U8),     // 31
 };
 
 #undef DNP_PARAM
@@ -106,6 +109,15 @@ inline constexpr u16 PARAM_COUNT = static_cast<u16>(sizeof(PARAM_TABLE) / sizeof
 //
 // If this fires: add the new field to PARAM_TABLE (at the END -- ids are a wire
 // contract) and update the number here.
+//
+// IT HAS A BLIND SPOT, and it is worth knowing before trusting it. sizeof only
+// moves when a field does not fit in existing TAIL PADDING -- so appending
+// `attack_enabled` and `aim_snap`, two single bytes after a u8, changed nothing
+// at all: 288 before and 288 after. The guard would not have noticed either one
+// going unregistered. What would is the test beside it, which walks PARAM_COUNT
+// and asserts every id reads back the field it wrote; a field nobody registered
+// simply is not there to be missed. Between them, an fx or a pointer is caught
+// by size and a byte is caught by absence.
 static_assert(sizeof(MoveParams) == 288,
               "MoveParams changed. Append the new field(s) to PARAM_TABLE in this "
               "file -- appending is safe, reordering breaks the wire format -- "

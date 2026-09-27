@@ -325,6 +325,84 @@ static void test_use_reaches_a_usable_prop() {
     }
 }
 
+// A weapon that does not swing, and aim that snaps.
+//
+// Both are parameters rather than code branches, and both are PREDICTED -- which
+// is the whole reason they are in the table instead of in the server. Each is
+// asserted with the same press that must still work, because "nothing happened"
+// is satisfied by an engine that stopped swinging at all.
+static void test_a_weapon_can_decline_to_swing() {
+    std::printf("props: attack_enabled is what stops one button being two attacks\n");
+
+    auto swings = [](bool enabled) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        w.spawn(fx3{F(21), F(20), F(0)});          // something to hit
+        w.params_mut(a).attack_enabled = enabled;
+        proto::InputFrame f{};
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        // ACCUMULATED, because the log is per-tick: reading it after the loop
+        // reads the last tick, which is long after the swing ended. The control
+        // caught exactly that -- "enabled: 0 events" is not a feature working.
+        u32 total = 0;
+        for (u32 t = 0; t < 40; ++t) {
+            w.set_input(a, f);
+            w.step();
+            total += w.attacks().count();
+        }
+        return total;
+    };
+
+    // The control and the claim, in that order: the same press, one parameter
+    // apart. Without the first, "no attacks" passes for an engine whose collider
+    // stopped working.
+    CHECK(swings(true) > 0);
+    CHECK(swings(false) == 0);
+    std::printf("  enabled: %u attack events; disabled: %u\n", swings(true), swings(false));
+}
+
+static void test_aim_can_snap_to_a_number_of_directions() {
+    std::printf("props: aim_snap quantises the heading, exactly and without trigonometry\n");
+
+    auto faced = [](u8 snap, u32 aim) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        w.params_mut(a).aim_snap = snap;
+        // Turn fast enough to reach the aim in one tick, so what is measured is
+        // the SNAP rather than the turn rate on the way to it.
+        w.params_mut(a).turn_speed = fx::from_int(1000);
+        proto::InputFrame f{};
+        f.aim = brad(aim);
+        for (u32 t = 0; t < 4; ++t) { w.set_input(a, f); w.step(); }
+        return w.agent(a).facing.raw;
+    };
+
+    const u32 turn = 0;                            // 2^32 wraps to 0
+    const u32 eighth = 0x20000000u;                // 1/8 of a turn
+    (void)turn;
+
+    // Just past an eighth snaps BACK to it; just before snaps FORWARD. That is
+    // rounding rather than flooring, and flooring would bias every heading
+    // anticlockwise by half a sector -- which reads as aiming slightly off.
+    CHECK(faced(8, eighth + 1000) == eighth);
+    CHECK(faced(8, eighth - 1000) == eighth);
+    // Half a sector past is the next one.
+    CHECK(faced(8, eighth + eighth / 2 + 1000) == eighth * 2);
+
+    // CONTROL: without the snap the same aim is kept exactly. Otherwise every
+    // assertion above passes for an engine that quantises everything always.
+    CHECK(faced(0, eighth + 1000) == eighth + 1000);
+    CHECK(faced(1, eighth + 1000) == eighth + 1000);   // one direction is not a snap
+    std::printf("  snapped %u -> %u; free aim kept %u\n",
+                eighth + 1000, faced(8, eighth + 1000), faced(0, eighth + 1000));
+}
+
 // Which hash sees an animation state, and which must not.
 //
 // THE PAIR IS THE POINT. agent_hash is the PREDICTION comparison and a script's
@@ -725,6 +803,8 @@ static void test_a_minimum_reach_makes_a_ring_rather_than_a_wedge() {
 
 int main() {
     test_props_share_the_entity_index_space();
+    test_a_weapon_can_decline_to_swing();
+    test_aim_can_snap_to_a_number_of_directions();
     test_an_animation_state_is_seen_by_one_hash_and_not_the_other();
     test_a_swing_hits_what_is_in_front_of_it();
     test_the_swing_is_not_instantaneous();

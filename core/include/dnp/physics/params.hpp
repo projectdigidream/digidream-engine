@@ -158,6 +158,32 @@ struct MoveParams {
     // melee weapon and short for a siege engine; the day something wants the
     // latter it should be a u16 rather than a second parameter.
     u8 attack_cooldown   = 0;
+
+    // WHETHER PRESSING ATTACK SWINGS AT ALL.
+    //
+    // Every weapon in this engine shares one button, and before this there was
+    // no way to say "this one does not swing": attack_reach of 0 still connects
+    // at the target's own radius, and attack_ticks of 0 is re-read as 1 two
+    // lines into the start condition. So firing a shotgun ALSO swung an
+    // invisible fist, and two independent damage paths ran off one press.
+    //
+    // A replicated boolean gating an ability, exactly as climb_enabled,
+    // hover_enabled, flight_enabled and grapple_enabled are -- which means the
+    // client predicts that pressing fire with a ranged weapon produces no
+    // collider, rather than predicting a swing the server then denies.
+    bool attack_enabled = true;
+
+    // HOW MANY DIRECTIONS AIM SNAPS TO. 0 is free aim.
+    //
+    // A platformer distinction rather than a Doom one: eight-way aiming is a
+    // different game from free aiming, and which one a weapon imposes is a rule
+    // the weapon declares. Applied in the shared controller so both sides snap
+    // identically and the snap is PREDICTED -- input_scale above is the exact
+    // precedent, a replicated parameter that changes how input is interpreted.
+    //
+    // "Fixed forward" is not a third value: it is turn_speed = 0, which this
+    // table already expresses.
+    u8 aim_snap = 0;
 };
 
 // Runtime state the abilities carry between ticks.
