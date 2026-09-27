@@ -220,6 +220,40 @@ int l_entity_hp(lua_State* L) {
     return 1;
 }
 
+// entity:avatar() -> n, and entity:set_avatar(n)
+//
+// WHICH ART DRAWS THIS PLAYER, so two players in one level can look nothing
+// alike. A number, never a record and never a sheet name: the catalogue's own
+// `avatar <id> as <n>` lines say what each number draws, so a script picks a
+// costume without knowing anything about the art that fulfils it -- the same
+// division set_animation makes for a state.
+//
+// Only players have one. An enemy is drawn from its kind, and asking a monster
+// for its avatar is a question with no answer rather than a zero.
+int l_entity_avatar(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.avatar == nullptr) { lua_pushnil(L); return 1; }
+    if (ctx.world != nullptr && ctx.world->agent(static_cast<u32>(a)).kind != 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushnumber(L, static_cast<double>(ctx.avatar[a]));
+    return 1;
+}
+
+int l_entity_set_avatar(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.avatar == nullptr) return 0;
+    const double n = luaL_checknumber(L, 2);
+    if (n < 0 || n > 65535) {
+        return luaL_error(L, "set_avatar: %f is not an avatar number (0..65535)", n);
+    }
+    ctx.avatar[a] = static_cast<u16>(n);
+    return 0;
+}
+
 int l_entity_set_hp(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -425,6 +459,8 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"set_solid", l_entity_set_solid},
     {"hp", l_entity_hp},
     {"set_hp", l_entity_set_hp},
+    {"avatar", l_entity_avatar},
+    {"set_avatar", l_entity_set_avatar},
     {"set_animation", l_entity_set_animation},
     {"kind", l_entity_kind},
     {"name", l_entity_name},

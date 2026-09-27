@@ -86,7 +86,11 @@ export class EntityView {
         // (docs/protocol.md §5.4), so the visual is chosen once, here, from
         // what the entity IS -- not guessed from how it moves.
         const kind = e.displayId ?? 0
-        ent = { mesh: this.makeMesh(kind), samples: [], generation, kind }
+        // The avatar arrives with the same first block, for the same reason: a
+        // player's costume is what it IS to the renderer, and choosing it once
+        // here is cheaper than asking on every frame.
+        const avatar = e.avatar ?? 0
+        ent = { mesh: this.makeMesh(kind, avatar), samples: [], generation, kind, avatar }
         this.scene.add(ent.mesh)
         this.entities.set(index, ent)
       }
@@ -95,6 +99,11 @@ export class EntityView {
       // client owns the timing (design §4). Recorded on the entity so a
       // renderer can pick it up without re-reading the snapshot.
       if (e.mask & ENT_FIELD.ANIMATION_STATE) ent.animationState = e.animationState ?? 0
+      // A costume can change mid-life -- a class swap. Recorded here; the mesh
+      // is NOT rebuilt, because a change of art is a change of mesh and that is
+      // a remove-and-respawn the caller can do rather than a surprise this loop
+      // performs mid-interpolation.
+      if (e.mask & ENT_FIELD.AVATAR) ent.avatar = e.avatar ?? 0
 
       // SOLIDITY, BEFORE THE POSITION EARLY-RETURN.
       //

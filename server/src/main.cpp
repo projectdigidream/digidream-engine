@@ -145,6 +145,10 @@ struct Level {
     u32  crush_reported_tick[sim::MAX_AGENTS]{};
     bool crush_seen[sim::MAX_AGENTS]{};
     u8   param_epoch[sim::MAX_AGENTS]{};
+    // Which avatar draws each player (design 4.1). SERVER state, not simulation
+    // state -- like hp: not hashed, not in the determinism gate, not predicted.
+    // A costume is not physics.
+    u16  avatar[sim::MAX_AGENTS]{};
 
     // The motion descriptors every client in THIS level has been told about.
     sim::SectorMotion sent_motions[sim::MAX_MOVING_SECTORS]{};
@@ -759,6 +763,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         L.ctx.map_changes = this;
         L.ctx.ui = this;
         L.ctx.hp = L.hp;
+        L.ctx.avatar = L.avatar;
         L.ctx.levels = this;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
@@ -1817,6 +1822,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // its watchers through an EntityBlock; this one is excluded from
             // its own stream (see the `i == s.agent` skip below), so without
             // this line a script animating a player animates nobody's screen.
+            sb.avatar          = L.avatar[s.agent];
             sb.animation_state = world.agent(s.agent).animation_state;
             sb.param_epoch     = L.param_epoch[s.agent];
             sb.state_hash      = world.agent_hash(s.agent);
@@ -1980,6 +1986,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                     // exactly the records a prop is. Zero stays "a player".
                     now.animation_state = a.animation_state;
                     now.display_id      = a.kind;
+                    // Only a player has an avatar; an enemy is drawn from its
+                    // kind. Reading it for both would be harmless and would also
+                    // suggest a monster could wear one.
+                    now.avatar          = a.kind == 0 ? L.avatar[i] : 0;
                     now.solid           = a.solid;
                 }
 
@@ -2016,6 +2026,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                 e.facing           = now.facing;
                 e.animation_state  = now.animation_state;
                 e.display_id       = now.display_id;
+                e.avatar           = now.avatar;
                 e.solid            = now.solid ? 1 : 0;
 
                 if (w.try_entity(e)) {

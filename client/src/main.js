@@ -28,6 +28,7 @@ import {
 } from './camera.js'
 import { buildSpline } from './spline.js'
 import { PathView } from './render/paths.js'
+import { stateFor, resolveState, deriveRemote } from './render/animstate.js'
 import { SCREEN_FIELD } from './proto.js'
 import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
@@ -259,6 +260,26 @@ let ui = null
 // Why the transport closed, if it has. Read by the handshake loop, which must
 // stop waiting for a reply that a closed connection can never deliver.
 let closedWhy = null
+// How a remote body is MOVING, measured from the two samples the interpolation
+// already found rather than sent.
+//
+// A remote player carries no velocity on the wire: EntityBlock has a position
+// and a facing and nothing about motion. So its locomotion is measured, which is
+// allowed to be approximately right -- a rendering guess, and anything that has
+// to be exact is declared by the server instead.
+//
+// Samples are in THREE space and DT apart in ticks, so the gap is converted once
+// here. Fewer than two samples is a body that has just arrived.
+const remoteCondition = (ent) => {
+  const s = ent.samples
+  if (!s || s.length < 2) return 'idle'
+  const a = s[s.length - 2]
+  const b = s[s.length - 1]
+  const ticks = b.tick - a.tick
+  if (!(ticks > 0)) return 'idle'
+  return deriveRemote(a, b, ticks * DT, {})
+}
+
 // A map change in flight: the new WELCOME, and the map arriving behind it.
 let pendingWelcome = null
 // The cutscene overlay's three elements. Looked up once: SCREEN_SET can arrive
@@ -773,8 +794,45 @@ const HEIGHT_ID = 1
 let bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
 let bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
 
+// THE LOCAL PLAYER'S BODY, and the one function that makes it.
+//
+// A capsule until an avatar is known, then the avatar's own mesh. Two things
+// make that a rebuild rather than a choice made once: the catalogue is fetched
+// asynchronously, so at startup there is nothing to build from; and the avatar
+// NUMBER arrives in a snapshot, so which one to build is not known until the
+// first one lands.
+//
+// Blue for a capsule so self and remote are still distinguishable when a module
+// ships no avatar -- which is the state every catalogue in the repo was in until
+// one declared one.
+// The capsule is built HERE and unconditionally, because neither the catalogue
+// nor the avatar number exists yet at this point in the module -- and buildBody
+// below reads both. The TDZ guard in client/test/tdz.test.js caught exactly that
+// when this was one call instead of two, which is what that test is for.
 let body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
+let bodyAvatar = -1
 scene.add(body)
+
+// Swap the body for the avatar's own mesh once one is known, or back again.
+//
+// A rebuild rather than a choice made once, for two reasons: the catalogue is
+// fetched asynchronously, so at startup there is nothing to build from, and the
+// avatar NUMBER arrives in a snapshot, so which one is not known until the first
+// one lands. Called from the frame loop, where it returns immediately unless the
+// answer has actually changed.
+//
+// Blue for a capsule so self and remote stay distinguishable when a module ships
+// no avatar -- the state every catalogue in this repo was in until one did.
+function buildBody () {
+  const want = props?.avatarFor(selfAvatar) ? selfAvatar : -1
+  if (want === bodyAvatar) return
+  const next = want >= 0 ? props.makeAvatar(want) : null
+  if (!next && want >= 0) return          // the catalogue could not build it
+  scene.remove(body)
+  bodyAvatar = want
+  body = next ?? makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
+  scene.add(body)
+}
 
 // The swing collider, drawn while a swing is running.
 //
@@ -996,7 +1054,11 @@ const others = new EntityView({
   // kind the catalogue does not cover falls back to the body mesh rather than
   // to nothing, because an entity you cannot see is indistinguishable from one
   // the server never sent.
-  makeMesh: (kind) => (kind ? props?.make(kind) : null) ??
+  // A player is kind 0 and kind 0 has no catalogue record by construction, so a
+  // player's art is addressed through the `avatar` line instead -- see
+  // PropRegistry.makeAvatar. Falling through to the body mesh when no avatar is
+  // declared keeps every catalogue that has never heard of one working unchanged.
+  makeMesh: (kind, avatarNo = 0) => (kind ? props?.make(kind) : props?.makeAvatar(avatarNo)) ??
                       makeAgentMesh(0xffa066, bodyRadius, bodyHeight),
   scene,
   // A prop is not only something to draw. A solid one is PHYSICS -- the mover
@@ -1116,9 +1178,11 @@ function adoptMap (bytes, w) {
 
   movers = []
 
-  scene.remove(body)
-  body = makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
-  scene.add(body)
+  // A new map may ship a different avatar, so the body is rebuilt rather than
+  // kept -- and bodyAvatar is cleared so buildBody does not think it already has
+  // the right one.
+  bodyAvatar = -1
+  buildBody()
   shadows.setBody(bodyRadius, bodyHeight)
 
   // Other players in the map just left are not other players here: the indices
@@ -1292,11 +1356,23 @@ const blend = (k, v) => { cost[k] += (v - cost[k]) * 0.1 }
 // The newest health the server has told us. Kept here rather than read from a
 // retained snapshot object, because drainSnapshots consumes them.
 let latestHp = null
+// The server's DECLARED animation state for this player, from SelfBlock.
+//
+// Kept here rather than read off readAgent, because it is not simulation state
+// the client predicts: it is a script's decision, deliberately excluded from
+// World::agent_hash so that setting it cannot mispredict. Zero means "nothing
+// declared", which is why it starts there.
+let selfAnimation = 0
+// Which avatar draws THIS player, from SelfBlock. Server state like hp, not
+// simulation state: a costume is not physics.
+let selfAvatar = 0
 
 function drainSnapshots () {
   while (pendingSnapshots.length) {
     const s = pendingSnapshots.shift()
     if (s.hp !== undefined) latestHp = s.hp
+    if (s.self?.animationState !== undefined) selfAnimation = s.self.animationState
+    if (s.self?.avatar !== undefined) selfAvatar = s.self.avatar
     newestServerTick = Math.max(newestServerTick, s.serverTick)
 
     // Transient effects, drawn once and forgotten. The event carries where the
@@ -1480,16 +1556,47 @@ function frame (now) {
     })
     swingTrail.update(performance.now() / 1000)
   }
+  // The body's MIDDLE, from the body's declared height rather than from the
+  // mesh's yOffset.
+  //
+  // They used to be the same number and are not any more. yOffset is the offset
+  // from the simulation's position -- the FEET -- to the mesh's own origin, which
+  // is height/2 for a capsule and ZERO for a sprite quad standing on the ground.
+  // So the moment a player became a sprite, these two sites silently dropped to
+  // the feet: an aiming arrow drawn along the floor, and an occlusion window
+  // centred low enough to leave the head behind the wall. The position write
+  // above is correct as-is and must keep using yOffset.
+  // THE LOCAL PLAYER'S OWN ANIMATION, which nothing used to do at all.
+  //
+  // Its state is RESOLVED rather than read: the server declares one when a script
+  // or a weapon says so, and zero means "animate from motion". The motion here is
+  // the PREDICTED agent -- velocity, grounded, climbing, attackLeft, all of it
+  // computed locally this tick -- so a jump animates on the tick the body leaves
+  // the ground rather than a round trip later, and a swing animates the instant
+  // the collider starts rather than when the server agrees it did.
+  //
+  // Outside `if (LIVE)`: a player animating is not a live feature.
+  // The body may have to become the avatar, or a different one. Cheap: buildBody
+  // returns immediately unless the answer has actually changed.
+  buildBody()
+  if (props && bodyAvatar >= 0) {
+    props.setState(body, resolveState(selfAnimation, a, props.avatarFor(selfAvatar)))
+    // A sprite quad has to face the camera, and keep its own heading somewhere
+    // the billboard has not overwritten -- the same two lines every remote body
+    // gets, which the local one never needed while it was a capsule.
+    body.rotation.y = billboardYaw(yaw)
+    body.userData.facingTurns = ((a.facing >>> 0) / 4294967296)
+  }
+
+  const middle = { x: subject.x, y: subject.y + bodyHeight / 2, z: subject.z }
   if (arrow) {
     // From the body's middle, which is roughly where a reach comes from and is
     // where you look when you are judging whether a door is in range.
-    aimFacingArrow(arrow,
-                   { x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z },
-                   facingDirection(a.facing))
+    aimFacingArrow(arrow, middle, facingDirection(a.facing))
   }
   // Aimed at the body's middle rather than its feet: a window centred on the
   // feet leaves the head behind the wall.
-  view.setOcclusionTarget({ x: subject.x, y: subject.y + body.userData.yOffset, z: subject.z })
+  view.setOcclusionTarget(middle)
   shadows.update(subject, groundUnder(subject.x, subject.z), view.lights, onGround)
 
   // ANIMATED SURFACES ARE NEITHER A LIVE FEATURE NOR A PROP FEATURE, and used
@@ -1513,34 +1620,61 @@ function frame (now) {
     // reason as the animator: a tracer is not a prop.
     if (vfx) vfx.update(performance.now() / 1000)
     if (props) {
-      // The animation's own clock, in seconds, shared by every prop of a kind.
-      // Independent phases would make a row of keys shimmer in a way nobody
-      // could name.
-      // Hand the server's declared animation state to the renderer. The entity
-      // view records it and the registry plays it, and until this line existed
-      // the two were never introduced -- a barrel switched to its explosion
-      // state and went on showing idle frames until it vanished.
-      for (const ent of others.entities.values()) {
-        if (ent.kind) props.setState(ent.mesh, ent.animationState ?? 0)
-      }
-      // The camera's position, so a sprite can choose which of its eight views
-      // to show: the view depends on the angle between the thing's facing and
-      // the direction to the viewer, and only the caller knows the second half.
-      props.update(now / 1000, cam3.position)
-      // Billboarding: yaw only, and derived rather than guessed. See
+      // ORDER MATTERS HERE, and it used to be wrong.
+      //
+      // props.update() READS userData.facingTurns to pick which of eight views a
+      // sprite shows. It used to run BEFORE the loop that writes it, so every
+      // eight-view sprite in the game chose its view from LAST frame's facing --
+      // invisible while standing still and a frame of lag on every turn.
+      //
+      // So: facing and billboard first, then the state, then the clock that
+      // consumes both.
+      //
+      // Billboarding is yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.
       const bb = billboardYaw(yaw)
       for (const ent of others.entities.values()) {
-        if (!ent.kind) continue
         ent.mesh.rotation.y = bb
         // Which way the thing is POINTING, kept on the mesh for the eight-view
         // sprites to read. It cannot be recovered from the mesh's own rotation,
         // because that has just been overwritten to face the camera -- which is
         // what billboarding is.
+        //
+        // For EVERY entity, players included. A remote player is kind 0 and used
+        // to be skipped here, which was right while it was drawn as a capsule and
+        // wrong the moment it became a sprite with eight views.
         ent.mesh.userData.facingTurns = ((ent.facing ?? 0) >>> 0) / 4294967296
+      }
+      // Hand the server's declared animation state to the renderer. The entity
+      // view records it and the registry plays it, and until this line existed
+      // the two were never introduced -- a barrel switched to its explosion
+      // state and went on showing idle frames until it vanished.
+      //
+      // Players included, and for them the state is RESOLVED rather than passed
+      // through: zero means "nothing declared", so a remote player animates from
+      // the motion two samples apart imply. See render/animstate.js.
+      for (const ent of others.entities.values()) {
+        const declared = ent.animationState ?? 0
+        if (ent.kind) { props.setState(ent.mesh, declared); continue }
+        // Zero is "nothing declared", so a remote player animates from the
+        // motion its two newest samples imply. Any non-zero value is the
+        // server's, and wins.
+        props.setState(ent.mesh, declared || stateFor(props.avatarFor(ent.avatar ?? 0), remoteCondition(ent)))
       }
     }
   }
+
+  // The prop clock, OUT of `if (LIVE)`.
+  //
+  // The same argument the animated surfaces above make for themselves: the local
+  // player's own animation is neither a live feature nor a prop feature, and
+  // leaving this inside `if (LIVE)` would mean a player stood frozen in solo
+  // mode while every barrel around them animated.
+  //
+  // The camera's position is handed in so a sprite can choose which of its eight
+  // views to show: the view depends on the angle between the thing's facing and
+  // the direction to the viewer, and only the caller knows the second half.
+  if (props) props.update(now / 1000, cam3.position)
 
   // The camera follows the PREDICTED position -- here, whichever of the two
   // modes produced it. Never a snapshot: see camera.js.

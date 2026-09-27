@@ -33,6 +33,7 @@ struct EntitySample {
     // a different key -- and a client that missed it would have a position with
     // nothing to draw at it.
     u32  display_id      = 0;
+    u16  avatar          = 0;
     // Whether other bodies collide with this one. Replicated because the client
     // predicts against it -- see proto::ent_field::SOLID.
     bool solid           = true;
@@ -106,6 +107,9 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
         // carry a display_id of zero on every respawn, which costs four bytes
         // to tell the client what it already assumes.
         if (now.display_id != 0) full |= proto::ent_field::DISPLAY_ID;
+        // Same again: avatar 0 is the default a client already assumes, so it is
+        // only worth two bytes when a script has actually chosen something.
+        if (now.avatar != 0) full |= proto::ent_field::AVATAR;
         // Same reasoning: solid is the default, so it is only worth a byte when
         // it is not. A body that spawns already dead does not exist.
         if (!now.solid) full |= proto::ent_field::SOLID;
@@ -116,6 +120,10 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     if (now.facing != was.facing) mask |= proto::ent_field::FACING;
     if (now.animation_state != was.animation_state) mask |= proto::ent_field::ANIMATION_STATE;
     if (now.display_id != was.display_id) mask |= proto::ent_field::DISPLAY_ID;
+    // Delta-masked rather than sent once, because an avatar CAN change -- a class
+    // swap, a costume -- and a field sent only on appearance would leave everyone
+    // else looking at the old one forever.
+    if (now.avatar != was.avatar) mask |= proto::ent_field::AVATAR;
     if (now.solid != was.solid) mask |= proto::ent_field::SOLID;
     return mask;
 }

@@ -80,6 +80,7 @@ void encode_entity(ByteWriter& w, const EntityBlock& e) noexcept {
     if (e.mask & ent_field::ANCHOR) w.u32v(e.anchor.raw);
     if (e.mask & ent_field::CONTROLLER_MODE) w.u8v(e.controller_mode);
     if (e.mask & ent_field::DISPLAY_ID) w.u32v(e.display_id);
+    if (e.mask & ent_field::AVATAR) w.u16v(e.avatar);
     if (e.mask & ent_field::SOLID) w.u8v(e.solid);
     // DESTROYED carries no payload.
 }
@@ -105,6 +106,7 @@ bool decode_entity(ByteReader& r, EntityBlock& e) noexcept {
     if (e.mask & ent_field::ANCHOR) e.anchor.raw = r.u32v();
     if (e.mask & ent_field::CONTROLLER_MODE) e.controller_mode = r.u8v();
     if (e.mask & ent_field::DISPLAY_ID) e.display_id = r.u32v();
+    if (e.mask & ent_field::AVATAR) e.avatar = r.u16v();
     if (e.mask & ent_field::SOLID) e.solid = r.u8v();
     return r.ok();
 }
@@ -144,6 +146,7 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
     }
+    w.u16v(s.avatar);
     // The observer's OWN animation state (design 4.1). Ungated: the local agent
     // is the one body that never appears in its own entity stream, so without
     // this it is the only thing on the map whose scripted animation nobody can
@@ -177,6 +180,7 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();
     }
+    s.avatar          = r.u16v();
     s.animation_state = r.u16v();
     s.param_epoch     = r.u8v();
     s.state_hash      = r.u64v();

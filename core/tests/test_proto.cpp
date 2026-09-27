@@ -256,6 +256,7 @@ static void test_snapshot_roundtrip() {
         self.anchor      = Handle::make(rng.next_below(1000), 3);
         self.jumps_used  = static_cast<u8>(rng.next_below(4));
         self.animation_state = static_cast<u16>(rng.next_u32());
+        self.avatar = static_cast<u16>(rng.next_u32());
         self.state_hash  = rng.next_u64();
         const i32 hp = static_cast<i32>(rng.next_u32());
 
@@ -285,6 +286,11 @@ static void test_snapshot_roundtrip() {
             if (i % 5 == 0) {
                 sent[i].mask |= ent_field::DISPLAY_ID;
                 sent[i].display_id = rng.next_u32();
+            }
+            // Which avatar draws a player -- its own field, so its own coverage.
+            if (i % 6 == 0) {
+                sent[i].mask |= ent_field::AVATAR;
+                sent[i].avatar = static_cast<u16>(rng.next_u32());
             }
             if (sw.try_entity(sent[i])) ++written;
         }
@@ -324,6 +330,7 @@ static void test_snapshot_roundtrip() {
         CHECK(got.self.state_hash == self.state_hash);
         CHECK(got.self.jumps_used == self.jumps_used);
         CHECK(got.self.animation_state == self.animation_state);
+        CHECK(got.self.avatar == self.avatar);
 
         CHECK(got.entity_count == written);
         for (int i = 0; i < written; ++i) {
@@ -342,6 +349,7 @@ static void test_snapshot_roundtrip() {
             }
             if (sent[i].mask & ent_field::DISPLAY_ID) {
                 CHECK(got.entities[i].display_id == sent[i].display_id);
+                CHECK(got.entities[i].avatar == sent[i].avatar);
             }
         }
         CHECK(got.vfx_count == vwritten);

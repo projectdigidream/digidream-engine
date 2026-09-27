@@ -186,6 +186,10 @@ struct WorldContext {
     // predicts; it reaches the right client through the snapshot's private
     // block, which design section 2 already requires be per-observer.
     i32*              hp = nullptr;
+    // Which avatar draws each player (design 4.1). Borrowed like hp, and server
+    // state for the same reason: a costume is not physics, so it is not hashed,
+    // not in the determinism gate and not predicted.
+    u16*              avatar = nullptr;
     const PropCatalogueView* props = nullptr;
 
     // Deterministic, seeded from the map hash and the script name -- never from

@@ -168,6 +168,19 @@ inline constexpr u32 DESTROYED       = 1u << 7;
 // something the server walks straight through -- every tick, for as long as the
 // body is there.
 inline constexpr u32 SOLID           = 1u << 8;
+// WHICH AVATAR draws this player (design 4.1).
+//
+// Its own field rather than display_id's, which carries the KIND -- and kind
+// zero has to keep meaning "a player", because the client branches on it to
+// decide whether a body's collider comes from the catalogue or from the map's
+// own replicated `body`, and whether it is a prop at all. An avatar number is a
+// different question from what a thing is: two players are the same kind of
+// thing and may look nothing alike.
+//
+// Delta-masked rather than sent once on appearance, because it can change: a
+// class swap, a costume. Zero is the default avatar, which is what a server that
+// never speaks gets.
+inline constexpr u32 AVATAR          = 1u << 9;
 }  // namespace ent_field
 
 namespace state_flag {
@@ -245,6 +258,11 @@ struct SelfBlock {
     // can arrive before the PARAM_UPDATE that describes them. Without this byte
     // the client cannot tell "I am one generation behind" from "the two builds
     // disagree", and those have opposite fixes.
+    // Which avatar draws this player. As EntityBlock's, and here for the same
+    // reason animation_state is: the local agent never appears in its own entity
+    // stream, so without it a player would be the one body on the map that could
+    // not see its own costume.
+    u16    avatar          = 0;
     // The observer's own animation state (design 4.1).
     //
     // SelfBlock's first purely COSMETIC field, and worth a sentence because the
@@ -454,6 +472,7 @@ struct EntityBlock {
     Handle anchor{};
     u8     controller_mode = 0;
     u32    display_id      = 0;   // dropped items only; never an item_hash (R7)
+    u16    avatar          = 0;   // which avatar draws a player; 0 is the default
     u8     solid           = 1;
 };
 

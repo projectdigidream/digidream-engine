@@ -27,6 +27,7 @@
  * typo teaches people not to touch it.
  */
 import { frameKey, quadFor, uvFor } from './atlas.js'
+import { CONDITIONS, defaultStates } from './animstate.js'
 
 /**
  * Put one atlas frame's corners into a plane's attributes.
@@ -83,6 +84,10 @@ export function propScale (def) {
 export function parseProps (text) {
   const kinds = new Map()   // id -> { id, sprite?: {...}, mesh?: {...} }
   const warnings = []
+  // Which record draws a player, by avatar NUMBER. A map rather than one entry,
+  // because different players can be drawn differently: the server names a
+  // number per body and this is what turns it into art.
+  const avatars = new Map()
 
   const def = (id) => {
     if (!kinds.has(id)) kinds.set(id, { id, states: new Map() })
@@ -142,6 +147,71 @@ export function parseProps (text) {
     // it loops -- so this line does not restate any of them. A `size` here
     // would be a second opinion about a number the sheet already carries, and
     // the two would drift the first time somebody re-exported.
+    // WHICH RECORD DRAWS A PLAYER (design 4.1).
+    //
+    //   avatar <id> [blend <seconds>]
+    //   avatar <id> when <condition> state <n>
+    //
+    // Kind 0 is structurally "no prop" in both readers -- this parser refuses
+    // id <= 0 below and the server calls it the same thing -- and a player IS
+    // kind 0 on the wire, which cannot change: an agent's `kind` is in
+    // World::agent_hash and absent from SelfBlock, so a server that gave a
+    // player kind 91 would mispredict every tick with nothing able to heal it.
+    //
+    // So the mapping lives HERE instead, which is better than the workaround it
+    // replaces: "a player is not a prop" stays true everywhere else in the
+    // client, the art is an ordinary prop/sprite/atlas record set needing no new
+    // grammar, the frame preload walks it for free, and a module ships its own
+    // avatar with no id baked into any code.
+    if (tok[0] === 'avatar') {
+      const id = Number(tok[1])
+      if (!Number.isInteger(id) || id <= 0) {
+        warnings.push(`line ${i + 1}: '${tok[1]}' is not a prop id`)
+        return
+      }
+      // WHICH avatar this is. `as <n>` names it; without one it is avatar 0, the
+      // default a server that says nothing gets. Read before the rest of the
+      // line so `when` and `blend` land on the right one whatever the order.
+      let slot = 0
+      for (let k = 2; k < tok.length - 1; k++) if (tok[k] === 'as') slot = Number(tok[k + 1])
+      if (!Number.isInteger(slot) || slot < 0) {
+        warnings.push(`line ${i + 1}: '${slot}' is not an avatar number`)
+        return
+      }
+      // The condition table is SEEDED with the convention rather than left
+      // empty, so `avatar <id>` alone animates. `when` lines then override.
+      if (!avatars.has(slot)) avatars.set(slot, { slot, kind: id, blend: 0, when: defaultStates() })
+      const avatar = avatars.get(slot)
+      // Last wins, and it is a warning rather than an error: a module loaded
+      // after another legitimately replaces an avatar.
+      if (avatar.kind !== id) {
+        warnings.push(`line ${i + 1}: avatar ${slot} was kind ${avatar.kind}, now ${id}; the later one wins`)
+        avatar.kind = id
+      }
+      let when = null
+      for (let k = 2; k < tok.length; k++) {
+        const val = tok[k + 1]
+        if (val === undefined) { warnings.push(`line ${i + 1}: '${tok[k]}' has no value`); break }
+        k++
+        switch (tok[k - 1]) {
+          case 'as': break   // already read above
+          case 'blend': avatar.blend = Number(val); break
+          case 'when':
+            if (!CONDITIONS.includes(val)) {
+              warnings.push(`line ${i + 1}: '${val}' is not an animation condition`)
+            }
+            when = val
+            break
+          case 'state':
+            if (when) avatar.when[when] = Number(val)
+            else warnings.push(`line ${i + 1}: 'state' without a 'when' before it`)
+            break
+          default: warnings.push(`line ${i + 1}: unknown attribute '${tok[k - 1]}'`)
+        }
+      }
+      return
+    }
+
     if (tok[0] === 'atlas') {
       const id = Number(tok[1])
       if (!Number.isInteger(id) || id <= 0) {
@@ -232,7 +302,17 @@ export function parseProps (text) {
     }
   })
 
-  return { kinds, warnings }
+  // An avatar naming a record nobody wrote would hand make() an unknown kind and
+  // get the fallback body with nothing said. Refuse it here, where the line is
+  // still identifiable.
+  for (const [slot, a] of [...avatars]) {
+    if (!kinds.has(a.kind)) {
+      warnings.push(`avatar ${slot} names kind ${a.kind}, which no record declares`)
+      avatars.delete(slot)
+    }
+  }
+
+  return { kinds, warnings, avatars }
 }
 
 /**
@@ -309,6 +389,28 @@ export function frameAt (state, seconds) {
  * chosen. A kind declaring one draws the fallback and says so once, which is a
  * better answer than pretending it worked.
  */
+/**
+ * Which view of a mesh faces the camera, from the facing smuggled in userData.
+ *
+ * Smuggled because a billboard overwrites `mesh.rotation.y` every frame, so the
+ * facing cannot live on the object itself -- main.js writes `facingTurns`
+ * alongside.
+ *
+ * ONE of these. The four lines were already written twice, for the per-PNG path
+ * and the atlas path, and a player would have made three copies of an arithmetic
+ * whose comments record two earlier versions shipping mirrored. It is also the
+ * single place a brad interpolation would go if a mesh ever needs facing to be
+ * smooth rather than one of eight.
+ */
+export function viewFor (mesh, cameraPos, views = 8) {
+  const dx = cameraPos.x - mesh.position.x
+  const dz = cameraPos.z - mesh.position.z
+  // Screen space is x/-z for world x/y (see main.js), and atan2 returns radians,
+  // so this is converted to turns before it meets a facing.
+  const toCamera = Math.atan2(-dz, dx) / (Math.PI * 2)
+  return rotationFor(mesh.userData.facingTurns ?? 0, toCamera, views)
+}
+
 export class PropRegistry {
   constructor ({ THREE, textures, catalogue, atlases = new Map() }) {
     this.THREE = THREE
@@ -318,11 +420,38 @@ export class PropRegistry {
     // they can share it, and sharing is what lets the renderer batch them.
     this.atlases = atlases
     this.kinds = catalogue?.kinds ?? new Map()
+    // Avatar number -> the record that draws a player with it. From `avatar`
+    // lines; see parseProps. Held rather than resolved at construction because
+    // the catalogue knows it and the registry is what can build it.
+    this.avatars = catalogue?.avatars ?? new Map()
     this.warned = new Set()
     // mesh -> { def, stateId }. A Map rather than an array searched linearly,
     // because the animation state is synced from the entity view every frame
     // and a scan per prop per frame is a scan that grows with the map.
     this.animated = new Map()
+  }
+
+  /**
+   * A THREE object for a PLAYER, or null when no avatar is declared.
+   *
+   * A player is kind 0 on the wire and kind 0 is structurally "no prop", so this
+   * is the one lookup that does not go through a kind the server knows about.
+   * Everything after it is the ordinary path -- the same make(), the same atlas
+   * handling, the same animation registry -- because a player's art is an
+   * ordinary record and only its ADDRESSING is special.
+   */
+  makeAvatar (slot = 0) {
+    // Falling back to avatar 0 rather than to nothing: a server naming an avatar
+    // this catalogue does not ship should draw SOMETHING, and the default is a
+    // better something than the capsule. A module that ships none gets the
+    // capsule, which is the old behaviour unchanged.
+    const a = this.avatars.get(slot) ?? this.avatars.get(0)
+    return a ? this.make(a.kind) : null
+  }
+
+  /** The avatar record behind a number, for its `when` table and its blend. */
+  avatarFor (slot = 0) {
+    return this.avatars.get(slot) ?? this.avatars.get(0) ?? null
   }
 
   /** A THREE object for this kind, or null to fall back to the default body. */
@@ -456,14 +585,7 @@ export class PropRegistry {
       // always turned to face the viewer and so carries no information about
       // which way the thing is pointing.
       let rot = 1
-      if (a.def.rot8 && cameraPos) {
-        const dx = cameraPos.x - mesh.position.x
-        const dz = cameraPos.z - mesh.position.z
-        // Screen space is x/-z for world x/y (see main.js), and atan2 returns
-        // radians, so this is converted to turns before it meets a facing.
-        const toCamera = Math.atan2(-dz, dx) / (Math.PI * 2)
-        rot = rotationFor(mesh.userData.facingTurns ?? 0, toCamera)
-      }
+      if (a.def.rot8 && cameraPos) rot = viewFor(mesh, cameraPos)
       const idx = frameAt(state, seconds - a.startedAt)
       const tex = this.textures.get(frameName(a.def, state, idx, rot))
       if (tex && mesh.material.map !== tex) {
@@ -504,10 +626,7 @@ export class PropRegistry {
 
     let view = 1
     if (entry.atlas.views.count > 1 && cameraPos) {
-      const dx = cameraPos.x - mesh.position.x
-      const dz = cameraPos.z - mesh.position.z
-      const toCamera = Math.atan2(-dz, dx) / (Math.PI * 2)
-      view = rotationFor(mesh.userData.facingTurns ?? 0, toCamera, entry.atlas.views.count)
+      view = viewFor(mesh, cameraPos, entry.atlas.views.count)
     }
 
     // frameAt wants { frames, fps, once }. `loop` and `once` are the same fact

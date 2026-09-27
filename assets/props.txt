@@ -39,6 +39,30 @@
 #
 #   sprite <id> size <world-height> [billboard] [state <n>] [fps <f>] frames A,B,C
 #   mesh   <id> model <name> [state <n>] [clip <name>]
+#   avatar <id> [blend <seconds>]
+#   avatar <id> when <condition> state <n>
+#           WHICH RECORD DRAWS A PLAYER is the `avatar` line, and it is a line
+#           rather than a record because a player is kind 0 on the wire and kind
+#           0 is structurally "no prop" in both readers. That cannot change: an
+#           agent's kind is in the hash the client predicts against and is absent
+#           from the block that would reconcile it, so a server that gave a
+#           player its own kind would mispredict every tick forever. So the art
+#           is an ordinary record and only its ADDRESSING is special.
+#
+#           `when <condition> state <n>` points one of the animation conditions
+#           at a state this catalogue drew -- `when climb state 7`. Without it
+#           the condition-to-state map would be numbers compiled into the client,
+#           which is the one thing this file exists to prevent. The conditions
+#           are the closed list in client/src/render/animstate.js; a name that is
+#           not one is a warning. Every condition already has a default, so
+#           `avatar <id>` alone works.
+#
+#           `blend <seconds>` cross-fades between states. ABSENT MEANS ZERO
+#           means today's hard cut, byte for byte -- a dissolve between two
+#           hand-drawn Doom frames is a double exposure that reads as a renderer
+#           fault, which is why this is opt-in per record and the Doom catalogue
+#           never opts in.
+#
 #           The RENDERER's half. The client reads it; the server never looks.
 #           A kind may have several state lines, one per animation state, and
 #           the server declares the STATE while the client owns the timing

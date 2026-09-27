@@ -473,5 +473,57 @@ atlas 42 sheet SPRT anim idle
   check(atlas.worldHeight === 2, "CONTROL: the sheet's own worldHeight is unchanged")
 }
 
+console.log('\n--- which record draws a player ---')
+{
+  // Against the REAL shipped catalogue, because an avatar that resolves in a
+  // fixture and not in what ships is the failure worth catching.
+  const real = parseProps(readFileSync(join(ROOT, 'modules/doom2/assets/props.txt'), 'utf8'))
+  const a = real.avatars.get(0)
+  check(a !== undefined, 'doom2 declares avatar 0')
+  check(real.kinds.has(a.kind), `and it names kind ${a.kind}, which the catalogue declares`)
+  check(real.kinds.get(a.kind).states.size > 1,
+    `with ${real.kinds.get(a.kind).states.size} animation states`)
+
+  // CONTROL. An avatar naming a record nobody wrote must be refused HERE, where
+  // the catalogue is still in hand -- a parser that trusted the id would hand
+  // make() an unknown kind and get the fallback body with nothing said.
+  const bad = parseProps('prop 5 thing radius 1 height 1\nsprite 5 size 1 frames A\navatar 999')
+  check(bad.avatars.size === 0, 'CONTROL: an avatar naming no record is dropped')
+  check(bad.warnings.some((w) => /999/.test(w)), 'and says so')
+
+  // Several avatars, so two players can look nothing alike.
+  const many = parseProps([
+    'prop 5 a radius 1 height 1', 'sprite 5 size 1 frames A',
+    'prop 6 b radius 1 height 1', 'sprite 6 size 1 frames B',
+    'avatar 5', 'avatar 6 as 1'
+  ].join('\n'))
+  check(many.avatars.size === 2, 'two avatar records give two avatars')
+  check(many.avatars.get(0).kind === 5 && many.avatars.get(1).kind === 6,
+    'numbered as declared, with a bare line meaning 0')
+
+  // `when` points a condition at a state this catalogue drew.
+  const w = parseProps([
+    'prop 5 a radius 1 height 1', 'sprite 5 size 1 frames A',
+    'sprite 5 state 7 fps 6 frames B,C',
+    'avatar 5', 'avatar 5 when climb state 7'
+  ].join('\n'))
+  check(w.avatars.get(0).when.climb === 7, 'a `when` override is read')
+  check(w.avatars.get(0).when.walk === 1, 'and the others keep the convention')
+
+  // CONTROL: the default table is not shared between parses. An object handed
+  // out rather than copied is the exact bug, and this catalogue exists so one
+  // module can differ from another.
+  const fresh = parseProps('prop 5 a radius 1 height 1\nsprite 5 size 1 frames A\navatar 5')
+  check(fresh.avatars.get(0).when.climb === 1,
+    'CONTROL: a later parse still sees the default climb state')
+
+  // An unknown condition is a warning, not a silent write.
+  const badWhen = parseProps([
+    'prop 5 a radius 1 height 1', 'sprite 5 size 1 frames A',
+    'avatar 5', 'avatar 5 when somersault state 7'
+  ].join('\n'))
+  check(badWhen.warnings.some((x) => /somersault/.test(x)), 'an unknown condition warns')
+}
+
 console.log(`\nprops: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)
