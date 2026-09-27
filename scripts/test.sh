@@ -351,6 +351,10 @@ else
   # arithmetic, and arithmetic is worth asserting rather than screenshotting.
   node client/test/mapgeom.test.js | tail -2
   node client/test/camera.test.js | tail -2
+  # Which animation a body should be playing. Pure, and the seam a mesh renderer
+  # would later consume unchanged -- so the state machine is decided once here
+  # rather than twice, once per renderer, and found to disagree.
+  node client/test/animstate.test.js | tail -2
   # The camera's path curve. Pure arithmetic, and the half of the path feature
   # that has no other way to be checked: a curve that quietly returned its
   # polyline would look right in every screenshot, so most of this file is the
@@ -445,6 +449,9 @@ else
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node studio/test/props.test.js | tail -2
+  # Camera paths: what the studio draws is what mapc bakes, and the curve
+  # length it shows is the one a cutscene is timed against.
+  node studio/test/paths.test.js | tail -2
   # A map's music is filed under the hash the client computes for it, and a
   # cue that names a missing track is said, not silently dropped.
   node studio/test/music.test.js | tail -2
