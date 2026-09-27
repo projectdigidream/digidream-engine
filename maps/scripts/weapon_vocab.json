@@ -1,0 +1,559 @@
+{
+  "actions": [
+    {
+      "args": [
+        {
+          "name": "damage",
+          "type": "int"
+        },
+        {
+          "name": "range",
+          "type": "fx"
+        },
+        {
+          "doc": "Rays in one shot. Default 1. A shotgun is 7.",
+          "name": "count",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Degrees of random cone, rolled PER RAY. Without it all seven of a shotgun's pellets travel the identical line and a shotgun is a pistol that hits seven times as hard at any range whatever.",
+          "name": "spread",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Tracer style to draw, or absent for none -- which is what makes a hitscan a punch. Doom's own fist is a line attack with a short range, so a melee weapon and a rifle share every line of the code that fires them.",
+          "name": "tracer",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "An instant shot. The engine answers where the ray ended and what was there; what that COSTS is this action.",
+      "name": "hitscan"
+    },
+    {
+      "args": [
+        {
+          "name": "missile",
+          "type": "missile"
+        },
+        {
+          "name": "count",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Degrees between shots when `count` > 1.",
+          "name": "arc",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How far in front of the body it appears, so a rocket does not spawn inside its owner.",
+          "name": "offset",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "Degrees off the aim, for a weapon that throws sideways.",
+          "name": "angle",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "A projectile, through the mob runtime's own launcher. The owner is the PLAYER and the heading is their facing, which is why this goes through mobs.launch_from rather than the launcher a monster uses: a mob's `aim` is a steering field a player does not have.",
+      "name": "launch"
+    },
+    {
+      "args": [
+        {
+          "name": "n",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "ammo",
+          "optional": true,
+          "type": "ammo"
+        }
+      ],
+      "doc": "Debit the pool. Default is the weapon's own `per` from its own `ammo`. AN ACTION RATHER THAN AUTOMATIC, because a charged shot costs more than a tapped one and a phase that fires twice pays twice -- neither of which a field on the weapon can say.",
+      "name": "consume"
+    },
+    {
+      "args": [
+        {
+          "name": "speed",
+          "type": "fx"
+        },
+        {
+          "name": "towards",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "facing",
+            "away",
+            "random"
+          ]
+        },
+        {
+          "name": "vertical",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "Degrees of random slop on the direction.",
+          "name": "jitter",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "A shove, in world units per second. RECOIL is `towards = \"away\"`; with a `vertical` it is a rocket jump. NOT PREDICTED -- the client learns about it from the next snapshot and reconciles, which is already classified as SNAP_LUA_APPLIED rather than as a fault. Making it predictable would mean the engine learning what a weapon is.",
+      "name": "impulse"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "name": "set_var"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "doc": "For a combo step or a refire count.",
+      "name": "add_var"
+    },
+    {
+      "args": [
+        {
+          "name": "phase",
+          "type": "phase"
+        }
+      ],
+      "doc": "Enter another phase immediately. The REST OF THE SEQUENCE IS ABANDONED, which is the point: it is how a shot that finds no ammunition stops before it draws a tracer.",
+      "name": "goto"
+    },
+    {
+      "args": [
+        {
+          "name": "state",
+          "type": "int"
+        }
+      ],
+      "doc": "Change the animation state part way through a phase, for a phase whose `anim` covers only its beginning.",
+      "name": "set_anim"
+    },
+    {
+      "args": [],
+      "doc": "If the weapon can no longer fire, select the best one that can. Doom does this and it is not a nicety: a player who empties a shotgun while something is chasing them is otherwise holding an inert object, pressing fire and getting nothing, with fifty bullets in their pocket.",
+      "name": "switch_if_empty"
+    },
+    {
+      "args": [
+        {
+          "name": "effect",
+          "type": "int"
+        },
+        {
+          "name": "length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "A visual effect at the muzzle, by catalogue id. A muzzle flash.",
+      "name": "vfx"
+    },
+    {
+      "args": [
+        {
+          "name": "fn",
+          "type": "string"
+        }
+      ],
+      "doc": "The escape hatch, called with (entity, weapon_name, phase_name).",
+      "name": "lua"
+    }
+  ],
+  "ammo_fields": [
+    {
+      "doc": "What the panel calls this pool. Defaults to its own name.",
+      "name": "label",
+      "optional": true,
+      "type": "string"
+    },
+    {
+      "doc": "The most a player may hold.",
+      "name": "max",
+      "type": "int"
+    },
+    {
+      "doc": "What they start with. Default 0.",
+      "name": "initial",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Where it sits in the panel. The read-out list is GENERATED from this, which is the thing that stops a new pool being invisible.",
+      "name": "order",
+      "optional": true,
+      "type": "int"
+    }
+  ],
+  "conditions": [
+    {
+      "args": [],
+      "doc": "Fires as soon as it is reached. For the last entry in a list, and for a phase whose `ticks` are the only gate.",
+      "name": "always"
+    },
+    {
+      "args": [
+        {
+          "name": "button",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "primary",
+            "secondary"
+          ]
+        }
+      ],
+      "doc": "The button went down THIS TICK. Edge-triggered, so holding it is one shot and not sixty a second. Default `primary`.",
+      "name": "button_pressed"
+    },
+    {
+      "args": [
+        {
+          "name": "button",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "primary",
+            "secondary"
+          ]
+        }
+      ],
+      "doc": "The button came up this tick. What ends a charge.",
+      "name": "button_released"
+    },
+    {
+      "args": [
+        {
+          "name": "button",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "primary",
+            "secondary"
+          ]
+        }
+      ],
+      "doc": "The button is down, edge or not. THIS IS WHAT AUTOMATIC FIRE IS: a chaingun's `ready` transitions on held where a pistol's transitions on pressed, and there is no `auto` flag anywhere.",
+      "name": "button_held"
+    },
+    {
+      "args": [
+        {
+          "name": "ticks",
+          "type": "int"
+        },
+        {
+          "name": "button",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "primary",
+            "secondary"
+          ]
+        }
+      ],
+      "doc": "The button has been down for at least this many consecutive ticks. A charge threshold. Several of these in descending order are charge LEVELS, which is why this is a condition rather than a field on a phase.",
+      "name": "held_for"
+    },
+    {
+      "args": [
+        {
+          "name": "n",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "The weapon's own pool holds at least `n`, default its `per`. A weapon with no `ammo` always has it.",
+      "name": "has_ammo"
+    },
+    {
+      "args": [],
+      "doc": "The complement, stated rather than negated, so a phase graph reads as a graph. This is what routes an empty weapon to a dry click instead of a shot.",
+      "name": "no_ammo"
+    },
+    {
+      "args": [
+        {
+          "name": "ticks",
+          "type": "int"
+        }
+      ],
+      "doc": "This phase has been running at least this long. For a transition part way through a phase that has other business afterwards.",
+      "name": "phase_elapsed"
+    },
+    {
+      "args": [
+        {
+          "name": "percent",
+          "type": "int"
+        }
+      ],
+      "doc": "0-100, from the seeded generator, so it is reproducible with the rest of the tick.",
+      "name": "chance"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "doc": "A per-weapon counter reached a number. A combo step, an overheat.",
+      "name": "var_at_least"
+    },
+    {
+      "args": [
+        {
+          "name": "var",
+          "type": "var"
+        },
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ],
+      "doc": "Exactly equal, for a counter used as a state rather than a level.",
+      "name": "var_is"
+    },
+    {
+      "args": [
+        {
+          "name": "fn",
+          "type": "string"
+        }
+      ],
+      "doc": "The escape hatch: the name of a global function, called with (entity, weapon_name, phase_name), truthy to fire. Meant to be used -- a vocabulary that covers everything is a programming language -- but everything expressible above should be.",
+      "name": "lua"
+    }
+  ],
+  "health_fields": [
+    {
+      "doc": "The normal ceiling. 100 in Doom.",
+      "name": "max",
+      "type": "int"
+    },
+    {
+      "doc": "The ceiling a `bonus_max` pickup may trickle up to. 200 in Doom.",
+      "name": "bonus_max",
+      "optional": true,
+      "type": "int"
+    }
+  ],
+  "phase_fields": [
+    {
+      "doc": "The animation state the player is put into for this phase -- the `state <n>` on a sprite line in assets/props.txt, and the same number client/src/render/animstate.js resolves. The server declares it and the client owns the timing (design §4), so this is a number, not a frame list.",
+      "name": "anim",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "How long the phase lasts. ABSENT MEANS IT WAITS -- the phase stays until a transition fires, which is exactly what a charge is. Present, it also defines a WINDOW: a transition on this phase can only fire while it is still running.",
+      "name": "ticks",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Where to go when `ticks` run out and no transition matched. Absent returns to the weapon's `initial`.",
+      "name": "next",
+      "optional": true,
+      "type": "phase"
+    },
+    {
+      "doc": "What this phase does, as an ordered list of {at = <ticks after entry>, action = ...}. `at` is a DEADLINE from entry, not a delay from the previous entry: entries fire on the first tick the phase has been running at least that long, so a dropped tick delays an entry rather than losing it.",
+      "name": "sequence",
+      "optional": true,
+      "type": "actions"
+    },
+    {
+      "doc": "A list of {when = <condition>, to = <phase>, ...args}, checked IN ORDER every tick, first match wins. Order is the whole mechanism for a charge: put `held_for 60 -> fire_big` above `button_released -> fire` and a long hold takes the first.",
+      "name": "transitions",
+      "optional": true,
+      "type": "table"
+    }
+  ],
+  "pickup_fields": [
+    {
+      "doc": "Grants this weapon, once, and selects it. Its ammunition is granted EVERY time, which is why a second shotgun on a map is still worth walking over.",
+      "name": "weapon",
+      "optional": true,
+      "type": "weapon"
+    },
+    {
+      "doc": "Grants ammunition, as {kind = n}, capped at each pool's `max`.",
+      "name": "ammo",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "Adds hit points, up to `ceiling`.",
+      "name": "heal",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Which health ceiling this pickup may fill to. A health bonus trickles past the normal one, which is why this is a named ceiling rather than a comparison against the pickup's own name buried in the runtime.",
+      "name": "ceiling",
+      "optional": true,
+      "type": "enum",
+      "values": [
+        "max",
+        "bonus_max"
+      ]
+    },
+    {
+      "doc": "Sets armour to this if it is higher. Doom's green and blue.",
+      "name": "armour",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "This pickup is declared and does nothing, and says so when walked over, naming itself. A pickup that silently does nothing is indistinguishable from a bug -- which is the whole reason this field exists rather than the entry simply being absent.",
+      "name": "not_yet",
+      "optional": true,
+      "type": "string"
+    }
+  ],
+  "swing_fields": [
+    {
+      "doc": "What a connected swing costs the thing it hit. SCRIPT, not a parameter: putting damage in the replicated table would hand the client the numbers to compute it with (docs/ENGINE.md).",
+      "name": "damage",
+      "type": "int"
+    },
+    {
+      "doc": "To the target's SURFACE, not its centre.",
+      "name": "reach",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How wide, either side of the aim. 0.125 is 45 degrees each way.",
+      "name": "half_arc",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "Where the collider starts, relative to the aim.",
+      "name": "sweep_from",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "And where it ends. Equal values make a THRUST that does not rotate at all; the default sweeps right to left through the front, which is what a swing looks like.",
+      "name": "sweep_to",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "The INNER edge, as a distance from the body's surface. Zero is a wedge starting at the body -- a fist. Non-zero makes a ring segment that misses anything pressed right up against you, which is a spear: getting inside its reach is how you beat it.",
+      "name": "min_reach",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How long the collider is live. This is why a swing is a VOLUME MOVING THROUGH TIME rather than an instant: a target that steps out of the way mid-swing is missed.",
+      "name": "ticks",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Ticks before another swing may START. Capped at 255 by the parameter's width.",
+      "name": "cooldown",
+      "optional": true,
+      "type": "int"
+    }
+  ],
+  "version": 1,
+  "weapon_fields": [
+    {
+      "doc": "What the weapon panel calls it. The only string a player sees.",
+      "name": "label",
+      "type": "string"
+    },
+    {
+      "doc": "Selection priority, low to high. It is what the panel sorts by AND what the empty-weapon fallback picks the highest of, so running a shotgun dry drops to the pistol rather than the fists.",
+      "name": "order",
+      "type": "int"
+    },
+    {
+      "doc": "Which pool this eats. Absent means it never runs out, which is what a fist and a chainsaw are.",
+      "name": "ammo",
+      "optional": true,
+      "type": "ammo"
+    },
+    {
+      "doc": "What one shot costs, debited by the `consume` action. Default 1. A charged shot that costs more says so on its own `consume`.",
+      "name": "per",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "The graph, by phase name.",
+      "name": "phases",
+      "type": "table"
+    },
+    {
+      "doc": "Which phase the weapon rests in. Defaults to the first phase in declaration order, and the runtime returns here whenever a phase runs out with no `next`.",
+      "name": "initial",
+      "optional": true,
+      "type": "phase"
+    },
+    {
+      "doc": "The swept melee collider, whose shape is written into the REPLICATED parameter table when this weapon is selected. Absent means this weapon does not swing -- and that is enforced through the parameter `attack_enabled`, so the client predicts the absence rather than predicting a swing the server then denies. See swing_fields.",
+      "name": "swing",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "How many directions aim snaps to while this is held. 0 or absent is free aim; 8 is eight-way. A replicated parameter, so the snap is predicted -- which matters, because an aim the client and the server round differently is a mispredict on every tick the stick is near a boundary.",
+      "name": "aim_snap",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Per-weapon counters, by name, with their starting values. Each player gets their own copy. A refire count, a combo step, a heat level.",
+      "name": "vars",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "Ammunition its own pickup comes with, as {kind = n}. Doom's shotgun arrives with eight shells.",
+      "name": "gives",
+      "optional": true,
+      "type": "table"
+    }
+  ]
+}

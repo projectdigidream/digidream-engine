@@ -89,6 +89,14 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
         "$ROOT/server/tests/test_lua_shootrange.cpp" "${LINK[@]}" \
         -o "$OUT/test_lua_shootrange"
+# The weapon runtime, against the same real bindings and for the same reason:
+# only here can "one press, one damage event" be asked, because the two paths it
+# is about -- the engine's swept collider and the script's hitscan -- exist only
+# when there is a real World underneath. The flat weapon table this replaced had
+# no test of any kind.
+clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_weapons.cpp" "${LINK[@]}" \
+        -o "$OUT/test_lua_weapons"
 
 echo "[lua-tests] $OUT/trigger_vocab_json $OUT/triggercheck"
 

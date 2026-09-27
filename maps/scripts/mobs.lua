@@ -1142,7 +1142,12 @@ function acts.hitscan(m, a)
     -- differently from how the catalogue describes them. Zero is perfect
     -- accuracy, which is what this engine did before this line existed and what
     -- a range test wants when it is measuring AIM rather than scatter.
-    local scale = M.spread_scale or 1
+    -- Per-OWNER first, so a knob meant for monsters cannot silently flatten a
+    -- player's shotgun. mobs.launch_from's synthetic record sets its own, and a
+    -- test that turns monster scatter off to measure aim would otherwise also
+    -- turn off the seven-pellet spread it was about to assert -- a vacuous pass
+    -- of exactly the kind this file keeps finding.
+    local scale = m.spread_scale or M.spread_scale or 1
     local off = 0
     if a.spread and a.spread ~= 0 and scale ~= 0 then
       off = math.floor(dnp.random(-1000, 1000) / 1000
@@ -1748,7 +1753,13 @@ function hurt(target, amount, by)
 
   m.hp = m.hp - amount
   m.hurt_at = dnp.tick()
-  m.hurt_by_mob = by ~= nil
+  -- A PLAYER is not a mob, and the difference is what infighting means. A
+  -- monster shot by another monster turns on it; a monster shot by a player is
+  -- being shot by the thing it was already trying to kill, and counting that as
+  -- infighting would have Doom's whole bestiary retaliate against each other
+  -- because somebody fired a shotgun. `hurt_by` still records WHO, so
+  -- `target_attacker` retaliates correctly either way.
+  m.hurt_by_mob = by ~= nil and not by.player
   -- WHO, not just whether. `hurt_by_mob` answers the condition; this is what
   -- `target_attacker` needs, and keeping only the boolean is why retaliating
   -- could not be a decision before.
@@ -1842,29 +1853,45 @@ function launch(m, kind, ang, offset)
   }
 end
 
+-- The owner record a non-mob acts through.
+--
+-- A player has no mob record and must not be given one: `live[]` is what the
+-- think loop walks, and a player in it would be thought about as a monster. So
+-- this is a record with the fields the action table reads and nothing else --
+-- built HERE, in the file that owns the record's shape, rather than in every
+-- caller that wants to borrow an action.
+--
+-- `aim` is passed explicitly because a mob's `aim` is a STEERING field that
+-- acts.face and drive maintain, and a player's heading is e:facing().
+-- `target` is nil, which is load-bearing: homing is skipped and acts.damage
+-- early-returns rather than hurting whoever the last mob was after.
+-- `player` is what keeps hurt() from reading a player's shot as infighting.
+function M.synthetic_owner(e, ang)
+  return {
+    e = e, idx = e:index(), aim = ang,
+    target = nil, dead = false, vars = {},
+    player = true, spread_scale = 1,
+  }
+end
+local synthetic_owner = M.synthetic_owner
+
 -- Launch a missile owned by an ENTITY rather than by a mob record.
 --
 -- The one thing a player needed and could not have. `launch` is a file-local
 -- and every consumer downstream reads an owner RECORD -- m.e, m.idx, m.aim,
 -- m.target, m.impact, m.dead -- so a weapon could not call it without building
 -- one, and a weapon building a mob record would make the record's shape the
--- weapon's business instead of this file's.
---
--- So the synthetic owner is built HERE. Note `aim` is passed explicitly: m.aim
--- is a MOB's steering field, maintained by acts.face and drive, and a player has
--- no such thing -- their heading is e:facing() and the caller says so.
---
--- `target` is nil, which is correct and load-bearing: homing is skipped, and
--- acts.damage early-returns rather than hurting whoever the last mob was after.
+-- weapon's business instead of this file's. See synthetic_owner above.
 function M.launch_from(e, kind, ang, offset)
   if e == nil or not e:valid() then return end
-  local owner = {
-    e = e, idx = e:index(), aim = ang,
-    target = nil, dead = false, vars = {},
-  }
+  local owner = synthetic_owner(e, ang)
   launch(owner, kind, ang, offset)
   return owner
 end
+
+--- Is this missile name known? For a loader in another file that wants to
+--- refuse a typo at LOAD rather than fire nothing at runtime.
+function M.has_missile(name) return missiles[name] ~= nil end
 
 -- Register more missile kinds after load.
 --
@@ -2203,8 +2230,30 @@ end
 -- who swung and what the moving collider found, and has no opinion about
 -- health or death. `attacker` is a player here, so `by` is nil and infighting
 -- does not trigger.
+-- WHAT A CONNECTED SWING COSTS.
+--
+-- The engine decides that a swept collider touched something; what that costs
+-- is script, which is the division docs/ENGINE.md:255-258 draws and the reason
+-- `attack_damage` is not a replicated parameter -- putting damage in the
+-- physics table would hand the client the numbers to compute it with.
+--
+-- It ASKS THE WEAPON first, and returning nil is a real answer: a weapon with
+-- no `swing` does no melee damage at all, however the collider came to be live.
+-- That is the second of the two gates that collapse the double-fire, and it is
+-- deliberately independent of the first -- `attack_enabled` is replicated state
+-- that a script could overwrite, and this is not.
+--
+-- The lookup is installed by weapons.lua rather than hooked, because hooks are
+-- a LIST: an `on_attack` in that file would run ALONGSIDE this one and the
+-- double damage would come straight back through the other door.
 function on_attack(attacker, target)
   if target == nil or not target:valid() then return end
+  if M.weapon_swing_damage ~= nil then
+    local n = M.weapon_swing_damage(attacker)
+    if n == nil then return end
+    hurt(target, n, nil)
+    return
+  end
   hurt(target, M.player_damage or 25, nil)
 end
 
