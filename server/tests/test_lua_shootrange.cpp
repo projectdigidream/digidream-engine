@@ -184,6 +184,23 @@ int main() {
         }
     }
 
+    // AIM, not scatter. `mobs.spread_scale` multiplies every declared spread,
+    // and this test sets it to zero deliberately: the assertions below say every
+    // monster's shot reaches the player, which is a claim about whether the ray
+    // is pointed at anything. Declared spreads run 5 to 12 degrees, and at the
+    // 26 units this fixture places monsters at, 5 degrees is a two-unit lateral
+    // miss against a body of radius 0.5 -- so with spread on, "every shot
+    // connects" is false BY DESIGN, and stray rays hit other monsters and start
+    // infighting, which changes who is even shooting at the player.
+    //
+    // Weakening the assertions to accommodate that would throw away the thing
+    // this test measures. The scatter itself is asserted separately at the end,
+    // against the binding that produces it.
+    if (luaL_dostring(vm.state(), "mobs.spread_scale = 0") != 0) {
+        std::printf("  FAIL disabling spread: %s\n", lua_tostring(vm.state(), -1));
+        return 1;
+    }
+
     lua_getglobal(vm.state(), "range_expected");
     const int expected = static_cast<int>(lua_tonumber(vm.state(), -1));
     lua_pop(vm.state(), 1);
@@ -292,6 +309,126 @@ int main() {
                 stubs, measured);
     CHECK(measured == expected);
     CHECK(stubs == 0);
+
+    // ----------------------------------------------------- the effect tag
+    //
+    // `tag` sat in the vocabulary and in docs/MOBS.md since effects existed and
+    // was read by nothing: an argument an author could write, that looked
+    // configured and did nothing. It is load-bearing now because selecting a
+    // weapon writes its swing shape into these same replicated parameters, so
+    // ten weapon switches would otherwise leave ten effects per parameter and
+    // the tenth reach would be the product of all of them.
+    //
+    // Measured through EffectStack::compute, the server's own recomputation
+    // (main.cpp:1168), rather than by reading the live parameter back: this test
+    // does not run the server's effect pump, so the live value never moves. It
+    // would be easy to pump it here instead -- and that would be a second,
+    // more generous copy of the loop, which is the mistake the header of this
+    // file is about.
+    const auto lua_do = [L](const char* src, const char* what) {
+        if (luaL_dostring(L, src) != 0) {
+            std::printf("  FAIL %s: %s\n", what, lua_tostring(L, -1));
+            return false;
+        }
+        return true;
+    };
+    effects.set_base(player, world.params(player));
+    const fx tag_base = effects.base(player).attack_reach;
+    const auto reach_now = [&] { return effects.compute(player).attack_reach; };
+
+    // FIRST, that the measurement works at all. attack_reach cannot legitimately
+    // be zero, so a zero here means the readback broke -- and against zero,
+    // base*2 and base*16 are also zero, so every assertion below would pass
+    // vacuously AND so would the control. That is exactly how this block first
+    // ran green while proving nothing.
+    CHECK(tag_base.raw > 0);
+    CHECK(reach_now().raw == tag_base.raw);
+
+    if (!lua_do("for _ = 1, 4 do"
+                "  mobs.tagged_effect(dnp.players()[1], 'weapon',"
+                "                     'attack_reach', 'mul', fx.int(2))"
+                "end", "tagging")) return 1;
+    const fx tag_replaced = reach_now();
+
+    if (!lua_do("mobs.clear_tagged(dnp.players()[1], 'weapon')", "clearing")) return 1;
+    const fx tag_cleared = reach_now();
+
+    // CONTROL. The same four calls WITHOUT a tag, which is what this engine did
+    // before tagged_effect existed. If these do not compound, the assertion
+    // above proves nothing -- a stack that already replaced would satisfy it.
+    if (!lua_do("for _ = 1, 4 do"
+                "  dnp.players()[1]:add_effect('attack_reach', 'mul', fx.int(2))"
+                "end", "stacking")) return 1;
+    const fx tag_stacked = reach_now();
+
+    std::printf("  --> attack_reach %lld raw; x2 tagged four times -> %lld; "
+                "cleared -> %lld; x2 untagged four times -> %lld\n",
+                static_cast<long long>(tag_base.raw),
+                static_cast<long long>(tag_replaced.raw),
+                static_cast<long long>(tag_cleared.raw),
+                static_cast<long long>(tag_stacked.raw));
+
+    // Four tagged doublings are ONE doubling.
+    CHECK(tag_replaced.raw == tag_base.raw * 2);
+    // And dropping the tag puts the parameter back EXACTLY, with no residue --
+    // the property test_lua_effects exists for, here reached through Lua.
+    CHECK(tag_cleared.raw == tag_base.raw);
+    // CONTROL: untagged, the same four calls compound to sixteen times.
+    CHECK(tag_stacked.raw == tag_base.raw * 16);
+
+    // ------------------------------------------------- the offset, for the first time
+    //
+    // `dnp.hitscan`'s third argument is the angular offset that makes a shotgun
+    // a shotgun, and until this block nothing in the repository passed one: the
+    // monster path called hitscan with two arguments, so every claim about
+    // hitscan came through a ray that could not be deflected. A binding that
+    // ignored the argument entirely would have passed every test that existed.
+    //
+    // Asserted against the real binding, from the real player, into the real
+    // room this test has already filled with 24 monsters at known bearings.
+    // Sweeping a full turn in sixteenths must reach more than one of them.
+    static const char* kSweep = R"LUA(
+      local p = dnp.players()[1]
+      local turn = 4294967296
+      local seen, hits = {}, 0
+      for i = 0, 15 do
+        local who = dnp.hitscan(p, 64, math.floor(i * turn / 16))
+        if who then
+          local k = tostring(who)
+          if not seen[k] then seen[k] = true; hits = hits + 1 end
+        end
+      end
+      sweep_distinct = hits
+      -- CONTROL. The same count of calls, all at the SAME offset, must find
+      -- exactly one thing. Without this the assertion above passes against a
+      -- binding that ignores the offset and happens to be facing a monster:
+      -- sixteen identical rays would report one distinct target, and a version
+      -- that deflected nothing would be indistinguishable from one that did.
+      local fixed = {}
+      local n = 0
+      for _ = 1, 16 do
+        local who = dnp.hitscan(p, 64, 0)
+        if who then
+          local k = tostring(who)
+          if not fixed[k] then fixed[k] = true; n = n + 1 end
+        end
+      end
+      fixed_distinct = n
+    )LUA";
+    if (luaL_dostring(L, kSweep) != 0) {
+        std::printf("  FAIL sweeping: %s\n", lua_tostring(L, -1));
+        return 1;
+    }
+    lua_getglobal(L, "sweep_distinct");
+    const int swept = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    lua_getglobal(L, "fixed_distinct");
+    const int fixed = static_cast<int>(lua_tonumber(L, -1));
+    lua_pop(L, 1);
+    std::printf("  --> 16 rays swept round a turn found %d distinct targets; "
+                "16 rays at one offset found %d\n", swept, fixed);
+    CHECK(swept > 1);
+    CHECK(fixed <= 1);
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

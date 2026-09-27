@@ -1126,8 +1126,38 @@ function acts.hitscan(m, a)
     -- the damage below ever ran, before update_missiles ran, and took the rest
     -- of the bucket with it. One typo presenting as four separate bugs: no
     -- damage, no tracer, monsters idle, and projectiles frozen in mid-air.
-    local target, at = dnp.hitscan(m.e, a.range)
-    if at == nil then return end
+    -- THE SPREAD, which every monster declares and none had ever used.
+    --
+    -- The vocabulary has carried `spread` on this action since it existed, and
+    -- this line never passed it -- so every monster in every converted level
+    -- fired down the exact centre of its aim, and a shotgun guy's four pellets
+    -- travelled one ray. It read as monsters being accurate rather than as an
+    -- argument being dropped.
+    --
+    -- Degrees to brad, floored, exactly as weapons.lua does it: the two are the
+    -- same calculation and a difference between them would be a difference
+    -- between how a player's shotgun and a monster's scatter.
+    -- M.spread_scale multiplies every declared spread, and exists for the same
+    -- reason M.player_damage does: a server may want its monsters to shoot
+    -- differently from how the catalogue describes them. Zero is perfect
+    -- accuracy, which is what this engine did before this line existed and what
+    -- a range test wants when it is measuring AIM rather than scatter.
+    local scale = M.spread_scale or 1
+    local off = 0
+    if a.spread and a.spread ~= 0 and scale ~= 0 then
+      off = math.floor(dnp.random(-1000, 1000) / 1000
+                       * (a.spread * scale * 4294967296 / 360))
+    end
+    local target, at = dnp.hitscan(m.e, a.range, off)
+    -- A shot that reached nothing is still a SHOT. It draws no tracer and does
+    -- no damage, but it is reported, because the observability hook below is how
+    -- a test tells "the state machine never fired" from "the aim was off" -- and
+    -- those have opposite fixes. Returning here conflated them the moment spread
+    -- made a monster capable of missing everything.
+    if at == nil then
+      if M.on_shot then M.on_shot(m, nil, a.range) end
+      return
+    end
 
     -- The tracer carries its START, its DIRECTION and its LENGTH. A client
     -- given only the impact has no idea where the shot came from; one given
@@ -1439,8 +1469,60 @@ function acts.set_param(m, a)
   m.e:add_effect(a.param, "set", a.value)
 end
 
+-- Effects that replace rather than stack, by (entity, tag).
+--
+-- `tag` has been in the vocabulary and in the docs since effects existed and was
+-- silently ignored -- an argument an author could write, that read as configured
+-- and did nothing. It matters now because a WEAPON writes its swing shape into
+-- these parameters when it is selected: without a tag, switching weapons ten
+-- times leaves ten effects per parameter, each recomputed every tick, and the
+-- tenth reach is the product of ten.
+--
+-- Entirely in Lua, because the binding already returns an effect id and already
+-- takes one back. Nothing in C++ needed to change.
+local tagged = {}
+
+function M.tagged_effect(e, tag, param, op, value, ticks)
+  local key = e:index() .. "/" .. tag
+  local old = tagged[key]
+  -- Removed FIRST, so the replacement is never briefly stacked on the thing it
+  -- replaces. A stale id from a reused slot removes an effect that should have
+  -- gone anyway, and remove_effect on an id that is not there is a no-op.
+  if old ~= nil then e:remove_effect(old) end
+  local eid = e:add_effect(param, op, value, ticks)
+  tagged[key] = (eid ~= 0) and eid or nil
+  return eid
+end
+
+-- Drop every tagged effect this entity holds. For a weapon being put away, and
+-- for a slot about to be reused by somebody else.
+function M.clear_tagged(e, tag)
+  local prefix = e:index() .. "/"
+  -- A tag matches itself AND anything beneath it, because acts.effect stores one
+  -- key per op: tagging an `effect` "reach" writes "reach/mul" and "reach/add",
+  -- and a clear of "reach" that matched only the bare name would leave both
+  -- behind. Matching the segment rather than the string is also what makes
+  -- clearing a whole weapon's worth of parameters one call.
+  local want = tag and (prefix .. tag) or nil
+  for key, eid in pairs(tagged) do
+    local mine = key:sub(1, #prefix) == prefix
+    local hit = (want == nil)
+        or key == want
+        or key:sub(1, #want + 1) == want .. "/"
+    if mine and hit then
+      e:remove_effect(eid)
+      tagged[key] = nil
+    end
+  end
+end
+
 function acts.effect(m, a)
   -- One op per effect, so a modifier that both scales and offsets is two.
+  if a.tag ~= nil then
+    if a.mul ~= nil then M.tagged_effect(m.e, a.tag .. "/mul", a.param, "mul", a.mul, a.ticks) end
+    if a.add ~= nil then M.tagged_effect(m.e, a.tag .. "/add", a.param, "add", a.add, a.ticks) end
+    return
+  end
   if a.mul ~= nil then m.e:add_effect(a.param, "mul", a.mul, a.ticks) end
   if a.add ~= nil then m.e:add_effect(a.param, "add", a.add, a.ticks) end
 end
@@ -1758,6 +1840,55 @@ function launch(m, kind, ang, offset)
     p = p, def = def, dir = d, ang = ang,
     owner = m, target = m.target, born = dnp.tick(),
   }
+end
+
+-- Launch a missile owned by an ENTITY rather than by a mob record.
+--
+-- The one thing a player needed and could not have. `launch` is a file-local
+-- and every consumer downstream reads an owner RECORD -- m.e, m.idx, m.aim,
+-- m.target, m.impact, m.dead -- so a weapon could not call it without building
+-- one, and a weapon building a mob record would make the record's shape the
+-- weapon's business instead of this file's.
+--
+-- So the synthetic owner is built HERE. Note `aim` is passed explicitly: m.aim
+-- is a MOB's steering field, maintained by acts.face and drive, and a player has
+-- no such thing -- their heading is e:facing() and the caller says so.
+--
+-- `target` is nil, which is correct and load-bearing: homing is skipped, and
+-- acts.damage early-returns rather than hurting whoever the last mob was after.
+function M.launch_from(e, kind, ang, offset)
+  if e == nil or not e:valid() then return end
+  local owner = {
+    e = e, idx = e:index(), aim = ang,
+    target = nil, dead = false, vars = {},
+  }
+  launch(owner, kind, ang, offset)
+  return owner
+end
+
+-- Register more missile kinds after load.
+--
+-- mobs.load REFUSES a second call, deliberately -- two tables each declaring
+-- monsters is the bug that hook lists exist to prevent. But a weapon file
+-- legitimately has projectiles of its own, and typing a player's rockets into
+-- the MONSTER table would put them where nothing places them.
+--
+-- A collision is refused rather than merged silently: two files disagreeing
+-- about what "rocket" means is a bug, and the later one winning quietly is how
+-- it survives to production.
+function M.add_missiles(t)
+  local added, clashed = 0, 0
+  for name, def in pairs(t or {}) do
+    if missiles[name] ~= nil then
+      clashed = clashed + 1
+      print(("mobs: missile '%s' is already declared; the later one is ignored")
+            :format(name))
+    else
+      missiles[name] = def
+      added = added + 1
+    end
+  end
+  return added, clashed
 end
 
 -- Missiles in flight.

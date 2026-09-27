@@ -544,7 +544,14 @@ mob_vocab = {
                { name = "mul", type = "fx", optional = true },
                { name = "add", type = "fx", optional = true },
                { name = "ticks", type = "int", optional = true },
-               { name = "tag", type = "string", optional = true } },
+               { name = "tag", type = "string", optional = true,
+                 doc = "A name this modifier REPLACES rather than stacks on. " ..
+                       "Two `effect` actions with the same tag on the same " ..
+                       "entity leave one effect, not two -- which is what a " ..
+                       "weapon writing its own reach needs, since switching " ..
+                       "weapons ten times would otherwise leave ten reaches " ..
+                       "multiplied together. Without a tag they stack, which " ..
+                       "is what a stack of buffs wants." } },
       doc = "A temporary modifier through the effect stack, which recomputes " ..
             "from base every tick and so cannot drift." },
 
