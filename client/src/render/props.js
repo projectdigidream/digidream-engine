@@ -230,6 +230,7 @@ export function parseProps (text) {
           case 'sheet': d.sheet = val; break
           case 'state': state = Number(val); break
           case 'anim': anim = val; break
+          case 'blend': d.blend = Number(val); break
           default: warnings.push(`line ${i + 1}: unknown attribute '${tok[k - 1]}'`)
         }
       }
@@ -283,6 +284,12 @@ export function parseProps (text) {
       switch (key) {
         case 'size':  d.size = Number(val); break
         case 'state': state = Number(val); break
+        // SECONDS to cross-fade between this kind's states. ABSENT MEANS ZERO
+        // means the hard cut this renderer has always done, byte for byte --
+        // which is why it is opt-in and why the Doom catalogue never opts in. A
+        // dissolve between two frames drawn for a hard cut at 6 fps is a double
+        // exposure that reads as a renderer fault.
+        case 'blend': d.blend = Number(val); break
         case 'fps':   fps = Number(val); break
         case 'frames': frames = val.split(',').filter(Boolean); break
         case 'model': model = val; break
@@ -446,7 +453,14 @@ export class PropRegistry {
     // better something than the capsule. A module that ships none gets the
     // capsule, which is the old behaviour unchanged.
     const a = this.avatars.get(slot) ?? this.avatars.get(0)
-    return a ? this.make(a.kind) : null
+    if (!a) return null
+    const mesh = this.make(a.kind)
+    // The avatar's own blend wins over the record's, because a player may share
+    // art with something else -- the placeholder does exactly that -- and how a
+    // PLAYER transitions is a decision about the player.
+    const rec = mesh ? this.animated.get(mesh) : null
+    if (rec && a.blend > 0) rec.blend = a.blend
+    return mesh
   }
 
   /** The avatar record behind a number, for its `when` table and its blend. */
@@ -499,7 +513,7 @@ export class PropRegistry {
     // and a plane's origin is its middle.
     mesh.userData.yOffset = size / 2
 
-    this.animated.set(mesh, { def, stateId: 0 })
+    this.animated.set(mesh, { def, stateId: 0, blend: def.blend ?? 0, from: null })
     return mesh
   }
 
@@ -537,7 +551,7 @@ export class PropRegistry {
     const mesh = new THREE.Mesh(geo, entry.material)
     mesh.userData.propKind = kind
     mesh.userData.yOffset = 0
-    this.animated.set(mesh, { def, stateId: 0, sheet: def.sheet, frameKey: null })
+    this.animated.set(mesh, { def, stateId: 0, blend: def.blend ?? 0, from: null, sheet: def.sheet, frameKey: null })
     return mesh
   }
 
@@ -550,15 +564,57 @@ export class PropRegistry {
    * -- the two halves of the renderer each did their job and were not
    * introduced.
    */
-  setState (mesh, stateId) {
+  setState (mesh, stateId, seconds = null) {
     const a = this.animated.get(mesh)
     if (!a || a.stateId === stateId) return
+
+    // THE OUTGOING STATE, kept only when this record opted into a blend.
+    //
+    // Its clock is NOT reset. Without `fromStarted` the outgoing quad freezes on
+    // frame 0 of the state it is fading OUT of -- which is worse than a hard cut,
+    // because a frozen ghost reads as a stuck renderer where a cut reads as an
+    // animation. A `once` state fading out is then correct for free: its clock
+    // keeps running and frameAt holds its last frame, which is what leaves a
+    // corpse on the floor.
+    //
+    // A transition that starts mid-fade REPLACES the outgoing state rather than
+    // stacking another ghost behind it. Three states in quick succession leave
+    // one ghost, not three -- and a stacking version would leak a material per
+    // transition.
+    const blend = a.blend ?? 0
+    if (blend > 0 && seconds !== null && a.startedAt !== null) {
+      a.from = a.stateId
+      a.fromStarted = a.startedAt
+      a.blendAt = seconds
+      a.blendFor = blend
+    }
+
     a.stateId = stateId
     // Restart the animation from its first frame rather than continuing the
     // shared clock's phase. An explosion that begins a third of the way through
     // is not an explosion, and unlike an idle loop it is meant to be seen once
     // from the beginning.
     a.startedAt = null
+  }
+
+  /**
+   * How far through a cross-fade this mesh is: 0 outgoing, 1 fully arrived.
+   *
+   * A DURATION rather than the exponential ease the camera uses, and the reason
+   * is concrete: an exponential never arrives, and a cross-fade must terminate
+   * so the outgoing clock can be dropped and its cloned material disposed.
+   */
+  mixAt (a, seconds) {
+    if (a.from === undefined || a.from === null) return 1
+    if (!(a.blendFor > 0)) return 1
+    const t = (seconds - a.blendAt) / a.blendFor
+    if (t >= 1) {
+      // Retire: the ghost is gone and its clock with it.
+      a.from = null
+      a.fromStarted = null
+      return 1
+    }
+    return t < 0 ? 0 : t
   }
 
   /**
@@ -571,7 +627,8 @@ export class PropRegistry {
   update (seconds, cameraPos = null) {
     for (const [mesh, a] of this.animated) {
       if (!mesh.parent) continue                   // removed from the scene
-      if (a.def.type === 'atlas') { this.#updateAtlas(mesh, a, seconds, cameraPos); continue }
+      const mix = this.mixAt(a, seconds)
+      if (a.def.type === 'atlas') { this.#updateAtlas(mesh, a, seconds, cameraPos, mix); continue }
       const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
       if (!state?.frames) continue
       // Idle states share one clock so props of a kind bob in lockstep; a state
@@ -593,6 +650,98 @@ export class PropRegistry {
         mesh.material.color.setHex(0xffffff)
         mesh.material.needsUpdate = true
       }
+
+      // The outgoing state, drawn behind and fading. Its own clock, still
+      // running -- see setState.
+      if (mix < 1) {
+        const from = a.def.states.get(a.from) ?? a.def.states.get(0)
+        const ftex = from?.frames
+          ? this.textures.get(frameName(a.def, from, frameAt(from, seconds - a.fromStarted), rot))
+          : null
+        this.#fade(mesh, a, mix, ftex)
+      } else {
+        this.#unfade(mesh, a)
+      }
+    }
+  }
+
+  /**
+   * Draw the outgoing state behind the incoming one, both part-transparent.
+   *
+   * THE TRAP HERE is alphaTest. A sprite's material clips every fragment below
+   * 0.5 alpha so its empty corners do not punch depth holes -- and with an
+   * opacity of 0.3 that clips EVERY fragment, so the thing being faded in is
+   * invisible for the whole fade and then appears. So both quads drop to a
+   * near-zero alphaTest while the blend runs, and #unfade puts it back.
+   *
+   * The ghost is a child so it inherits position, rotation and scale without
+   * this having to track any of them -- a fade that drifted away from the body
+   * it belongs to would be worse than no fade.
+   */
+  #fade (mesh, a, mix, ghostTex) {
+    const THREE = this.THREE
+    if (!a.ghost) {
+      // THE MESH'S OWN MATERIAL MAY BE SHARED. The atlas path hands every entity
+      // drawn from a sheet the SAME material, so writing opacity onto it would
+      // fade every body of that kind at once. So a fading mesh gets its own
+      // clone for the duration, and the shared one is put back afterwards.
+      if (!mesh.material.userData?.owned) {
+        a.sharedMaterial = mesh.material
+        mesh.material = mesh.material.clone()
+        mesh.material.userData.owned = true
+      }
+      // The ghost needs its OWN geometry as well as its own material: the atlas
+      // path rewrites the quad every frame for each frame's trim, so sharing it
+      // would drag the ghost onto the incoming frame's shape.
+      const g = new THREE.Mesh(mesh.geometry.clone(), mesh.material.clone())
+      // OWNED, and this flag is load-bearing. Disposal walks meshes on the way
+      // out, and until now it disposed whatever it found -- true of the per-PNG
+      // path where one material is allocated per entity, and FALSE of the atlas
+      // path. Only what this method cloned may ever be disposed.
+      g.material.userData.owned = true
+      g.material.depthWrite = false
+      g.renderOrder = (mesh.renderOrder ?? 0) - 1
+      if (ghostTex) g.material.map = ghostTex
+      mesh.add(g)
+      a.ghost = g
+    }
+    // The per-PNG path keeps the outgoing state ANIMATING, because there that
+    // costs one texture swap. The atlas path holds the frame it left on: its
+    // geometry is per-frame, so following it would mean cloning a quad every
+    // frame of every fade, and over a tenth of a second the difference is not
+    // visible. Stated rather than left to be noticed.
+    if (ghostTex && a.ghost.material.map !== ghostTex) {
+      a.ghost.material.map = ghostTex
+      a.ghost.material.needsUpdate = true
+    }
+    // THE TRAP. A sprite's material clips every fragment below 0.5 alpha so its
+    // empty corners do not punch depth holes -- and with an opacity of 0.3 that
+    // clips EVERY fragment, so the thing fading IN is invisible for the whole
+    // fade and then appears. Both quads drop to a near-zero alphaTest while the
+    // blend runs; #unfade puts it back.
+    mesh.material.transparent = true
+    mesh.material.alphaTest = 0.01
+    mesh.material.opacity = mix
+    a.ghost.material.transparent = true
+    a.ghost.material.alphaTest = 0.01
+    a.ghost.material.opacity = 1 - mix
+  }
+
+  /** Put the mesh back the way a sprite is meant to be, shared material and all. */
+  #unfade (mesh, a) {
+    if (!a.ghost) return
+    mesh.remove(a.ghost)
+    a.ghost.geometry.dispose()
+    a.ghost.material.dispose()
+    a.ghost = null
+    if (a.sharedMaterial) {
+      // The clone this mesh borrowed for the fade, and only that.
+      mesh.material.dispose()
+      mesh.material = a.sharedMaterial
+      a.sharedMaterial = null
+    } else {
+      mesh.material.opacity = 1
+      mesh.material.alphaTest = 0.5
     }
   }
 
@@ -609,7 +758,7 @@ export class PropRegistry {
    * animation, seventeen of every eighteen writes would be setting the values
    * that are already there.
    */
-  #updateAtlas (mesh, a, seconds, cameraPos) {
+  #updateAtlas (mesh, a, seconds, cameraPos, mix = 1) {
     const entry = this.atlases.get(a.sheet)
     if (!entry) return
     const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
@@ -631,6 +780,12 @@ export class PropRegistry {
 
     // frameAt wants { frames, fps, once }. `loop` and `once` are the same fact
     // stated the other way up.
+    // The fade, BEFORE the early return below: a frame that has not changed
+    // still has an opacity that has, and returning first would freeze the blend
+    // at whatever it was when the frame last moved.
+    if (mix < 1) this.#fade(mesh, a, mix, null)
+    else this.#unfade(mesh, a)
+
     const idx = frameAt({ frames: anim.frames, fps: anim.fps, once: !anim.loop }, seconds - a.startedAt)
     const key = frameKey(entry.atlas, state.anim, idx, view)
     if (!key || key === a.frameKey) return

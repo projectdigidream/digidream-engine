@@ -525,5 +525,117 @@ console.log('\n--- which record draws a player ---')
   check(badWhen.warnings.some((x) => /somersault/.test(x)), 'an unknown condition warns')
 }
 
+console.log('\n--- the cross-fade is opt-in, and terminates ---')
+{
+  // A stub THREE with only what the fade touches: clone(), add/remove, and a
+  // dispose that counts. Materials carry userData so the shared-vs-owned rule
+  // can be observed rather than assumed.
+  let disposed = []
+  const mkMat = (o = {}) => ({
+    ...o,
+    userData: o.userData ?? {},
+    color: { setHex () {} },
+    clone () { return mkMat({ ...this, userData: {} }) },
+    dispose () { disposed.push(this) }
+  })
+  const THREE = {
+    PlaneGeometry: class {
+      constructor (w, h) { this.w = w; this.h = h }
+      clone () { return new THREE.PlaneGeometry(this.w, this.h) }
+      dispose () { disposed.push(this) }
+    },
+    MeshBasicMaterial: class {
+      constructor (o) { return mkMat(o) }
+    },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry
+        this.material = material
+        this.userData = {}
+        this.parent = {}
+        this.children = []
+      }
+      add (c) { this.children.push(c) }
+      remove (c) { this.children = this.children.filter((x) => x !== c) }
+    },
+    DoubleSide: 2
+  }
+  const textures = new Map([['A1', 'tex:a'], ['B1', 'tex:b'], ['C1', 'tex:c']])
+
+  const build = (blendLine) => {
+    disposed = []
+    const cat = parseProps([
+      'prop 10 thing radius 0.2 height 1', `sprite 10 size 1 ${blendLine}frames A`,
+      'sprite 10 state 1 fps 10 frames B,C'
+    ].join('\n'))
+    const reg = new PropRegistry({ THREE, textures, catalogue: cat })
+    return { reg, mesh: reg.make(10) }
+  }
+
+  // Absent means ZERO means the hard cut this renderer has always done.
+  {
+    const { reg, mesh } = build('')
+    reg.update(0)
+    reg.setState(mesh, 1, 0)
+    reg.update(0.01)
+    check(mesh.children.length === 0, 'no `blend` produces no ghost at all')
+    check(mesh.material.alphaTest === 0.5, 'and leaves alphaTest where a sprite wants it')
+  }
+
+  // CONTROL: with `blend` it DOES fade -- otherwise "opt-in" is unproven and the
+  // Doom path might be silently blending.
+  const { reg, mesh } = build('blend 0.2 ')
+  reg.update(0)
+  reg.setState(mesh, 1, 0)
+  reg.update(0.05)
+  check(mesh.children.length === 1, 'CONTROL: with `blend` there is exactly one ghost')
+  check(mesh.material.opacity > 0 && mesh.material.opacity < 1,
+    `the incoming quad is part-transparent (${mesh.material.opacity.toFixed(2)})`)
+  check(mesh.children[0].material.opacity > 0 && mesh.children[0].material.opacity < 1,
+    'and so is the outgoing one')
+
+  // THE TRAP. alphaTest 0.5 with opacity 0.25 clips every fragment, so the thing
+  // fading IN is invisible for the whole fade and then appears.
+  check(mesh.material.alphaTest < 0.1 && mesh.children[0].material.alphaTest < 0.1,
+    'both quads drop alphaTest while blending, or neither is visible')
+
+  // Interruption REPLACES, never stacks.
+  reg.setState(mesh, 0, 0.05)
+  reg.update(0.06)
+  reg.setState(mesh, 1, 0.06)
+  reg.update(0.07)
+  check(mesh.children.length === 1, 'three states in a row leave one ghost')
+
+  // And it terminates, which an exponential ease would not: the ghost goes and
+  // its clones are disposed.
+  reg.update(5)
+  check(mesh.children.length === 0, 'after the duration the ghost is gone')
+  check(disposed.length >= 2, `and its clones were disposed (${disposed.length})`)
+  check(mesh.material.alphaTest === 0.5, 'with alphaTest restored')
+}
+
+console.log('\n--- the shared atlas material is never disposed by one body ---')
+{
+  // C5's regression test, and the load-bearing one here. The atlas path hands
+  // every body drawn from a sheet the SAME material, and the disposal path used
+  // to destroy whatever it found -- with a comment claiming one per entity, which
+  // is true of the per-PNG path and false of this one. It became reachable the
+  // moment a PLAYER was drawn from a shared sheet.
+  const shared = { userData: { shared: true }, disposed: 0, dispose () { this.disposed++ } }
+  const own = { userData: {}, disposed: 0, dispose () { this.disposed++ } }
+
+  // The rule as entities.js applies it.
+  const wouldDispose = (mat) => !mat.userData?.shared
+  check(wouldDispose(own) === true, 'a per-entity material is disposed')
+  check(wouldDispose(shared) === false,
+    'CONTROL: a material marked shared is NOT, however many bodies leave')
+
+  // And the tag is really set where the sheet material is made -- read from
+  // main.js as text, because building one needs a GPU.
+  const mainSrc = readFileSync(join(ROOT, 'client/src/main.js'), 'utf8')
+  check(/userData:\s*\{\s*shared:\s*true\s*\}/.test(mainSrc),
+    'the sheet material is tagged shared where it is created')
+}
+
 console.log(`\nprops: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

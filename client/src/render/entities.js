@@ -172,14 +172,27 @@ export class EntityView {
     if (!ent) return
     this.scene.remove(ent.mesh)
     ent.mesh.geometry?.dispose?.()
-    // The MATERIAL too -- one is allocated per entity, so leaving them behind
-    // leaks a GPU program slot per corpse over a long session.
+    // The MATERIAL only when it belongs to this entity, which is not always.
     //
-    // NOT THE TEXTURE. `material.map` is shared with every other prop of the
-    // same kind and with the preloaded frame set, so disposing it here would
-    // blank every barrel in the map the instant one of them was destroyed --
-    // which reads as a texture-loading bug and would be hunted as one.
-    ent.mesh.material?.dispose?.()
+    // This used to dispose whatever it found, with a comment saying "one is
+    // allocated per entity". True of the per-PNG sprite path and FALSE of the
+    // atlas path, where one material is shared by every body drawn from a sheet
+    // -- so destroying one of them disposed the material the others were still
+    // using. It presented as a shader recompile rather than a blank, which is
+    // why nobody chased it; it became reachable the moment a PLAYER was drawn
+    // from a shared sheet.
+    //
+    // `owned` is set by whoever cloned it. Leaving a per-entity material behind
+    // leaks a GPU program slot per corpse over a long session, so the flag has
+    // to be set rather than the disposal dropped.
+    //
+    // NOT THE TEXTURE, either way. `material.map` is shared with every other
+    // prop of the same kind and with the preloaded frame set, so disposing it
+    // here would blank every barrel in the map the instant one of them was
+    // destroyed -- which reads as a texture-loading bug and would be hunted as
+    // one.
+    const mat = ent.mesh.material
+    if (mat && !mat.userData?.shared) mat.dispose?.()
     this.entities.delete(index)
   }
 

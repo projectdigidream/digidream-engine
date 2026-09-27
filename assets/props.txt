@@ -37,7 +37,8 @@
 #           misprediction on every touch and looks like a netcode fault.
 #
 #
-#   sprite <id> size <world-height> [billboard] [state <n>] [fps <f>] frames A,B,C
+#   sprite <id> size <world-height> [billboard] [rot8] [once] [state <n>] [fps <f>]
+#                                   [blend <seconds>] frames A,B,C
 #   mesh   <id> model <name> [state <n>] [clip <name>]
 #   avatar <id> [blend <seconds>]
 #   avatar <id> when <condition> state <n>

@@ -1021,9 +1021,13 @@ try {
         atlases.set(name, {
           atlas,
           texture,
-          material: new THREE.MeshBasicMaterial({
+          // ONE MATERIAL PER SHEET, shared by every body drawn from it -- which
+          // is what lets the renderer batch them, and what makes disposing it
+          // from any one of them a bug. Said on the object rather than left to
+          // the reader, because the disposal path is three files away.
+          material: Object.assign(new THREE.MeshBasicMaterial({
             map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide
-          })
+          }), { userData: { shared: true } })
         })
       } catch (e) {
         console.warn(`[props] sheet ${name} not loaded (${e.message}); kinds using it draw the fallback body`)
@@ -1580,7 +1584,7 @@ function frame (now) {
   // returns immediately unless the answer has actually changed.
   buildBody()
   if (props && bodyAvatar >= 0) {
-    props.setState(body, resolveState(selfAnimation, a, props.avatarFor(selfAvatar)))
+    props.setState(body, resolveState(selfAnimation, a, props.avatarFor(selfAvatar)), now / 1000)
     // A sprite quad has to face the camera, and keep its own heading somewhere
     // the billboard has not overwritten -- the same two lines every remote body
     // gets, which the local one never needed while it was a capsule.
@@ -1655,11 +1659,13 @@ function frame (now) {
       // the motion two samples apart imply. See render/animstate.js.
       for (const ent of others.entities.values()) {
         const declared = ent.animationState ?? 0
-        if (ent.kind) { props.setState(ent.mesh, declared); continue }
+        if (ent.kind) { props.setState(ent.mesh, declared, now / 1000); continue }
         // Zero is "nothing declared", so a remote player animates from the
         // motion its two newest samples imply. Any non-zero value is the
         // server's, and wins.
-        props.setState(ent.mesh, declared || stateFor(props.avatarFor(ent.avatar ?? 0), remoteCondition(ent)))
+        props.setState(ent.mesh,
+                       declared || stateFor(props.avatarFor(ent.avatar ?? 0), remoteCondition(ent)),
+                       now / 1000)
       }
     }
   }

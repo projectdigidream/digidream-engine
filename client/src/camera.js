@@ -19,6 +19,7 @@
 // demonstrates the difference rather than asserting the rule, because the rule
 // lives at the call site and no amount of code in this file can enforce it.
 //
+import { easeToward } from './render/animstate.js'
 
 // A deterministic value noise, so a shake is reproducible in a test. Nothing
 // here needs to match the server -- shake is cosmetic and client-local -- but
@@ -428,10 +429,16 @@ export class Camera {
     this._blend(active ? 1 : 0, dt)
   }
 
-  /** Ease pathMix toward `want`, frame-rate independently. */
+  /**
+   * Ease pathMix toward `want`, frame-rate independently.
+   *
+   * Delegates to easeToward so there is ONE exponential ease in the client
+   * rather than two. Deliberately not what the sprite cross-fade uses: that
+   * needs a duration, because an exponential never arrives and a cross-fade must
+   * terminate so its cloned material can be disposed.
+   */
   _blend (want, dt) {
-    const k = 1 - Math.exp(-Math.max(0, this.cfg.pathBlend) * dt)
-    this.pathMix += (want - this.pathMix) * k
+    this.pathMix = easeToward(this.pathMix, want, this.cfg.pathBlend, dt)
     if (this.pathMix < 1e-6) this.pathMix = 0
     if (this.pathMix > 1 - 1e-6) this.pathMix = 1
   }
