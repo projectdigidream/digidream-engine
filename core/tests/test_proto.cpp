@@ -969,6 +969,93 @@ int main() {
     test_param_update();
     test_param_table();
     test_fuzz();
+    // ------------------------------------------- a full snapshot still carries events
+    //
+    // The wire's order is entities then transients, so the transients are
+    // written LAST -- and on a populated level the entities will use every
+    // byte. Doom's MAP01 places thirty-one monsters beside thirty-one props
+    // against a datagram that holds about forty-six entity blocks, so there was
+    // nothing left and every tracer, spray and explosion was dropped. It looks
+    // exactly like the effect not working.
+    //
+    // The two do not fail alike, which is what decides who yields: an entity
+    // that does not fit is re-sent next snapshot and the client carries the old
+    // one forward, while an event that does not fit is gone -- it happened at a
+    // moment that has passed. So the caller reserves room, and this is the
+    // property that reserve exists for.
+    {
+        std::printf("proto: a snapshot full of entities still carries its events\n");
+        u8 buf[MAX_DATAGRAM_BYTES];
+
+        // How many entities fit when nothing is reserved -- the number the
+        // reserve is measured against.
+        u32 alone = 0;
+        {
+            SnapshotWriter w(buf, sizeof buf);
+            SnapshotHeader h{};
+            h.server_tick = 7;
+            w.begin(h, SelfBlock{}, 100);
+            for (u32 i = 0; i < 200; ++i) {
+                EntityBlock e;
+                e.handle = Handle::make(i + 1, 0);
+                e.mask = ent_field::POS | ent_field::FACING;
+                e.pos = fx3{fx::from_int(static_cast<i64>(i)), fx::zero(), fx::zero()};
+                if (!w.try_entity(e)) break;
+                ++alone;
+            }
+            w.finish();
+        }
+        std::printf("  a datagram holds %u entity blocks with nothing held back\n", alone);
+        CHECK(alone > 20);
+
+        // Now the same, with room kept back for eight events, and the events
+        // written after -- which is the order the wire is read in.
+        SnapshotWriter w(buf, sizeof buf);
+        SnapshotHeader h{};
+        h.server_tick = 7;
+        w.begin(h, SelfBlock{}, 100);
+        // One event of slack: the loop below stops when the budget is AT MOST
+        // the reserve, and the last entity written can leave it a few bytes
+        // under. Without the slack, eight reserved fits seven.
+        const size_t reserve = 9 * SnapshotWriter::VFX_BYTES + 2;
+        u32 written = 0;
+        for (u32 i = 0; i < 200; ++i) {
+            if (w.remaining() <= reserve) break;
+            EntityBlock e;
+            e.handle = Handle::make(i + 1, 0);
+            e.mask = ent_field::POS | ent_field::FACING;
+            e.pos = fx3{fx::from_int(static_cast<i64>(i)), fx::zero(), fx::zero()};
+            if (!w.try_entity(e)) break;
+            ++written;
+        }
+        u32 events = 0;
+        for (u32 i = 0; i < 8; ++i) {
+            VfxEvent v;
+            v.kind = 11;
+            v.pos = fx3{fx::from_int(1), fx::from_int(2), fx::from_int(3)};
+            v.param = 512;
+            if (!w.try_vfx(v)) break;
+            ++events;
+        }
+        const size_t n = w.finish();
+        std::printf("  with eight reserved: %u entities and %u events in %zu bytes\n",
+                    written, events, n);
+        // ALL EIGHT. That is the whole point -- and the control is the count
+        // above: if the reserve cost nothing, `alone` would equal `written` and
+        // the reserve would be doing nothing.
+        CHECK(events == 8);
+        CHECK(written < alone);
+        CHECK(n <= MAX_DATAGRAM_BYTES);
+
+        // And it all decodes, so the reserve did not corrupt the layout.
+        DecodedSnapshot got{};
+        ByteReader r(buf, n);
+        CHECK(decode_snapshot(r, got));
+        CHECK(r.at_end());
+        CHECK(got.vfx_count == events);
+        CHECK(got.entity_count == written);
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

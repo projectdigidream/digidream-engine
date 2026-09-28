@@ -536,6 +536,17 @@ public:
     u16 entities_written() const noexcept { return entity_count_; }
     u16 vfx_written() const noexcept { return vfx_count_; }
 
+    // What is left of the datagram, so a caller can keep some back. A snapshot's
+    // transients are written AFTER its entities because that is the order the
+    // wire is read in, and entities on a populated level will happily use every
+    // byte -- so reserving is the only way an event ever gets sent.
+    size_t remaining() const noexcept { return w_.remaining(); }
+
+    // What one encoded VfxEvent costs: kind (2) + a quantised vec3 (12) +
+    // a brad (4) + param (4). Named so a caller can reserve N of them without
+    // restating the format, which is how a reserve silently becomes wrong.
+    static constexpr size_t VFX_BYTES = 22;
+
 private:
     u8*        buf_;
     ByteWriter w_;

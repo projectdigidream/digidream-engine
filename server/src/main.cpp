@@ -1953,8 +1953,52 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                 for (u32 k = 0; k < order_n; ++k) order[k] = cand[k].i;
             }
 
+            // ROOM KEPT BACK FOR THE TRANSIENTS, and this is why it exists.
+            //
+            // The wire's order is entities then events, so the events are
+            // written last -- and on a populated level the entities will use
+            // every byte. Doom's MAP01 alone places thirty-one monsters and
+            // thirty-one props against a datagram that holds about forty-six
+            // entity blocks, so there was nothing left and every tracer,
+            // every spray of blood and every explosion was dropped. It looks
+            // exactly like the effect not working, and it is the effect never
+            // being sent.
+            //
+            // The two do not fail alike, which is what decides who yields. An
+            // entity that does not fit is re-sent on the next snapshot and the
+            // client carries the old one forward meanwhile -- that is the whole
+            // delta design, and the loop above already handles it. An event
+            // that does not fit is GONE: it happened at a moment that has
+            // passed, and the comment on the transient loop below says so.
+            //
+            // So the recoverable thing yields to the unrecoverable one, but
+            // only by a bounded amount: eight events is 178 bytes of 1200, or
+            // about seven entities' worth, and anything past eight still takes
+            // its chances on what the entities leave.
+            // ONE EVENT OF SLACK, because the loop stops when the budget is
+            // AT MOST the reserve and not exactly it: the last entity written
+            // can leave a few bytes under, and without the slack that is the
+            // difference between eight events fitting and seven.
+            const u32 pending_vfx = world.vfx_count();
+            const u32 want_vfx = pending_vfx < 8 ? pending_vfx : 8;
+            const size_t vfx_reserve =
+                pending_vfx == 0 ? 0
+                                 : (want_vfx + 1) * proto::SnapshotWriter::VFX_BYTES + 2;
+
             for (u32 oi = 0; oi < order_n; ++oi) {
+                // Stop ADDING entities once the reserve is all that is left.
+                // Not a `break`: the loop below still has to record what the
+                // client actually holds for every remaining entity, or the next
+                // delta is computed against data that never arrived.
                 const u32 i = order[oi];
+                if (vfx_reserve > 0 && i != s.agent && w.remaining() <= vfx_reserve) {
+                    // What the client STILL holds, exactly as the "did not fit"
+                    // path below records it -- anything else and the next delta
+                    // is computed against data that never arrived.
+                    record.entities[i] = baseline ? baseline->entities[i] : EntitySample{};
+                    ++omitted;
+                    continue;
+                }
                 // The observer's own agent is in SelfBlock at full precision.
                 // Sending it again here would let the client reconcile against
                 // the quantised copy of itself.
