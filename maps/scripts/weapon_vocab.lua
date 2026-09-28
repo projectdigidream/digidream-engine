@@ -161,6 +161,31 @@ weapon_vocab = {
       doc = "How long the collider is live. This is why a swing is a VOLUME " ..
             "MOVING THROUGH TIME rather than an instant: a target that steps " ..
             "out of the way mid-swing is missed." },
+    { name = "pitch_from", type = "fx", optional = true,
+      doc = "Where the collider starts VERTICALLY, as a turn fraction: 0 is " ..
+            "level, 0.25 is straight up, -0.25 straight down." },
+    { name = "pitch_to", type = "fx", optional = true,
+      doc = "And where it ends. An overhead chop runs from above to level; a " ..
+            "spear thrust upward runs the other way. Equal values are a fixed " ..
+            "elevation, which is what a horizontal slash at chest height is." },
+    { name = "half_pitch", type = "fx", optional = true,
+      doc = "How tall the arc is, either side of the pitch. ABSENT OR ZERO " ..
+            "MEANS NO VERTICAL CHECK AT ALL -- the swing is bounded only by " ..
+            "the body's height, which is how every swing behaved before pitch " ..
+            "existed and is right for a fist. Set it and an overhead swing " ..
+            "genuinely misses something at your feet." },
+    { name = "knockback", type = "fx", optional = true,
+      doc = "How hard a connected swing throws the target, in world units per " ..
+            "second, directly away from the swinger." },
+    { name = "lift", type = "fx", optional = true,
+      doc = "The vertical part of that shove. An uppercut that pops a target " ..
+            "into the air is this and nothing else." },
+    { name = "slow", type = "fx", optional = true,
+      doc = "Multiplier on the target's move_speed while it lasts. 0.5 is " ..
+            "half pace; needs `slow_ticks` beside it or nothing happens." },
+    { name = "slow_ticks", type = "int", optional = true,
+      doc = "How long the slow lasts. Tagged by the attacker, so hitting the " ..
+            "same target twice REPLACES rather than stacking to a standstill." },
     { name = "cooldown", type = "int", optional = true,
       doc = "Ticks before another swing may START. Capped at 255 by the " ..
             "parameter's width." },
@@ -188,6 +213,16 @@ weapon_vocab = {
             "delay from the previous entry: entries fire on the first tick " ..
             "the phase has been running at least that long, so a dropped " ..
             "tick delays an entry rather than losing it." },
+    { name = "swing", type = "table", optional = true,
+      doc = "A swing shape for THIS PHASE, replacing the weapon's while it is " ..
+            "in it. Same fields as the weapon's `swing`.\n" ..
+            "THIS IS WHAT MAKES A COMBO A COMBO. Three presses reaching " ..
+            "`hit1`, `hit2`, `hit3` was already the shape the phase graph " ..
+            "gave -- and all three swung the identical volume for the " ..
+            "identical damage, because `swing` was a property of the weapon " ..
+            "and there was one of it. A finisher that hits harder and sweeps " ..
+            "wider is the whole reason anyone writes a combo.\n" ..
+            "A phase without one leaves the weapon's in place." },
     { name = "transitions", type = "table", optional = true,
       doc = "A list of {when = <condition>, to = <phase>, ...args}, checked " ..
             "IN ORDER every tick, first match wins. Order is the whole " ..
@@ -268,6 +303,24 @@ weapon_vocab = {
       args = { { name = "var", type = "var" }, { name = "value", type = "int" } },
       doc = "Exactly equal, for a counter used as a state rather than a level." },
 
+    { name = "grounded",
+      args = { { name = "value", type = "bool", optional = true } },
+      doc = "Whether the body is standing on something. `value = false` is " ..
+            "AIRBORNE, and that is what a down-slash is written with: put the " ..
+            "airborne branch above the grounded one in `ready` and the same " ..
+            "button does two different things. Default true." },
+
+    { name = "moving",
+      args = { { name = "speed", type = "fx", optional = true } },
+      doc = "Moving horizontally faster than `speed` (default a half unit a " ..
+            "second). A running attack that differs from a standing one." },
+
+    { name = "falling",
+      args = { { name = "speed", type = "fx", optional = true } },
+      doc = "Descending faster than `speed`. A stomp is this plus a press, " ..
+            "and it is deliberately not the same as `grounded = false`: the " ..
+            "top of a jump is airborne and is not a dive." },
+
     { name = "lua",
       args = { { name = "fn", type = "string" } },
       doc = "The escape hatch: the name of a global function, called with " ..
@@ -299,6 +352,15 @@ weapon_vocab = {
                 "makes a hitscan a punch. Doom's own fist is a line attack " ..
                 "with a short range, so a melee weapon and a rifle share " ..
                 "every line of the code that fires them." },
+        { name = "knockback", type = "fx", optional = true,
+          doc = "World units per second, away from the muzzle. PER RAY, so a " ..
+                "seven-pellet shotgun at point blank shoves seven times -- " ..
+                "which is what a shotgun at point blank should do." },
+        { name = "lift", type = "fx", optional = true,
+          doc = "The vertical part of that shove." },
+        { name = "slow", type = "fx", optional = true,
+          doc = "Multiplier on the target's move_speed. Needs `slow_ticks`." },
+        { name = "slow_ticks", type = "int", optional = true },
       },
       doc = "An instant shot. The engine answers where the ray ended and what " ..
             "was there; what that COSTS is this action." },
@@ -319,6 +381,59 @@ weapon_vocab = {
             "is the PLAYER and the heading is their facing, which is why this " ..
             "goes through mobs.launch_from rather than the launcher a monster " ..
             "uses: a mob's `aim` is a steering field a player does not have." },
+
+    { name = "damage_area",
+      args = {
+        { name = "damage", type = "int" },
+        { name = "radius", type = "fx" },
+        { name = "offset", type = "fx", optional = true,
+          doc = "How far IN FRONT of the body the circle is centred. Absent " ..
+                "or zero is centred on the player, which is a ground slam; a " ..
+                "few units is a shockwave thrown forward. This is the " ..
+                "\"chosen point\", and it is relative because a weapon does " ..
+                "not know where it will be fired from." },
+        { name = "height", type = "fx", optional = true,
+          doc = "And how far above the feet, for a blast that goes off at " ..
+                "chest height rather than on the floor." },
+        { name = "falloff", type = "bool", optional = true,
+          doc = "Damage linear in distance rather than flat to the edge. " ..
+                "Linear in distance and not in its square: full strength " ..
+                "until the last inch and then nothing reads as a bug." },
+        { name = "hurts_owner", type = "bool", optional = true,
+          doc = "Default true. False is what stops a rocket jump killing you." },
+        { name = "knockback", type = "fx", optional = true,
+          doc = "Outward from the CENTRE, not from the player -- so a blast " ..
+                "thrown forward scatters things away from where it landed." },
+        { name = "lift", type = "fx", optional = true },
+        { name = "slow", type = "fx", optional = true },
+        { name = "slow_ticks", type = "int", optional = true },
+      },
+      doc = "A circle of damage around a chosen point. Everything in range is " ..
+            "hit once, walls are NOT consulted -- this is a shockwave, not a " ..
+            "ray -- and it is the mob runtime's own blast, the one rockets " ..
+            "have used since the cyberdemon." },
+
+    { name = "telegraph",
+      args = {
+        { name = "effect", type = "int",
+          doc = "Which warning to draw, by catalogue id. What it LOOKS like is " ..
+                "the catalogue's business, exactly as a tracer style is." },
+        { name = "radius", type = "fx", optional = true,
+          doc = "How big the warned area is." },
+        { name = "ticks", type = "int", optional = true,
+          doc = "How long until the blow actually lands. The number a player " ..
+                "needs to decide whether to move." },
+        { name = "offset", type = "fx", optional = true,
+          doc = "How far in front of the body it is centred, matching " ..
+                "`damage_area`'s so a warning and its blast agree." },
+      },
+      doc = "ANNOUNCE AN INCOMING ATTACK, so a client can draw the warning " ..
+            "before it lands. Put one at `at = 0` of a wind-up phase and the " ..
+            "blow itself later in the same phase; the gap between them IS the " ..
+            "time the player has.\n" ..
+            "It carries no wire format of its own: it rides the vfx event, " ..
+            "with the radius in 1/256 units in the low sixteen bits of `param` " ..
+            "and the ticks remaining in the high sixteen." },
 
     { name = "consume",
       args = { { name = "n", type = "int", optional = true },

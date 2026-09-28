@@ -344,10 +344,17 @@ function W.check_weapon(name, def, deferred)
     if type(ph) ~= "table" then
       complain("%s: must be a table", pwhere)
     else
-      local seq, trans = ph.sequence, ph.transitions
-      ph.sequence, ph.transitions = nil, nil
+      local seq, trans, psw = ph.sequence, ph.transitions, ph.swing
+      ph.sequence, ph.transitions, ph.swing = nil, nil, nil
       check_fields(ph, PHASE_FIELD, pwhere, ctx, vocab.phase_fields)
-      ph.sequence, ph.transitions = seq, trans
+      ph.sequence, ph.transitions, ph.swing = seq, trans, psw
+
+      -- A phase's own swing, field by field, exactly as the weapon's. Skipping
+      -- it would let `raech` through on a combo finisher and nowhere else,
+      -- which is the worst kind of half-checked.
+      if psw ~= nil then
+        check_fields(psw, SWING_FIELD, pwhere .. " swing", ctx, vocab.swing_fields)
+      end
 
       for i, entry in ipairs(seq or {}) do
         local ewhere = pwhere .. " step " .. i
@@ -556,6 +563,10 @@ local SWING_PARAM = {
   reach = "attack_reach", half_arc = "attack_half_arc",
   sweep_from = "attack_sweep_from", sweep_to = "attack_sweep_to",
   min_reach = "attack_min_reach",
+  -- The vertical half of the arc, which makes an overhead chop a different
+  -- volume from a horizontal slash rather than the same one drawn differently.
+  pitch_from = "attack_pitch_from", pitch_to = "attack_pitch_to",
+  half_pitch = "attack_half_pitch",
 }
 local SWING_U8 = { ticks = "attack_ticks", cooldown = "attack_cooldown" }
 
@@ -598,8 +609,21 @@ function W.swing_damage(attacker)
   local inv = W.of[attacker:index()]
   if inv == nil then return nil end
   local def = W.defs[inv.current]
-  if def == nil or def.swing == nil then return nil end
-  return def.swing.damage
+  if def == nil then return nil end
+  -- THE PHASE'S OWN SWING FIRST, then the weapon's.
+  --
+  -- The parameters the collider ran with came from the phase (see phase_swing),
+  -- so the damage has to as well -- otherwise a combo escalates in reach and
+  -- arc and every hit costs the weapon's one number, which is the bug this
+  -- whole feature exists to remove, surviving in the half nobody replicates.
+  local st = run[attacker:index()]
+  local ph = st and def.phases and def.phases[st.phase]
+  local sw = (ph and ph.swing) or def.swing
+  if sw == nil then return nil end
+  -- THE WHOLE TABLE, not just the number. Knockback and slow are properties of
+  -- the blow and belong with what it costs; returning only `damage` meant a
+  -- melee weapon could not shove, which is most of what melee is for.
+  return sw
 end
 
 -- ------------------------------------------------------------------ conditions
@@ -652,6 +676,29 @@ function conds.chance(c, a) return dnp.random(0, 99) < a.percent end
 function conds.var_at_least(c, a) return (c.state.vars[a.var] or 0) >= a.value end
 function conds.var_is(c, a)       return (c.state.vars[a.var] or 0) == a.value end
 
+-- WHAT THE BODY IS DOING, so an attack can differ in the air.
+--
+-- A down-slash while falling and a stomp on landing are ordinary platformer
+-- attacks, and they are transitions rather than a feature: put the airborne
+-- branch above the grounded one in `ready` and the same button does two
+-- different things. The engine already answers both questions.
+function conds.grounded(c, a)
+  local g = c.e:grounded() and true or false
+  if a.value == nil then return g end
+  return g == a.value
+end
+
+function conds.moving(c, a)
+  local v = c.e:vel()
+  local sq = v.x * v.x + v.y * v.y
+  local lim = a.speed or fx.frac(1, 2)
+  return sq > lim * lim
+end
+
+function conds.falling(c, a)
+  return c.e:vel().z < (a.speed and -a.speed or fx.zero())
+end
+
 function conds.lua(c, a)
   local fn = _G[a.fn]
   if type(fn) ~= "function" then return false end
@@ -700,6 +747,36 @@ end
 
 function acts.impulse(c, a)
   mobs.acts.impulse(owner_of(c), a)
+end
+
+-- A CIRCLE OF DAMAGE, centred where the weapon says rather than on the player.
+--
+-- The mob runtime's own blast, which rockets have used since the cyberdemon:
+-- the falloff, the "does not hurt its owner" rule and the knockback all live
+-- there. `offset` puts the centre in front of the body -- a ground slam at your
+-- feet is 0, a shockwave thrown forward is a few units -- and that is the
+-- "chosen point" without a second way of naming one.
+function acts.damage_area(c, a)
+  local m = owner_of(c)
+  if a.offset and a.offset ~= ZERO then
+    local p, d = c.e:pos(), dnp.dir(c.e:facing())
+    m.impact = vec3.new(p.x + d.x * a.offset, p.y + d.y * a.offset,
+                        p.z + (a.height or ZERO))
+  end
+  mobs.acts.damage_area(m, a)
+end
+
+-- Announce what is about to happen, so a client can draw a warning. Rides the
+-- existing vfx event; see mobs.telegraph for what `param` carries.
+function acts.telegraph(c, a)
+  local p, origin = c.e:pos(), nil
+  if a.offset and a.offset ~= ZERO then
+    local d = dnp.dir(c.e:facing())
+    origin = vec3.new(p.x + d.x * a.offset, p.y + d.y * a.offset, p.z)
+  else
+    origin = p
+  end
+  mobs.telegraph(c.e, a, origin, c.e:facing())
 end
 
 function acts.set_var(c, a) c.state.vars[a.var] = a.value end
@@ -784,6 +861,23 @@ local function enter(state, phase, now)
   state.phase   = phase
   state.entered = now
   state.done    = {}
+end
+
+-- A PHASE MAY CARRY ITS OWN SWING, which is what makes a combo a combo.
+--
+-- Three presses reaching `hit1`, `hit2`, `hit3` were already the shape the
+-- phase graph gave -- and all three swung the identical volume for the
+-- identical damage, because `swing` was a property of the WEAPON and there was
+-- one of it. A finisher that hits harder and sweeps wider is the whole reason
+-- anyone writes a combo.
+--
+-- Written on ENTRY, through the same tagged effects the weapon's own swing
+-- uses, so the last phase to speak wins and putting the weapon away still
+-- clears everything. A phase with no `swing` leaves the weapon's in place,
+-- which is what every phase did before this line existed.
+local function phase_swing(e, def, ph)
+  if ph == nil or ph.swing == nil then return end
+  apply_weapon_params(e, { swing = ph.swing, aim_snap = def.aim_snap })
 end
 
 --- Reset a player's weapon machine. For a weapon change, and for a fresh slot.
@@ -899,6 +993,7 @@ local function tick_player(e, idx, now)
       break
     end
     enter(state, to, now)
+    phase_swing(e, def, def.phases[to])
   end
 end
 

@@ -159,6 +159,7 @@ constexpr LuaOnly LUA_ACTIONS[] = {
     {"damage",         "touches the world"},
     {"melee",          "touches the world"},
     {"swing",          "presses a button on the world's input; one tick, rare"},
+    {"telegraph",      "emits a vfx event; rare, and touches the world"},
     {"impulse",        "touches the world"},
     {"spawn",          "touches the world, and owns the brood budget"},
     {"revive",         "reaches into another mob's state"},

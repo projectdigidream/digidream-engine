@@ -184,6 +184,28 @@ mob_vocab = {
       doc = "Ticks before another swing may START. Capped at 255 by the " ..
             "parameter's width. A mob's state graph usually gates this " ..
             "already; set it when two states could both swing." },
+    { name = "pitch_from", type = "fx", optional = true,
+      doc = "Where the collider starts VERTICALLY, as a turn fraction: 0 is " ..
+            "level, 0.25 straight up, -0.25 straight down." },
+    { name = "pitch_to", type = "fx", optional = true,
+      doc = "And where it ends. A cyberdemon bringing a hoof down runs from " ..
+            "above to level; equal values are a fixed elevation." },
+    { name = "half_pitch", type = "fx", optional = true,
+      doc = "How tall the arc is, either side of the pitch. ABSENT OR ZERO " ..
+            "MEANS NO VERTICAL CHECK -- bounded only by the body's height, " ..
+            "which is how every swing behaved before pitch existed. Set it " ..
+            "and an overhead blow genuinely misses something at your feet." },
+    { name = "knockback", type = "fx", optional = true,
+      doc = "How hard a connected swing throws the target, in world units per " ..
+            "second, directly away from the swinger." },
+    { name = "lift", type = "fx", optional = true,
+      doc = "The vertical part of that shove." },
+    { name = "slow", type = "fx", optional = true,
+      doc = "Multiplier on the target's move_speed while it lasts. Needs " ..
+            "`slow_ticks` beside it or nothing happens." },
+    { name = "slow_ticks", type = "int", optional = true,
+      doc = "How long the slow lasts. Tagged by the attacker, so hitting the " ..
+            "same target twice REPLACES rather than stacking to a standstill." },
   },
 
   -- ---------------------------------------------------------------- state
@@ -442,6 +464,12 @@ mob_vocab = {
           doc = "Degrees of random cone, per bullet." },
         { name = "tracer", type = "int", optional = true,
           doc = "Tracer style to draw, or absent for none." },
+        { name = "knockback", type = "fx", optional = true,
+          doc = "World units per second, away from the muzzle. PER RAY." },
+        { name = "lift", type = "fx", optional = true },
+        { name = "slow", type = "fx", optional = true,
+          doc = "Multiplier on the target's move_speed. Needs `slow_ticks`." },
+        { name = "slow_ticks", type = "int", optional = true },
       },
       doc = "An instant shot. The engine answers where the ray ended and what " ..
             "was there; what that COSTS is this action." },
@@ -476,6 +504,23 @@ mob_vocab = {
             "A mob with no `swing` field does nothing here and says so at " ..
             "load, rather than swinging with the engine's defaults -- which " ..
             "would be a two-unit reach nobody asked for." },
+
+    { name = "telegraph",
+      args = {
+        { name = "effect", type = "int",
+          doc = "Which warning to draw, by catalogue id." },
+        { name = "radius", type = "fx", optional = true },
+        { name = "ticks", type = "int", optional = true,
+          doc = "How long until the blow lands -- the number a player needs " ..
+                "in order to decide whether to move." },
+      },
+      doc = "ANNOUNCE AN INCOMING ATTACK so a client can warn about it. Put " ..
+            "one at `at = 0` of an attack state and the blow later in the " ..
+            "same sequence; the gap between them IS the player's reaction " ..
+            "time, and writing it as two entries is what makes it tunable.\n" ..
+            "No wire format of its own: it rides the vfx event, radius in " ..
+            "1/256 units in the low sixteen bits of `param` and ticks in the " ..
+            "high sixteen." },
 
     { name = "melee",
       args = { { name = "damage", type = "int" },
@@ -518,6 +563,11 @@ mob_vocab = {
     { name = "damage_area",
       args = { { name = "damage", type = "int" },
                { name = "radius", type = "fx" },
+               { name = "knockback", type = "fx", optional = true,
+                 doc = "Outward from the blast CENTRE, not from the mob." },
+               { name = "lift", type = "fx", optional = true },
+               { name = "slow", type = "fx", optional = true },
+               { name = "slow_ticks", type = "int", optional = true },
                { name = "falloff", type = "bool", optional = true },
                { name = "hurts_owner", type = "bool", optional = true } },
       doc = "A blast. `hurts_owner` false is a rocket that does not kill the " ..

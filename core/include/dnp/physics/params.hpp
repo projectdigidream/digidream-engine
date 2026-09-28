@@ -173,6 +173,24 @@ struct MoveParams {
     // collider, rather than predicting a swing the server then denies.
     bool attack_enabled = true;
 
+    // THE VERTICAL HALF OF THE ARC. 0 means "do not check pitch at all".
+    //
+    // The swing was flat: it swept a horizontal angle and tested elevation with
+    // a crude z band, so an overhead chop and a horizontal slash were the same
+    // volume. These three make the sweep a path through BOTH angles, which is
+    // what an axe coming down and a spear going up need.
+    //
+    // Zero for `half_pitch` is unconstrained and is the default, so every swing
+    // written before these existed sweeps exactly as it did -- the z band still
+    // bounds it, and that is the behaviour worth keeping for a fist.
+    //
+    // Turn fractions like the horizontal pair, and for the same reason: brad is
+    // a turn in 2^32, so a fraction and a brad are the same number. 0.125 is
+    // 45 degrees, straight up is 0.25.
+    fx attack_pitch_from = fx::zero();
+    fx attack_pitch_to   = fx::zero();
+    fx attack_half_pitch = fx::zero();
+
     // HOW MANY DIRECTIONS AIM SNAPS TO. 0 is free aim.
     //
     // A platformer distinction rather than a Doom one: eight-way aiming is a

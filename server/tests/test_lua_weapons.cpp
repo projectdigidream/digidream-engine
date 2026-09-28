@@ -388,12 +388,14 @@ int main(int argc, char** argv) {
     if (!run("local p = dnp.players()[1]\n"
              "swing_with_shotgun = weapons.swing_damage(p)\n"
              "weapons.get(p:index()).current = 'fists'\n"
-             "swing_with_fists = weapons.swing_damage(p)\n"
+             "-- THE WHOLE SWING TABLE, not just the number: knockback and slow\n"
+             "-- are properties of the blow and travel with what it costs.\n"
+             "swing_with_fists = weapons.swing_damage(p).damage\n"
              "weapons.get(p:index()).current = 'shotgun'\n", "asking swing_damage"))
         return 1;
     std::printf("  swing_damage: fists=%d shotgun=%s\n",
                 (int)num("swing_with_fists"),
-                num("swing_with_shotgun") < 0 ? "nil" : "a number");
+                num("swing_with_shotgun") < 0 ? "nil" : "a table");
     CHECK(num("swing_with_fists") == 10);
     // CONTROL for the pair: if this were also a number, the "two independent
     // gates" claim would be one gate and a comment.
@@ -1159,6 +1161,107 @@ int main(int argc, char** argv) {
     CHECK(str("label_list2") == "Bullets, Shells, Goo, Rockets, Cells");
 
     // ================================================================
+    // A COMBO ESCALATES, which one shared `swing` could not express.
+    //
+    // Three presses reaching jab1, jab2, hook was already the shape the phase
+    // graph gave -- and all three swung the identical volume for the identical
+    // damage, because `swing` was a property of the WEAPON and there was one of
+    // it. A phase carries its own now, so the finisher hits for three times the
+    // first and throws what it lands on.
+    if (!run("local p = dnp.players()[1]\n"
+             "local inv = weapons.get(p:index())\n"
+             "inv.have = { fists = true }\n"
+             "inv.current = 'fists'\n"
+             "weapons.rearm_player(p:index())\n"
+             "combo_damage = {}\n", "arming the fists")) return 1;
+    {
+        // One press, then a second inside recover1, then a third inside
+        // recover2 -- the window is what `ticks` on a recover phase IS.
+        // Presses at 1, 17 and 33. jab1 runs ticks 1-11 and has no
+        // transitions, so a press during it is ignored -- the second has to
+        // land in recover1 (11-25) and the third in recover2 (29-45). Getting
+        // that wrong reads as "the combo does not work" and is a mistimed
+        // fixture.
+        const char* pat = ".1...............1...............1...............";
+        u32 t = 200000;
+        for (const char* ch = pat; *ch; ++ch) {
+            set_buttons(*ch == '1' ? proto::button::ATTACK_PRIMARY : 0);
+            const std::string step =
+                "local p = dnp.players()[1]\n"
+                "weapons.tick_player(p, p:index(), " + std::to_string(++t) + ")\n"
+                "local sw = weapons.swing_damage(p)\n"
+                "local ph = weapons.phase_of(p:index())\n"
+                "if ph and combo_damage[ph] == nil then\n"
+                "  combo_damage[ph] = (sw and sw.damage) or -1\n"
+                "end\n";
+            if (!run(step.c_str(), "stepping the combo")) return 1;
+        }
+        set_buttons(0);
+    }
+    if (!run("jab1_dmg = combo_damage.jab1 or -1\n"
+             "jab2_dmg = combo_damage.jab2 or -1\n"
+             "hook_dmg = combo_damage.hook or -1\n", "reading the combo")) return 1;
+    std::printf("  a three-hit combo escalates: jab1=%d jab2=%d hook=%d\n",
+                (int)num("jab1_dmg"), (int)num("jab2_dmg"), (int)num("hook_dmg"));
+    // All three REACHED, or the window is not a window.
+    CHECK(num("jab1_dmg") > 0);
+    CHECK(num("jab2_dmg") > 0);
+    CHECK(num("hook_dmg") > 0);
+    // AND THEY DIFFER. Without a per-phase swing all three are the weapon's
+    // one number, which is what this whole block is about.
+    CHECK(num("jab2_dmg") > num("jab1_dmg"));
+    CHECK(num("hook_dmg") > num("jab2_dmg"));
+
+    // ------------------------------------------------- the same button, airborne
+    //
+    // A down-slash while off the ground is a transition, not a feature: the
+    // airborne branch sits above the grounded one in `ready` and the same
+    // button reaches a different phase.
+    if (!run("local p = dnp.players()[1]\n"
+             "weapons.rearm_player(p:index())\n"
+             "p:teleport(vec3.new(fx.int(20), fx.int(20), fx.int(6)))\n"
+             "p:set_velocity(vec3.new(fx.int(0), fx.int(0), fx.int(4)))\n",
+             "putting the player in the air")) return 1;
+    server_tick(0);
+    if (!run("airborne_now = dnp.players()[1]:grounded() and 0 or 1",
+             "checking it is airborne")) return 1;
+    // The fixture has to actually leave the ground, or the branch below is
+    // untested and passes for the wrong reason.
+    CHECK(num("airborne_now") == 1);
+    set_buttons(proto::button::ATTACK_PRIMARY);
+    if (!run("local p = dnp.players()[1]\n"
+             "weapons.tick_player(p, p:index(), 300001)\n"
+             "air_phase = weapons.phase_of(p:index())\n"
+             "air_damage = (weapons.swing_damage(p) or {}).damage or -1\n",
+             "attacking in the air")) return 1;
+    set_buttons(0);
+    std::printf("  pressing attack while airborne reaches '%s' (%d damage)\n",
+                str("air_phase").c_str(), (int)num("air_damage"));
+    CHECK(str("air_phase") == "slam");
+    // CONTROL: on the ground the identical press reaches the jab instead.
+    if (!run("local p = dnp.players()[1]\n"
+             "-- NOT the origin: the demon section below spawns there, and two\n"
+             "-- bodies in one place shove each other, which moved the demon and\n"
+             "-- shifted its arc by a tick.\n"
+             "p:teleport(vec3.new(fx.int(20), fx.int(20), fx.int(0)))\n"
+             "p:set_velocity(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n",
+             "putting it back down")) return 1;
+    for (int i = 0; i < 20; ++i) server_tick(0);
+    if (!run("grounded_now = dnp.players()[1]:grounded() and 1 or 0",
+             "checking it landed")) return 1;
+    CHECK(num("grounded_now") == 1);
+    if (!run("weapons.rearm_player(dnp.players()[1]:index())", "rearming")) return 1;
+    set_buttons(proto::button::ATTACK_PRIMARY);
+    if (!run("local p = dnp.players()[1]\n"
+             "weapons.tick_player(p, p:index(), 300100)\n"
+             "ground_phase = weapons.phase_of(p:index())\n", "attacking on the ground"))
+        return 1;
+    set_buttons(0);
+    std::printf("  CONTROL: the same press on the ground reaches '%s'\n",
+                str("ground_phase").c_str());
+    CHECK(str("ground_phase") == "jab1");
+
+    // ================================================================
     // PARITY. Three readers of one vocabulary: the runtime, the checked-in
     // JSON, and docs/WEAPONS.md. A name in one and not another is a feature
     // that either does not exist or cannot be found.
@@ -1409,9 +1512,12 @@ int main(int argc, char** argv) {
     CHECK(hit_at_end > hit_at_start);
 
     // So a target at the far end can step away before the sweep arrives.
-    const int dodged = bite(55, hit_at_end);
+    // Two ticks EARLY, not exactly on the landing tick: the arc's timing moves
+    // by a tick with the fixture, and a dodge that races the hit it is dodging
+    // measures the ordering of two lines rather than the window.
+    const int dodged = bite(55, hit_at_end - 2);
     std::printf("  and one that steps away on tick %d is missed (%s)\n",
-                hit_at_end, dodged < 0 ? "never hit" : "still hit");
+                hit_at_end - 2, dodged < 0 ? "never hit" : "still hit");
     // CANNOT BE DONE against `melee`, which is the whole reason this exists.
     CHECK(dodged < 0);
 
@@ -1476,6 +1582,58 @@ int main(int argc, char** argv) {
     // number it produced is recorded here instead.
     CHECK(swings_landed == 3);
     run("if twice_victim:valid() then twice_victim:despawn() end", "clearing");
+
+    // ------------------------------------------------- the arc has a TOP and a BOTTOM
+    //
+    // `half_pitch` is what makes an overhead chop a different volume from a
+    // horizontal slash rather than the same one drawn differently. Zero means
+    // "do not check", which is every swing written before it existed, so the
+    // claim has to be made in both directions: a pitched swing misses what a
+    // flat one hits.
+    if (!run("demon:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
+             "demon:set_input(fx.int(0), fx.int(0), 0, 0)\n"
+             "mobs.acts.sleep(mobs.live[demon:index()])\n", "resetting the demon"))
+        return 1;
+    const auto bite_at_height = [&](bool pitched, long long z_raw) {
+        const std::string setup =
+            std::string("local d = demon\n") +
+            // A victim ABOVE the demon, in front of it. A flat swing reaches it
+            // because the z band is generous; a swing pitched downward must not.
+            "high = mobs.spawn('zombieman', vec3.new(fx.frac(50,48), fx.int(0), "
+            "                                        fx.raw(" + std::to_string(z_raw) + ")))\n"
+            "high:set_solid(false)\n"
+            "mobs.live[high:index()].hp = 200\n"
+            "high_hp0 = mobs.live[high:index()].hp\n"
+            // Pitched DOWNWARD, away from the target above.
+            + (pitched
+               ? "d:set_body_param('attack_half_pitch', fx.frac(1,16))\n"
+                 "d:set_body_param('attack_pitch_from', fx.frac(-1,8))\n"
+                 "d:set_body_param('attack_pitch_to', fx.frac(-1,8))\n"
+               : "d:set_body_param('attack_half_pitch', fx.int(0))\n");
+        if (!run(setup.c_str(), "placing a high victim")) return -1;
+        recompute();
+        for (int i = 0; i < 4; ++i) server_tick(0);
+        if (!run("mobs.acts.swing(mobs.live[demon:index()])", "swinging high")) return -1;
+        for (int i = 0; i < 24; ++i) server_tick(0);
+        if (!run("local r = mobs.live[high:index()]\n"
+                 "high_hp1 = r and r.hp or high_hp0", "reading the high victim")) return -1;
+        const int lost = static_cast<int>(num("high_hp0") - num("high_hp1"));
+        run("if high:valid() then high:despawn() end", "clearing");
+        return lost;
+    };
+    // Roughly a unit and a quarter up: inside the z band, above a downward arc.
+    const long long kUp = static_cast<long long>(1.25 * 4294967296.0);
+    const int flat_hit = bite_at_height(false, kUp);
+    const int pitched_hit = bite_at_height(true, kUp);
+    std::printf("  a target %.2f above: a flat swing costs it %d, "
+                "one pitched downward costs it %d\n", 1.25, flat_hit, pitched_hit);
+    // CONTROL: unconstrained, it connects -- so the miss below is the pitch and
+    // not the geometry being out of reach all along.
+    CHECK(flat_hit > 0);
+    // AND THE PITCHED ONE MISSES, which is the whole of the vertical arc.
+    CHECK(pitched_hit == 0);
+    if (!run("demon:set_body_param('attack_half_pitch', fx.int(0))",
+             "restoring the demon")) return 1;
 
     // And a monster with NO declared swing does not swing, by the same two gates
     // a ranged weapon is held to: the parameter says no, and on_attack would

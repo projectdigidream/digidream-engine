@@ -1201,6 +1201,31 @@ void World::resolve_attack(u32 agent) noexcept {
         const u32 diff = to.raw - centre.raw;   // wraps, deliberately
         return diff <= half || diff >= (0u - half);
     };
+
+    // AND THE VERTICAL HALF, if the weapon asked for one.
+    //
+    // `attack_half_pitch` of zero means "do not check", which is every swing
+    // written before this existed: they stay bounded by the z band below and
+    // sweep exactly as they did. A non-zero value makes the sweep a path
+    // through BOTH angles, so an overhead chop misses something at your feet.
+    //
+    // Measured from the attacker's MIDDLE to the target's middle, not foot to
+    // foot: a downward swing aimed at a body should connect with its chest, and
+    // feet are where the floor is.
+    const u32  half_pitch = static_cast<u32>(mp.attack_half_pitch.raw);
+    const fx   pitch = fx_lerp(mp.attack_pitch_from, mp.attack_pitch_to, phase);
+    const brad pitch_centre = brad(static_cast<u32>(pitch.raw));
+    const fx   a_mid = a.pos.z + mp.height / fx::from_int(2);
+
+    const auto in_pitch = [&](fx2 toward, fx target_mid) {
+        if (half_pitch == 0) return true;
+        const fx flat = length(toward);
+        const fx rise = target_mid - a_mid;
+        if (flat.raw == 0 && rise.raw == 0) return true;           // inside us
+        const brad to = fx_atan2(rise, flat);
+        const u32 diff = to.raw - pitch_centre.raw;
+        return diff <= half_pitch || diff >= (0u - half_pitch);
+    };
     // IS THERE A WALL IN THE WAY?
     //
     // The tests above are distance and angle, which describe a shape and say
@@ -1268,6 +1293,7 @@ void World::resolve_attack(u32 agent) noexcept {
         const fx2 toward = fx2{agents_[t].pos.x, agents_[t].pos.y} - from;
         if (!reaches(toward, params_[t].radius)) continue;
         if (!in_arc(toward)) continue;
+        if (!in_pitch(toward, agents_[t].pos.z + params_[t].height / fx::from_int(2))) continue;
         if (!clear_path(toward)) continue;
         a.mv.attack_hit_agents[t / 64] |= (static_cast<u64>(1) << (t % 64));
         attacks_.push(AttackEvent{agent, t});
@@ -1282,6 +1308,7 @@ void World::resolve_attack(u32 agent) noexcept {
         const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
         if (!reaches(toward, p.radius)) continue;
         if (!in_arc(toward)) continue;
+        if (!in_pitch(toward, p.pos.z + p.height / fx::from_int(2))) continue;
         if (!clear_path(toward)) continue;
         a.mv.attack_hit_props[pi / 64] |= (static_cast<u64>(1) << (pi % 64));
         attacks_.push(AttackEvent{agent, MAX_AGENTS + pi});

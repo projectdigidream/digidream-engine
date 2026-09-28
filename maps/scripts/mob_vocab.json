@@ -27,6 +27,28 @@
           "name": "tracer",
           "optional": true,
           "type": "int"
+        },
+        {
+          "doc": "World units per second, away from the muzzle. PER RAY.",
+          "name": "knockback",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "lift",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "Multiplier on the target's move_speed. Needs `slow_ticks`.",
+          "name": "slow",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow_ticks",
+          "optional": true,
+          "type": "int"
         }
       ],
       "doc": "An instant shot. The engine answers where the ray ended and what was there; what that COSTS is this action.",
@@ -73,6 +95,28 @@
       "args": [],
       "doc": "Start the swept collider this mob declares in its `swing` field. ONE TICK is all this does: the engine's attack is edge-triggered, so the press starts a swing that then runs for `ticks` on its own and hits each target at most once however long it lasts.\nA mob with no `swing` field does nothing here and says so at load, rather than swinging with the engine's defaults -- which would be a two-unit reach nobody asked for.",
       "name": "swing"
+    },
+    {
+      "args": [
+        {
+          "doc": "Which warning to draw, by catalogue id.",
+          "name": "effect",
+          "type": "int"
+        },
+        {
+          "name": "radius",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "How long until the blow lands -- the number a player needs in order to decide whether to move.",
+          "name": "ticks",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "ANNOUNCE AN INCOMING ATTACK so a client can warn about it. Put one at `at = 0` of an attack state and the blow later in the same sequence; the gap between them IS the player's reaction time, and writing it as two entries is what makes it tunable.\nNo wire format of its own: it rides the vfx event, radius in 1/256 units in the low sixteen bits of `param` and ticks in the high sixteen.",
+      "name": "telegraph"
     },
     {
       "args": [
@@ -176,6 +220,27 @@
         {
           "name": "radius",
           "type": "fx"
+        },
+        {
+          "doc": "Outward from the blast CENTRE, not from the mob.",
+          "name": "knockback",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "lift",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow_ticks",
+          "optional": true,
+          "type": "int"
         },
         {
           "name": "falloff",
@@ -1085,6 +1150,48 @@
     {
       "doc": "Ticks before another swing may START. Capped at 255 by the parameter's width. A mob's state graph usually gates this already; set it when two states could both swing.",
       "name": "cooldown",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "Where the collider starts VERTICALLY, as a turn fraction: 0 is level, 0.25 straight up, -0.25 straight down.",
+      "name": "pitch_from",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "And where it ends. A cyberdemon bringing a hoof down runs from above to level; equal values are a fixed elevation.",
+      "name": "pitch_to",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How tall the arc is, either side of the pitch. ABSENT OR ZERO MEANS NO VERTICAL CHECK -- bounded only by the body's height, which is how every swing behaved before pitch existed. Set it and an overhead blow genuinely misses something at your feet.",
+      "name": "half_pitch",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How hard a connected swing throws the target, in world units per second, directly away from the swinger.",
+      "name": "knockback",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "The vertical part of that shove.",
+      "name": "lift",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "Multiplier on the target's move_speed while it lasts. Needs `slow_ticks` beside it or nothing happens.",
+      "name": "slow",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "How long the slow lasts. Tagged by the attacker, so hitting the same target twice REPLACES rather than stacking to a standstill.",
+      "name": "slow_ticks",
       "optional": true,
       "type": "int"
     }

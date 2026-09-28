@@ -1247,7 +1247,10 @@ function acts.hitscan(m, a)
 
     -- The shot ARRIVES. dnp.hitscan already answered what was in the way,
     -- walls included, so a target here is one the bullet actually reached.
-    if target ~= nil and target:valid() then hurt(target, a.damage, m) end
+    if target ~= nil and target:valid() then
+      hurt(target, a.damage, m)
+      M.apply_hit(target, m.p or m.e:pos(), a)
+    end
 
     ::next_pellet::
   end
@@ -1279,6 +1282,29 @@ local function release_presses()
       pressing[idx] = nil
     end
   end
+end
+
+-- ANNOUNCE AN INCOMING ATTACK, so a client can draw the warning.
+--
+-- The engine has no notion of a telegraph and should not: what a wind-up LOOKS
+-- like is a rendering decision, and the catalogue already owns that -- a vfx
+-- `kind` is exactly "which visual", the same way a tracer style is.
+--
+-- So this rides the existing vfx event and adds no wire format. `pos` is where
+-- it is centred, `dir` the heading it covers, and `param` PACKS the two numbers
+-- a warning needs and a tracer does not: the radius in 1/256 units in the low
+-- sixteen bits, and how many ticks until it lands in the high sixteen. A
+-- client that does not know the kind ignores it, which is what an unknown
+-- effect id already does.
+function M.telegraph(e, a, origin, ang)
+  if a.effect == nil then return end
+  local r = math.min(65535, math.floor(((a.radius or ZERO) * fx.int(256)).int))
+  local t = math.min(65535, a.ticks or 0)
+  dnp.vfx(a.effect, origin, wrap_brad(ang), r + t * 65536)
+end
+
+function acts.telegraph(m, a)
+  M.telegraph(m.e, a, m.p or m.e:pos(), m.aim or m.e:facing())
 end
 
 -- START THE SWEPT COLLIDER. One tick, and one tick is all it takes.
@@ -1400,6 +1426,39 @@ function acts.revive(m, a)
   end
 end
 
+-- WHAT A HIT DOES TO THE THING IT HIT, beyond taking health off.
+--
+-- One helper, called from every place damage lands -- the swept collider's
+-- on_attack, a hitscan ray, a blast -- because knockback that only works for
+-- one of the three is the kind of gap nobody notices until a level designer
+-- asks why the shotgun shoves and the rocket does not.
+--
+-- `knockback` is world units per second, AWAY from `origin`: the muzzle for a
+-- bullet, the blast centre for an explosion, the swinger for a swing. Reusing
+-- `origin` rather than the attacker's position is what makes a rocket throw
+-- people outward from where it landed instead of away from the gunner.
+--
+-- `slow` is a multiplier on move_speed for `slow_ticks`, through the effect
+-- stack, which already recomputes from base every tick and so cannot drift.
+-- Tagged by the attacker, so hitting the same target twice REPLACES rather than
+-- stacking to a standstill.
+function M.apply_hit(target, origin, a)
+  if target == nil or not target:valid() then return end
+  if a.knockback and a.knockback ~= 0 then
+    local p = target:pos()
+    local dx, dy = p.x - origin.x, p.y - origin.y
+    -- Straight up when the target is exactly on the origin: a blast centred on
+    -- somebody's feet has no direction to throw them, and zero is worse.
+    local ang = (dx.raw == 0 and dy.raw == 0) and 0 or aim_at(origin, p)
+    local d = dnp.dir(wrap_brad(ang))
+    target:add_impulse(vec3.new(d.x * a.knockback, d.y * a.knockback,
+                                a.lift or ZERO))
+  end
+  if a.slow and a.slow_ticks then
+    M.tagged_effect(target, "hitslow", "move_speed", "mul", a.slow, a.slow_ticks)
+  end
+end
+
 function acts.damage_area(m, a)
   -- CENTRED WHERE IT WENT OFF, not on whoever set it off.
   --
@@ -1429,6 +1488,10 @@ function acts.damage_area(m, a)
           dmg = (fx.int(a.damage) * (a.radius - d) / a.radius).int
         end
         if dmg > 0 then hurt(e, dmg, m) end
+        -- Knockback and slow apply whether or not the damage rounded to zero at
+        -- the edge of the falloff: being on the fringe of a blast still shoves
+        -- you, and a wave that pushes without hurting is a real thing to write.
+        M.apply_hit(e, p, a)
       end
     end
   end
@@ -2435,13 +2498,18 @@ function on_attack(attacker, target)
     -- this is not.
     if sw == nil then return end
     hurt(target, sw.damage, mine)
+    M.apply_hit(target, attacker:pos(), sw)
     return
   end
 
   if M.weapon_swing_damage ~= nil then
-    local n = M.weapon_swing_damage(attacker)
-    if n == nil then return end
-    hurt(target, n, nil)
+    -- The whole `swing` table, not just its damage: knockback and slow are
+    -- properties of the blow and belong with the number it costs.
+    local sw = M.weapon_swing_damage(attacker)
+    if sw == nil then return end
+    if type(sw) == "number" then sw = { damage = sw } end
+    hurt(target, sw.damage, nil)
+    M.apply_hit(target, attacker:pos(), sw)
     return
   end
   hurt(target, M.player_damage or 25, nil)
