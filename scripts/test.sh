@@ -524,7 +524,12 @@ else
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
      && node test/noupstream.test.js 2>/dev/null | tail -2 \
-     && node test/ui.test.js 2>/dev/null | tail -2 \
+     `# NOT tail -2. This one has failed intermittently in the suite while` \
+     `# passing every time it is run by hand, and each occurrence has cost a` \
+     `# bisect because the summary is all that survived -- the line naming the` \
+     `# assertion was thrown away by the tail. Same shape as delta.test.js` \
+     `# below: keep the failures, drop the passes.` \
+     && node test/ui.test.js 2>/dev/null | grep -E 'FAIL|ui:' \
      && node test/e2e.test.js 2>/dev/null | tail -2 \
      && node test/delta.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/mapdata.test.js 2>/dev/null | tail -2 \
