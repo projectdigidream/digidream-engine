@@ -726,7 +726,21 @@ function acts.hitscan(c, a)
 end
 
 function acts.launch(c, a)
+  -- AUTO-AIM, once for the whole volley.
+  --
+  -- A player has no vertical aim -- a command carries one heading -- so
+  -- without this a rocket fired at anything on a step sails over it or into
+  -- the floor. The horizontal correction is the same slight one a bullet gets
+  -- and comes from the same search, so the rocket and the shotgun agree about
+  -- what you were pointing at.
+  --
+  -- A missile declares no range, only a lifetime, so the search uses the
+  -- runtime's own reach. `a.angle` and `a.arc` are measured from the CORRECTED
+  -- heading, which is what keeps a three-way spread straddling the target
+  -- rather than one of its edges.
   local base = c.e:facing()
+  local t, aimed, slope = mobs.autoaim(c.e)
+  if t ~= nil then base = aimed end
   local n = a.count or 1
   for i = 1, n do
     local ang = base
@@ -734,7 +748,7 @@ function acts.launch(c, a)
     if n > 1 and a.arc then
       ang = ang + deg((i - 1 - (n - 1) / 2) * a.arc)
     end
-    mobs.launch_from(c.e, a.missile, ang % 4294967296, a.offset)
+    mobs.launch_from(c.e, a.missile, ang % 4294967296, a.offset, slope)
   end
 end
 

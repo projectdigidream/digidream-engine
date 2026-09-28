@@ -129,10 +129,23 @@ export function parseVfx (text) {
  * to infinity through whatever the shot hit, and one given only the far end
  * would not know where it came from.
  *
- * `param` is the length in 1/256 world units, which is a hundredth of a Doom
- * unit at this scale and comfortably inside the u32 the event carries. `dir` is
- * a brad -- a turn in 2^32 -- so dividing by 2^32 gives turns directly and the
- * conversion cannot pick up a stray factor of pi.
+ * `param` carries TWO numbers, both in 1/256 world units -- a hundredth of a
+ * Doom unit at this scale -- packed into the one u32 the event has: the
+ * horizontal length in the low sixteen bits, and the RISE over that length in
+ * the high sixteen, offset by half its range so it can be negative.
+ *
+ * The rise is there because the event has one angle and it is a heading, and a
+ * shot in this engine can now slope: there is no vertical aim input, so every
+ * bullet fired at something on a step or in a pit is auto-aimed upwards or
+ * down. Drawn from the heading alone the tracer would be flat while the damage
+ * landed on the balcony, which is the failure this repository keeps finding --
+ * the shot is right and the picture says it is not.
+ *
+ * A rise rather than a pitch angle, because a pitch needs a tangent to become
+ * an endpoint and the tangent is unbounded looking straight down.
+ *
+ * `dir` is a brad -- a turn in 2^32 -- so dividing by 2^32 gives turns directly
+ * and the conversion cannot pick up a stray factor of pi.
  *
  * Extracted from main.js so it can be tested at all. main.js needs a DOM, a
  * WebGL context and a live session, so every line in it is a line no suite
@@ -141,7 +154,9 @@ export function parseVfx (text) {
  * convention was reasoned about instead of checked.
  */
 export function tracerEnds (v, fxToFloat) {
-  const len = v.param / 256
+  const p = (v.param >>> 0)
+  const len = (p & 0xffff) / 256
+  const rise = ((p >>> 16) - 32768) / 256
   const turns = (v.dir >>> 0) / 4294967296
   const a = turns * Math.PI * 2
   const x = fxToFloat(v.pos.x)
@@ -149,7 +164,7 @@ export function tracerEnds (v, fxToFloat) {
   const z = fxToFloat(v.pos.z)
   return {
     from: { x, y, z },
-    to: { x: x + Math.cos(a) * len, y: y + Math.sin(a) * len, z },
+    to: { x: x + Math.cos(a) * len, y: y + Math.sin(a) * len, z: z + rise },
     length: len
   }
 }

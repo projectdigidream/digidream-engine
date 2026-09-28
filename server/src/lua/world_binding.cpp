@@ -1242,7 +1242,7 @@ int l_dnp_props(lua_State* L) {
     return 1;
 }
 
-// dnp.hitscan(from_entity, range) -> hit_entity | nil, x, y, z
+// dnp.hitscan(from_entity, range, [spread_brad], [slope]) -> hit | nil, impact
 //
 // A shot that arrives instantly: the ray stops at the first agent or prop in
 // its path, or at the first wall. Doom's own zombies and shotgunners work this
@@ -1282,6 +1282,25 @@ int l_dnp_hitscan(lua_State* L) {
     const fx2 dir = fx_dir(aim);
     const fx2 to = from + dir * range;
 
+    // AND AN OPTIONAL SLOPE: rise per unit of horizontal run.
+    //
+    // Zero is the flat ray this binding cast for its whole life, and is the
+    // default, so every caller that does not aim upwards is unchanged.
+    //
+    // It has to exist here because there is no vertical aim INPUT anywhere in
+    // the engine: a command carries one brad and a brad is a heading. Without
+    // a slope a body whose middle is not level with yours cannot be shot at
+    // all -- the `eye < z0 || eye > z1` test below rejects it -- so a monster
+    // on a ledge, or standing in a pit, was immune to every bullet in the game
+    // and an auto-aim above this would have had nothing to aim with.
+    //
+    // Rise per RUN rather than a pitch angle because both consumers want it
+    // that way: the ray's height at a distance is one multiply, and a missile
+    // adds the same product to its z every step. A pitch would be converted
+    // back at each of them, twice, with a tangent that blows up looking
+    // straight down.
+    const fx slope = lua_isnoneornil(L, 4) ? fx::zero() : check_fx(L, 4);
+
     // Nearest ENTITY along the ray, by the same "in front and within the
     // corridor" test a swing uses -- a cylinder test rather than an exact
     // capsule intersection, which for bodies this size differs only where a
@@ -1289,10 +1308,16 @@ int l_dnp_hitscan(lua_State* L) {
     i32  best = -1;
     fx   best_t = fx::one() + fx::one();
     const auto consider = [&](fx2 p, fx r, fx z0, fx z1, i32 entity) {
-        if (eye < z0 || eye > z1) return;               // over or under it
         const fx2 toward = p - from;
         const fx along = dot(dir, toward);
         if (along <= fx::zero() || along > range) return;
+        // WHERE THE RAY IS BY THE TIME IT GETS THERE. For a flat shot that is
+        // the eye, which is why this used to be the first line of the lambda;
+        // a sloped one has to know how far along the body is before it can say
+        // how high the bullet is, so the cheap reject moved below the
+        // projection rather than above it.
+        const fx ray_z = eye + slope * along;
+        if (ray_z < z0 || ray_z > z1) return;           // over or under it
         // Perpendicular distance from the ray to the centre.
         const fx2 closest = from + dir * along;
         const u128 off_sq = len_sq_raw(p - closest);
@@ -1319,7 +1344,8 @@ int l_dnp_hitscan(lua_State* L) {
     // And the geometry, which OCCLUDES: a wall between the shooter and a target
     // stops the shot, so the wall is consulted even when a body was found.
     const physics::RayHit wall =
-        physics::raycast(*m, sh.mv.sector, from, dir, range, 0, eye);
+        physics::raycast(*m, sh.mv.sector, from, dir, range, 0, eye,
+                         eye + slope * range);
     fx2 end = to;
     if (wall.blocked) {
         const fx wall_t = wall.distance / range;
@@ -1331,7 +1357,12 @@ int l_dnp_hitscan(lua_State* L) {
     if (best < 0) lua_pushnil(L);
     else if (sim::World::is_prop(static_cast<u32>(best))) push_prop(L, ctx, static_cast<u32>(best));
     else push_entity(L, ctx, static_cast<u32>(best));
-    push_vec3(L, fx3{end.x, end.y, eye});
+    // The impact's HEIGHT is where the ray was when it stopped, which for a
+    // sloped shot is not the eye. `best_t` is a fraction of the range when
+    // anything was reached and stays at two when nothing was, so one
+    // comparison distinguishes them.
+    const fx end_d = best_t <= fx::one() ? range * best_t : range;
+    push_vec3(L, fx3{end.x, end.y, eye + slope * end_d});
     return 2;
 }
 

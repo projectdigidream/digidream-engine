@@ -682,6 +682,130 @@ local function aim_at(from, to)
   return dnp.atan2(to.y - from.y, to.x - from.x)
 end
 
+-- ------------------------------------------------------------------ auto-aim
+--
+-- THERE IS NO VERTICAL AIM IN THIS ENGINE, and that is not an oversight: a
+-- command carries one brad and a brad is a heading. So every shot this file
+-- has ever fired travelled dead level, and anything standing on a step, a
+-- balcony or in a pit was unhittable by bullets and by rockets alike -- while
+-- `can_see` said plainly that it was visible, because sight learned to slope
+-- and shooting never did.
+--
+-- The vertical answer is therefore ENTIRELY automatic; there is no input for
+-- it to assist. The horizontal one assists, and only slightly.
+
+-- How far off the nose a shot corrects itself, in degrees.
+--
+-- Doom's own number: it tried the aim, then the aim plus and minus 2^26 in a
+-- 2^32 turn, which is 5.625 degrees each way. Small enough that aiming is
+-- still the player's job and large enough that a monster at the edge of a
+-- corridor is not missed by a pixel.
+M.autoaim_h = 5.625
+
+-- How far it looks for something to correct towards, when the shot itself
+-- names no range -- a missile has a lifetime rather than a reach. Doom's
+-- MISSILERANGE, the same 2048 units its hitscans use.
+M.autoaim_range = du(2048)
+
+-- Where a shot leaves a body, and where it is aimed AT: the middle.
+--
+-- The same height dnp.hitscan casts from and dnp.can_see looks between, said
+-- here for the third time -- which is a third place to disagree, so it reads
+-- the body's own replicated `height` rather than any constant. `or ZERO` is
+-- for the offline harnesses, whose entities carry only the parameters a test
+-- set.
+local function eye_of(e)
+  local p = e:pos()
+  -- A PROP HAS NO PARAMETERS. It is a different userdata type with a different
+  -- method table, and asking it for one raises rather than answering nil -- so
+  -- a missile, which is a prop, is its own middle.
+  local h = e.param and e:param("height") or nil
+  return p.z + (h or ZERO) / fx.int(2)
+end
+M.eye_of = eye_of
+
+-- Rise per unit of horizontal run, from a shooter to a body's middle.
+--
+-- The one number both consumers want: dnp.hitscan multiplies it by how far
+-- along the ray is, and a missile adds it to its z once per step. Nil when
+-- the two are in the same place, where the question has no answer and a
+-- division would invent one.
+local function slope_to(from_e, to_e)
+  local a, b = from_e:pos(), to_e:pos()
+  local d = dnp.length(vec3.new(b.x - a.x, b.y - a.y, ZERO))
+  if d <= ZERO then return nil end
+  return (eye_of(to_e) - eye_of(from_e)) / d
+end
+M.slope_to = slope_to
+
+--- What a shot should actually be pointed at.
+---
+--- Returns the target, the exact heading to it, and the slope to its middle --
+--- or nil when nothing inside the cone is worth correcting towards, in which
+--- case the caller fires where it was already pointing.
+---
+--- NEAREST WINS, not straightest: inside a cone this narrow the two almost
+--- always agree, and "the thing in front of you" is the rule `target_nearest`
+--- already uses, so a player and a monster do not disagree about what they are
+--- looking at.
+---
+--- The ray is cast LAST, for the candidate that is currently winning, for the
+--- same reason acts.target_nearest casts it last: it is the expensive part and
+--- a nearer candidate found afterwards would have wasted it.
+function M.autoaim(e, range, slop)
+  if e == nil or not e:valid() then return nil end
+  local from = e:pos()
+  local face = e:facing()
+  local reach = range or M.autoaim_range
+  local cap = math.floor((slop or M.autoaim_h or 0) * 4294967296 / 360)
+  if cap <= 0 then return nil end
+  local best, bd, bang
+
+  local function consider(o)
+    if o == nil or not o:valid() or o:index() == e:index() then return end
+    local q = o:pos()
+    local d = dnp.length(vec3.new(q.x - from.x, q.y - from.y, ZERO))
+    if d > reach or d <= ZERO then return end
+    if bd ~= nil and d >= bd then return end
+    -- Signed, wrapped, in brad. The turn wraps, so a target a degree to the
+    -- left of north is 359 degrees away by subtraction and one degree away in
+    -- fact; folding the difference into the half-turn is what tells them
+    -- apart.
+    local ang = aim_at(from, q)
+    local off = (ang - face) % 4294967296
+    if off > 2147483648 then off = off - 4294967296 end
+    if off > cap or off < -cap then return end
+    if not dnp.can_see(e, o) then return end
+    best, bd, bang = o, d, ang
+  end
+
+  for i = 1, #players do consider(players[i]) end
+  for _, o in pairs(live) do
+    if not o.dead then consider(o.e) end
+  end
+
+  if best == nil then return nil end
+  return best, bang, slope_to(e, best)
+end
+
+-- The tracer's `param`, which carries its LENGTH and now its RISE.
+--
+-- A vfx event has one angle and it is a heading, so a tracer drawn from the
+-- event alone is flat -- and a sloped shot with a flat tracer is the failure
+-- this file keeps finding: the damage lands correctly and the picture says it
+-- did not, which is the worse way round. Both halves are 1/256 of a unit in
+-- sixteen bits: lengths run to 256 units where the longest weapon in the game
+-- reaches 43, and the rise is offset by half its range so it can be negative.
+-- Clamped rather than wrapped, because a wrapped length draws a tracer
+-- pointing backwards.
+local function tracer_param(len, rise)
+  local n = (len * fx.int(256)).int
+  if n > 65535 then n = 65535 elseif n < 0 then n = 0 end
+  local r = 32768 + ((rise or ZERO) * fx.int(256)).int
+  if r > 65535 then r = 65535 elseif r < 0 then r = 0 end
+  return r * 65536 + n
+end
+
 -- ------------------------------------------------------------------ routing
 
 -- How often a mob may ask for a new route. A* over a Doom level is cheap but
@@ -1162,6 +1286,26 @@ function acts.set_angle(m, a)
 end
 
 function acts.hitscan(m, a)
+  -- WHERE THE SHOT ACTUALLY POINTS, decided once and then scattered from.
+  --
+  -- Once, not once per pellet, because a shotgun whose seven pellets each ran
+  -- their own auto-aim would have them converge on one body instead of
+  -- spreading across it -- and because the search costs a ray.
+  --
+  -- A monster needs no search: it has a target and has been turning towards it
+  -- for the last half second, so only the VERTICAL is missing. A player has no
+  -- target and no vertical aim at all, so both halves come from the cone.
+  local aim_off, slope = 0, nil
+  if m.target ~= nil and not m.target_prop and m.target:valid() then
+    slope = slope_to(m.e, m.target)
+  elseif m.player then
+    local t, ang = M.autoaim(m.e, a.range)
+    if t ~= nil then
+      local d = (ang - m.e:facing()) % 4294967296
+      if d > 2147483648 then d = d - 4294967296 end
+      aim_off, slope = d, slope_to(m.e, t)
+    end
+  end
   for _ = 1, (a.count or 1) do
     -- TWO returns, not four: dnp.hitscan gives (target_or_nil, impact) where
     -- the impact is a vec3. Reading it as x, y, z made `x` the vec3 and y and z
@@ -1196,7 +1340,8 @@ function acts.hitscan(m, a)
       off = math.floor(dnp.random(-1000, 1000) / 1000
                        * (a.spread * scale * 4294967296 / 360))
     end
-    local target, at = dnp.hitscan(m.e, a.range, off)
+    off = off + aim_off
+    local target, at = dnp.hitscan(m.e, a.range, off, slope)
     -- A shot that reached nothing is still a SHOT. It draws no tracer and does
     -- no damage, but it is reported, because the observability hook is how a
     -- test tells "the state machine never fired" from "the aim was off" -- and
@@ -1229,11 +1374,19 @@ function acts.hitscan(m, a)
     -- way round.
     if a.tracer then
       local from = m.p or m.e:pos()
-      local muzzle = vec3.new(from.x, from.y, at.z)
-      local len = dnp.length(vec3.new(at.x - muzzle.x, at.y - muzzle.y, ZERO))
-      -- Length in 1/256 units, which the event carries as a u32.
+      local len = dnp.length(vec3.new(at.x - from.x, at.y - from.y, ZERO))
+      -- AND ITS RISE, so the line is drawn where the bullet went.
+      --
+      -- `at.z` is where the ray ENDED, so the muzzle is that height less
+      -- whatever the slope climbed on the way there -- the engine's own
+      -- arithmetic read backwards rather than a second guess at eye height,
+      -- which is how the two would come to disagree. A flat shot climbs
+      -- nothing and this is the line it always was.
+      local rise = slope ~= nil and slope * len or ZERO
+      local muzzle = vec3.new(from.x, from.y, at.z - rise)
+      -- Length and rise in 1/256 units, which the event carries as one u32.
       dnp.vfx(a.tracer, muzzle, wrap_brad(m.e:facing() + off),
-              (len * fx.int(256)).int)
+              tracer_param(len, rise))
     end
 
     -- An observability hook, for anything that wants to know what the shots
@@ -1353,10 +1506,18 @@ end
 function acts.missile(m, a)
   local n = a.count or 1
   local arc = a.arc or 0
+  -- THE HEIGHT IT IS THROWN AT. A monster is already turned towards its
+  -- target, so the horizontal half is done; this is the half that was missing,
+  -- and without it an imp on a balcony threw fireballs over the floor below it
+  -- forever. One slope for the whole volley, so an arc of three stays an arc.
+  local slope = nil
+  if m.target ~= nil and not m.target_prop and m.target:valid() then
+    slope = slope_to(m.e, m.target)
+  end
   for i = 1, n do
     -- Centred on the aim: three shots with an arc of 10 go -10, 0, +10.
     local off = (n == 1) and 0 or ((i - 1) - (n - 1) / 2) * arc
-    launch(m, a.kind, (m.aim or 0) + off * 4294967296 / 360, a.offset)
+    launch(m, a.kind, (m.aim or 0) + off * 4294967296 / 360, a.offset, slope)
   end
 end
 
@@ -2103,7 +2264,9 @@ M.hurt = hurt
 
 -- --------------------------------------------------------------- missiles
 
-function launch(m, kind, ang, offset)
+-- `slope` is rise per unit of horizontal run, and nil is the flat flight every
+-- missile in this file had before there was an auto-aim. See M.autoaim.
+function launch(m, kind, ang, offset, slope)
   local def = missiles[kind]
   if def == nil then return end
   local from = m.e:pos()
@@ -2122,7 +2285,7 @@ function launch(m, kind, ang, offset)
   p:set_facing(wrap_brad(ang))
   if def.anim_fly then p:set_animation(def.anim_fly) end
   flying[p:index()] = {
-    p = p, def = def, dir = d, ang = ang,
+    p = p, def = def, dir = d, ang = ang, slope = slope,
     owner = m, target = m.target, born = dnp.tick(),
   }
 end
@@ -2156,10 +2319,10 @@ local synthetic_owner = M.synthetic_owner
 -- m.target, m.impact, m.dead -- so a weapon could not call it without building
 -- one, and a weapon building a mob record would make the record's shape the
 -- weapon's business instead of this file's. See synthetic_owner above.
-function M.launch_from(e, kind, ang, offset)
+function M.launch_from(e, kind, ang, offset, slope)
   if e == nil or not e:valid() then return end
   local owner = synthetic_owner(e, ang)
-  launch(owner, kind, ang, offset)
+  launch(owner, kind, ang, offset, slope)
   return owner
 end
 
@@ -2231,6 +2394,16 @@ local function update_missiles(tick)
         if d > cap then d = cap elseif d < -cap then d = -cap end
         s.ang = s.ang + d
         s.dir = dnp.dir(s.ang)
+        -- VERTICALLY TOO, for a missile that was launched with a slope. A
+        -- revenant's tracer that steers in plan and holds the height it left
+        -- with follows you round a corner and then flies over your head.
+        -- From the missile's own position, not through slope_to: it is a PROP,
+        -- and `p` is the point it is steering from this tick anyway.
+        if s.slope ~= nil then
+          local q = s.target:pos()
+          local run = dnp.length(vec3.new(q.x - p.x, q.y - p.y, ZERO))
+          if run > ZERO then s.slope = (eye_of(s.target) - p.z) / run end
+        end
         -- And the SPRITE turns with it. A revenant's missile that steers but
         -- keeps its launch heading shows the wrong one of its eight views for
         -- the rest of its flight.
@@ -2297,7 +2470,8 @@ local function update_missiles(tick)
           s.p:despawn(); flying[idx] = nil
         end
       else
-        s.p:set_pos(vec3.new(nx, ny, p.z + (def.gravity or ZERO)))
+        s.p:set_pos(vec3.new(nx, ny, p.z + (def.gravity or ZERO)
+                             + (s.slope ~= nil and s.slope * step or ZERO)))
       end
     end
   end

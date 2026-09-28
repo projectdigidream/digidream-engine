@@ -93,27 +93,52 @@ const at = (x, y, z) => ({ x: BigInt(Math.round(x * 4294967296)),
                            y: BigInt(Math.round(y * 4294967296)),
                            z: BigInt(Math.round(z * 4294967296)) })
 const BRAD = (turns) => Math.round(turns * 4294967296) >>> 0
+// A tracer's `param`, packed exactly as mobs.lua's tracer_param packs it: the
+// horizontal length in the low sixteen bits, the rise over it in the high
+// sixteen offset by 32768. Written out here rather than imported because the
+// two ends of a wire agreeing by construction proves nothing about the wire.
+const PARAM = (len, rise = 0) =>
+  (((32768 + Math.round(rise * 256)) * 65536) + Math.round(len * 256)) >>> 0
 
 // Due east: a quarter of the way round is north, so zero must be +x and the
 // line must be exactly as long as the event said. A sign error here is the
 // single most likely reason a tracer is invisible: it would point away from
 // everything and out of the room.
 {
-  const e = { kind: 1, pos: at(10, 20, 1), dir: BRAD(0), param: 4 * 256 }
+  const e = { kind: 1, pos: at(10, 20, 1), dir: BRAD(0), param: PARAM(4) }
   const { from, to, length } = tracerEnds(e, fxToFloat)
   check(Math.abs(from.x - 10) < 1e-6 && Math.abs(from.y - 20) < 1e-6,
         `it starts where the shot started (${from.x.toFixed(2)}, ${from.y.toFixed(2)})`)
   check(Math.abs(to.x - 14) < 1e-6 && Math.abs(to.y - 20) < 1e-6,
         `zero brad points east (${to.x.toFixed(2)}, ${to.y.toFixed(2)})`)
   check(Math.abs(length - 4) < 1e-6, `and it is ${length} units long, as param said`)
-  check(Math.abs(to.z - from.z) < 1e-6, 'flat: the engine casts a 2D ray, so the line is one too')
+  check(Math.abs(to.z - from.z) < 1e-6,
+        'a shot with no rise is flat, which is every shot at something level with you')
+}
+
+// SLOPED, which is what an auto-aimed shot at a monster on a balcony is.
+//
+// There is no vertical aim input in this engine, so the slope is chosen for the
+// player -- and a tracer drawn from the heading alone would be flat while the
+// damage landed three units higher. The rise is signed, so both directions are
+// checked: an offset encoding that dropped its sign would pass upwards and
+// draw every downward shot into the ceiling.
+{
+  const up = tracerEnds({ kind: 1, pos: at(0, 0, 1), dir: BRAD(0), param: PARAM(4, 3) },
+                        fxToFloat)
+  check(Math.abs(up.to.z - 4) < 1e-6, `it climbs by the rise (${up.to.z.toFixed(3)})`)
+  check(Math.abs(up.to.x - 4) < 1e-6,
+        'and `length` stays the HORIZONTAL run, so the low half is untouched by the high one')
+  const down = tracerEnds({ kind: 1, pos: at(0, 0, 10), dir: BRAD(0), param: PARAM(4, -3) },
+                          fxToFloat)
+  check(Math.abs(down.to.z - 7) < 1e-6, `and falls by a negative one (${down.to.z.toFixed(3)})`)
 }
 
 // A quarter turn. Checked as well as east, because a convention that is right
 // at zero and mirrored everywhere else is exactly what shipped twice before in
 // this renderer -- the sprite billboard and the swing collider.
 {
-  const e = { kind: 1, pos: at(0, 0, 0), dir: BRAD(0.25), param: 2 * 256 }
+  const e = { kind: 1, pos: at(0, 0, 0), dir: BRAD(0.25), param: PARAM(2) }
   const { to } = tracerEnds(e, fxToFloat)
   check(Math.abs(to.x) < 1e-6 && Math.abs(to.y - 2) < 1e-6,
         `a quarter turn points north (${to.x.toFixed(3)}, ${to.y.toFixed(3)})`)
@@ -136,7 +161,7 @@ check(fade(0.2, 0.1) === 0, 'and stays gone')
 {
   const scene = { added: [], add (o) { this.added.push(o) } }
   const view = new VfxView({ THREE, scene, catalogue: CAT, poolSize: 4 })
-  const e = { kind: 1, pos: at(10, 20, 1), dir: BRAD(0), param: 4 * 256 }
+  const e = { kind: 1, pos: at(10, 20, 1), dir: BRAD(0), param: PARAM(4) }
   const { from, to } = tracerEnds(e, fxToFloat)
 
   view.spawn(1, from, to, 100)

@@ -1809,6 +1809,171 @@ int main(int argc, char** argv) {
                 (int)num("nosw_hp0"), (int)num("nosw_hp1"));
     CHECK(num("nosw_hp1") == num("nosw_hp0"));
 
+    // ==================================================================
+    // AUTO-AIM
+    //
+    // A command carries ONE brad and a brad is a heading, so this engine has
+    // never had a vertical aim -- and every bullet and every rocket travelled
+    // dead level. Anything standing on a step or in a pit was unhittable while
+    // `can_see` said plainly that it was visible, because sight learned to
+    // slope and shooting never did.
+    //
+    // So the vertical correction is total and the horizontal one is slight, and
+    // both are asserted against a control that must fail: a claim about an aim
+    // assist is worthless unless the unassisted shot is shown to miss.
+
+    // A CLEAN STAGE. Every earlier block left a zombieman somewhere, dead or
+    // alive, and an auto-aim is precisely a thing that finds the nearest body
+    // it can see -- so a leftover corpse two units away is not background, it
+    // is the answer.
+    if (!run("local p = dnp.players()[1]\n"
+             "for _, e in ipairs(dnp.entities()) do\n"
+             "  if e:index() ~= p:index() then e:despawn() end\n"
+             "end\n"
+             "mobs.reset()\n"
+             "p:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
+             "p:set_velocity(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n",
+             "clearing the stage")) return 1;
+    server_tick(0);
+    server_tick(0);
+
+    // Two units ahead and three units up: a balcony, in the units this room is
+    // sixty across in. Placed along the player's OWN facing, because several
+    // blocks above have turned it and a hardcoded +x would be aiming at a wall.
+    if (!run("local p = dnp.players()[1]\n"
+             "local pp, d = p:pos(), dnp.dir(p:facing())\n"
+             "aim_up = mobs.spawn('zombieman',\n"
+             "  vec3.new(pp.x + d.x * fx.int(2), pp.y + d.y * fx.int(2),\n"
+             "           pp.z + fx.int(3)))\n"
+             "aim_up:set_solid(false)\n"
+             "mobs.live[aim_up:index()].hp = 500\n", "a target on a balcony")) return 1;
+    recompute();
+
+    // THE ENABLING HALF: dnp.hitscan can now travel at a slope.
+    //
+    // Asked of the binding directly and with no ticks in between, so nothing
+    // has moved and the only difference between the two calls is the fourth
+    // argument.
+    if (!run("local p = dnp.players()[1]\n"
+             "aim_slope = mobs.slope_to(p, aim_up)\n"
+             "local flat = dnp.hitscan(p, fx.int(8), 0, fx.int(0))\n"
+             "local sloped = dnp.hitscan(p, fx.int(8), 0, aim_slope)\n"
+             "flat_found = (flat ~= nil and flat:index() == aim_up:index()) and 1 or 0\n"
+             "sloped_found = (sloped ~= nil and sloped:index() == aim_up:index()) and 1 or 0\n",
+             "casting at a balcony")) return 1;
+    std::printf("  a body three units up: a flat ray finds it %d times, a sloped one %d\n",
+                (int)num("flat_found"), (int)num("sloped_found"));
+    // CONTROL: the flat ray -- every ray this engine cast before today -- goes
+    // straight underneath it. Without this the line below passes against a
+    // binding that ignores its new argument entirely.
+    CHECK(num("flat_found") == 0);
+    CHECK(num("sloped_found") == 1);
+
+    // THE SEARCH finds it, and reports a slope that climbs.
+    if (!run("local p = dnp.players()[1]\n"
+             "local t, ang, sl = mobs.autoaim(p, fx.int(8))\n"
+             "up_found = (t ~= nil and t:index() == aim_up:index()) and 1 or 0\n"
+             "up_climbs = (sl ~= nil and sl > fx.int(0)) and 1 or 0\n",
+             "searching")) return 1;
+    CHECK(num("up_found") == 1);
+    CHECK(num("up_climbs") == 1);
+
+    // AND THE WHOLE PLAYER PATH, which is this call: weapons.lua's own
+    // `hitscan` action is one line handing the mob runtime a synthetic owner,
+    // so driving it here drives exactly the code a trigger pull runs.
+    if (!run("local p = dnp.players()[1]\n"
+             "local shot = { range = fx.int(8), damage = 10, count = 1 }\n"
+             "aim_hp0 = mobs.live[aim_up:index()].hp\n"
+             "mobs.acts.hitscan(mobs.synthetic_owner(p, p:facing()), shot)\n"
+             "aim_hp1 = mobs.live[aim_up:index()].hp\n"
+             "-- CONTROL: the same shot with the cone shut. Nothing else changes.\n"
+             "mobs.autoaim_h = 0\n"
+             "mobs.acts.hitscan(mobs.synthetic_owner(p, p:facing()), shot)\n"
+             "aim_hp2 = mobs.live[aim_up:index()].hp\n"
+             "mobs.autoaim_h = 5.625\n", "shooting at a balcony")) return 1;
+    std::printf("  a player firing at it: %d -> %d hit points, and with the cone shut %d\n",
+                (int)num("aim_hp0"), (int)num("aim_hp1"), (int)num("aim_hp2"));
+    CHECK(num("aim_hp1") < num("aim_hp0"));
+    CHECK(num("aim_hp2") == num("aim_hp1"));
+
+    // THE HORIZONTAL HALF, and that it is SLIGHT.
+    //
+    // A candidate four degrees off the nose at five units, and one fifteen
+    // degrees off at THREE -- nearer, so a search that only asked "what is
+    // closest" would take it. The cone has to be what refuses it, and the
+    // second half of the check removes the legal candidate and requires the
+    // answer to become nothing rather than the illegal one.
+    if (!run("local p = dnp.players()[1]\n"
+             "for _, e in ipairs(dnp.entities()) do\n"
+             "  if e:index() ~= p:index() then e:despawn() end\n"
+             "end\n"
+             "mobs.reset()\n", "clearing the stage again")) return 1;
+    server_tick(0);
+    if (!run("local p = dnp.players()[1]\n"
+             "local pp = p:pos()\n"
+             "local function place(deg, dist)\n"
+             "  local a = (p:facing() + math.floor(deg * 4294967296 / 360)) % 4294967296\n"
+             "  local d = dnp.dir(a)\n"
+             "  return mobs.spawn('zombieman',\n"
+             "    vec3.new(pp.x + d.x * dist, pp.y + d.y * dist, pp.z))\n"
+             "end\n"
+             "near_cone = place(4, fx.int(5))\n"
+             "off_cone  = place(15, fx.int(3))\n"
+             "near_cone:set_solid(false)\n"
+             "off_cone:set_solid(false)\n", "two candidates")) return 1;
+    recompute();
+    if (!run("local p = dnp.players()[1]\n"
+             "local t = mobs.autoaim(p, fx.int(10))\n"
+             "cone_pick = (t == nil) and 0 or (t:index() == near_cone:index() and 1 or 2)\n"
+             "near_cone:despawn()\n"
+             "local t2 = mobs.autoaim(p, fx.int(10))\n"
+             "cone_alone = (t2 == nil) and 0 or 1\n", "asking the cone")) return 1;
+    std::printf("  of two bodies, 4 deg at five units and 15 deg at three, "
+                "the cone picks %s\n",
+                num("cone_pick") == 1 ? "the nearer-to-the-nose one"
+                                      : (num("cone_pick") == 2 ? "the WRONG one" : "neither"));
+    CHECK(num("cone_pick") == 1);
+    // CONTROL: fifteen degrees is outside it. A cone wide enough to take
+    // anything would have answered 1 here, and the assist would be an aimbot.
+    CHECK(num("cone_alone") == 0);
+
+    // ------------------------------------------------------- and a PROJECTILE
+    //
+    // A missile carries the same slope and adds it to its height once per step.
+    // Measured on the flying prop itself rather than on a victim, because a
+    // victim tall enough to be hit by both is a victim that proves neither.
+    const auto rocket_rise = [&](const char* slope_expr) {
+        const std::string src =
+            std::string("local p = dnp.players()[1]\n"
+                        "for _, pr in ipairs(dnp.props()) do pr:despawn() end\n"
+                        "mobs.launch_from(p, 'rocket', p:facing(), fx.frac(30,48), ")
+            + slope_expr + ")\n"
+            "rocket_z0 = nil\n"
+            "for _, pr in ipairs(dnp.props()) do\n"
+            "  if pr:name() == 'rocket' then rocket_z0 = pr:pos().z end\n"
+            "end\n";
+        if (!run(src.c_str(), "launching")) return -999.0;
+        for (int i = 0; i < 5; ++i) server_tick(0);
+        if (!run("rocket_rise = -999\n"
+                 "for _, pr in ipairs(dnp.props()) do\n"
+                 "  if pr:name() == 'rocket' and rocket_z0 ~= nil then\n"
+                 "    rocket_rise = ((pr:pos().z - rocket_z0) * fx.int(256)).int\n"
+                 "  end\n"
+                 "end\n", "reading the rocket")) return -999.0;
+        return num("rocket_rise");
+    };
+    const double flat_rise = rocket_rise("nil");
+    const double up_rise = rocket_rise("fx.int(1)");
+    std::printf("  a rocket over five ticks rises %.0f/256 flat and %.0f/256 with a slope of one\n",
+                flat_rise, up_rise);
+    // CONTROL: no slope, no climb -- the flight every missile in this engine
+    // had before today, unchanged.
+    CHECK(flat_rise == 0);
+    // AND IT CLIMBS. A slope of one is forty-five degrees, so over five ticks
+    // it gains exactly what it travelled: a rocket that stored the slope and
+    // never spent it would read 0 here and pass every other check in the file.
+    CHECK(up_rise > 0);
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }
