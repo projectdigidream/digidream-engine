@@ -901,6 +901,58 @@ int main(int argc, char** argv) {
                 (int)num("good_complaints"));
     CHECK(num("good_complaints") == 0);
 
+    // ------------------------------------------------- the panel is generated
+    //
+    // The read-out list used to be four names written into the runtime, beside
+    // a separate table of four widget ids, beside a separate starting
+    // inventory. A fifth ammunition kind could be declared, granted, counted
+    // and capped -- and never appear on screen, because nothing tied the three
+    // lists together.
+    if (!run("local p = dnp.players()[1]\n"
+             "local panel = weapons.panel_for(p:index())\n"
+             "sliders = 0\n"
+             "slider_ids = {}\n"
+             "slider_labels = {}\n"
+             "for _, w in ipairs(panel.widgets) do\n"
+             "  if w.kind == 'slider' then\n"
+             "    sliders = sliders + 1\n"
+             "    slider_ids[#slider_ids + 1] = w.id\n"
+             "    slider_labels[#slider_labels + 1] = w.label\n"
+             "  end\n"
+             "end\n"
+             "ids_distinct = 1\n"
+             "for i = 1, #slider_ids do for j = i + 1, #slider_ids do\n"
+             "  if slider_ids[i] == slider_ids[j] then ids_distinct = 0 end\n"
+             "end end\n"
+             "label_list = table.concat(slider_labels, ', ')\n", "reading the panel"))
+        return 1;
+    std::printf("  the weapon panel shows %d ammunition read-outs: %s\n",
+                (int)num("sliders"), str("label_list").c_str());
+    CHECK(num("sliders") == 4);
+    // Distinct ids, or ui_set updates the wrong counter. They are generated from
+    // a base plus an index now, where they used to be four constants.
+    CHECK(num("ids_distinct") == 1);
+    // IN `order`, which is what the list is sorted by.
+    CHECK(str("label_list") == "Bullets, Shells, Rockets, Cells");
+
+    // CONTROL, and it is the whole claim: declare a FIFTH pool and it appears,
+    // in its declared position, with an id of its own. Nothing in this file
+    // knows the word 'plasma'.
+    if (!run("weapons.load { ammo = { goo = { label = 'Goo', max = 9, order = 3 } } }\n"
+             "local p = dnp.players()[1]\n"
+             "local panel = weapons.panel_for(p:index())\n"
+             "sliders2 = 0\n"
+             "local names = {}\n"
+             "for _, w in ipairs(panel.widgets) do\n"
+             "  if w.kind == 'slider' then\n"
+             "    sliders2 = sliders2 + 1; names[#names + 1] = w.label end\n"
+             "end\n"
+             "label_list2 = table.concat(names, ', ')\n", "adding a fifth pool"))
+        return 1;
+    std::printf("  after declaring a fifth pool: %s\n", str("label_list2").c_str());
+    CHECK(num("sliders2") == 5);
+    CHECK(str("label_list2") == "Bullets, Shells, Goo, Rockets, Cells");
+
     // ================================================================
     // PARITY. Three readers of one vocabulary: the runtime, the checked-in
     // JSON, and docs/WEAPONS.md. A name in one and not another is a feature

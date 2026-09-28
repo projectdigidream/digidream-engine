@@ -1017,6 +1017,14 @@ local function build_panel(idx)
   return { title = "Weapons", widgets = widgets }
 end
 
+--- The panel a player would be shown, without opening one.
+---
+--- For a test, and for a debug view. The read-out list is GENERATED from the
+--- ammunition table's `order`, and that is the thing worth being able to check:
+--- it used to be a literal list of four names in this file, so a fifth pool
+--- could be declared, picked up, counted and capped, and never appear on screen.
+function W.panel_for(idx) return build_panel(idx) end
+
 local function signature(idx)
   local names = {}
   for _, w in ipairs(W.list(idx)) do names[#names + 1] = w.name end
