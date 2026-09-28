@@ -194,6 +194,34 @@ int l_entity_press(lua_State* L) {
     return 0;
 }
 
+// entity:release(buttons)
+//
+// The other half of `press`: clear a mask from the input this agent already
+// has, leaving the axes and the aim alone.
+//
+// It exists because `press` is NOT self-limiting. The native mob loop's
+// set_move early-returns when nothing it knows about has changed
+// (server/src/mobs/mob_runtime.cpp), comparing against the Mob's OWN cache --
+// which cannot know a script reached past it and OR'd a bit into the world's
+// input frame. A monster in a `move = "stop"` attack state has constant axes,
+// so nothing would ever write the button back to zero, `attack_held` would stay
+// true, and the SECOND swing would never start.
+//
+// So the mob runtime releases on the tick after it presses, and the press is
+// one tick by construction rather than by luck.
+int l_entity_release(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) return 0;
+    if (!ctx.world->agent(static_cast<u32>(a)).scripted) {
+        return luaL_error(L, "entity %d is a player; its input comes from its session", a);
+    }
+    proto::InputFrame f = ctx.world->input(static_cast<u32>(a));
+    f.buttons = static_cast<u16>(f.buttons & ~static_cast<u16>(luaL_checknumber(L, 2)));
+    ctx.world->set_input(static_cast<u32>(a), f);
+    return 0;
+}
+
 int l_entity_set_input(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -536,6 +564,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"teleport", l_entity_teleport},
     {"set_input", l_entity_set_input},
     {"press", l_entity_press},
+    {"release", l_entity_release},
     {"set_solid", l_entity_set_solid},
     {"hp", l_entity_hp},
     {"set_hp", l_entity_set_hp},

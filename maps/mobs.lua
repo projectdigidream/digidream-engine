@@ -1243,6 +1243,29 @@ function acts.damage(m, a)
   hurt(m.target, a.amount, m)
 end
 
+-- Entities that pressed a button this tick, released at the start of the next.
+-- See acts.swing for why this is not the engine's job.
+local pressing = {}
+
+local function release_presses()
+  if next(pressing) == nil then return end
+  local now = dnp.tick()
+  for idx, p in pairs(pressing) do
+    -- ONLY A PRESS FROM AN EARLIER TICK.
+    --
+    -- The tick is recorded rather than assumed, because a press can be made
+    -- from inside this hook (a state's sequence reaching `swing`) or from
+    -- outside it (a trigger, a test). Releasing everything at the top of the
+    -- hook would clear a press made moments earlier from outside before
+    -- World::step ever saw the button, and the swing would never start --
+    -- silently, and only for that caller.
+    if p.tick < now then
+      if p.e:valid() then p.e:release(dnp.button.ATTACK_PRIMARY) end
+      pressing[idx] = nil
+    end
+  end
+end
+
 -- START THE SWEPT COLLIDER. One tick, and one tick is all it takes.
 --
 -- The engine's attack is edge-triggered, so a single tick with the button down
@@ -1262,6 +1285,14 @@ function acts.swing(m, a)
     return
   end
   m.e:press(dnp.button.ATTACK_PRIMARY)
+  -- RELEASED NEXT TICK, by the loop below, because `press` is not
+  -- self-limiting. The native mob loop only writes an input frame when
+  -- something IT knows about changed, and an attack state usually sets
+  -- `move = "stop"` -- so a monster's axes are constant, nothing writes the
+  -- button back to zero, `attack_held` stays true, and the second swing never
+  -- starts. It would have worked for a chasing monster and failed for a
+  -- standing one, which is the worst way for it to fail.
+  pressing[m.idx] = { e = m.e, tick = dnp.tick() }
 end
 
 function acts.melee(m, a)
@@ -2262,6 +2293,8 @@ end
 
 function on_tick()
   local tick = dnp.tick()
+  -- FIRST, before anything reads or writes input: last tick's presses end here.
+  release_presses()
   refresh_players()
 
   -- NOBODY HERE: stop.

@@ -200,6 +200,13 @@ function Ent:press(buttons)
   self.input.buttons = bit.bor(self.input.buttons or 0, buttons or 0)
   self.pressed = self.input.buttons
 end
+-- And the half that ends a press. See l_entity_release: `press` is not
+-- self-limiting, so the mob runtime releases on the following tick.
+function Ent:release(buttons)
+  self.input = self.input or {}
+  self.input.buttons = bit.band(self.input.buttons or 0, bit.bnot(buttons or 0))
+  self.pressed = self.input.buttons
+end
 function Ent:kind() return self.what end
 -- Where the body is actually POINTING, which lags where it has been told to
 -- point. `facing` used to return a constant 0 here, so every test happened to

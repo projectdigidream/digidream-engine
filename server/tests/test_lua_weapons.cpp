@@ -1217,10 +1217,66 @@ int main(int argc, char** argv) {
                 too_late);
     CHECK(too_late >= 0);
 
+    // TWICE, WHILE STANDING STILL, which is the case that nearly shipped broken.
+    //
+    // `press` ORs a bit into the world's input frame, and the native mob loop
+    // only writes an input frame when something IT knows about changed. An
+    // attack state sets `move = "stop"`, so a biting monster's axes are
+    // constant -- nothing would have written the button back to zero,
+    // `attack_held` would have stayed true, and the second swing would never
+    // start. It would have worked for a chasing monster and failed for a
+    // standing one.
+    //
+    // Driven through the mob runtime's own on_tick, because that is what
+    // releases the press; calling acts.swing twice without it would prove
+    // nothing about the thing under test.
+    if (!run("demon:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
+             "demon:set_input(fx.int(0), fx.int(0), 0, 0)\n"
+             "mobs.acts.sleep(mobs.live[demon:index()])\n"
+             "-- IN FRONT. A body faces +x by default and the arc runs from\n"
+             "-- -120 to +120 degrees off that, so a victim at -x is BEHIND the\n"
+             "-- demon and would be missed by a swing that worked perfectly.\n"
+             "twice_victim = mobs.spawn('zombieman',"
+             "  vec3.new(fx.frac(50,48), fx.int(0), fx.int(0)))\n"
+             "twice_victim:set_solid(false)\n"
+             "twice_hp0 = mobs.live[twice_victim:index()].hp\n", "placing a victim"))
+        return 1;
+    recompute();
+    for (int i = 0; i < 4; ++i) server_tick(0);
+
+    int swings_landed = 0;
+    for (int swing = 0; swing < 3; ++swing) {
+        // TOPPED UP FIRST. A demon bites for 20 and a zombieman has 20 hit
+        // points, so it dies on the first swing and the next two have nothing
+        // left to hit -- which reads exactly like the stuck button this test is
+        // about, and is not it.
+        if (!run("mobs.live[twice_victim:index()].hp = 200\n"
+                 "twice_before = mobs.live[twice_victim:index()].hp\n"
+                 "mobs.acts.swing(mobs.live[demon:index()])", "swinging")) return 1;
+        const double before = num("twice_before");
+        // Long enough for the collider to live and die, with the axes never
+        // changing -- which is the condition under test.
+        for (int i = 0; i < 20; ++i) server_tick(0);
+        if (!run("local r = mobs.live[twice_victim:index()]\n"
+                 "twice_hp = r and r.hp or -1", "reading the victim")) return 1;
+        const double now = num("twice_hp");
+        if (now >= 0 && now < before) ++swings_landed;
+    }
+    std::printf("  a standing demon told to bite three times landed %d of them\n",
+                swings_landed);
+    // ALL THREE. Verified to be a real gate by disabling release_presses in
+    // mobs.lua and re-running: it lands 1 of 3, which is the bug exactly --
+    // the first press works and every one after it is swallowed. That control
+    // cannot live in this file, because it needs the runtime broken, so the
+    // number it produced is recorded here instead.
+    CHECK(swings_landed == 3);
+    run("if twice_victim:valid() then twice_victim:despawn() end", "clearing");
+
     // And a monster with NO declared swing does not swing, by the same two gates
     // a ranged weapon is held to: the parameter says no, and on_attack would
     // answer nothing even if it did not.
     if (!run("nosw = mobs.spawn('zombieman', vec3.new(fx.int(-8), fx.int(0), fx.int(0)))\n"
+             "nosw:set_input(fx.int(0), fx.int(0), 0, 0)\n"
              "nosw_declared = (mobs.live[nosw:index()].def.swing ~= nil) and 1 or 0\n"
              "nosw_spawned = 1\n", "a mob with no swing")) return 1;
     recompute();
@@ -1235,8 +1291,10 @@ int main(int argc, char** argv) {
     // would cost a parameter write per monster to defend against something
     // nothing does -- the native loop only ever presses JUMP. So the gate is
     // asserted where it actually is.
+    // IN FRONT OF IT and well inside a demon's reach, so "nothing happened"
+    // means the swing was refused rather than that the geometry saved us.
     if (!run("nosw_victim = mobs.spawn('zombieman',"
-             "  vec3.new(fx.frac(-40,48), fx.int(0), fx.int(0)))\n"
+             "  vec3.new(fx.int(-8) + fx.frac(50,48), fx.int(0), fx.int(0)))\n"
              "nosw_hp0 = mobs.live[nosw_victim:index()].hp\n"
              "-- The action, on a mob that declares nothing. It must do nothing\n"
              "-- rather than start a collider with the engine's defaults.\n"
