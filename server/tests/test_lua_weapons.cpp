@@ -556,6 +556,27 @@ int main(int argc, char** argv) {
     CHECK(str("after_dry") == "pistol");
     CHECK(dry_events == 0);
 
+    // A weapon can also run dry in the MIDDLE of a burst, with the trigger
+    // never released -- a chaingun empties while the press edge is long past.
+    // Asking for the edge would leave the player holding an inert gun with
+    // bullets in their pocket, which is the exact complaint the auto-switch was
+    // written for, so the condition is `button_held` and not `button_pressed`.
+    if (!run("local inv = weapons.get(dnp.players()[1]:index())\n"
+             "inv.have = { fists = true, pistol = true, chaingun = true }\n"
+             "inv.ammo.bullets = 3\n"
+             "inv.current = 'chaingun'\n", "arming a nearly-empty chaingun")) return 1;
+    press_for(80, 80, "chaingun");
+    if (!run("local inv = weapons.get(dnp.players()[1]:index())\n"
+             "after_burst = inv.current\n"
+             "bullets_left = inv.ammo.bullets\n", "reading the result")) return 1;
+    std::printf("  a chaingun run dry mid-burst leaves %d bullets and the %s\n",
+                (int)num("bullets_left"), str("after_burst").c_str());
+    CHECK(num("bullets_left") == 0);
+    // NOT the chaingun. The fists, in fact, because the pistol draws on the same
+    // empty pool -- which is switch_to_usable picking the highest order that can
+    // actually fire rather than the highest order full stop.
+    CHECK(str("after_burst") == "fists");
+
     // -------------------------------------------------------------- pickups
     if (!run("local p = dnp.players()[1]\n"
              "local inv = weapons.get(p:index())\n"
