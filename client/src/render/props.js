@@ -323,6 +323,31 @@ export function parseProps (text) {
 }
 
 /**
+ * The record for one state of one kind, whatever KIND of thing it is.
+ *
+ * THE SEAM A MESH RENDERER WOULD ARRIVE AT, and the reason it is one function
+ * rather than four copies of `states.get(n) ?? states.get(0)`.
+ *
+ * A sprite's state is `{frames, fps, once}` and a mesh's is `{model, clip,
+ * fps}`, and the grammar already makes those structurally the same thing: both
+ * are `<type> <id> state <n> ...`, both are looked up by the same number, and
+ * both fall back to state 0 for a number nobody declared. What differs is only
+ * what the renderer does with what comes back.
+ *
+ * So the state MACHINE -- animstate.js, which decides `state` and the cross-fade
+ * that decides `from` and `mix` -- never learns which of the three it is
+ * driving. That is the part worth being deliberate about: getting it wrong means
+ * writing the state machine twice and discovering later that the two disagree.
+ *
+ * The fallback is not a nicety. A script may set an animation state a module's
+ * art does not have, and the alternative to falling back is drawing nothing.
+ */
+export function stateRecord (def, stateId = 0) {
+  if (!def || !def.states) return null
+  return def.states.get(stateId) ?? def.states.get(0) ?? [...def.states.values()][0] ?? null
+}
+
+/**
  * Which frame of a state is showing at time `t`.
  *
  * A pure function of the animation's own clock, so it is testable without a
@@ -474,14 +499,34 @@ export class PropRegistry {
     if (!def) return null
 
     if (def.type === 'mesh') {
+      // THE STATE IS RESOLVED FIRST, and that is the whole point of doing it
+      // here rather than bailing a line earlier.
+      //
+      // Everything up to "which model and which clip should be playing" already
+      // works for a mesh: the grammar parses it, the state lookup answers it,
+      // animstate.js decides which state, and the cross-fade decides `from` and
+      // `mix`. What is missing is downstream of all of it -- a model FORMAT,
+      // which is a content decision and not a rendering one, a loader for it,
+      // and an importmap route to reach one (client/index.html maps `three/` to
+      // three's build directory, so `three/examples/jsm/*` 404s even though the
+      // file is on disk).
+      //
+      // Resolving the state anyway means the seam is exercised by every mesh
+      // record a catalogue declares, rather than being a shape nobody has run.
+      const state = stateRecord(def, 0)
       if (!this.warned.has(kind)) {
         this.warned.add(kind)
-        console.warn(`[props] kind ${kind} is a mesh; mesh rendering is not implemented yet`)
+        console.warn(
+          `[props] kind ${kind} is a mesh (model ${state?.model ?? '?'}, ` +
+          `clip ${state?.clip ?? '?'}); the catalogue, the state machine and ` +
+          'the cross-fade are ready for it, but there is no model loader yet')
       }
+      // Null, so main.js falls through to the replicated capsule. A mesh entity
+      // is drawn as a body rather than not drawn at all.
       return null
     }
 
-    const state = def.states.get(0) ?? [...def.states.values()][0]
+    const state = stateRecord(def, 0)
     if (!state) return null
 
     if (def.type === 'atlas') return this.#makeAtlas(kind, def)
@@ -629,7 +674,7 @@ export class PropRegistry {
       if (!mesh.parent) continue                   // removed from the scene
       const mix = this.mixAt(a, seconds)
       if (a.def.type === 'atlas') { this.#updateAtlas(mesh, a, seconds, cameraPos, mix); continue }
-      const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
+      const state = stateRecord(a.def, a.stateId)
       if (!state?.frames) continue
       // Idle states share one clock so props of a kind bob in lockstep; a state
       // the server switched INTO runs from its own start, because it is an
@@ -654,7 +699,7 @@ export class PropRegistry {
       // The outgoing state, drawn behind and fading. Its own clock, still
       // running -- see setState.
       if (mix < 1) {
-        const from = a.def.states.get(a.from) ?? a.def.states.get(0)
+        const from = stateRecord(a.def, a.from)
         const ftex = from?.frames
           ? this.textures.get(frameName(a.def, from, frameAt(from, seconds - a.fromStarted), rot))
           : null
@@ -761,7 +806,7 @@ export class PropRegistry {
   #updateAtlas (mesh, a, seconds, cameraPos, mix = 1) {
     const entry = this.atlases.get(a.sheet)
     if (!entry) return
-    const state = a.def.states.get(a.stateId) ?? a.def.states.get(0)
+    const state = stateRecord(a.def, a.stateId)
     if (!state?.anim) return
     const anim = entry.atlas.byName.get(state.anim)
     if (!anim) {

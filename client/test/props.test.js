@@ -6,7 +6,7 @@
 // are about the parser being tolerant in the right places and strict in the
 // right places, and about the animation clock being the client's own.
 //
-import { parseProps, frameAt, rotationFor, frameName, propScale, PropRegistry } from '../src/render/props.js'
+import { parseProps, frameAt, rotationFor, frameName, propScale, stateRecord, PropRegistry } from '../src/render/props.js'
 import { parseAtlas } from '../src/render/atlas.js'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -635,6 +635,74 @@ console.log('\n--- the shared atlas material is never disposed by one body ---')
   const mainSrc = readFileSync(join(ROOT, 'client/src/main.js'), 'utf8')
   check(/userData:\s*\{\s*shared:\s*true\s*\}/.test(mainSrc),
     'the sheet material is tagged shared where it is created')
+}
+
+console.log('\n--- one state lookup, whatever kind of thing it is ---')
+{
+  // THE MESH SEAM. A mesh record's state resolves through exactly the function a
+  // sprite's does, so the state MACHINE -- animstate.js and the cross-fade --
+  // never learns which of the three it is driving. Getting this wrong means
+  // writing the state machine twice and discovering later that they disagree.
+  const { kinds, warnings } = parseProps([
+    'prop 60 statue radius 0.5 height 2',
+    'sprite 60 state 0 fps 4 frames A,B',
+    'sprite 60 state 3 fps 8 frames C',
+    'prop 61 golem radius 0.5 height 2',
+    'mesh 61 model golem.glb state 0 clip idle fps 30',
+    'mesh 61 model golem.glb state 3 clip die fps 24'
+  ].join('\n'))
+  check(warnings.length === 0, `both records parse cleanly (${warnings.join('; ')})`)
+
+  const spr = kinds.get(60)
+  const msh = kinds.get(61)
+  check(spr?.type === 'sprite' && msh?.type === 'mesh', 'one of each type')
+
+  // The same lookup, the same number, for both.
+  check(stateRecord(spr, 3)?.frames?.[0] === 'C', 'a sprite resolves state 3')
+  check(stateRecord(msh, 3)?.clip === 'die', 'and a mesh resolves state 3 the same way')
+
+  // And the same fallback, which is not a nicety: a script may set a state a
+  // module's art does not have, and the alternative is drawing nothing.
+  check(stateRecord(spr, 9)?.frames?.[0] === 'A', 'an undeclared sprite state falls back to 0')
+  check(stateRecord(msh, 9)?.clip === 'idle', 'and an undeclared mesh state falls back to 0')
+
+  // CONTROL: it really discriminates. A version that always answered state 0
+  // would pass every line above that only says what the fallback does.
+  check(stateRecord(msh, 3)?.clip !== stateRecord(msh, 0)?.clip,
+        'CONTROL: state 3 and state 0 are different records')
+
+  // CONTROL: nothing at all is null rather than a throw, because make() asks
+  // this before it knows whether a kind has any art.
+  check(stateRecord(null, 0) === null, 'CONTROL: no definition is null, not a throw')
+  check(stateRecord({ states: new Map() }, 0) === null, 'and neither is an empty one')
+
+  // A mesh kind still returns no mesh -- there is no model loader -- so main.js
+  // falls through to the replicated capsule and a mesh entity is drawn as a body
+  // rather than not drawn at all.
+  // The same stub the blocks above use: the registry only ever touches geometry,
+  // a basic material and a mesh, so none of this needs a GPU.
+  const THREE = {
+    PlaneGeometry: class { constructor (w, h) { this.w = w; this.h = h } },
+    MeshBasicMaterial: class {
+      constructor (o) { Object.assign(this, o); this.color = { setHex () {} } }
+    },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry
+        this.material = material
+        this.userData = {}
+        this.parent = {}
+      }
+    },
+    DoubleSide: 2
+  }
+  const reg = new PropRegistry({
+    THREE,
+    textures: new Map([['A', 'tex:a'], ['B', 'tex:b'], ['C', 'tex:c']]),
+    catalogue: { kinds }
+  })
+  check(reg.make(61) === null, 'a mesh kind builds nothing yet, so the capsule is used')
+  check(reg.make(60) !== null, 'CONTROL: the sprite beside it does build')
 }
 
 console.log(`\nprops: ${checks} checks, ${fails} failures`)
