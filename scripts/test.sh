@@ -60,6 +60,12 @@ HOST_ARCH="$(uname -m)"
 # writer has drifted from mapc's grammar.
 "./build/$HOST_ARCH/mapc" modules/starter/maps/first.map "build/$HOST_ARCH/starter_first.dnpm"
 ./scripts/check_map_scripts.sh
+# The generated reference sections of docs/MOBS.md and docs/WEAPONS.md, diffed
+# against the vocabularies they come from. A heading check catches a MISSING
+# entry and nothing else -- a name documented with last month's arguments passes
+# one -- and a diff catches that, which is the reason those halves are generated
+# at all. The prose above each marker is not checked and must not be.
+./scripts/check_vocab_docs.sh
 
 # Every mob table loads clean, and every deliberately broken one is refused.
 # The second half is the point: a loader that accepts everything passes the
@@ -266,6 +272,14 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # table, and four bugs this phase came from a stub being more generous than
   # the engine and one from a parameter setter that never existed.
   "./build/lua/test_lua_shootrange"
+  # The weapon runtime: the phase machine, the pickups, the ammunition, and the
+  # double-fire collapse. Same venue and the same reason -- only a real World
+  # can say whether one press of ATTACK_PRIMARY starts the engine's swept
+  # collider as well as the script's shot, which is what it used to do. Every
+  # claim in it has a control that must fail, including three weapons that exist
+  # purely to use the parts of the vocabulary Doom does not: charge, combos and
+  # alt-fire.
+  "./build/lua/test_lua_weapons" .
   # The server hosted on a thread and restarted with a different module, the
   # way the phone shells play-test (docs/IOS.md). Present only once main.cpp
   # exports dnp_server_run; the control is a run whose stop flag is never set.

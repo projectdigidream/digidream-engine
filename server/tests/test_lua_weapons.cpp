@@ -1,5 +1,13 @@
 //
-// Weapons, against the real bindings and a real world.
+// Weapons -- and the swept collider generally -- against the real bindings and a
+// real world.
+//
+// The collider is shared: a player's melee and a monster's claw are the same
+// engine facility, driven from the same replicated parameters, and the last
+// section here is about the monster half. It lives in this file rather than in
+// a third one because the room, the catalogue, the VM and the server loop below
+// are the harness both need, and a second copy of a harness is a second harness
+// that drifts.
 //
 // WHY THIS EXISTS AT ALL. maps/scripts/weapons.lua shipped six weapons, an
 // inventory, four ammunition pools, an empty-weapon fallback and a UI panel,
@@ -29,6 +37,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 #include "dnp/sim/world.hpp"
 #include "dnp/physics/params_table.hpp"
@@ -66,8 +75,11 @@ struct WeaponProps final : public server::lua::PropCatalogueView {
     struct Entry { const char* name; u16 kind; fx radius; fx height; fx speed; };
     static constexpr fx du(i64 n) { return fx::from_frac(n, 48); }
 
-    Entry table[6] = {
+    Entry table[7] = {
         {"zombieman",  20, du(20), du(56), du(8 * 35)},
+        // The one monster in the shipped bestiary whose bite SWEEPS, so the
+        // monster half of this file has something real to drive.
+        {"demon",      22, du(30), du(56), du(10 * 35)},
         {"medikit",    12, du(10), du(16), fx::zero()},
         {"w_shotgun",  82, du(10), du(16), fx::zero()},
         {"ammo_shells", 8, du(10), du(16), fx::zero()},
@@ -330,16 +342,25 @@ int main(int argc, char** argv) {
     // The effect stack is pumped by main.cpp, not by a test, so the parameters
     // are recomputed here the way the server recomputes them.
     effects.set_base(player, world.params(player));
+    // EVERY AGENT, not just the player. The effect pump in main.cpp runs over
+    // the session list; a monster's parameters are put in the stack by the spawn
+    // binding and recomputed by the same loop, so pumping only the player left
+    // every monster on the engine's DEFAULTS -- which is how a demon's declared
+    // 1.67-unit reach read back as 2.00 and a zombieman with no swing at all
+    // read back as able to swing.
     const auto recompute = [&] {
-        // Exactly what main.cpp:1168 does, field by field through the
-        // parameter table's own accessors, because that is the only way the
-        // Bool and U8 fields round-trip correctly.
-        const physics::MoveParams want = effects.compute(player);
-        physics::MoveParams& live = world.params_mut(player);
-        for (u16 f = 0; f < physics::PARAM_COUNT; ++f) {
-            physics::param_set_raw(live, f, physics::param_get_raw(want, f));
+        // Field by field through the parameter table's own accessors, exactly as
+        // main.cpp:1168 does, because that is the only way the Bool and U8
+        // fields round-trip correctly.
+        for (u32 a = 0; a < world.agent_high_water(); ++a) {
+            if (!world.agent(a).active) continue;
+            const physics::MoveParams want = effects.compute(a);
+            physics::MoveParams& live = world.params_mut(a);
+            for (u16 f = 0; f < physics::PARAM_COUNT; ++f) {
+                physics::param_set_raw(live, f, physics::param_get_raw(want, f));
+            }
         }
-        return want;
+        return effects.compute(player);
     };
     physics::MoveParams p_fists = recompute();
     std::printf("  fists: attack_enabled=%d reach=%lld raw\n",
@@ -509,6 +530,24 @@ int main(int argc, char** argv) {
         commands.apply(world, [](u32) {});
         recompute();
         world.step();
+        // SWINGS THAT CONNECTED, dispatched exactly as main.cpp:1119-1132 does.
+        // The engine reports a contact and stops; what it COSTS is the script's,
+        // through this hook. Without this the collider swept correctly and
+        // nothing ever took damage, which reads as the swing not working.
+        const sim::AttackLog& hits = world.attacks();
+        for (u32 i = 0; i < hits.count(); ++i) {
+            const sim::AttackEvent& e = hits.at(i);
+            for (u32 h = 0; h < vm.hook_count("on_attack"); ++h) {
+                if (!vm.begin_hook_at("on_attack", h)) continue;
+                server::lua::push_entity(vm.state(), ctx, e.attacker);
+                if (sim::World::is_prop(e.target)) {
+                    server::lua::push_prop(vm.state(), ctx, e.target);
+                } else {
+                    server::lua::push_entity(vm.state(), ctx, e.target);
+                }
+                vm.end_hook("on_attack", world.tick(), 2);
+            }
+        }
         ++server_tick_n;
     };
 
@@ -769,6 +808,394 @@ int main(int argc, char** argv) {
                 barrel_main, barrel_alt);
     CHECK(barrel_main == 1);
     CHECK(barrel_alt == 2);
+
+    // ================================================================
+    // EVERY BAD TABLE IS REFUSED, and this is the assertion the validating
+    // loader exists for. A loader that accepted everything would pass every
+    // test above this line perfectly: Doom's weapons load, they fire, they take
+    // ammunition, the pickups work. Nothing so far can tell a checker from a
+    // shrug.
+    //
+    // Run against the REAL loader, not a linter's copy of it, so what is proven
+    // is that the server refuses these rather than that something else would.
+    struct Bad { const char* why; const char* lua; };
+    static const Bad kBad[] = {
+        {"a misspelled weapon field",
+         "weapons.check_weapon('b1', { label = 'B', order = 90, dammage = 20,"
+         "  phases = { ready = {} }, initial = 'ready' })"},
+        {"a misspelled swing field",
+         "weapons.check_weapon('b2', { label = 'B', order = 90,"
+         "  swing = { damage = 5, raech = 2 },"
+         "  phases = { ready = {} }, initial = 'ready' })"},
+        {"a transition to a phase that does not exist",
+         "weapons.check_weapon('b3', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { transitions = {"
+         "    { when = 'always', to = 'nowhere' } } } } })"},
+        {"an unknown action",
+         "weapons.check_weapon('b4', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { sequence = { { at = 0, action = 'teleport' } } } } })"},
+        {"an unknown condition",
+         "weapons.check_weapon('b5', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { transitions = {"
+         "    { when = 'player_is_bored', to = 'ready' } } } } })"},
+        {"a missing required action argument",
+         "weapons.check_weapon('b6', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { sequence = {"
+         "    { at = 0, action = 'hitscan', damage = 5 } } } } })"},
+        {"an enum value that is not one of the allowed ones",
+         "weapons.check_weapon('b7', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { sequence = {"
+         "    { at = 0, action = 'impulse', speed = '2', towards = 'sideways' }"
+         "  } } } })"},
+        {"an inexact fx literal, which means different things on different builds",
+         "weapons.check_weapon('b8', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { sequence = {"
+         "    { at = 0, action = 'hitscan', damage = 5, range = 0.1 } } } } })"},
+        {"a variable nothing declares",
+         "weapons.check_weapon('b9', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { sequence = {"
+         "    { at = 0, action = 'add_var', var = 'heat', value = 1 } } } } })"},
+        {"an `initial` naming a phase that does not exist",
+         "weapons.check_weapon('b10', { label = 'B', order = 90, initial = 'nope',"
+         "  phases = { ready = {}, other = {} } })"},
+        {"several phases and no `initial`, where declaration order is not a thing "
+         "a Lua table has",
+         "weapons.check_weapon('b11', { label = 'B', order = 90,"
+         "  phases = { ready = {}, other = {} } })"},
+        {"a required weapon field left out",
+         "weapons.check_weapon('b12', { order = 90, initial = 'ready',"
+         "  phases = { ready = {} } })"},
+    };
+    std::printf("  --- every bad table must be refused ---\n");
+    int refused = 0;
+    for (const Bad& b : kBad) {
+        if (!run("before_bad = weapons.load_errors()", "reading the error count")) return 1;
+        const double before = num("before_bad");
+        if (!run(b.lua, "checking a bad table")) return 1;
+        if (!run("after_bad = weapons.load_errors()", "reading the error count")) return 1;
+        const double after = num("after_bad");
+        const bool caught = after > before;
+        if (caught) ++refused;
+        std::printf("  %s  %s\n", caught ? "refused " : "ACCEPTED", b.why);
+        CHECK(caught);
+    }
+    std::printf("  --> %d of %d refused\n", refused, (int)(sizeof(kBad) / sizeof(kBad[0])));
+
+    // And a GOOD table alongside them, so "it refuses everything" is not the
+    // explanation for the block above. A checker that complained about every
+    // input would satisfy all twelve.
+    if (!run("local before = weapons.load_errors()\n"
+             "weapons.check_weapon('good', { label = 'Good', order = 91,"
+             "  initial = 'ready', vars = { heat = 0 },"
+             "  swing = { damage = 5, reach = '1.5', ticks = 8 },"
+             "  phases = {"
+             "    ready = { anim = 0, transitions = {"
+             "      { when = 'button_pressed', to = 'fire' } } },"
+             "    fire = { anim = 2, ticks = 8, next = 'ready', sequence = {"
+             "      { at = 0, action = 'add_var', var = 'heat', value = 1 },"
+             "      { at = 2, action = 'hitscan', damage = 5, range = '20',"
+             "        count = 3, spread = 10 } } } } })\n"
+             "good_complaints = weapons.load_errors() - before\n",
+             "checking a good table")) return 1;
+    std::printf("  CONTROL: a well-formed weapon drew %d complaints\n",
+                (int)num("good_complaints"));
+    CHECK(num("good_complaints") == 0);
+
+    // ================================================================
+    // PARITY. Three readers of one vocabulary: the runtime, the checked-in
+    // JSON, and docs/WEAPONS.md. A name in one and not another is a feature
+    // that either does not exist or cannot be found.
+
+    // 1. The vocabulary and the runtime, both directions.
+    if (!run("vocab_mismatches = weapons.check_vocabulary()", "checking parity")) return 1;
+    std::printf("  the vocabulary and the runtime disagree about %d names\n",
+                (int)num("vocab_mismatches"));
+    CHECK(num("vocab_mismatches") == 0);
+
+    // CONTROL, and it is the point: take one action OUT of the vocabulary and
+    // the runtime must complain that it implements something nobody lists.
+    // Without this, the check above passes against a comparison that looks at
+    // nothing -- which is what it did until the tables stopped being captured at
+    // load.
+    if (!run("removed = table.remove(weapon_vocab.actions)\n"
+             "vocab_after_removal = weapons.check_vocabulary()\n"
+             "table.insert(weapon_vocab.actions, removed)\n"
+             "vocab_restored = weapons.check_vocabulary()\n"
+             "removed_name = removed.name\n", "the parity control")) return 1;
+    std::printf("  removing `%s` from the vocabulary produced %d complaints; "
+                "putting it back, %d\n", str("removed_name").c_str(),
+                (int)num("vocab_after_removal"), (int)num("vocab_restored"));
+    CHECK(num("vocab_after_removal") > 0);
+    CHECK(num("vocab_restored") == 0);
+
+    // 2. The checked-in JSON is byte-current. The editor reads it, so a stale
+    // copy offers fields the loader refuses -- the exact failure the generator
+    // exists to prevent.
+    {
+        std::string fresh;
+        if (FILE* pipe = popen("./build/lua/trigger_vocab_json . "
+                               "maps/scripts/weapon_vocab.lua weapon_vocab 2>/dev/null",
+                               "r")) {
+            char buf[8192];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), pipe)) > 0) fresh.append(buf, n);
+            pclose(pipe);
+        }
+        std::string on_disk;
+        if (FILE* fp = std::fopen("maps/scripts/weapon_vocab.json", "rb")) {
+            char buf[8192];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), fp)) > 0) on_disk.append(buf, n);
+            std::fclose(fp);
+        }
+        if (fresh.empty()) {
+            std::printf("  ..   no build/lua/trigger_vocab_json; the JSON is not compared\n");
+        } else {
+            std::printf("  weapon_vocab.json: %zu bytes on disk, %zu regenerated\n",
+                        on_disk.size(), fresh.size());
+            CHECK(!on_disk.empty());
+            CHECK(fresh == on_disk);
+        }
+    }
+
+    // 3. docs/WEAPONS.md documents exactly the vocabulary.
+    {
+        std::string doc;
+        if (FILE* fp = std::fopen("docs/WEAPONS.md", "rb")) {
+            char buf[4096];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), fp)) > 0) doc.append(buf, n);
+            std::fclose(fp);
+        }
+        CHECK(!doc.empty());
+
+        // The names come from the TABLE, enumerated in Lua. Parsing them out of
+        // the document in C++ would make this a second reader of the document
+        // rather than a comparison against the vocabulary.
+        if (!run("local out = {}\n"
+                 "for _, c in ipairs(weapon_vocab.conditions) do out[#out+1] = c.name end\n"
+                 "for _, a in ipairs(weapon_vocab.actions)    do out[#out+1] = a.name end\n"
+                 "doc_names = table.concat(out, '\\n')\n", "listing the names")) return 1;
+        const std::string names = str("doc_names");
+        std::vector<std::string> list;
+        for (size_t at = 0; at <= names.size();) {
+            const size_t nl = names.find('\n', at);
+            const std::string one = names.substr(at, nl == std::string::npos
+                                                     ? std::string::npos : nl - at);
+            if (!one.empty()) list.push_back(one);
+            if (nl == std::string::npos) break;
+            at = nl + 1;
+        }
+        // The list itself is worth asserting: a bug that produced an EMPTY list
+        // would make the loop below pass with nothing checked.
+        std::printf("  docs/WEAPONS.md is checked against %zu vocabulary names\n",
+                    list.size());
+        CHECK(list.size() > 20);
+
+        int undocumented = 0;
+        for (const std::string& name : list) {
+            if (doc.find("### `" + name + "`") == std::string::npos) {
+                ++undocumented;
+                std::printf("  FAIL docs/WEAPONS.md has no `%s` section\n", name.c_str());
+            }
+        }
+        CHECK(undocumented == 0);
+
+        // CONTROL: the detector can fail. A name that is NOT in the vocabulary
+        // must not be found either -- without it a search matching everything
+        // would pass the loop above in silence.
+        CHECK(doc.find("### `reload_by_hand`") == std::string::npos);
+
+        // And the other direction: a heading naming nothing.
+        int stray = 0;
+        size_t at = 0;
+        while ((at = doc.find("### `", at)) != std::string::npos) {
+            const size_t start = at + 5;
+            const size_t end = doc.find('`', start);
+            if (end == std::string::npos) break;
+            const std::string name = doc.substr(start, end - start);
+            bool known = false;
+            for (const std::string& k : list) if (k == name) known = true;
+            if (!known) {
+                ++stray;
+                std::printf("  FAIL docs/WEAPONS.md documents `%s`, which the "
+                            "vocabulary does not list\n", name.c_str());
+            }
+            at = end;
+        }
+        CHECK(stray == 0);
+    }
+
+    // ================================================================
+    // A MONSTER'S SWING, AND WHY IT IS WORTH HAVING.
+    //
+    // `melee` is an instant distance test: on the tick it runs, anything inside
+    // range is hit and there is nothing the target can do. A swept collider
+    // travels through an arc over several ticks, so stepping out of the way part
+    // way through WORKS -- which for a monster whose only threat is reaching you
+    // is the difference between a fight and a tax.
+    //
+    // That is the claim, and it is asserted as a pair: the same swing, against a
+    // target that stays and a target that moves. One of them must connect and
+    // the other must not, or the duration is decorative.
+    if (!run("demon = mobs.spawn('demon', vec3.new(fx.int(-3), fx.int(0), fx.int(0)))\n"
+             "demon_has_swing = (mobs.live[demon:index()].def.swing ~= nil) and 1 or 0\n"
+             "demon_reach = mobs.live[demon:index()].def.swing.reach.raw\n"
+             "demon_ticks = mobs.live[demon:index()].def.swing.ticks\n"
+             "demon_damage = mobs.live[demon:index()].def.swing.damage\n",
+             "spawning a demon")) return 1;
+    std::printf("  a demon declares a swing: reach %.2f, live for %d ticks, %d damage\n",
+                num("demon_reach") / 4294967296.0, (int)num("demon_ticks"),
+                (int)num("demon_damage"));
+    CHECK(num("demon_has_swing") == 1);
+    // A duration is the whole point. One tick is an instant hit under another
+    // name, and the engine re-reads zero as one.
+    CHECK(num("demon_ticks") > 1);
+
+    // The shape reached the REPLICATED parameter table, which is what makes a
+    // monster's swing predicted by the same machinery a player's is.
+    //
+    // Pumped first. The spawn binding seeds the effect stack's base and the
+    // server's loop recomputes from it; reading the live table before that has
+    // happened gives the engine's DEFAULTS, which is how a declared 1.67-unit
+    // reach first read back as 2.00.
+    recompute();
+    if (!run("local d = demon\n"
+             "demon_enabled = d:param('attack_enabled').raw\n"
+             "demon_param_reach = d:param('attack_reach').raw\n", "reading the demon"))
+        return 1;
+    std::printf("  and it is in the parameter table: enabled=%d reach=%.2f\n",
+                (int)num("demon_enabled"), num("demon_param_reach") / 4294967296.0);
+    CHECK(num("demon_enabled") != 0);
+    CHECK(num("demon_param_reach") == num("demon_reach"));
+
+    // WHERE IN THE SWEEP a hit lands, which is the thing a duration buys.
+    //
+    // The collider starts at `sweep_from` and travels to `sweep_to` over the
+    // swing's life. So a target at the START of the arc is hit on the first
+    // tick and a target at the END is hit only once the sweep arrives -- and
+    // the gap between those two ticks IS the window a target has to move.
+    //
+    // Driven through mobs.acts.swing rather than by waiting for the state graph
+    // to reach `melee`, because what is under test is the collider: routing a
+    // monster across a room first would make a failure mean either thing.
+    //
+    // The demon sits at the origin facing +x. `bearing` is degrees off that.
+    const auto bite = [&](int bearing_deg, int dodge_at) {
+        const double rad = bearing_deg * 3.14159265358979 / 180.0;
+        const double dist = 1.15;                  // inside reach, outside the body
+        const long long vx = static_cast<long long>(std::llround(std::cos(rad) * dist * 4294967296.0));
+        const long long vy = static_cast<long long>(std::llround(std::sin(rad) * dist * 4294967296.0));
+        const std::string setup =
+            "demon:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
+            "demon:set_input(fx.int(0), fx.int(0), 0, 0)\n"
+            // DORMANT, so the only swing in this measurement is the one this
+            // test starts. Left awake the demon sees the victim, runs its own
+            // `melee` state and bites on its own schedule -- which showed up as
+            // the same bearing being hit on tick 10 in one run and tick 7 in the
+            // next, a number that looked like sweep geometry and was the AI.
+            "mobs.acts.sleep(mobs.live[demon:index()])\n"
+            "victim = mobs.spawn('zombieman', vec3.new(fx.raw(" +
+            std::to_string(vx) + "), fx.raw(" + std::to_string(vy) + "), fx.int(0)))\n"
+            "victim:set_solid(false)\n"
+            "hit_tick = -1\n"
+            "victim_hp0 = mobs.live[victim:index()].hp\n";
+        if (!run(setup.c_str(), "placing a victim")) return -2;
+        recompute();
+        // Let the bodies settle before the swing, so neither is still falling to
+        // the floor when the collider is evaluated.
+        for (int i = 0; i < 4; ++i) server_tick(0);
+        if (!run("mobs.acts.swing(mobs.live[demon:index()])", "starting a bite")) return -2;
+        int landed = -1;
+        for (int i = 0; i < 20; ++i) {
+            if (i == dodge_at) {
+                // OUT OF THE ARC. Teleported rather than walked, because what is
+                // being tested is whether the collider re-checks where things
+                // are -- a walk would also be testing the mob's own pathing.
+                if (!run("victim:teleport(vec3.new(fx.int(30), fx.int(30), fx.int(0)))",
+                         "dodging")) return -2;
+            }
+            server_tick(0);
+            if (landed < 0) {
+                if (!run("local r = mobs.live[victim:index()]\n"
+                         "victim_now = r and r.hp or victim_hp0", "reading hp")) return -2;
+                if (num("victim_now") < num("victim_hp0")) landed = i;
+            }
+        }
+        run("if victim:valid() then victim:despawn() end", "clearing");
+        return landed;
+    };
+
+    // A DIAGNOSTIC SWEEP, printed before anything is asserted, because the
+    // number this section is about is the table and not the pass.
+    std::printf("  --- which bearings a demon's bite reaches, and on which tick ---\n");
+    for (int b = -90; b <= 90; b += 15) {
+        const int t = bite(b, -1);
+        std::printf("  %+4d deg: %s\n", b,
+                    t < 0 ? "never reached" : ("tick " + std::to_string(t)).c_str());
+    }
+
+    // Two bearings through the identical swing. The arc runs from -60 to +60
+    // degrees, so a target behind the start is reached first and one at the far
+    // end last.
+    const int hit_at_start = bite(-55, -1);
+    const int hit_at_end   = bite(55, -1);
+    std::printf("  a demon's bite reaches a target at -55 deg on tick %d, "
+                "and one at +55 deg on tick %d\n", hit_at_start, hit_at_end);
+    // BOTH are reached. If either were never hit, the dodge below would pass for
+    // the wrong reason.
+    CHECK(hit_at_start >= 0);
+    CHECK(hit_at_end >= 0);
+    // AND THE COLLIDER TRAVELS. This is the claim: the far side of the arc is
+    // reached LATER than the near side, which is what makes the attack a volume
+    // moving through time rather than a distance test wearing a duration.
+    CHECK(hit_at_end > hit_at_start);
+
+    // So a target at the far end can step away before the sweep arrives.
+    const int dodged = bite(55, hit_at_end);
+    std::printf("  and one that steps away on tick %d is missed (%s)\n",
+                hit_at_end, dodged < 0 ? "never hit" : "still hit");
+    // CANNOT BE DONE against `melee`, which is the whole reason this exists.
+    CHECK(dodged < 0);
+
+    // And moving away a tick too LATE does not help, or "there is a window"
+    // would be a claim about nothing.
+    const int too_late = bite(55, hit_at_end + 1);
+    std::printf("  stepping away one tick later is too late (hit on tick %d)\n",
+                too_late);
+    CHECK(too_late >= 0);
+
+    // And a monster with NO declared swing does not swing, by the same two gates
+    // a ranged weapon is held to: the parameter says no, and on_attack would
+    // answer nothing even if it did not.
+    if (!run("nosw = mobs.spawn('zombieman', vec3.new(fx.int(-8), fx.int(0), fx.int(0)))\n"
+             "nosw_declared = (mobs.live[nosw:index()].def.swing ~= nil) and 1 or 0\n"
+             "nosw_spawned = 1\n", "a mob with no swing")) return 1;
+    recompute();
+    if (!run("nosw_enabled = nosw:param('attack_enabled').raw", "reading its collider"))
+        return 1;
+    std::printf("  a zombieman declares no swing (%d), and swinging is refused\n",
+                (int)num("nosw_declared"));
+    CHECK(num("nosw_declared") == 0);
+
+    // It is stopped by the ACTION and by on_attack, not by a parameter, and that
+    // is deliberate: writing `attack_enabled = 0` into every monster in the world
+    // would cost a parameter write per monster to defend against something
+    // nothing does -- the native loop only ever presses JUMP. So the gate is
+    // asserted where it actually is.
+    if (!run("nosw_victim = mobs.spawn('zombieman',"
+             "  vec3.new(fx.frac(-40,48), fx.int(0), fx.int(0)))\n"
+             "nosw_hp0 = mobs.live[nosw_victim:index()].hp\n"
+             "-- The action, on a mob that declares nothing. It must do nothing\n"
+             "-- rather than start a collider with the engine's defaults.\n"
+             "mobs.acts.swing(mobs.live[nosw:index()])\n", "swinging with nothing"))
+        return 1;
+    for (int i = 0; i < 20; ++i) server_tick(0);
+    if (!run("local r = mobs.live[nosw_victim:index()]\n"
+             "nosw_hp1 = r and r.hp or nosw_hp0", "reading the victim")) return 1;
+    std::printf("  a zombieman told to swing did nothing: %d -> %d hit points\n",
+                (int)num("nosw_hp0"), (int)num("nosw_hp1"));
+    CHECK(num("nosw_hp1") == num("nosw_hp0"));
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

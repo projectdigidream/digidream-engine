@@ -163,6 +163,37 @@ int l_entity_change_map(lua_State* L) {
 // Refused for an agent a session is sitting at: a script that could write a
 // player's input could walk them into a pit, and no amount of client prediction
 // would survive it.
+// dnp entity:press(buttons)
+//
+// OR a button mask into the input this agent ALREADY has, leaving the movement
+// axes and the aim exactly as they were.
+//
+// This exists for one reason: a monster's axes are owned by the native mob loop
+// (server/src/mobs/mob_runtime.cpp), which recomputes them on think ticks, and
+// `set_input` writes a whole frame. A script wanting a monster to SWING would
+// have to pass movement it does not know, and would stop the monster dead for a
+// tick to do it.
+//
+// One tick is enough and that is the point: the controller's attack is
+// edge-triggered, so a single tick with the button down starts a swing that then
+// runs for `attack_ticks` on its own. Nothing here has to hold it.
+//
+// Scripted agents only, the same rule set_input follows: a script that could
+// press a PLAYER's buttons could swing their weapon for them, and no amount of
+// reconciliation survives an input the client never sent.
+int l_entity_press(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) return 0;
+    if (!ctx.world->agent(static_cast<u32>(a)).scripted) {
+        return luaL_error(L, "entity %d is a player; its input comes from its session", a);
+    }
+    proto::InputFrame f = ctx.world->input(static_cast<u32>(a));
+    f.buttons = static_cast<u16>(f.buttons | static_cast<u16>(luaL_checknumber(L, 2)));
+    ctx.world->set_input(static_cast<u32>(a), f);
+    return 0;
+}
+
 int l_entity_set_input(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -376,6 +407,54 @@ int l_entity_param(lua_State* L) {
     return 1;
 }
 
+// entity:set_body_param(name, value)
+//
+// Write a movement parameter into the body ITSELF, permanently, rather than
+// stacking a modifier on top of it.
+//
+// WHY THIS IS NOT add_effect. The effect stack is for TEMPORARY modifiers -- it
+// recomputes from base every tick so it cannot drift, and it holds MAX_EFFECTS
+// of them for the whole world, 256. A property of a body, spent once at spawn
+// and never removed, is not a modifier: a level of a hundred monsters each
+// declaring a swing would need eight slots apiece and exhaust the stack, and the
+// monsters past the limit would silently get the engine's defaults.
+//
+// The base is re-seeded along with the live value, so effects still compose on
+// top of the new number rather than on top of the one it replaced -- which is
+// the whole reason this is a binding and not two calls a script makes in order.
+//
+// Scripted agents only, the same rule set_input follows. A player's body comes
+// from the catalogue and their session; a script rewriting it would be changing
+// physics the client predicts with no epoch to notice it by.
+int l_entity_set_body_param(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || !ctx.effects) return 0;
+    if (!ctx.world->agent(static_cast<u32>(a)).scripted) {
+        return luaL_error(L, "entity %d is a player; its body comes from the "
+                             "catalogue and its session", a);
+    }
+    const char* name = luaL_checkstring(L, 2);
+    const i32 id = physics::param_id_by_name(name);
+    if (id < 0) return luaL_error(L, "no movement parameter named '%s'", name);
+    // AN fx EITHER WAY, as the effect stack takes one: a script says 13 and
+    // means the number, not a bit pattern. So an integral field -- every U8 and
+    // every Bool -- is TRUNCATED rather than having a Q32.32 raw poured into it.
+    //
+    // Skipping this wrote 13 * 2^32 into `attack_ticks`, a u8, and the swing came
+    // out 254 ticks long: four seconds of collider that then counted down across
+    // every following swing, so the first one worked and none of the rest ever
+    // started. The identical mistake effects.hpp:145 records having made.
+    const fx v = check_fx(L, 3);
+    const bool integral =
+        physics::PARAM_TABLE[static_cast<u16>(id)].type != physics::ParamType::Fx;
+    physics::param_set_raw(ctx.world->params_mut(static_cast<u32>(a)),
+                           static_cast<u16>(id), integral ? v.trunc_int() : v.raw);
+    ctx.effects->set_base(static_cast<u32>(a),
+                          ctx.world->params(static_cast<u32>(a)));
+    return 0;
+}
+
 int l_entity_base_param(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -456,6 +535,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"index", l_entity_index_of},
     {"teleport", l_entity_teleport},
     {"set_input", l_entity_set_input},
+    {"press", l_entity_press},
     {"set_solid", l_entity_set_solid},
     {"hp", l_entity_hp},
     {"set_hp", l_entity_set_hp},
@@ -472,6 +552,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"set_velocity", l_entity_set_velocity},
     {"param", l_entity_param},
     {"base_param", l_entity_base_param},
+    {"set_body_param", l_entity_set_body_param},
     {"add_effect", l_entity_add_effect},
     {"remove_effect", l_entity_remove_effect},
     {nullptr, nullptr},

@@ -692,7 +692,13 @@ end
 -- So the runtime asserts at load that the two agree in BOTH directions, which
 -- is what mobs.lua and triggers.lua do and what found two mismatches the first
 -- time each of them ran.
-local function check_vocabulary_matches_implementation()
+function W.check_vocabulary()
+  -- RE-INDEXED on every call rather than using the tables captured at load, so
+  -- a caller that changed the vocabulary is actually compared against the
+  -- changed one. Captured tables would make the control below pass vacuously.
+  local COND = index_by_name(vocab.conditions)
+  local ACT  = index_by_name(vocab.actions)
+  local before = load_errors
   for name in pairs(COND) do
     if conds[name] == nil then
       complain("vocabulary lists condition '%s' and the runtime does not " ..
@@ -717,8 +723,13 @@ local function check_vocabulary_matches_implementation()
                "list it", name)
     end
   end
+  return load_errors - before
 end
-check_vocabulary_matches_implementation()
+-- Run at LOAD, and public so a test can run it again after mutating either
+-- side. A check that can only ever pass cannot be shown to work: the control
+-- for this one removes a vocabulary entry and requires a complaint, which is
+-- the only way to know the comparison is looking at anything.
+W.check_vocabulary()
 
 W.conds, W.acts = conds, acts
 

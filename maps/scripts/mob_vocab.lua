@@ -126,9 +126,64 @@ mob_vocab = {
       doc = "Whether being hurt by another mob makes that mob the target. " ..
             "Doom's monsters do this and it is most of what makes a crowded " ..
             "room interesting." },
+    { name = "swing", type = "table", optional = true,
+      doc = "THE SWEPT COLLIDER this mob attacks with, if it does -- a volume " ..
+            "that moves through an arc over several ticks, so a target that " ..
+            "steps out of the way mid-swing is MISSED. The same engine " ..
+            "facility a player's melee uses, with the same fields, because a " ..
+            "monster's claw and a player's fist are the same thing and there " ..
+            "is no reason the player should be the only one who can be dodged." ..
+            "\n" ..
+            "Distinct from the `melee` action, which is an instant distance " ..
+            "test: that hits whatever is in range on the tick it runs and " ..
+            "nothing can be done about it. Declare this and put a `swing` " ..
+            "action in the attack state's sequence. See swing_fields." },
     { name = "corpse", type = "bool", optional = true,
       doc = "Whether the body stays after the death state's sequence ends. " ..
             "Corpses are capped and recycled oldest-first by the runtime." },
+  },
+
+  -- ---------------------------------------------------------------- swing
+  --
+  -- Every field here IS a movement parameter (core/include/dnp/physics/
+  -- params.hpp), written through the effect stack under one tag when the mob
+  -- spawns. So the shape of a monster's swing replicates and is predicted by
+  -- exactly the same machinery a player's is, and neither side learns anything
+  -- new to do it.
+  --
+  -- ANGLES ARE TURN FRACTIONS, not degrees and not radians: brad is a turn in
+  -- 2^32, so a turn fraction and a brad are the same number and the conversion
+  -- cannot pick up a factor of pi. 0.125 is an eighth of the way round.
+  swing_fields = {
+    { name = "damage", type = "int",
+      doc = "What a connected swing costs. SCRIPT, not a parameter -- putting " ..
+            "damage in the replicated table would hand the client the numbers " ..
+            "to compute it with." },
+    { name = "reach", type = "fx", optional = true,
+      doc = "To the target's SURFACE, not its centre." },
+    { name = "half_arc", type = "fx", optional = true,
+      doc = "How wide, either side of the aim. 0.125 is 45 degrees each way. " ..
+            "A narrow arc is a lunge you can side-step; a wide one sweeps the " ..
+            "room and is what a big monster should have." },
+    { name = "sweep_from", type = "fx", optional = true,
+      doc = "Where the collider starts, relative to the aim." },
+    { name = "sweep_to", type = "fx", optional = true,
+      doc = "And where it ends. Equal values make a THRUST that does not " ..
+            "rotate -- a spear, a horn, a charge." },
+    { name = "min_reach", type = "fx", optional = true,
+      doc = "The INNER edge, as a distance from the body's surface. Non-zero " ..
+            "makes a ring segment that misses anything pressed against the " ..
+            "body, so getting inside the weapon's reach is how you beat it. " ..
+            "On a monster this is the parameter that makes closing the " ..
+            "distance the right answer rather than the fatal one." },
+    { name = "ticks", type = "int", optional = true,
+      doc = "How long the collider is live, and the whole reason this is " ..
+            "worth having: with a duration the swing can be READ and dodged. " ..
+            "Zero is re-read as one by the engine, which is an instant hit." },
+    { name = "cooldown", type = "int", optional = true,
+      doc = "Ticks before another swing may START. Capped at 255 by the " ..
+            "parameter's width. A mob's state graph usually gates this " ..
+            "already; set it when two states could both swing." },
   },
 
   -- ---------------------------------------------------------------- state
@@ -412,6 +467,15 @@ mob_vocab = {
             "else entirely. That was a real bug: a fireball burst on the " ..
             "player and did nothing, because the range was being tested from " ..
             "twelve units back where the imp was standing." },
+
+    { name = "swing", args = {},
+      doc = "Start the swept collider this mob declares in its `swing` field. " ..
+            "ONE TICK is all this does: the engine's attack is edge-triggered, " ..
+            "so the press starts a swing that then runs for `ticks` on its own " ..
+            "and hits each target at most once however long it lasts.\n" ..
+            "A mob with no `swing` field does nothing here and says so at " ..
+            "load, rather than swinging with the engine's defaults -- which " ..
+            "would be a two-unit reach nobody asked for." },
 
     { name = "melee",
       args = { { name = "damage", type = "int" },

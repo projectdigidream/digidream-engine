@@ -57,6 +57,7 @@ end
 -- first real server, which is the harness testing itself rather than the code.
 local fx, vec3 = _G.fx, _G.vec3
 local ZERO = fx.int(0)
+local ONE  = fx.int(1)
 
 -- Doom's map unit: 48 to the engine's one. Only used by definitions that say
 -- so; nothing in the runtime assumes it.
@@ -95,6 +96,7 @@ local COND = index_by_name(vocab.conditions)
 local ACT = index_by_name(vocab.actions)
 local STATE_FIELD = index_by_name(vocab.state_fields)
 local MOB_FIELD = index_by_name(vocab.mob_fields)
+local SWING_FIELD = index_by_name(vocab.swing_fields)
 local MISSILE_FIELD = index_by_name(vocab.missile_fields)
 
 -- THE CONTROL FOR THE VOCABULARY ITSELF.
@@ -289,6 +291,16 @@ local function check_action_list(list, where, mob)
         complain("%s: 'goto' names state '%s', which this mob does not have",
                  at, tostring(a.state))
       end
+      -- A SWING with nothing to swing. The action reads the mob's `swing`
+      -- declaration for its shape and on_attack reads it for the damage, so
+      -- without one the press would start a collider with the engine's
+      -- defaults -- a two-unit reach and a 90-degree arc no author wrote -- and
+      -- then do no damage with it. Silently.
+      if a.action == "swing" and mob and mob.swing == nil then
+        complain("%s: 'swing' needs a `swing` table on the mob, which declares " ..
+                 "the arc, the reach, how long the collider lives and what a " ..
+                 "hit costs", at)
+      end
       if a.action == "missile" and a.kind and missiles[a.kind] == nil then
         complain("%s: 'missile' names '%s', which is not a defined missile",
                  at, tostring(a.kind))
@@ -430,6 +442,37 @@ function M.load(data)
       complain("%s: has no states", where)
       d.states = d.states or {}
     end
+
+    -- THE SWING, field by field. Validated here rather than left to the engine
+    -- because these go straight into the replicated parameter table: a
+    -- misspelled `raech` would be a monster with the engine's default two-unit
+    -- reach and nothing anywhere saying why, which is the failure this whole
+    -- file is arranged against.
+    if d.swing ~= nil then
+      if type(d.swing) ~= "table" then
+        complain("%s: `swing` must be a table of swing fields", where)
+        d.swing = nil
+      else
+        local swhere = where .. " swing"
+        for k in pairs(d.swing) do
+          if SWING_FIELD[k] == nil then
+            local known = {}
+            for _, f in ipairs(vocab.swing_fields) do known[#known + 1] = f.name end
+            table.sort(known)
+            complain("%s: has no field named `%s`. Known: %s", swhere, k,
+                     table.concat(known, ", "))
+          end
+        end
+        for _, f in ipairs(vocab.swing_fields) do
+          if d.swing[f.name] == nil then
+            if not f.optional then complain("%s: needs `%s`", swhere, f.name) end
+          else
+            d.swing[f.name] = check_value(f, d.swing[f.name], swhere)
+          end
+        end
+      end
+    end
+
     defs[name] = d
   end
 
@@ -1200,6 +1243,27 @@ function acts.damage(m, a)
   hurt(m.target, a.amount, m)
 end
 
+-- START THE SWEPT COLLIDER. One tick, and one tick is all it takes.
+--
+-- The engine's attack is edge-triggered, so a single tick with the button down
+-- starts a swing that runs for `attack_ticks` on its own and hits each target at
+-- most once however long it lasts. Nothing here holds the button, and nothing
+-- here decides what a hit costs -- on_attack does, from the same declaration
+-- these parameters came from.
+--
+-- `press` rather than `set_input`, because a monster's movement axes belong to
+-- the native loop: writing a whole input frame here would mean passing movement
+-- this action does not know, and stopping the monster dead for a tick to do it.
+function acts.swing(m, a)
+  if m.def == nil or m.def.swing == nil then
+    -- Refused at LOAD as well, so this is the belt to that braces. Swinging
+    -- with the engine's defaults would be a two-unit reach and a 90-degree arc
+    -- that no author wrote down.
+    return
+  end
+  m.e:press(dnp.button.ATTACK_PRIMARY)
+end
+
 function acts.melee(m, a)
   if m.target == nil or not m.target:valid() then return end
   local p, t = m.e:pos(), m.target:pos()
@@ -1521,6 +1585,50 @@ function M.clear_tagged(e, tag)
   end
 end
 
+-- The swing parameters, for a mob or anything else that declares the same shape.
+--
+-- Deliberately the same field names and the same parameters weapons.lua writes
+-- for a player, through the same effect tag. Two implementations of "write a
+-- swing into the parameter table" would be two places for the turn-fraction
+-- conversion to be wrong in, and only one of them would get a test.
+local SWING_PARAM = {
+  reach = "attack_reach", half_arc = "attack_half_arc",
+  sweep_from = "attack_sweep_from", sweep_to = "attack_sweep_to",
+  min_reach = "attack_min_reach",
+}
+local SWING_U8 = { ticks = "attack_ticks", cooldown = "attack_cooldown" }
+
+-- Written into the BODY, not stacked as an effect.
+--
+-- A weapon writes a player's swing through the effect stack, because a player's
+-- swing is temporary -- it changes with every weapon switch -- and there are a
+-- handful of players. A monster's claw is neither: it is a property of the body,
+-- spent once at spawn and never removed.
+--
+-- And the stack could not carry it anyway. MAX_EFFECTS is 256 FOR THE WHOLE
+-- WORLD (server/src/lua/effects.hpp), every monster already spends one slot on
+-- `turn_speed`, and a Doom level has more than a hundred monsters. Eight slots
+-- apiece for a swing exhausts it, and `add_effect` answers a full stack with a
+-- zero -- so the monsters past the limit would silently get the engine's
+-- defaults: a two-unit reach and a 90-degree arc nobody wrote down.
+local function apply_swing(e, sw)
+  if sw == nil then
+    -- NOT written. `attack_enabled` defaults to true and a mob without a swing
+    -- is stopped three other ways -- the action refuses, the loader refuses, and
+    -- on_attack answers no damage -- none of which costs a parameter write per
+    -- monster. Nothing in the engine presses a monster's attack button.
+    return
+  end
+  e:set_body_param("attack_enabled", ONE)
+  for field, param in pairs(SWING_PARAM) do
+    if sw[field] ~= nil then e:set_body_param(param, sw[field]) end
+  end
+  for field, param in pairs(SWING_U8) do
+    if sw[field] ~= nil then e:set_body_param(param, fx.int(sw[field])) end
+  end
+end
+M.apply_swing = apply_swing
+
 function acts.effect(m, a)
   -- One op per effect, so a modifier that both scales and offsets is two.
   if a.tag ~= nil then
@@ -1599,6 +1707,21 @@ function M.spawn(kind, pos, opts)
     -- flyer is flying on every client without a word of it crossing the wire.
     e:add_effect("gravity_scale", "set", ZERO)
   end
+
+  -- THE SWEPT COLLIDER, if this mob declares one.
+  --
+  -- Written into the replicated parameter table exactly as a weapon writes a
+  -- player's, through the same tag, so the shape of a monster's claw is
+  -- predicted by the same machinery and neither side learns anything new. The
+  -- monster then swings by pressing the attack button for one tick, which the
+  -- shared controller turns into a volume moving through an arc -- so a
+  -- monster's attack can be READ AND DODGED, which an instant distance check
+  -- can never be.
+  --
+  -- `attack_enabled` is set BOTH WAYS on purpose. Its default is true, so a mob
+  -- with no `swing` that somehow pressed the button would swing with the
+  -- engine's defaults: a two-unit reach and a 90-degree arc nobody asked for.
+  apply_swing(e, def.swing)
 
   live[m.idx] = m
 
@@ -2248,6 +2371,25 @@ end
 -- double damage would come straight back through the other door.
 function on_attack(attacker, target)
   if target == nil or not target:valid() then return end
+
+  -- WHO SWUNG. A monster and a player both reach this hook through the same
+  -- swept collider, and what a hit costs comes from whichever declaration the
+  -- attacker actually carries -- a mob's `swing` field or the weapon in a
+  -- player's hands. Asking the weapon table about a monster would find no
+  -- inventory and return nil, which read as monsters doing no melee damage at
+  -- all, so the mob is checked FIRST: `live` is the definitive answer to "is
+  -- this one of ours".
+  local mine = attacker ~= nil and attacker.index ~= nil and live[attacker:index()]
+  if mine ~= nil then
+    local sw = mine.def and mine.def.swing
+    -- No declaration, no damage. The second of two gates, exactly as for a
+    -- weapon: `attack_enabled` is replicated state a script could overwrite and
+    -- this is not.
+    if sw == nil then return end
+    hurt(target, sw.damage, mine)
+    return
+  end
+
   if M.weapon_swing_damage ~= nil then
     local n = M.weapon_swing_damage(attacker)
     if n == nil then return end

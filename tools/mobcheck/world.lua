@@ -167,6 +167,39 @@ function Ent:add_effect(name, op, value, ticks)
   end
   return #self.effects
 end
+-- The other half of the pair, which the engine has always had and this harness
+-- did not: `tagged_effect` removes before it adds, so a mob declaring a `swing`
+-- reached straight through the gap the moment one existed. An id the engine
+-- returns and takes back is not an id if only one direction is modelled.
+--
+-- Freed rather than table.remove'd, because add_effect returns the INDEX as the
+-- id and shifting the array would renumber every effect above the removed one.
+function Ent:remove_effect(id)
+  if self.effects == nil or id == nil then return false end
+  local e = self.effects[id]
+  if e == nil then return false end
+  self.effects[id] = { param = e.param, freed = true }
+  if e.op == "set" and self.params then self.params[e.param] = nil end
+  return true
+end
+-- Write a parameter into the BODY, permanently, as l_entity_set_body_param does.
+-- Distinct from add_effect on purpose: a monster's swing is a property of its
+-- body and there is no room in the effect stack for one per monster.
+function Ent:set_body_param(name, value)
+  if type(name) == "table" then
+    error("set_body_param takes (param, value), not a table")
+  end
+  self.params = self.params or {}
+  self.params[name] = value
+end
+-- OR a mask into the input this entity already has, leaving the axes alone --
+-- the shape l_entity_press takes, and the only way a script can start a swing
+-- without also claiming to know where a monster was walking.
+function Ent:press(buttons)
+  self.input = self.input or {}
+  self.input.buttons = bit.bor(self.input.buttons or 0, buttons or 0)
+  self.pressed = self.input.buttons
+end
 function Ent:kind() return self.what end
 -- Where the body is actually POINTING, which lags where it has been told to
 -- point. `facing` used to return a constant 0 here, so every test happened to
