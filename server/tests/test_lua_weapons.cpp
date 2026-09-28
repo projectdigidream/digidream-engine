@@ -491,7 +491,10 @@ int main(int argc, char** argv) {
     if (!run("vfx_log = {}\n"
              "local real_vfx = dnp.vfx\n"
              "dnp.vfx = function(style, pos, angle, len)\n"
-             "  vfx_log[#vfx_log + 1] = angle\n"
+             "  -- BY KIND. A pellet now emits its tracer AND a hit burst, so\n"
+             "  -- counting every vfx call counts two things and the shotgun\n"
+             "  -- looks like it fires fourteen rays. The tracer is kind 1.\n"
+             "  if style == 1 then vfx_log[#vfx_log + 1] = angle end\n"
              "  return real_vfx(style, pos, angle, len)\n"
              "end\n"
              "weapons.get(dnp.players()[1]:index()).ammo.shells = 20\n",

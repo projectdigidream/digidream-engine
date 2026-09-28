@@ -35,6 +35,18 @@
           "type": "fx"
         },
         {
+          "doc": "A particle kind to burst where this lands, by catalogue id. Drawn entirely by the client -- nothing about it crosses the wire or enters a hash.",
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How wide a volume the burst comes out of. A blast wants its own radius here so the particles fill it rather than all starting at one point.",
+          "name": "hit_vfx_radius",
+          "optional": true,
+          "type": "fx"
+        },
+        {
           "name": "lift",
           "optional": true,
           "type": "fx"
@@ -224,6 +236,18 @@
         {
           "doc": "Outward from the blast CENTRE, not from the mob.",
           "name": "knockback",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "A particle kind to burst where this lands, by catalogue id. Drawn entirely by the client -- nothing about it crosses the wire or enters a hash.",
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How wide a volume the burst comes out of. A blast wants its own radius here so the particles fill it rather than all starting at one point.",
+          "name": "hit_vfx_radius",
           "optional": true,
           "type": "fx"
         },
@@ -1174,6 +1198,18 @@
     {
       "doc": "How hard a connected swing throws the target, in world units per second, directly away from the swinger.",
       "name": "knockback",
+      "optional": true,
+      "type": "fx"
+    },
+    {
+      "doc": "A particle kind to burst where this lands, by catalogue id. Drawn entirely by the client -- nothing about it crosses the wire or enters a hash.",
+      "name": "hit_vfx",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "How wide a volume the burst comes out of. A blast wants its own radius here so the particles fill it rather than all starting at one point.",
+      "name": "hit_vfx_radius",
       "optional": true,
       "type": "fx"
     },

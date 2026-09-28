@@ -47,6 +47,18 @@
           "type": "fx"
         },
         {
+          "doc": "A particle kind to burst where this lands, by catalogue id. Drawn entirely by the client -- nothing about it crosses the wire or enters a hash.",
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How wide a volume the burst comes out of. A blast wants its own radius here so the particles fill it rather than all starting at one point.",
+          "name": "hit_vfx_radius",
+          "optional": true,
+          "type": "fx"
+        },
+        {
           "name": "slow_ticks",
           "optional": true,
           "type": "int"
@@ -135,6 +147,18 @@
         },
         {
           "name": "slow",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "A particle kind to burst where this lands, by catalogue id. Drawn entirely by the client -- nothing about it crosses the wire or enters a hash.",
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "How wide a volume the burst comes out of. A blast wants its own radius here so the particles fill it rather than all starting at one point.",
+          "name": "hit_vfx_radius",
           "optional": true,
           "type": "fx"
         },
@@ -680,6 +704,18 @@
       "name": "slow_ticks",
       "optional": true,
       "type": "int"
+    },
+    {
+      "doc": "A particle kind to burst where this lands, by catalogue id. Drawn entirely by the client -- nothing about it crosses the wire or enters a hash.",
+      "name": "hit_vfx",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "How wide a volume the burst comes out of. A blast wants its own radius here so the particles fill it rather than all starting at one point.",
+      "name": "hit_vfx_radius",
+      "optional": true,
+      "type": "fx"
     },
     {
       "doc": "Ticks before another swing may START. Capped at 255 by the parameter's width.",

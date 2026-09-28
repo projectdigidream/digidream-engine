@@ -11,10 +11,33 @@
 // neither binary:
 //
 //   vfx <kind> tracer [colour <hex>] [width <w>] [life <seconds>]
+//   vfx <kind> particles [count <n>] [life <s>] [life_var <s>] [speed <u/s>]
+//                        [speed_var <u/s>] [cone <turns>] [gravity <u/s/s>]
+//                        [drag <per second>] [size <u>] [size_end <u>]
+//                        [colour <hex>] [colour_end <hex>] [blend additive|alpha]
 //
 // The engine attaches no meaning to the number at all. It reports "effect 1
 // happened here, pointing that way, with this parameter"; the file says what a
-// 1 is, and the parameter is its length.
+// 1 is, and the parameter is its length -- or, for particles, the radius of the
+// volume they come out of.
+//
+// PARTICLES ARE ENTIRELY THE CLIENT'S, and that is the whole design. The server
+// says an effect happened somewhere; it does not simulate a single particle,
+// none of them cross the wire, and none of them is in any hash. So a burst
+// costs one event however many specks it draws, two clients may show slightly
+// different sparks, and neither is wrong -- the same standing this engine gives
+// the animation cross-fade.
+//
+// WHICH ALSO MEANS THERE IS NOTHING NEW TO ATTACH THEM TO. A hit, a rocket
+// bursting, a sword swinging and a monster reaching frame 4 of its attack all
+// already call `dnp.vfx`: the mob and weapon vocabularies have a `vfx` action,
+// missiles have `on_hit`, and hits run through mobs.apply_hit. A particle kind
+// is a number you put in one of those.
+//
+// ONE-SHOT BURSTS, not looping emitters. A vfx event has no end and nothing
+// refers to it, so there is nothing to stop -- a torch that smokes forever is a
+// thing attached to an ENTITY with a lifetime, which is a different feature and
+// is not this one.
 //
 
 /** Read the `vfx` records out of the catalogue text. */
@@ -31,14 +54,53 @@ export function parseVfx (text) {
       warnings.push(`line ${i + 1}: '${tok[1]}' is not a vfx kind`)
       return
     }
-    const d = { id, type: tok[2] ?? 'tracer', colour: 0xffdd55, width: 0.04, life: 0.12 }
+    const type = tok[2] ?? 'tracer'
+    const d = type === 'particles'
+      ? {
+          id,
+          type,
+          // Unity's ParticleSystem in the parts that earn their keep here: a
+          // burst count, a lifetime with spread, a speed with spread, a cone to
+          // throw them into, gravity and drag, and size and colour ramps.
+          // `cone` is in TURNS like every other angle in this engine: 0 is a
+          // beam straight along the event's direction, 0.25 a hemisphere, 0.5 a
+          // full sphere.
+          count: 16,
+          life: 0.5,
+          lifeVar: 0.25,
+          speed: 6,
+          speedVar: 3,
+          cone: 0.25,
+          gravity: 18,
+          drag: 1.5,
+          size: 0.1,
+          sizeEnd: 0,
+          colour: 0xffaa33,
+          colourEnd: 0x662200,
+          // ADDITIVE BY DEFAULT, and it is not only a look: under additive
+          // blending black IS invisible, so the per-particle colour ramp doubles
+          // as the fade and one vertex attribute does both. Sparks, muzzle
+          // flashes and blood all want it. `alpha` is for smoke, where fading
+          // to black would be soot rather than absence -- there the whole burst
+          // fades together on the material, because per-point opacity needs a
+          // custom shader and a shader is a lot to carry for smoke.
+          blend: 'additive'
+        }
+      : { id, type, colour: 0xffdd55, width: 0.04, life: 0.12 }
+    const NUM = {
+      width: 'width', life: 'life', life_var: 'lifeVar', count: 'count',
+      speed: 'speed', speed_var: 'speedVar', cone: 'cone', gravity: 'gravity',
+      drag: 'drag', size: 'size', size_end: 'sizeEnd'
+    }
     for (let k = 3; k < tok.length; k += 2) {
+      const key = tok[k]
       const v = tok[k + 1]
-      if (v === undefined) { warnings.push(`line ${i + 1}: '${tok[k]}' has no value`); break }
-      if (tok[k] === 'colour' || tok[k] === 'color') d.colour = parseInt(v.replace(/^#|^0x/, ''), 16)
-      else if (tok[k] === 'width') d.width = Number(v)
-      else if (tok[k] === 'life') d.life = Number(v)
-      else warnings.push(`line ${i + 1}: unknown vfx attribute '${tok[k]}'`)
+      if (v === undefined) { warnings.push(`line ${i + 1}: '${key}' has no value`); break }
+      if (key === 'colour' || key === 'color') d.colour = parseInt(v.replace(/^#|^0x/, ''), 16)
+      else if (key === 'colour_end' || key === 'color_end') d.colourEnd = parseInt(v.replace(/^#|^0x/, ''), 16)
+      else if (key === 'blend') d.blend = v
+      else if (NUM[key] !== undefined) d[NUM[key]] = Number(v)
+      else warnings.push(`line ${i + 1}: unknown vfx attribute '${key}'`)
     }
     kinds.set(id, d)
   })
@@ -109,6 +171,99 @@ export function fade (age, life) {
 }
 
 /**
+ * One burst's worth of particles, ready to integrate.
+ *
+ * PURE, and takes its own random source, so a test can hand it a fixed one and
+ * assert the cone actually constrains the directions. `rand` returns [0, 1).
+ *
+ * `dirTurns` is the event's heading and `radius` the volume they come out of --
+ * the event's `param`, in 1/256 units, so an explosion can fill its own blast
+ * radius rather than all of it starting at one point. Zero is a point source.
+ *
+ * Emitted into a CONE about the heading, in three space, because that is where
+ * they will be drawn and converting per particle per frame would be the same
+ * arithmetic sixty times a second. `cone` of 0.5 turns is the whole sphere, and
+ * the polar angle is distributed by acos so the directions are even on it
+ * rather than bunched at the pole -- the naive version puts most of an
+ * explosion in a ring, which reads as a smoke signal.
+ */
+export function emitBurst (def, at, dirTurns, radius = 0, rand = Math.random) {
+  const out = []
+  const n = Math.max(0, Math.floor(def.count ?? 0))
+  const yaw = dirTurns * Math.PI * 2
+  const maxPolar = Math.min(1, Math.max(0, (def.cone ?? 0.25) * 2)) * Math.PI
+  for (let i = 0; i < n; i++) {
+    // Around the heading: polar from the axis, azimuth around it.
+    const polar = Math.acos(1 - rand() * (1 - Math.cos(maxPolar)))
+    const az = rand() * Math.PI * 2
+    // The cone's axis is the event's heading, laid flat: engine (x, y) maps to
+    // three (x, -y), so a heading of `yaw` is (cos yaw, 0, -sin yaw).
+    const ax = Math.cos(yaw); const az0 = -Math.sin(yaw)
+    // A frame about that axis. The axis is horizontal by construction, so world
+    // up is never parallel to it and the cross product is always defined.
+    const ux = 0; const uy = 1; const uz = 0
+    // right = axis x up
+    const rx = 0 * az0 - 0 * uy
+    const ry = az0 * ux - ax * uz
+    const rz = ax * uy - 0 * ux
+    const rl = Math.hypot(rx, ry, rz) || 1
+    const bx = rx / rl; const by = ry / rl; const bz = rz / rl
+    // up2 = right x axis
+    const cx = by * az0 - bz * 0
+    const cy = bz * ax - bx * az0
+    const cz = bx * 0 - by * ax
+    const sp = Math.sin(polar); const cp = Math.cos(polar)
+    const ca = Math.cos(az); const sa = Math.sin(az)
+    const dx = ax * cp + (bx * ca + cx * sa) * sp
+    const dy = 0 * cp + (by * ca + cy * sa) * sp
+    const dz = az0 * cp + (bz * ca + cz * sa) * sp
+    const speed = Math.max(0, (def.speed ?? 0) + ((rand() * 2 - 1) * (def.speedVar ?? 0)))
+    const life = Math.max(0.01, (def.life ?? 0.5) + ((rand() * 2 - 1) * (def.lifeVar ?? 0)))
+    // Scattered through the emission volume, not onto its shell: cube-rooting a
+    // uniform draw is what makes a blast look filled instead of hollow.
+    const r = radius > 0 ? radius * Math.cbrt(rand()) : 0
+    out.push({
+      x: at.x + dx * r, y: at.y + dy * r, z: at.z + dz * r,
+      vx: dx * speed, vy: dy * speed, vz: dz * speed,
+      age: 0, life
+    })
+  }
+  return out
+}
+
+/**
+ * Advance a burst by `dt` seconds, dropping what has expired.
+ *
+ * Gravity is -Y because three's up is Y, and this engine's z maps to it.
+ * Drag is exponential rather than linear so a large `dt` -- a dropped frame, a
+ * tab regaining focus -- cannot push a speed through zero and send a spark
+ * backwards, which a naive `v -= v * drag * dt` does the moment drag*dt > 1.
+ */
+export function stepParticles (parts, dt, def) {
+  if (!(dt > 0)) return parts
+  const keep = Math.exp(-(def.drag ?? 0) * dt)
+  const g = (def.gravity ?? 0) * dt
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    p.age += dt
+    if (p.age >= p.life) { parts.splice(i, 1); continue }
+    p.vx *= keep; p.vy *= keep; p.vz *= keep
+    p.vy -= g
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt
+  }
+  return parts
+}
+
+/** Lerp two packed 0xRRGGBB colours, component-wise. */
+export function rampColour (from, to, t) {
+  const f = t < 0 ? 0 : t > 1 ? 1 : t
+  const r = ((from >> 16) & 255) + (((to >> 16) & 255) - ((from >> 16) & 255)) * f
+  const g = ((from >> 8) & 255) + (((to >> 8) & 255) - ((from >> 8) & 255)) * f
+  const b = (from & 255) + ((to & 255) - (from & 255)) * f
+  return { r: r / 255, g: g / 255, b: b / 255 }
+}
+
+/**
  * Draws transient effects and lets them expire.
  *
  * A small pool of reusable meshes rather than one allocation per shot: a
@@ -123,6 +278,13 @@ export class VfxView {
     this.live = []          // { mesh, born, life }
     this.pool = []
     this.warned = new Set()
+    // Bursts are not pooled the way tracers are: each carries its own buffer
+    // sized to its own count, and a pool of those is a pool of sizes. They are
+    // few and short -- a cap is what keeps a firefight from allocating without
+    // bound, and dropping one during a firefight is invisible.
+    this.parts = []
+    this.maxBursts = 24
+    this.lastNow = null
 
     for (let i = 0; i < poolSize; i++) {
       // A unit-length box along +X, scaled per shot. A line primitive would be
@@ -156,6 +318,7 @@ export class VfxView {
       }
       return
     }
+    if (def.type === 'particles') return this.#burst(def, from, to)
     const mesh = this.pool.pop()
     // Out of pool: drop it. A transient that had to wait is a transient drawn
     // at the wrong moment, and dropping one during a firefight is invisible.
@@ -185,6 +348,44 @@ export class VfxView {
     this.live.push({ mesh, born: now, life: def.life })
   }
 
+  /**
+   * A burst of particles, from the same `spawn` every other effect arrives by.
+   *
+   * `from` is where it happened and `to` carries the direction and the emission
+   * radius, because that is what the caller already computed for a tracer --
+   * see tracerEnds. A point source is from === to, which is what an event with
+   * a zero `param` gives.
+   */
+  #burst (def, from, to) {
+    if (this.parts.length >= this.maxBursts) return
+    const dx = to.x - from.x
+    const dz = to.z - from.z
+    const radius = Math.hypot(dx, dz)
+    // Three space again: the heading is atan2 over (x, -z), the inverse of the
+    // mapping the caller used. Zero radius leaves no direction to recover, and
+    // a cone of 0.5 turns does not need one.
+    const turns = radius > 0 ? Math.atan2(-dz, dx) / (Math.PI * 2) : 0
+    const parts = emitBurst(def, from, turns, radius)
+    if (parts.length === 0) return
+
+    const THREE = this.THREE
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(parts.length * 3), 3))
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(parts.length * 3), 3))
+    const mat = new THREE.PointsMaterial({
+      size: def.size ?? 0.1,
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      sizeAttenuation: true,
+      blending: def.blend === 'alpha' ? THREE.NormalBlending : THREE.AdditiveBlending
+    })
+    const points = new THREE.Points(geo, mat)
+    points.frustumCulled = false
+    this.scene.add(points)
+    this.parts.push({ def, parts, points, maxLife: Math.max(...parts.map((p) => p.life)) })
+  }
+
   /** Fade everything live, and return expired meshes to the pool. */
   update (now) {
     for (let i = this.live.length - 1; i >= 0; i--) {
@@ -198,5 +399,45 @@ export class VfxView {
       }
       e.mesh.material.opacity = f
     }
+
+    // Particles run on a DELTA, not on a timestamp: they integrate, and a burst
+    // that joined between two frames has no age to measure against this one.
+    const dt = this.lastNow === null ? 0 : Math.min(0.1, now - this.lastNow)
+    this.lastNow = now
+    for (let i = this.parts.length - 1; i >= 0; i--) {
+      const b = this.parts[i]
+      stepParticles(b.parts, dt, b.def)
+      if (b.parts.length === 0) {
+        this.scene.remove(b.points)
+        b.points.geometry.dispose()
+        b.points.material.dispose()
+        this.parts.splice(i, 1)
+        continue
+      }
+      const pos = b.points.geometry.attributes.position
+      const col = b.points.geometry.attributes.color
+      for (let k = 0; k < b.parts.length; k++) {
+        const p = b.parts[k]
+        pos.array[k * 3] = p.x; pos.array[k * 3 + 1] = p.y; pos.array[k * 3 + 2] = p.z
+        const t = p.age / p.life
+        const c = rampColour(b.def.colour, b.def.colourEnd ?? 0, t)
+        // The ramp IS the fade under additive blending, where black is
+        // invisible. Under alpha it is not, so there the whole burst fades on
+        // the material instead -- per-point opacity wants a custom shader, and
+        // a shader is a lot to carry for smoke.
+        col.array[k * 3] = c.r; col.array[k * 3 + 1] = c.g; col.array[k * 3 + 2] = c.b
+      }
+      // The buffers were sized for the burst and particles retire out of it, so
+      // the draw range is what hides the tail rather than a rebuilt buffer.
+      b.points.geometry.setDrawRange(0, b.parts.length)
+      pos.needsUpdate = true
+      col.needsUpdate = true
+      const age = b.maxLife > 0 ? 1 - Math.max(...b.parts.map((p) => 1 - p.age / p.life)) : 1
+      b.points.material.size = (b.def.size ?? 0.1) +
+        (((b.def.sizeEnd ?? 0) - (b.def.size ?? 0.1)) * Math.min(1, Math.max(0, age)))
+      if (b.def.blend === 'alpha') b.points.material.opacity = 1 - Math.min(1, Math.max(0, age))
+    }
   }
+
+  get burstCount () { return this.parts.length }
 }

@@ -1457,6 +1457,20 @@ function M.apply_hit(target, origin, a)
   if a.slow and a.slow_ticks then
     M.tagged_effect(target, "hitslow", "move_speed", "mul", a.slow, a.slow_ticks)
   end
+  -- PARTICLES, from the one place every damage path already funnels through.
+  --
+  -- A swing, a bullet and a blast all reach here, so `hit_vfx` on any of them
+  -- sprays where it landed without a second wiring -- and the client draws the
+  -- burst from the kind alone, so nothing about it crosses the wire or enters a
+  -- hash. Thrown BACK along the blow, away from whatever dealt it, which is the
+  -- direction blood goes.
+  if a.hit_vfx then
+    local p = target:pos()
+    local ang = (p.x.raw == origin.x.raw and p.y.raw == origin.y.raw)
+        and 0 or aim_at(origin, p)
+    dnp.vfx(a.hit_vfx, p, wrap_brad(ang), a.hit_vfx_radius and
+            math.floor((a.hit_vfx_radius * fx.int(256)).int) or 0)
+  end
 end
 
 function acts.damage_area(m, a)

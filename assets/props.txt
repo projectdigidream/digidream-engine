@@ -117,3 +117,34 @@
 vfx 1 tracer colour ffee88 width 0.09 life 0.35
 vfx 2 tracer colour ff8844 width 0.12 life 0.45
 
+# --- particles ---------------------------------------------------------------
+#
+# Bursts, drawn entirely by the client from one event. Nothing crosses the wire
+# but the kind number, the place and the direction: the server does not simulate
+# a particle and none of them is in any hash.
+#
+# `cone` is in TURNS like every other angle in this engine -- 0 is a beam along
+# the event's direction, 0.25 a hemisphere, 0.5 a full sphere -- and the event's
+# `param` is the radius they come out of, so a blast can fill its own radius.
+#
+# ADDITIVE unless told otherwise, which is what makes the colour ramp double as
+# the fade: black is invisible under additive blending, so one attribute does
+# both and no shader is needed.
+#
+# ONE LINE EACH. There is no continuation character: a line not starting with a
+# record keyword is skipped in silence, so a wrapped entry keeps the attributes
+# before the break and loses every one after it. Which is a kind that looks
+# configured, parses without a warning, and draws the defaults.
+
+# A hit: a short spray, thrown back along the blow.
+vfx 10 particles count 14 life 0.45 life_var 0.2 speed 7 speed_var 4 cone 0.18 gravity 22 drag 2 size 0.09 size_end 0.02 colour ff5533 colour_end 330000
+
+# A rocket going off: fast, wide, and it falls.
+vfx 11 particles count 40 life 0.8 life_var 0.4 speed 14 speed_var 8 cone 0.5 gravity 16 drag 1.2 size 0.16 size_end 0.02 colour ffdd88 colour_end 662200
+
+# Sparks off a wall, tight and quick.
+vfx 12 particles count 8 life 0.3 life_var 0.15 speed 9 speed_var 5 cone 0.3 gravity 30 drag 1 size 0.05 size_end 0 colour ffffcc colour_end 442200
+
+# Smoke, and the one that is NOT additive: fading to black would be soot rather
+# than absence, so the whole burst fades on the material instead.
+vfx 13 particles count 10 life 1.6 life_var 0.6 speed 2 speed_var 1 cone 0.4 gravity -1 drag 2 size 0.2 size_end 0.6 colour 555555 colour_end 222222 blend alpha

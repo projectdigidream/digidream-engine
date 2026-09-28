@@ -198,6 +198,14 @@ mob_vocab = {
     { name = "knockback", type = "fx", optional = true,
       doc = "How hard a connected swing throws the target, in world units per " ..
             "second, directly away from the swinger." },
+    { name = "hit_vfx", type = "int", optional = true,
+      doc = "A particle kind to burst where this lands, by " ..
+            "catalogue id. Drawn entirely by the client -- nothing " ..
+            "about it crosses the wire or enters a hash." },
+    { name = "hit_vfx_radius", type = "fx", optional = true,
+      doc = "How wide a volume the burst comes out of. A blast " ..
+            "wants its own radius here so the particles fill it " ..
+            "rather than all starting at one point." },
     { name = "lift", type = "fx", optional = true,
       doc = "The vertical part of that shove." },
     { name = "slow", type = "fx", optional = true,
@@ -466,6 +474,14 @@ mob_vocab = {
           doc = "Tracer style to draw, or absent for none." },
         { name = "knockback", type = "fx", optional = true,
           doc = "World units per second, away from the muzzle. PER RAY." },
+        { name = "hit_vfx", type = "int", optional = true,
+          doc = "A particle kind to burst where this lands, by " ..
+                "catalogue id. Drawn entirely by the client -- nothing " ..
+                "about it crosses the wire or enters a hash." },
+        { name = "hit_vfx_radius", type = "fx", optional = true,
+          doc = "How wide a volume the burst comes out of. A blast " ..
+                "wants its own radius here so the particles fill it " ..
+                "rather than all starting at one point." },
         { name = "lift", type = "fx", optional = true },
         { name = "slow", type = "fx", optional = true,
           doc = "Multiplier on the target's move_speed. Needs `slow_ticks`." },
@@ -565,6 +581,14 @@ mob_vocab = {
                { name = "radius", type = "fx" },
                { name = "knockback", type = "fx", optional = true,
                  doc = "Outward from the blast CENTRE, not from the mob." },
+               { name = "hit_vfx", type = "int", optional = true,
+                 doc = "A particle kind to burst where this lands, by " ..
+                       "catalogue id. Drawn entirely by the client -- nothing " ..
+                       "about it crosses the wire or enters a hash." },
+               { name = "hit_vfx_radius", type = "fx", optional = true,
+                 doc = "How wide a volume the burst comes out of. A blast " ..
+                       "wants its own radius here so the particles fill it " ..
+                       "rather than all starting at one point." },
                { name = "lift", type = "fx", optional = true },
                { name = "slow", type = "fx", optional = true },
                { name = "slow_ticks", type = "int", optional = true },

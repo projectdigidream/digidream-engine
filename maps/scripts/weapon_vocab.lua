@@ -186,6 +186,14 @@ weapon_vocab = {
     { name = "slow_ticks", type = "int", optional = true,
       doc = "How long the slow lasts. Tagged by the attacker, so hitting the " ..
             "same target twice REPLACES rather than stacking to a standstill." },
+    { name = "hit_vfx", type = "int", optional = true,
+      doc = "A particle kind to burst where this lands, by catalogue id. " ..
+        "Drawn entirely by the client -- nothing about it crosses the " ..
+        "wire or enters a hash." },
+    { name = "hit_vfx_radius", type = "fx", optional = true,
+      doc = "How wide a volume the burst comes out of. A blast wants its " ..
+        "own radius here so the particles fill it rather than all " ..
+        "starting at one point." },
     { name = "cooldown", type = "int", optional = true,
       doc = "Ticks before another swing may START. Capped at 255 by the " ..
             "parameter's width." },
@@ -360,6 +368,14 @@ weapon_vocab = {
           doc = "The vertical part of that shove." },
         { name = "slow", type = "fx", optional = true,
           doc = "Multiplier on the target's move_speed. Needs `slow_ticks`." },
+        { name = "hit_vfx", type = "int", optional = true,
+          doc = "A particle kind to burst where this lands, by catalogue id. " ..
+                "Drawn entirely by the client -- nothing about it crosses the " ..
+                "wire or enters a hash." },
+        { name = "hit_vfx_radius", type = "fx", optional = true,
+          doc = "How wide a volume the burst comes out of. A blast wants its " ..
+                "own radius here so the particles fill it rather than all " ..
+                "starting at one point." },
         { name = "slow_ticks", type = "int", optional = true },
       },
       doc = "An instant shot. The engine answers where the ray ended and what " ..
@@ -406,6 +422,14 @@ weapon_vocab = {
                 "thrown forward scatters things away from where it landed." },
         { name = "lift", type = "fx", optional = true },
         { name = "slow", type = "fx", optional = true },
+        { name = "hit_vfx", type = "int", optional = true,
+          doc = "A particle kind to burst where this lands, by catalogue id. " ..
+                "Drawn entirely by the client -- nothing about it crosses the " ..
+                "wire or enters a hash." },
+        { name = "hit_vfx_radius", type = "fx", optional = true,
+          doc = "How wide a volume the burst comes out of. A blast wants its " ..
+                "own radius here so the particles fill it rather than all " ..
+                "starting at one point." },
         { name = "slow_ticks", type = "int", optional = true },
       },
       doc = "A circle of damage around a chosen point. Everything in range is " ..

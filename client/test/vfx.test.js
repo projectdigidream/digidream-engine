@@ -14,7 +14,8 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseVfx, tracerEnds, fade, VfxView } from '../src/render/vfx.js'
+import { parseVfx, tracerEnds, fade, VfxView, emitBurst, stepParticles,
+         rampColour } from '../src/render/vfx.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -47,8 +48,30 @@ const THREE = {
   Vector3: class {
     constructor (x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z }
     set (x, y, z) { this.x = x; this.y = y; this.z = z; return this }
-  }
+  },
+  // Enough of the point pipeline for a burst: a geometry with named attributes
+  // and a draw range, a material, and a Points to hang them on.
+  BufferGeometry: class {
+    constructor () { this.attributes = {}; this.drawRange = { start: 0, count: 0 } }
+    setAttribute (n, a) { this.attributes[n] = a }
+    setDrawRange (s, c) { this.drawRange = { start: s, count: c } }
+    dispose () { this.disposed = true }
+  },
+  Float32BufferAttribute: class {
+    constructor (array, itemSize) { this.array = array; this.itemSize = itemSize }
+  },
+  PointsMaterial: class {
+    constructor (o) { Object.assign(this, o) }
+    dispose () { this.disposed = true }
+  },
+  Points: class {
+    constructor (geo, mat) { this.geometry = geo; this.material = mat }
+  },
+  AdditiveBlending: 2,
+  NormalBlending: 1
 }
+
+const fakeTHREE = () => THREE
 
 const CAT = parseVfx(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
 console.log('vfx: a hitscan shot becomes a line, and then stops being one')
@@ -155,6 +178,126 @@ check(fade(0.2, 0.1) === 0, 'and stays gone')
   // and nothing would say why.
   view.spawn(9999, from, to, 200)
   check(view.live.length === 0, 'CONTROL: an unknown kind draws nothing')
+}
+
+console.log('\n--- particles come out of a cone and fall down it ---')
+{
+  const def = { count: 400, life: 1, lifeVar: 0, speed: 10, speedVar: 0,
+                cone: 0.125, gravity: 20, drag: 0, size: 0.1, sizeEnd: 0,
+                colour: 0xff0000, colourEnd: 0x000000 }
+
+  // A quarter of the cone, about +X in three space (the event's heading of 0).
+  const b = emitBurst(def, { x: 0, y: 0, z: 0 }, 0, 0)
+  check(b.length === 400, `the burst has its declared count (${b.length})`)
+
+  // `cone` is in TURNS, and 0.125 turns is a 45-degree half-angle: every
+  // direction must be within that of the axis. Asserted as a dot product rather
+  // than per-component, because the axis is a direction and not an axis-aligned
+  // one in general.
+  let worst = 1
+  for (const p of b) {
+    const l = Math.hypot(p.vx, p.vy, p.vz)
+    worst = Math.min(worst, p.vx / l)     // dot with +X
+  }
+  const limit = Math.cos(0.125 * 2 * Math.PI)
+  check(worst >= limit - 1e-9,
+        `every particle is inside the cone (worst ${worst.toFixed(4)} >= ${limit.toFixed(4)})`)
+
+  // CONTROL: a wider cone really does go wider, or `cone` is decorative and the
+  // check above passes for a burst that only ever goes straight ahead.
+  const wide = emitBurst({ ...def, cone: 0.5 }, { x: 0, y: 0, z: 0 }, 0, 0)
+  const behind = wide.filter((p) => p.vx < 0).length
+  check(behind > 0, `CONTROL: a full sphere throws ${behind} of 400 backwards`)
+
+  // The heading is obeyed: pointing a quarter turn round puts the cone on -Z,
+  // because engine (x, y) maps to three (x, -y).
+  const turned = emitBurst(def, { x: 0, y: 0, z: 0 }, 0.25, 0)
+  const axis = turned.every((p) => p.vz < 0)
+  check(axis, 'a quarter-turn heading throws them along -Z in three space')
+
+  // Speed and lifetime spread: with the variance at zero they are exact, which
+  // is what makes the varied case meaningful.
+  const speeds = b.map((p) => Math.hypot(p.vx, p.vy, p.vz))
+  check(Math.max(...speeds) - Math.min(...speeds) < 1e-9, 'no variance means one speed')
+  const varied = emitBurst({ ...def, speedVar: 4 }, { x: 0, y: 0, z: 0 }, 0, 0)
+  const vs = varied.map((p) => Math.hypot(p.vx, p.vy, p.vz))
+  check(Math.max(...vs) - Math.min(...vs) > 1,
+        `CONTROL: speed_var spreads them (${(Math.max(...vs) - Math.min(...vs)).toFixed(2)})`)
+
+  // A radius fills a VOLUME rather than a shell, which is what stops a blast
+  // looking like a smoke ring.
+  const filled = emitBurst(def, { x: 0, y: 0, z: 0 }, 0, 2)
+  const rs = filled.map((p) => Math.hypot(p.x, p.y, p.z))
+  check(Math.max(...rs) <= 2 + 1e-9, 'nothing starts outside the emission radius')
+  check(Math.min(...rs) < 1, `and they fill it rather than ring it (min ${Math.min(...rs).toFixed(2)})`)
+  // CONTROL: a zero radius is a point source.
+  const point = emitBurst(def, { x: 5, y: 6, z: 7 }, 0, 0)
+  check(point.every((p) => p.x === 5 && p.y === 6 && p.z === 7),
+        'CONTROL: no radius means they all start at the event')
+}
+
+console.log('\n--- and then they are integrated ---')
+{
+  const def = { gravity: 10, drag: 0 }
+  const parts = [{ x: 0, y: 0, z: 0, vx: 1, vy: 0, vz: 0, age: 0, life: 1 }]
+  stepParticles(parts, 0.5, def)
+  check(Math.abs(parts[0].x - 0.5) < 1e-9, 'velocity moves it')
+  check(parts[0].vy < 0 && Math.abs(parts[0].vy + 5) < 1e-9, 'gravity pulls it DOWN, which is -Y in three space')
+
+  // Expiry, and the reason the draw range exists: the buffer is sized once.
+  const dying = [{ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, age: 0, life: 0.2 },
+                 { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, age: 0, life: 2 }]
+  stepParticles(dying, 0.5, def)
+  check(dying.length === 1, 'a particle past its life is dropped')
+  check(dying[0].life === 2, 'and it is the short one that went')
+
+  // Drag is exponential, so a huge dt cannot push a speed through zero and send
+  // a spark backwards -- which `v -= v * drag * dt` does the moment drag*dt > 1.
+  const dragged = [{ x: 0, y: 0, z: 0, vx: 10, vy: 0, vz: 0, age: 0, life: 99 }]
+  stepParticles(dragged, 5, { gravity: 0, drag: 4 })
+  check(dragged[0].vx > 0, `CONTROL: a huge step never reverses it (${dragged[0].vx.toExponential(1)})`)
+  check(dragged[0].vx < 10, 'and it really did slow down')
+
+  // A zero or negative step changes nothing, which is what a paused tab gives.
+  const still = [{ x: 3, y: 0, z: 0, vx: 1, vy: 0, vz: 0, age: 0, life: 1 }]
+  stepParticles(still, 0, def)
+  check(still[0].x === 3 && still[0].age === 0, 'a zero step is a no-op')
+}
+
+console.log('\n--- the colour ramp is the fade ---')
+{
+  const c0 = rampColour(0xff0000, 0x000000, 0)
+  const c1 = rampColour(0xff0000, 0x000000, 1)
+  const ch = rampColour(0xff0000, 0x000000, 0.5)
+  check(c0.r === 1 && c0.g === 0 && c0.b === 0, 'it starts at the first colour')
+  check(c1.r === 0, 'and ends at the second -- black, which additive blending draws as nothing')
+  check(Math.abs(ch.r - 0.5) < 0.01, `and passes through the middle (${ch.r.toFixed(3)})`)
+  // Out of range is clamped, because `age/life` can overshoot by a frame.
+  check(rampColour(0xff0000, 0x000000, 2).r === 0, 'past the end is clamped')
+  check(rampColour(0xff0000, 0x00ff00, -1).g === 0, 'and so is before the start')
+}
+
+console.log('\n--- a particle kind draws through the same spawn as everything else ---')
+{
+  const { kinds } = parseVfx('vfx 9 particles count 8 life 0.3 gravity 0 drag 0')
+  const scene = {
+    children: [],
+    add (o) { this.children.push(o) },
+    remove (o) { const i = this.children.indexOf(o); if (i >= 0) this.children.splice(i, 1) }
+  }
+  const view = new VfxView({ THREE: fakeTHREE(), scene, catalogue: { kinds }, poolSize: 2 })
+  view.spawn(9, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 0)
+  check(view.burstCount === 1, 'the burst is live')
+  // NOT a tracer: it must not have taken one of the tracer meshes, or a
+  // firefight of sparks starves the thing that draws the shots.
+  check(view.live.length === 0, 'CONTROL: and it did not consume a tracer from the pool')
+  // Stepped at a real frame rate, not in one leap: `update` clamps dt to 0.1 so
+  // a tab regaining focus cannot teleport a burst through its whole life, which
+  // means a 0.3s life takes several frames whatever the wall clock says.
+  for (let f = 1; f <= 40; f++) view.update(f / 60)
+  check(view.burstCount === 0, 'and it is gone once every particle has expired')
+  check(scene.children.length === 2,
+        `CONTROL: its Points was removed from the scene (${scene.children.length} left, the 2 tracers)`)
 }
 
 console.log(`\nvfx: ${checks} checks, ${fails} failures`)
