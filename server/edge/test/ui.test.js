@@ -304,10 +304,36 @@ check(panel !== null && panel.uiId !== wasId,
 
   // And ONLY when it changes. Sixty reliable control messages a second saying
   // the same number is a waste of the channel that carries map data.
+  //
+  // NO REDUNDANT MESSAGE, rather than no message at all. This used to assert
+  // that the count did not move, which is a claim about the FIXTURE and not
+  // about the panel: this level has monsters in it, they shoot the player, and
+  // a health change during the window is a UI_SET the panel is right to send.
+  // It failed roughly one run in four and cost a bisect each time, because the
+  // number it printed -- "1 in 60 ticks" -- looks like the waste it is named
+  // after.
+  //
+  // So the waste is measured directly: a UI_SET repeating a value the client
+  // already has. That is the thing the panel promises not to do, and it is true
+  // whether or not anything shot anybody.
+  const known = new Map()
+  for (const u of uiSets) known.set(u.widgetId, u.value)
   const before = uiSets.length
   await step(60)
-  check(uiSets.length === before,
-        `a steady value sends nothing (${uiSets.length - before} in 60 ticks)`)
+  const repeats = uiSets.slice(before).filter((u) => {
+    const had = known.get(u.widgetId)
+    known.set(u.widgetId, u.value)
+    return had === u.value
+  })
+  //
+  // Verified to have teeth by taking the `hp ~= shown_hp` guard out of
+  // maps/scripts/debug_panel.lua and re-running: "61 sent in 60 ticks, 60
+  // redundant", which is one a tick, exactly the waste this is named after.
+  // That control needs the runtime broken so it cannot live here, and the
+  // number it produced is recorded instead.
+  check(repeats.length === 0,
+        `no UI_SET repeats a value the client already has ` +
+        `(${uiSets.length - before} sent in 60 ticks, ${repeats.length} redundant)`)
 }
 
 // --- the attack sliders reach the physics ------------------------------------
