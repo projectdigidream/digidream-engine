@@ -1340,7 +1340,14 @@ function acts.melee(m, a)
   if m.target == nil or not m.target:valid() then return end
   local p, t = m.e:pos(), m.target:pos()
   local dx, dy = t.x - p.x, t.y - p.y
-  if dx * dx + dy * dy <= a.range * a.range then hurt(m.target, a.damage, m) end
+  if dx * dx + dy * dy <= a.range * a.range then
+    hurt(m.target, a.damage, m)
+    -- The same hit effects every other damage path gets. Without this the
+    -- knockback, the slow and the blood would all validate at load and do
+    -- nothing at runtime -- which is the exact shape of failure the loader
+    -- exists to prevent, arriving through the one action that forgot to ask.
+    M.apply_hit(m.target, p, a)
+  end
 end
 
 function acts.missile(m, a)
@@ -1464,11 +1471,22 @@ function M.apply_hit(target, origin, a)
   -- burst from the kind alone, so nothing about it crosses the wire or enters a
   -- hash. Thrown BACK along the blow, away from whatever dealt it, which is the
   -- direction blood goes.
-  if a.hit_vfx then
+  -- WHAT BLEEDS IS THE TARGET'S BUSINESS, not the weapon's.
+  --
+  -- The attack names a default -- red, for most things -- and a mob that
+  -- declares `blood` overrides it, because an imp bleeds green whether it was
+  -- shot, punched or blown up. Putting the colour on the attack would mean
+  -- every weapon in every module listing every exception.
+  --
+  -- A player is not in `live`, so they take the attack's default, which is what
+  -- "red for enemies and the player" is.
+  local mine = live[target:index()]
+  local kind = (mine and mine.def and mine.def.blood) or a.hit_vfx
+  if kind then
     local p = target:pos()
     local ang = (p.x.raw == origin.x.raw and p.y.raw == origin.y.raw)
         and 0 or aim_at(origin, p)
-    dnp.vfx(a.hit_vfx, p, wrap_brad(ang), a.hit_vfx_radius and
+    dnp.vfx(kind, p, wrap_brad(ang), a.hit_vfx_radius and
             math.floor((a.hit_vfx_radius * fx.int(256)).int) or 0)
   end
 end
@@ -1771,7 +1789,12 @@ function acts.vfx(m, a)
   elseif at == "impact" and m.impact ~= nil then
     p = m.impact
   end
-  dnp.vfx(a.kind, p)
+  -- The RADIUS the effect comes out of, for a particle kind: a blast whose
+  -- specks all start at one point reads as a firecracker however many there
+  -- are. Carried in the event's `param`, in 1/256 units, which is the same slot
+  -- a tracer uses for its length.
+  dnp.vfx(a.kind, p, m.aim or 0,
+          a.radius and math.floor((a.radius * fx.int(256)).int) or 0)
 end
 
 function acts.lua(m, a)

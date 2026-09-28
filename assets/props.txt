@@ -136,15 +136,32 @@ vfx 2 tracer colour ff8844 width 0.12 life 0.45
 # before the break and loses every one after it. Which is a kind that looks
 # configured, parses without a warning, and draws the defaults.
 
-# A hit: a short spray, thrown back along the blow.
-vfx 10 particles count 14 life 0.45 life_var 0.2 speed 7 speed_var 4 cone 0.18 gravity 22 drag 2 size 0.09 size_end 0.02 colour ff5533 colour_end 330000
+# BLOOD. Pixels rather than sparks: a constant size and a short life, so they
+# read as specks of the thing that was hit rather than as embers. Thrown back
+# along the blow, which is the direction blood goes.
+#
+# 10 is what everything bleeds unless it says otherwise. A mob declaring `blood`
+# overrides it -- see 14.
+vfx 10 particles count 12 life 0.5 life_var 0.25 speed 5 speed_var 3 cone 0.2 gravity 26 drag 1.5 size 0.07 size_end 0.07 colour ff2018 colour_end 400604
 
-# A rocket going off: fast, wide, and it falls.
-vfx 11 particles count 40 life 0.8 life_var 0.4 speed 14 speed_var 8 cone 0.5 gravity 16 drag 1.2 size 0.16 size_end 0.02 colour ffdd88 colour_end 662200
+# A rocket going off. Big, and deliberately so: the blast it draws is 128 map
+# units across and a modest puff under it reads as a firecracker that happens to
+# kill things. Two kinds go off together -- this and the smoke below.
+vfx 11 particles count 90 life 1.1 life_var 0.5 speed 22 speed_var 12 cone 0.5 gravity 14 drag 1.1 size 0.28 size_end 0.03 colour ffeeaa colour_end 882200
 
-# Sparks off a wall, tight and quick.
-vfx 12 particles count 8 life 0.3 life_var 0.15 speed 9 speed_var 5 cone 0.3 gravity 30 drag 1 size 0.05 size_end 0 colour ffffcc colour_end 442200
+# Muzzle sparkles: tight, quick, and thrown forward along the shot.
+vfx 12 particles count 7 life 0.16 life_var 0.08 speed 11 speed_var 6 cone 0.08 gravity 6 drag 3 size 0.05 size_end 0.01 colour ffffdd colour_end 996600
 
 # Smoke, and the one that is NOT additive: fading to black would be soot rather
 # than absence, so the whole burst fades on the material instead.
-vfx 13 particles count 10 life 1.6 life_var 0.6 speed 2 speed_var 1 cone 0.4 gravity -1 drag 2 size 0.2 size_end 0.6 colour 555555 colour_end 222222 blend alpha
+vfx 13 particles count 14 life 1.8 life_var 0.7 speed 3 speed_var 2 cone 0.5 gravity -1 drag 2 size 0.3 size_end 0.9 colour 666666 colour_end 222222 blend alpha
+
+# GREEN BLOOD. Doom gives some of its bestiary a colour of its own, and an imp
+# is the one this module names. Same shape as 10 -- only the colour differs,
+# because what bleeds green bleeds the same way.
+vfx 14 particles count 12 life 0.5 life_var 0.25 speed 5 speed_var 3 cone 0.2 gravity 26 drag 1.5 size 0.07 size_end 0.07 colour 44ff22 colour_end 0a3300
+
+# Sparks off the chainsaw, per cut. The chainsaw's `cut` phase repeats every few
+# ticks while the trigger is held, so a one-shot burst fired repeatedly IS the
+# continuous spray -- there is no looping emitter and none is needed.
+vfx 15 particles count 6 life 0.22 life_var 0.12 speed 8 speed_var 5 cone 0.35 gravity 24 drag 2 size 0.05 size_end 0.01 colour ffdd66 colour_end 662200

@@ -139,6 +139,38 @@
         {
           "name": "range",
           "type": "fx"
+        },
+        {
+          "doc": "World units per second, away from the attacker.",
+          "name": "knockback",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "lift",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow_ticks",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "A particle kind to burst where this lands. A mob's own `blood` overrides it.",
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "hit_vfx_radius",
+          "optional": true,
+          "type": "fx"
         }
       ],
       "doc": "Damage if the target is inside `range` right now. Separate from `hitscan` because a monster with only a ranged attack is harmless the moment you stand inside it -- a missile spawned inside somebody bursts on its owner or sails past.",
@@ -490,8 +522,15 @@
             "target",
             "impact"
           ]
+        },
+        {
+          "doc": "For a PARTICLE kind: how wide a volume the burst comes out of. A blast whose specks all start at one point reads as a firecracker however many there are.",
+          "name": "radius",
+          "optional": true,
+          "type": "fx"
         }
       ],
+      "doc": "Fire a visual effect. `at = \"impact\"` is what an explosion wants: it draws where the missile LANDED, and it draws whether or not anything was in range -- unlike `hit_vfx` on damage_area, which is per victim and so shows nothing at all when a rocket hits an empty wall.",
       "name": "vfx"
     },
     {
@@ -1046,6 +1085,12 @@
       "name": "swing",
       "optional": true,
       "type": "table"
+    },
+    {
+      "doc": "The particle kind this mob sprays when it is hurt, by catalogue id. OVERRIDES whatever the attack named, because what bleeds is the target's business: an imp bleeds green whether it was shot, punched or blown up, and the alternative is every weapon in every module listing every exception.\nAbsent takes the attack's own `hit_vfx`, which is how everything that is not an exception stays red.",
+      "name": "blood",
+      "optional": true,
+      "type": "int"
     },
     {
       "doc": "Whether the body stays after the death state's sequence ends. Corpses are capped and recycled oldest-first by the runtime.",

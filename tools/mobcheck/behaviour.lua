@@ -278,7 +278,12 @@ do
   local p = W.add("player", 6, 0, 0)
   W.see = true
   for _ = 1, 200 do W.tick_n = W.tick_n + 1; W.advance(); on_tick() end
-  CHECK(#W.vfx == 0, "no tracer without one asked for (" .. #W.vfx .. ")")
+  -- BY KIND. Every damage path now also sprays blood, which is a vfx event of
+  -- its own -- so counting every event counts two things and a monster with no
+  -- tracer looks like it drew one. The tracer is kind 1.
+  local tracers = 0
+  for _, v in ipairs(W.vfx) do if v.kind == 1 then tracers = tracers + 1 end end
+  CHECK(tracers == 0, "no tracer without one asked for (" .. tracers .. ")")
   -- But the shot still lands, so the control is about the DRAWING and not
   -- about the monster having stopped shooting.
   CHECK(p.health < 100, "and the shot still lands")
@@ -433,7 +438,10 @@ do
   -- when target_in_front compared against the mob's intent instead.
 
   -- And the tracer spans the real distance rather than stopping short.
-  local v = W.vfx[#W.vfx]
+  -- The last TRACER, not the last event: the blood burst that follows a landed
+  -- shot is a vfx too, and its param is an emission radius rather than a length.
+  local v
+  for _, e in ipairs(W.vfx) do if e.kind == 1 then v = e end end
   CHECK(v ~= nil and v.param ~= nil and v.param / 256 > 4,
         "the tracer reaches (" .. tostring(v and v.param and v.param / 256) .. ")")
 end

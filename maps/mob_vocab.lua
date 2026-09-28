@@ -138,6 +138,14 @@ mob_vocab = {
             "test: that hits whatever is in range on the tick it runs and " ..
             "nothing can be done about it. Declare this and put a `swing` " ..
             "action in the attack state's sequence. See swing_fields." },
+    { name = "blood", type = "int", optional = true,
+      doc = "The particle kind this mob sprays when it is hurt, by catalogue " ..
+            "id. OVERRIDES whatever the attack named, because what bleeds is " ..
+            "the target's business: an imp bleeds green whether it was shot, " ..
+            "punched or blown up, and the alternative is every weapon in every " ..
+            "module listing every exception.\n" ..
+            "Absent takes the attack's own `hit_vfx`, which is how everything " ..
+            "that is not an exception stays red." },
     { name = "corpse", type = "bool", optional = true,
       doc = "Whether the body stays after the death state's sequence ends. " ..
             "Corpses are capped and recycled oldest-first by the runtime." },
@@ -540,7 +548,16 @@ mob_vocab = {
 
     { name = "melee",
       args = { { name = "damage", type = "int" },
-               { name = "range", type = "fx" } },
+               { name = "range", type = "fx" },
+               { name = "knockback", type = "fx", optional = true,
+                 doc = "World units per second, away from the attacker." },
+               { name = "lift", type = "fx", optional = true },
+               { name = "slow", type = "fx", optional = true },
+               { name = "slow_ticks", type = "int", optional = true },
+               { name = "hit_vfx", type = "int", optional = true,
+                 doc = "A particle kind to burst where this lands. A mob's own " ..
+                       "`blood` overrides it." },
+               { name = "hit_vfx_radius", type = "fx", optional = true } },
       doc = "Damage if the target is inside `range` right now. Separate from " ..
             "`hitscan` because a monster with only a ranged attack is " ..
             "harmless the moment you stand inside it -- a missile spawned " ..
@@ -696,7 +713,16 @@ mob_vocab = {
     { name = "vfx",
       args = { { name = "kind", type = "int" },
                { name = "at", type = "enum", optional = true,
-                 values = { "self", "target", "impact" } } } },
+                 values = { "self", "target", "impact" } },
+               { name = "radius", type = "fx", optional = true,
+                 doc = "For a PARTICLE kind: how wide a volume the burst comes " ..
+                       "out of. A blast whose specks all start at one point " ..
+                       "reads as a firecracker however many there are." } },
+      doc = "Fire a visual effect. `at = \"impact\"` is what an explosion " ..
+            "wants: it draws where the missile LANDED, and it draws whether or " ..
+            "not anything was in range -- unlike `hit_vfx` on damage_area, " ..
+            "which is per victim and so shows nothing at all when a rocket " ..
+            "hits an empty wall." },
 
     { name = "set_anim",
       args = { { name = "anim", type = "int" } },
