@@ -309,6 +309,84 @@ static void test_omitting_the_far_height_is_the_flat_cast() {
     CHECK(a.blocked);
 }
 
+// A BODY IS A COLUMN, and that is what "monsters lose the player when he is
+// higher or lower" turned out to be.
+//
+// Sight was one line drawn between two eyes. Stand a few units back from a
+// ledge and the line from a monster below to your WAIST runs into the ledge
+// while the line to your HEAD clears it -- which is exactly the moment a player
+// walks up onto a balcony and every monster in the room forgets about him.
+//
+// The numbers are worked out rather than found: the east floor is at 6, the
+// monster's eye at 1 in the west room at x = 10, and the boundary is at x = 20.
+// A body standing at x = 23 with its feet on that floor puts the boundary
+// 10/13 of the way along, so the middle line arrives there at 5.62 -- under the
+// floor -- and the head line at 6.38, over it. One is visible and one is not,
+// and the body is the same body.
+static void test_a_head_over_a_ledge_is_visible() {
+    std::printf("sight: a head over a ledge is visible when the waist is not\n");
+    static Pair p(F(6), F(10));
+    const fx3 eye{F(10), F(20), F(1)};
+    const fx2 them{F(23), F(20)};
+
+    // CONTROL, and it is the bug: the single line this replaced, between the
+    // two middles, says no. Without this the claim below could be met by a
+    // sight test that had simply stopped checking heights.
+    const fx mid = F(7);
+    const fx2 d{them.x - eye.x, them.y - eye.y};
+    CHECK(raycast(p.view, 0, fx2{eye.x, eye.y}, normalize(d), length(d), 0,
+                  eye.z, mid).blocked);
+
+    // The column: feet on the floor at 6, head at 8.
+    CHECK(can_see(p.view, 0, eye, them, F(6), F(8)));
+}
+
+// The same claim upside down, because a fix that only looks up is half a fix --
+// and Doom's own levels put as many monsters on balconies as in pits.
+//
+// A crawlspace east: floor 0, ceiling 2. The monster's eye is at 5 in the west
+// room and the body stands at x = 25 with its head at 2. The boundary is 10/15
+// of the way, so the middle line is at 2.33 -- over the ceiling -- and the line
+// to the FEET is at 1.67, under it.
+static void test_feet_under_a_ceiling_are_visible() {
+    std::printf("sight: feet below a ceiling are visible when the waist is not\n");
+    static Pair p(F(0), F(2));
+    const fx3 eye{F(10), F(20), F(5)};
+    const fx2 them{F(25), F(20)};
+
+    const fx2 d{them.x - eye.x, them.y - eye.y};
+    // CONTROL: the middle line is stopped by the ceiling.
+    CHECK(raycast(p.view, 0, fx2{eye.x, eye.y}, normalize(d), length(d), 0,
+                  eye.z, F(1)).blocked);
+
+    CHECK(can_see(p.view, 0, eye, them, F(0), F(2)));
+}
+
+// AND IT IS NOT "YES" WEARING A DISGUISE. Two bodies that genuinely cannot see
+// each other still cannot, or every assertion above is satisfied by a function
+// that returns true.
+static void test_can_see_still_says_no() {
+    std::printf("sight: and a body that is really hidden is still hidden\n");
+
+    // A shut door -- opaque at every height, so no aim along the column helps
+    // and the retry must not be attempted at all.
+    static Pair shut(F(0), F(0));
+    CHECK(!can_see(shut.view, 0, fx3{F(10), F(20), F(1)}, fx2{F(30), F(20)},
+                   F(0), F(2)));
+
+    // A floor high enough that the whole column is under it: the same geometry
+    // as the head-over-a-ledge case, with the body standing far enough back
+    // that even its head is below the line. A retry that answered yes anyway
+    // would pass the two tests above for the wrong reason.
+    static Pair p(F(6), F(10));
+    CHECK(!can_see(p.view, 0, fx3{F(10), F(20), F(1)}, fx2{F(35), F(20)},
+                   F(6), F(8)));
+
+    // And a plain wall with nothing behind it, northward out of the west room.
+    CHECK(!can_see(p.view, 0, fx3{F(10), F(20), F(1)}, fx2{F(10), F(60)},
+                   F(0), F(2)));
+}
+
 int main() {
     test_an_open_neighbour_does_not_block();
     test_a_raised_floor_blocks_sight_below_it();
@@ -320,6 +398,9 @@ int main() {
     test_a_swing_does_not_reach_through_a_wall();
     test_a_sloped_ray_reaches_a_target_below_a_low_ceiling();
     test_omitting_the_far_height_is_the_flat_cast();
+    test_a_head_over_a_ledge_is_visible();
+    test_feet_under_a_ceiling_are_visible();
+    test_can_see_still_says_no();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

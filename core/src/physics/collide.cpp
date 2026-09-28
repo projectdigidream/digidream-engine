@@ -902,9 +902,14 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
             // a shut door -- a sector whose ceiling rests on its floor -- and it
             // needs its own test, because `floor <= z <= ceil` is satisfied by a
             // zero gap at exactly that height.
-            if (beyond.ceil_z <= beyond.floor_z ||
-                z_here < beyond.floor_z || z_here > beyond.ceil_z) {
+            if (beyond.ceil_z <= beyond.floor_z) {
+                solid = true;                    // opaque at every height
+            } else if (z_here < beyond.floor_z) {
                 solid = true;
+                hit.height_block = -1;           // under the floor beyond
+            } else if (z_here > beyond.ceil_z) {
+                solid = true;
+                hit.height_block = 1;            // over the ceiling beyond
             }
         }
 
@@ -939,6 +944,38 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
     // for the same reason an unset start sector is.
     hit.blocked = true;
     return hit;
+}
+
+// The middle of a column, and then one end of it. See the header.
+bool can_see(const geom::MapData& map, i32 from_sector, fx3 eye,
+             fx2 target, fx low, fx high) noexcept {
+    const fx2 d{target.x - eye.x, target.y - eye.y};
+    const fx dist = length(d);
+    // Standing inside each other. Not a degenerate case to reject: two bodies
+    // at the same plan position see each other, and normalising a zero vector
+    // would make that a division instead of an answer.
+    if (dist <= fx::zero()) return true;
+    const fx2 dir = normalize(d);
+    const fx2 from{eye.x, eye.y};
+
+    // BLOCKED BEFORE REACHING IT is a wall in the way; blocked at or past it is
+    // the wall behind it.
+    //
+    // The middle first, because it is the line that succeeds nearly always and
+    // the only one anybody pays for.
+    const fx mid = low + (high - low) / fx::from_int(2);
+    const RayHit first = raycast(map, from_sector, from, dir, dist, 0, eye.z, mid);
+    if (!first.blocked || first.distance >= dist) return true;
+    // A WALL is a wall from every angle. Retrying against one is the cost this
+    // whole arrangement exists to avoid paying on a level full of monsters that
+    // genuinely cannot see anybody.
+    if (first.height_block == 0) return false;
+
+    // And once more at the end of the column the failure points towards: under
+    // a floor, aim at the head; over a ceiling, aim at the feet.
+    const RayHit again = raycast(map, from_sector, from, dir, dist, 0, eye.z,
+                                 first.height_block < 0 ? high : low);
+    return !again.blocked || again.distance >= dist;
 }
 
 }  // namespace dnp::physics

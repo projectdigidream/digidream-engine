@@ -1807,13 +1807,16 @@ int l_dnp_can_see(lua_State* L) {
     const geom::MapData* m = ctx.world->map();
     if (m == nullptr) { lua_pushboolean(L, 0); return 1; }
 
-    const auto eye_of = [&](int idx, fx3& out, i32& sector) {
+    // A BODY IS A COLUMN, so both ends of it are read: the looker uses its
+    // middle, which is its eye, and the target is asked about from its feet to
+    // the top of its head.
+    const auto body_of = [&](int idx, fx3& pos, fx& height, i32& sector) {
         if (proto::Handle* h = to_handle(L, idx)) {
             const i32 a = resolve(L, ctx, *h);
             if (a < 0) return false;
             const sim::AgentState& e = ctx.world->agent(static_cast<u32>(a));
-            out = fx3{e.pos.x, e.pos.y,
-                      e.pos.z + ctx.world->params(static_cast<u32>(a)).height / 2};
+            pos = e.pos;
+            height = ctx.world->params(static_cast<u32>(a)).height;
             sector = e.mv.sector;
             return true;
         }
@@ -1821,39 +1824,37 @@ int l_dnp_can_see(lua_State* L) {
             const i32 e = resolve_prop(L, ctx, check_prop_handle(L, idx));
             if (e < 0) return false;
             const sim::PropState& p = ctx.world->prop(static_cast<u32>(e));
-            out = fx3{p.pos.x, p.pos.y, p.pos.z + p.height / 2};
+            pos = p.pos;
+            height = p.height;
             sector = geom::find_sector(*m, fx2{p.pos.x, p.pos.y});
             return true;
         }
         return false;
     };
 
-    fx3 from{}, to{};
+    fx3 from_pos{}, to_pos{};
+    fx from_h{}, to_h{};
     i32 from_sector = -1, to_sector = -1;
-    if (!eye_of(1, from, from_sector) || !eye_of(2, to, to_sector)) {
+    if (!body_of(1, from_pos, from_h, from_sector) ||
+        !body_of(2, to_pos, to_h, to_sector)) {
         lua_pushboolean(L, 0);
         return 1;
     }
 
-    const fx2 d{to.x - from.x, to.y - from.y};
-    const fx dist = length(d);
-    if (dist <= fx::zero()) { lua_pushboolean(L, 1); return 1; }
-
-    // At EYE HEIGHT. Sight is not a floorplan question: a two-sided line with a
-    // balcony behind it, or a shut door, is a wall to look through even though
-    // it names a neighbouring sector.
-    // SLOPED, from one eye to the other. A flat cast at the looker's own height
-    // is a different line from the one to the target the moment the two are at
-    // different heights, and on a Doom map they nearly always are -- a step, a
-    // stair, a ledge. It answered "no" for a player standing in the open a
-    // little below, so the monster lost its target, reacquired it, and stood
-    // there doing that: an enemy stuck on a step whenever the player was lower.
-    const physics::RayHit hit =
-        physics::raycast(*m, from_sector, fx2{from.x, from.y}, normalize(d), dist,
-                         0, from.z, to.z);
-    // BLOCKED before reaching the target is a wall in the way. Blocked at or
-    // past it is the wall behind it.
-    lua_pushboolean(L, (!hit.blocked || hit.distance >= dist) ? 1 : 0);
+    // At EYE HEIGHT, and SLOPED. Sight is not a floorplan question: a two-sided
+    // line with a balcony behind it, or a shut door, is a wall to look through
+    // even though it names a neighbouring sector -- and a flat cast at the
+    // looker's own height is a different line from the one to the target the
+    // moment the two are at different heights, which on a Doom map they nearly
+    // always are.
+    //
+    // The geometry of it lives in core, in physics::can_see, because the native
+    // mob loop asks the identical question and a transcription of it is a
+    // second answer waiting to drift from this one.
+    const fx3 eye{from_pos.x, from_pos.y, from_pos.z + from_h / 2};
+    lua_pushboolean(L, physics::can_see(*m, from_sector, eye,
+                                        fx2{to_pos.x, to_pos.y},
+                                        to_pos.z, to_pos.z + to_h) ? 1 : 0);
     return 1;
 }
 

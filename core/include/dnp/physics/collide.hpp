@@ -199,6 +199,21 @@ struct RayHit {
     //
     // When this is set, `point`, `distance` and `side` describe the OBSTRUCTION.
     bool blocked = false;
+
+    // WHY it was blocked, when what stopped it was the HEIGHT rather than the
+    // wall.
+    //
+    // Zero is a wall -- one-sided, BLOCKING, or a shut door stored as a sector
+    // with its ceiling on its floor -- and no choice of aim gets past one. The
+    // other two are facts about the AIM and not about the map: -1 says the ray
+    // passed below the neighbour's floor and +1 that it passed above its
+    // ceiling, and in both cases the same boundary is open to a ray aimed the
+    // other way.
+    //
+    // Sight is what reads it. A single line between two eyes cannot see a body
+    // whose head is over a ledge your eyeline runs under, and knowing which way
+    // it failed is what lets it retry once instead of answering no.
+    i8 height_block = 0;
 };
 
 // Cast a ray across the sectors it passes through, stopping at the first side
@@ -239,5 +254,29 @@ inline constexpr fx RAY_NO_HEIGHT = fx::from_raw(INT64_MIN);
 // Left out, the ray is flat and every existing caller behaves exactly as it did.
 RayHit raycast(const geom::MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
                u8 flag, fx z = RAY_NO_HEIGHT, fx z_end = RAY_NO_HEIGHT) noexcept;
+
+// CAN A BODY AT `eye` SEE A BODY STANDING AT `target` BETWEEN `low` and `high`?
+//
+// A body is a COLUMN, not a point, and that is the whole of what this adds over
+// a single raycast. Sight used to be one line drawn between two eyes, which is
+// strictly harsher than what a player sees: stand a few units back from a
+// ledge and a monster below can watch your head over the edge long before your
+// waist comes into view. The single line said no, so the monster lost its
+// target, went back to looking, found you again a moment later and lost you
+// again -- reported as monsters forgetting the player whenever he was higher or
+// lower than they were.
+//
+// Doom answers this by narrowing an aperture as it walks, which is exact and is
+// a second walk to write and maintain beside `raycast`'s. This instead casts at
+// the middle and, if the HEIGHT was what stopped it, casts once more at
+// whichever end of the column the failure points towards. One extra walk, only
+// on the rays that were about to answer no, and none at all for a ray stopped
+// by an actual wall.
+//
+// ponytail: two casts, not an aperture. A body visible only through a slot
+// that neither its middle nor that one end lines up with reads as hidden.
+// Doom's slope-interval walk is the upgrade if that ever shows up in a level.
+bool can_see(const geom::MapData& map, i32 from_sector, fx3 eye,
+             fx2 target, fx low, fx high) noexcept;
 
 }  // namespace dnp::physics

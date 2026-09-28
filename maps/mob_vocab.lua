@@ -302,8 +302,11 @@ mob_vocab = {
       args = {},
       doc = "A ray reaches it. NOT the same question as `target_within`, and " ..
             "conflating them is what had monsters shooting through two walls " ..
-            "at somebody across the map. Costs a raycast -- put a " ..
-            "`target_within` before it." },
+            "at somebody across the map. The target is a COLUMN and not a " ..
+            "point: a body whose head is over a ledge your eyeline runs " ..
+            "under is visible, and asking only about its middle is what had " ..
+            "monsters forgetting a player standing higher or lower than " ..
+            "them. Costs a raycast -- put a `target_within` before it." },
 
     { name = "target_in_front",
       args = { { name = "arc", type = "int", optional = true,

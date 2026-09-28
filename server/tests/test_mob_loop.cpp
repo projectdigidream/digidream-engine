@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "dnp/physics/collide.hpp"
 #include "lua/vm.hpp"
 #include "mobs/mob_runtime.hpp"
 
@@ -391,6 +392,82 @@ int main(int argc, char** argv) {
         CHECK(!ask(Cond::TargetAbove, F(2), F(13)));
         CHECK(!ask(Cond::TargetBelow, F(2), F(7)));
         std::printf("  the height pair, at set heights: above/below/level/absent\n");
+    }
+
+    // ------------------------------------------ a body is a COLUMN, not a point
+    //
+    // Reported as monsters forgetting the player whenever he was higher or
+    // lower than they were. Sight was one line drawn between two eyes, which is
+    // strictly harsher than what a player sees: step back from a ledge and the
+    // line to your WAIST runs into it while the line to your HEAD clears it.
+    // The monster then lost its target, went back to looking, found it again a
+    // moment later and lost it again.
+    //
+    // Asked of `evaluate` rather than waited for in a graph, for the reason the
+    // block above gives: an edge that never fires proves nothing about the
+    // condition on it, and here the positions are set rather than arrived at.
+    {
+        // West room floor 0, east room floor 6, sharing the boundary at x = 30.
+        static geom::MapStorage lstore;
+        const fx2 west[] = {{F(0), F(0)}, {F(30), F(0)}, {F(30), F(60)}, {F(0), F(60)}};
+        const fx2 east[] = {{F(30), F(0)}, {F(60), F(0)}, {F(60), F(60)}, {F(30), F(60)}};
+        lstore.add_sector(west, 4, F(0), F(40), 1);
+        lstore.add_sector(east, 4, F(6), F(40), 1);
+        lstore.add_side(0, 0, 1, geom::NO_SECTOR, 0);
+        lstore.add_side(0, 1, 2, 1, 0);               // west -> east
+        lstore.add_side(0, 2, 3, geom::NO_SECTOR, 0);
+        lstore.add_side(0, 3, 0, geom::NO_SECTOR, 0);
+        lstore.add_side(1, 0, 1, geom::NO_SECTOR, 0);
+        lstore.add_side(1, 1, 2, geom::NO_SECTOR, 0);
+        lstore.add_side(1, 2, 3, geom::NO_SECTOR, 0);
+        lstore.add_side(1, 3, 0, 0, 0);               // east -> west
+        lstore.rebuild_grid();
+        static geom::MapData lview = lstore.view();
+
+        static sim::World lw;
+        lw.reset();
+        lw.set_map(&lview);
+        lw.set_map_storage(&lstore);
+
+        // The watcher on the low floor, eye at 1. The boundary is twenty units
+        // away, so a body standing at 36 on the raised floor puts it 20/26 of
+        // the way along: the middle line arrives at 5.62, under the floor, and
+        // the head line at 6.38, over it. One at 50 is too far back for either.
+        const u32 watcher = lw.spawn(fx3{F(10), F(30), F(0)});
+        lw.agent_mut(watcher).kind = 7;
+        lw.params_mut(watcher).height = F(2);
+        const u32 on_ledge = lw.spawn(fx3{F(36), F(30), F(6)});
+        lw.params_mut(on_ledge).height = F(2);
+        const u32 well_back = lw.spawn(fx3{F(50), F(30), F(6)});
+        lw.params_mut(well_back).height = F(2);
+
+        // CONTROL, and it is the bug itself: the single eye-to-middle line says
+        // no. Without it the claim below is satisfied by a sight test that
+        // stopped looking at heights at all.
+        CHECK(physics::raycast(lview, 0, fx2{F(10), F(30)},
+                               fx2{fx::one(), fx::zero()}, F(26), 0, F(1), F(7))
+                  .blocked);
+
+        Mob probe;
+        probe.entity = watcher;
+        probe.kind = 0;
+        probe.has_tp = true;
+        probe.p = fx3{F(10), F(30), F(0)};
+        EvalWorld ev{&lw, 100, nullptr, &rt.graph, &rt.mobs, nullptr, nullptr, nullptr};
+        Condition c;
+        c.id = Cond::TargetVisible;
+        const auto visible = [&](u32 who) {
+            probe.target = static_cast<i32>(who);
+            probe.tp = lw.agent(who).pos;
+            return evaluate(rt.graph, rt.graph.kinds[0], probe, c, ev, nullptr);
+        };
+
+        CHECK(visible(on_ledge));
+        // AND NOT EVERYONE. Far enough back that even its head is under the
+        // line, so "it can see up now" is not "it can see through floors".
+        CHECK(!visible(well_back));
+        std::printf("  over a ledge: the body four units past the edge is seen, "
+                    "the one twenty past it is not\n");
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

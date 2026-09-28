@@ -36,33 +36,24 @@ namespace dnp::server::mobs {
 
 namespace {
 
-// The eye, as dnp.can_see computes it: the body's centre height, not its feet
-// and not the top of its head.
-fx3 eye_of(const sim::World& w, u32 a) {
-    const sim::AgentState& e = w.agent(a);
-    return fx3{e.pos.x, e.pos.y, e.pos.z + w.params(a).height / 2};
-}
-
-// A ray reaches it. Transcribed from l_dnp_can_see, including the two
-// decisions in it that took a bug each to find: the cast is at EYE height
-// because a two-sided line with a balcony behind it is a wall to look through,
-// and it SLOPES from one eye to the other because a flat cast at the looker's
-// own height answered "no" for a player standing a little below -- which had
-// monsters losing and reacquiring a target while stood on a step.
+// A ray reaches it.
+//
+// NOT transcribed any more: this and l_dnp_can_see call the same function in
+// core, because the two runtimes answering the same question in two places is
+// the thing this whole arrangement is arranged against -- and the sight rule
+// has now collected three decisions that each cost a bug to find. The cast is
+// at EYE height because a two-sided line with a balcony behind it is a wall to
+// look through; it SLOPES because a flat cast at the looker's own height is a
+// different line from the one to its target; and the target is a COLUMN
+// because a body whose head is over a ledge your eyeline runs under is visible.
 bool can_see(const sim::World& w, u32 from_a, u32 to_a) {
     const geom::MapData* m = w.map();
     if (m == nullptr) return false;
-    const fx3 from = eye_of(w, from_a);
-    const fx3 to = eye_of(w, to_a);
-    const fx2 d{to.x - from.x, to.y - from.y};
-    const fx dist = length(d);
-    if (dist <= fx::zero()) return true;
-    const physics::RayHit hit =
-        physics::raycast(*m, w.agent(from_a).mv.sector, fx2{from.x, from.y},
-                         normalize(d), dist, 0, from.z, to.z);
-    // Blocked before reaching the target is a wall in the way; blocked at or
-    // past it is the wall behind it.
-    return !hit.blocked || hit.distance >= dist;
+    const sim::AgentState& a = w.agent(from_a);
+    const sim::AgentState& b = w.agent(to_a);
+    const fx3 eye{a.pos.x, a.pos.y, a.pos.z + w.params(from_a).height / 2};
+    return physics::can_see(*m, a.mv.sector, eye, fx2{b.pos.x, b.pos.y},
+                            b.pos.z, b.pos.z + w.params(to_a).height);
 }
 
 }  // namespace
