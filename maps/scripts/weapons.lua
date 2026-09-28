@@ -1047,20 +1047,35 @@ local shown = {}
 
 local function ammo_widget_id(i) return AMMO_WIDGET_BASE + i end
 
+-- A SELECT'S VALUE IS A ZERO-BASED INDEX INTO ITS OPTIONS.
+--
+-- The protocol says so (docs/protocol.md 11), the client numbers its `<option>`
+-- elements from 0 (client/src/render/ui.js), and the server DROPS an index
+-- outside [0, count-1] rather than clamping it (main.cpp:912). Lua counts from
+-- one, and this panel sent Lua's number: so choosing the first weapon in the
+-- list did nothing at all, choosing the second gave you the first, and the
+-- highlight on a freshly opened panel was off by one or dropped outright.
+--
+-- It reads like "no weapon" occupying a slot in the list, which is exactly what
+-- it is -- index 0, which nothing here ever named. maps/scripts/debug_panel.lua
+-- had it right all along.
+local function to_option(i) return i - 1 end          -- Lua index -> wire index
+local function from_option(v) return v + 1 end        -- wire index -> Lua index
+
 local function build_panel(idx)
   local inv = W.get(idx)
   local list = W.list(idx)
-  local options, value = {}, 1
+  local options, value = {}, 0
   for i, w in ipairs(list) do
     options[i] = w.def.label
-    if w.name == inv.current then value = i end
+    if w.name == inv.current then value = to_option(i) end
   end
   if #options == 0 then options[1] = "(none)" end
 
   local widgets = {
     { kind = "label",  id = 0, label = "Weapon" },
     { kind = "select", id = W_SELECT, label = "Held", value = value,
-      lo = 1, hi = #options, options = options },
+      lo = 0, hi = #options - 1, options = options },
     { kind = "label",  id = 0, label = "Ammunition" }
   }
   for i, a in ipairs(sorted_ammo()) do
@@ -1106,9 +1121,9 @@ local function refresh_panel(e, idx)
 
   local list = W.list(idx)
   for i, w in ipairs(list) do
-    if w.name == inv.current and shown[idx].sel ~= i then
-      shown[idx].sel = i
-      dnp.ui_set(e, panel_of[idx], W_SELECT, i)
+    if w.name == inv.current and shown[idx].sel ~= to_option(i) then
+      shown[idx].sel = to_option(i)
+      dnp.ui_set(e, panel_of[idx], W_SELECT, to_option(i))
     end
   end
 
@@ -1124,7 +1139,12 @@ local function refresh_panel(e, idx)
   end
 end
 
-function on_ui_event(e, ui_id, widget, value)
+--- What the player did with the panel.
+---
+--- Public, with the global hook below a one-line delegate, for the same reason
+--- W.pickup is: the VM HARVESTS hooks out of _G after loading, so there is no
+--- global left for a test -- or a trigger, or the editor's preview -- to call.
+function W.ui_event(e, ui_id, widget, value)
   local idx = e:index()
   if idx == nil or panel_of[idx] ~= ui_id then return end
   if widget ~= W_SELECT then
@@ -1141,11 +1161,24 @@ function on_ui_event(e, ui_id, widget, value)
   end
 
   local list = W.list(idx)
-  local chosen = list[value]
+  local chosen = list[from_option(value)]
   if chosen then
     W.select(idx, chosen.name)
     if shown[idx] then shown[idx].sel = value end
   end
+end
+
+function on_ui_event(e, ui_id, widget, value)
+  return W.ui_event(e, ui_id, widget, value)
+end
+
+--- Choose a weapon by its WIRE index, as the client's message does.
+---
+--- For a test. The index convention is the thing worth checking and it only
+--- shows up when an event comes back in, so this routes through the same code
+--- a real message does rather than reaching for W.select.
+function W.choose(e, option)
+  return W.ui_event(e, panel_of[e:index()], W_SELECT, option)
 end
 
 function on_tick()

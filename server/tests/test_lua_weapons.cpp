@@ -1048,6 +1048,63 @@ int main(int argc, char** argv) {
     // IN `order`, which is what the list is sorted by.
     CHECK(str("label_list") == "Bullets, Shells, Rockets, Cells");
 
+    // A SELECT'S VALUE IS A ZERO-BASED INDEX, and choosing each option must
+    // land on the weapon whose label is at that index.
+    //
+    // The bug this replaces: Lua counts from one and this panel sent Lua's
+    // number, so choosing the FIRST weapon did nothing at all (index 0 reached
+    // list[0], which is nil) and choosing the second gave you the first. It
+    // reads exactly like an unnamed "no weapon" entry occupying the top of the
+    // list -- because that is what index 0 was.
+    //
+    // Round-tripped through on_ui_event, the same entry point the client's
+    // message reaches, rather than by inspecting the panel: the panel was
+    // already self-consistent and wrong.
+    if (!run("local p = dnp.players()[1]\n"
+             "local inv = weapons.get(p:index())\n"
+             "inv.have = { fists = true, pistol = true, shotgun = true }\n"
+             "local panel = weapons.panel_for(p:index())\n"
+             "sel_widget = nil\n"
+             "for _, w in ipairs(panel.widgets) do\n"
+             "  if w.kind == 'select' then sel_widget = w end\n"
+             "end\n"
+             "sel_lo, sel_hi = sel_widget.lo, sel_widget.hi\n"
+             "sel_opts = #sel_widget.options\n"
+             "sel_labels = table.concat(sel_widget.options, ', ')\n",
+             "reading the select")) return 1;
+    std::printf("  the weapon select offers %d options [%d..%d]: %s\n",
+                (int)num("sel_opts"), (int)num("sel_lo"), (int)num("sel_hi"),
+                str("sel_labels").c_str());
+    // The range the wire expects: zero to count-1. The server DROPS anything
+    // outside it rather than clamping (main.cpp:912), so an off-by-one here is
+    // a selection that silently never happens.
+    CHECK(num("sel_lo") == 0);
+    CHECK(num("sel_hi") == num("sel_opts") - 1);
+
+    // Every index, in order, lands on its own label.
+    if (!run("local p = dnp.players()[1]\n"
+             "local panel = weapons.panel_for(p:index())\n"
+             "local sel\n"
+             "for _, w in ipairs(panel.widgets) do\n"
+             "  if w.kind == 'select' then sel = w end\n"
+             "end\n"
+             "local ok = 0\n"
+             "local got = {}\n"
+             "for i = 0, #sel.options - 1 do\n"
+             "  weapons.choose(p, i)\n"
+             "  local now = weapons.get(p:index()).current\n"
+             "  got[#got + 1] = now\n"
+             "  if weapons.defs[now] and weapons.defs[now].label == sel.options[i + 1] then\n"
+             "    ok = ok + 1\n"
+             "  end\n"
+             "end\n"
+             "sel_matched = ok\n"
+             "sel_got = table.concat(got, ', ')\n", "round-tripping the select"))
+        return 1;
+    std::printf("  choosing options 0..%d selects: %s\n",
+                (int)num("sel_opts") - 1, str("sel_got").c_str());
+    CHECK(num("sel_matched") == num("sel_opts"));
+
     // CONTROL, and it is the whole claim: declare a FIFTH pool and it appears,
     // in its declared position, with an id of its own. Nothing in this file
     // knows the word 'plasma'.
