@@ -19,10 +19,30 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 11;  // 11 added camera paths (design §4.1)
-                                        // (10 added the texture scale a map is drawn at;
+inline constexpr u16 MAP_VERSION = 12;  // 12 added flat styles and surface alpha
+                                        // (11 added camera paths (design §4.1);
+                                        // 10 added the texture scale a map is drawn at;
                                         //  8 added its body proportions;
                                         //  7 added sector holes)
+
+// THE OLDEST FILE THIS STILL READS, and the only version window the format has
+// ever had.
+//
+// Every earlier bump rewrote every map, because every earlier bump changed what
+// a map MEANS: a file without sector holes is not a file whose holes are empty,
+// and a file without body proportions was built for a body it cannot name. A
+// v11 file is different. Everything 12 added is a rendering attribute whose
+// absence has exactly one correct reading -- unrotated, unshifted, full size,
+// opaque -- which is what a v11 map was already drawn as.
+//
+// So the window costs two `if`s and saves re-baking every level in the
+// repository, which is not free: a bake moves each map's content hash, and
+// modules/doom2/assets/music/index.json is keyed by it, so a re-bake silently
+// unmaps thirty-two soundtracks. It has done so twice.
+//
+// It closes the moment a field arrives whose absence is ambiguous. Say so here
+// when that happens rather than quietly widening it further.
+inline constexpr u16 MAP_MIN_VERSION = 11;
 
 enum class MapLoadStatus : u8 {
     Ok = 0,

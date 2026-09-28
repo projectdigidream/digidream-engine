@@ -79,9 +79,114 @@ static void build_reference(MapStorage& s) {
     s.side_render_mut(1).peg_flags = peg_flag::LOWER_UNPEGGED;
     s.side_render_mut(3).middle = wall;
     s.side_render_mut(3).x_offset = fx::from_frac(3, 2);
+
+    // HOW THE FLATS ARE PAINTED, on the fixture every other test in this file
+    // shares -- so the round trip, the physics-separation check and the
+    // bit-flip sweep all cover them without a fourth fixture to keep in step.
+    // Deliberately all four attributes on one flat and a different one on
+    // another: a writer that emitted the floor's style twice would round-trip
+    // perfectly against a fixture that painted only floors.
+    s.sector_render_mut(0).floor.angle = 0x20000000u;         // an eighth turn
+    s.sector_render_mut(0).floor.off_x = fx::from_frac(5, 4);
+    s.sector_render_mut(0).floor.off_y = fx::from_int(-3);
+    s.sector_render_mut(0).floor.scale = fx::from_frac(5, 2);
+    s.sector_render_mut(0).floor.alpha = 128;
+    s.sector_render_mut(1).ceil.angle = 0xC0000000u;          // three eighths
+    s.sector_render_mut(2).ceil.scale = fx::from_frac(1, 4);
+    s.side_render_mut(2).alpha = 200;
     s.side_render_mut(3).y_offset = fx::from_int(-4);
     s.side_render_mut(9).upper = step;
     s.side_render_mut(9).peg_flags = peg_flag::UPPER_UNPEGGED;
+}
+
+// A MAP WRITTEN BEFORE FLAT STYLES EXISTED STILL LOADS, AND IS THE SAME MAP.
+//
+// The format has never had a version window before: every earlier bump changed
+// what a map MEANS, so every earlier bump rewrote every map. This one did not.
+// Everything version 12 added is a rendering attribute whose absence has one
+// correct reading, so a version 11 file is a version 12 file with every style
+// at its default -- and its CONTENT HASH is unchanged, which is the load-
+// bearing half. modules/doom2/assets/music/index.json is keyed by that hash,
+// and a re-bake of all thirty-two levels to gain a floor rotation nobody used
+// would silently unmap thirty-two soundtracks.
+//
+// Built by DOWNGRADING a file this writer produced rather than by checking in
+// an old one: a fixture recorded once drifts, and this way the two layouts are
+// compared as they are actually written today.
+static void test_a_map_written_before_styles_still_loads() {
+    std::printf("mapfile: a map from before flat styles is the same map\n");
+
+    // STATIC, both of them. A MapStorage is a fixed-size arena measured in
+    // megabytes, and four of them plus two file buffers overflowed the stack
+    // under the sanitizer -- which is the whole reason the other fixtures in
+    // this file are static too.
+    static MapStorage src;
+    src.clear();
+    build_reference(src);
+    // Defaults everywhere, because defaults are all a version 11 file can say.
+    for (u32 i = 0; i < src.view().sector_count; ++i) {
+        src.sector_render_mut(i).floor = SurfaceStyle{};
+        src.sector_render_mut(i).ceil = SurfaceStyle{};
+    }
+    for (u32 i = 0; i < src.view().side_count; ++i) src.side_render_mut(i).alpha = 255;
+
+    static u8 buf[8192];
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+    const size_t n = w.size();
+
+    // The two render sections are the last thing before the trailing hash, so
+    // the bytes ahead of them are byte-identical between the two versions.
+    constexpr size_t SECTOR_12 = 5 + 2 * 29, SECTOR_11 = 5;
+    constexpr size_t SIDE_12 = 24, SIDE_11 = 23;
+    const u32 sectors = src.view().sector_count;
+    const u32 sides = src.view().side_count;
+    const size_t tail = sectors * SECTOR_12 + sides * SIDE_12 + 8;
+    CHECK(n > tail);
+    const size_t head = n - tail;
+
+    static u8 old[8192];
+    size_t m = 0;
+    for (size_t i = 0; i < head; ++i) old[m++] = buf[i];
+    old[4] = 11; old[5] = 0;
+    size_t at = head;
+    for (u32 i = 0; i < sectors; ++i, at += SECTOR_12) {
+        for (size_t k = 0; k < SECTOR_11; ++k) old[m++] = buf[at + k];
+    }
+    for (u32 i = 0; i < sides; ++i, at += SIDE_12) {
+        for (size_t k = 0; k < SIDE_11; ++k) old[m++] = buf[at + k];
+    }
+    for (size_t k = 0; k < 8; ++k) old[m++] = buf[at + k];   // the hash
+
+    static MapStorage dst;
+    ByteReader r(old, m);
+    const MapLoadStatus st = load_map(r, dst);
+    CHECK(st == MapLoadStatus::Ok);
+    // THE HASH IS THE CLAIM. load_map already compares it against the one the
+    // file carries, so reaching Ok says the recomputed hash matched -- and this
+    // says it matched the one the NEW writer produces for the same map.
+    CHECK(dst.hash() == src.hash());
+    for (u32 i = 0; i < dst.view().sector_count; ++i) {
+        CHECK(dst.render_view().sector(i).floor.is_default());
+        CHECK(dst.render_view().sector(i).ceil.is_default());
+    }
+    for (u32 i = 0; i < dst.view().side_count; ++i) {
+        CHECK(dst.render_view().side(i).alpha == 255);
+    }
+
+    // CONTROL: the window has a bottom. A file one version older than the
+    // oldest supported is refused, or "we accept 11 and 12" is really "we
+    // accept anything" and the version field means nothing.
+    // `dst` again rather than a third arena: load_map clears its destination
+    // before it reads a byte, so a refused load leaves nothing behind.
+    old[4] = 10;
+    ByteReader r10(old, m);
+    CHECK(load_map(r10, dst) == MapLoadStatus::BadVersion);
+
+    // And so is one newer than this writer knows how to produce.
+    old[4] = 13;
+    ByteReader r13(old, m);
+    CHECK(load_map(r13, dst) == MapLoadStatus::BadVersion);
 }
 
 static void test_roundtrip() {
@@ -147,10 +252,19 @@ static void test_roundtrip() {
     const RenderData rb = dst.render_view();
     CHECK(ra.sector_count == rb.sector_count);
     CHECK(ra.side_count == rb.side_count);
+    const auto same_style = [&](const SurfaceStyle& x, const SurfaceStyle& y) {
+        CHECK(x.angle == y.angle);
+        CHECK(x.off_x == y.off_x);
+        CHECK(x.off_y == y.off_y);
+        CHECK(x.scale == y.scale);
+        CHECK(x.alpha == y.alpha);
+    };
     for (u32 i = 0; i < ra.sector_count && i < rb.sector_count; ++i) {
         CHECK(ra.sector(i).floor_tex == rb.sector(i).floor_tex);
         CHECK(ra.sector(i).ceil_tex == rb.sector(i).ceil_tex);
         CHECK(ra.sector(i).light_level == rb.sector(i).light_level);
+        same_style(ra.sector(i).floor, rb.sector(i).floor);
+        same_style(ra.sector(i).ceil, rb.sector(i).ceil);
     }
     for (u32 i = 0; i < ra.side_count && i < rb.side_count; ++i) {
         CHECK(ra.side(i).upper == rb.side(i).upper);
@@ -159,6 +273,7 @@ static void test_roundtrip() {
         CHECK(ra.side(i).peg_flags == rb.side(i).peg_flags);
         CHECK(ra.side(i).x_offset == rb.side(i).x_offset);
         CHECK(ra.side(i).y_offset == rb.side(i).y_offset);
+        CHECK(ra.side(i).alpha == rb.side(i).alpha);
     }
 }
 
@@ -552,6 +667,7 @@ int main() {
     test_rejects_bad_input();
     test_render_does_not_affect_physics();
     test_fuzz();
+    test_a_map_written_before_styles_still_loads();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

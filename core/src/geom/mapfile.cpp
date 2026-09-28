@@ -154,11 +154,23 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u8v(sc.len);
         for (u32 k = 0; k < sc.len; ++k) w.u8v(static_cast<u8>(sc.name[k]));
     }
+    // One flat's style. Written for both flats of every sector even when it is
+    // the default, because a fixed-width record is what lets the loader read
+    // this section without a per-sector length.
+    const auto write_style = [&](const SurfaceStyle& st) {
+        w.u32v(st.angle);
+        w.fxraw(st.off_x);
+        w.fxraw(st.off_y);
+        w.fxraw(st.scale);
+        w.u8v(st.alpha);
+    };
     for (u32 i = 0; i < m.sector_count; ++i) {
         const SectorRender& r = rd.sector(i);
         w.u16v(r.floor_tex);
         w.u16v(r.ceil_tex);
         w.u8v(r.light_level);
+        write_style(r.floor);
+        write_style(r.ceil);
     }
     for (u32 i = 0; i < m.side_count; ++i) {
         const SideRender& r = rd.side(i);
@@ -168,6 +180,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u8v(r.peg_flags);
         w.fxraw(r.x_offset);
         w.fxraw(r.y_offset);
+        w.u8v(r.alpha);
     }
 
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
@@ -184,7 +197,9 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const u16 version = r.u16v();
     const u16 flags = r.u16v();
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
-    if (version != MAP_VERSION) { store.clear(); return MapLoadStatus::BadVersion; }
+    if (version < MAP_MIN_VERSION || version > MAP_VERSION) {
+        store.clear(); return MapLoadStatus::BadVersion;
+    }
 
     // Reserved flags MUST be zero. Ignoring them would be the friendlier-looking
     // choice, but a set bit means the writer used a feature this build does not
@@ -656,15 +671,38 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         return t == NO_TEXTURE || t < texture_count;
     };
 
+    // A file older than the styles leaves them at their defaults, which is
+    // exactly how it was always drawn. See MAP_MIN_VERSION.
+    const bool has_styles = version >= 12;
+    const auto read_style = [&](SurfaceStyle& st) {
+        if (!has_styles) return true;
+        st.angle = r.u32v();
+        st.off_x = r.fxraw();
+        st.off_y = r.fxraw();
+        st.scale = r.fxraw();
+        st.alpha = r.u8v();
+        // A scale of zero or less is a division, and the file on disk is not
+        // necessarily the one mapc wrote. REFUSED rather than repaired: a
+        // repair would silently turn a flipped bit back into the default, and
+        // the default is the one value this hash does not fold in -- so
+        // clamping here was a genuine don't-care byte, and the format's own
+        // bit-flip test caught it within a minute of being written.
+        return st.scale.raw > 0;
+    };
+
     for (u32 i = 0; i < sector_count; ++i) {
         const u16 floor_tex = r.u16v();
         const u16 ceil_tex = r.u16v();
         const u8 light = r.u8v();
+        SectorRender& sr = store.sector_render_mut(i);
+        sr.floor = SurfaceStyle{};
+        sr.ceil = SurfaceStyle{};
+        const bool style_ok = read_style(sr.floor) && read_style(sr.ceil);
         if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        if (!style_ok) { store.clear(); return MapLoadStatus::BadIndex; }
         if (!texture_ok(floor_tex) || !texture_ok(ceil_tex)) {
             store.clear(); return MapLoadStatus::BadIndex;
         }
-        SectorRender& sr = store.sector_render_mut(i);
         sr.floor_tex = floor_tex;
         sr.ceil_tex = ceil_tex;
         sr.light_level = light;
@@ -677,6 +715,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         const u8 peg = r.u8v();
         const fx xo = r.fxraw();
         const fx yo = r.fxraw();
+        const u8 alpha = has_styles ? r.u8v() : 255;
         if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
         if (!texture_ok(upper) || !texture_ok(middle) || !texture_ok(lower)) {
             store.clear(); return MapLoadStatus::BadIndex;
@@ -688,6 +727,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         sr.peg_flags = peg;
         sr.x_offset = xo;
         sr.y_offset = yo;
+        sr.alpha = alpha;
     }
 
     const u64 want_hash = r.u64v();

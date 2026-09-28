@@ -130,11 +130,58 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
     side: sideIndex,
     texture,
     light: sector.light,
+    // A GRATE. One is a middle field on a two-sided line -- which this already
+    // drew, as a solid sheet, because nothing carried the fact that the picture
+    // has holes in it. `?? 1` is for the callers in tests that build a side by
+    // hand; a side from a real map always has one.
+    alpha: side.alpha ?? 1,
     positions,
     normals,
     uvs,
     indices: [0, 1, 2, 0, 2, 3]
   }
+}
+
+/**
+ * Where a point on a flat lands in its texture.
+ *
+ * The projection itself is the one a flat has always had: straight down the
+ * vertical axis, from WORLD coordinates, so neighbouring sectors' floors line
+ * up by construction rather than each restarting at its own origin. That is
+ * what a tiled floor should do, and is why for a long time there was nothing
+ * here to configure.
+ *
+ * `style` is the escape hatch, in the order an author would say it out loud:
+ * turn the pattern, then shift it, then draw it larger. The shift is in WORLD
+ * units and is applied before the scale, so "move it two units east" means the
+ * same distance whatever size the tiles are drawn at -- the alternative reads
+ * as the offset changing meaning when you resize.
+ *
+ * v is negated because textures are sampled with v running DOWN the image (see
+ * textures.js) while the world's y runs the other way. Pure, and exported, so
+ * the transform can be asserted without a GPU: an angle convention reasoned
+ * about instead of checked has shipped mirrored twice in this renderer.
+ */
+export function flatUV (x, y, style) {
+  let u = x
+  let v = -y
+  const turns = style?.turns ?? 0
+  if (turns !== 0) {
+    const a = turns * Math.PI * 2
+    const c = Math.cos(a)
+    const sn = Math.sin(a)
+    const ru = u * c - v * sn
+    const rv = u * sn + v * c
+    u = ru
+    v = rv
+  }
+  u += style?.offX ?? 0
+  v += style?.offY ?? 0
+  // A scale of zero is a division; the format refuses one at bake and again at
+  // load, and this is the third gate because a map is not the only way a style
+  // reaches here.
+  const k = style?.scale > 0 ? style.scale : 1
+  return [u / k, v / k]
 }
 
 /**
@@ -159,16 +206,21 @@ export function buildSectorSurfaces (map, sectorIndex) {
   const triCount = s.triCount * 3
 
   const flats = [
-    [SURFACE.FLOOR, s.floorZ, s.floorTex, true],
-    [SURFACE.CEIL, s.ceilZ, s.ceilTex, false]
+    [SURFACE.FLOOR, s.floorZ, s.floorTex, true, s.floorStyle],
+    [SURFACE.CEIL, s.ceilZ, s.ceilTex, false, s.ceilStyle]
   ]
   // A slab gets a bottom, facing down -- and it is a real surface, not a
   // decoration: the physics core stops a body rising into it at exactly this
   // height, from the SAME sector.thickness the mesh is built from. What you see
   // is what you collide with.
-  if (s.thickness > 0) flats.push([SURFACE.UNDERSIDE, s.floorZ - s.thickness, s.floorTex, false])
+  // The underside wears the floor's own style, because it is the same slab
+  // seen from below and a rotated floor with an unrotated bottom is two
+  // different tiles on one piece of geometry.
+  if (s.thickness > 0) {
+    flats.push([SURFACE.UNDERSIDE, s.floorZ - s.thickness, s.floorTex, false, s.floorStyle])
+  }
 
-  for (const [kind, z, tex, up] of flats) {
+  for (const [kind, z, tex, up, style] of flats) {
     if (tex === NO_TEXTURE) continue
     const positions = []
     const normals = []
@@ -187,18 +239,15 @@ export function buildSectorSurfaces (map, sectorIndex) {
         const p = map.points[pi]
         positions.push(toThreeX(p.x), toThreeY(z), toThreeZ(p.y))
         normals.push(0, up ? 1 : -1, 0)
-        // Flats are projected straight down the vertical axis, so a floor's
-        // pattern lines up across sector boundaries the way a tiled floor
-        // should, instead of restarting at each sector's own origin.
-        //
-        // v is negated because textures are sampled with v running DOWN the
-        // image (see textures.js) while the world's y runs the other way.
+        // The projection, and whatever the sector asked for on top of it: see
+        // flatUV.
         //
         // u is negated for CEILINGS only. A ceiling is the same triangles seen
         // from below, so its winding is reversed just after this -- and
         // reversing the geometry without reversing the uvs would leave its
         // texture mirrored relative to the floor's.
-        uvs.push(up ? p.x : -p.x, -p.y)
+        const [fu, fv] = flatUV(p.x, p.y, style)
+        uvs.push(up ? fu : -fu, fv)
       }
       indices.push(local)
     }
@@ -212,6 +261,7 @@ export function buildSectorSurfaces (map, sectorIndex) {
     }
     out.push({
       kind, sector: sectorIndex, side: -1, texture: tex, light: s.light,
+      alpha: style?.alpha ?? 1,
       positions, normals, uvs, indices
     })
   }
@@ -309,10 +359,16 @@ export function buildMapSurfaces (map) {
 export function mergeByTexture (surfaces) {
   const byTexture = new Map()
   for (const s of surfaces) {
-    let g = byTexture.get(s.texture)
+    // BY TEXTURE AND BY OPACITY, because they choose the material together. A
+    // grate and the wall beside it can share a picture and must not share a
+    // draw: one is opaque and keeps early-z, the other is blended and sorted.
+    // Merging them would make whichever arrived first decide for both.
+    const alpha = s.alpha ?? 1
+    const key = `${s.texture}:${alpha}`
+    let g = byTexture.get(key)
     if (!g) {
-      g = { texture: s.texture, positions: [], normals: [], uvs: [], colors: [], indices: [] }
-      byTexture.set(s.texture, g)
+      g = { texture: s.texture, alpha, positions: [], normals: [], uvs: [], colors: [], indices: [] }
+      byTexture.set(key, g)
     }
     const base = g.positions.length / 3
     for (const v of s.positions) g.positions.push(v)

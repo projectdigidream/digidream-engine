@@ -8,7 +8,7 @@
 #   west wall climbs    floor +0.5        floor 4.0 (too high: a wall)
 #                       (walkable step)   east wall grapples
 
-sector floor 0 ceil 40 tag 1 light 105 floortex FLOOR1 ceiltex CEIL1
+sector floor 0 ceil 40 tag 1 light 105 floortex FLOOR1 ceiltex CEIL1 floorangle 30 floorscale 1.5 flooroffx 0.25
   vertex  0   0   wall           tex WALL1
   vertex 40   0   neighbor 1     lower STEP1
   vertex 40  40   wall           tex WALL1
@@ -30,7 +30,7 @@ sector floor 0 ceil 40 tag 101 light 115 floortex PLAT1 ceiltex CEIL1
   vertex 40  40   neighbor 0     lower STEP1 unpeg-lower
 end
 
-sector floor 4 ceil 40 tag 3 light 120 floortex PLAT2 ceiltex CEIL1
+sector floor 4 ceil 40 tag 3 light 120 floortex PLAT2 ceiltex CEIL1 flooralpha 160
   vertex 60   0   wall           tex WALL2
   vertex 80   0   wall grapple   tex HOOK1
   vertex 80  40   wall           tex WALL2

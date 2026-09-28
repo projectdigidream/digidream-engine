@@ -218,22 +218,54 @@ console.log('\n--- the shader and the material it is used with agree ---')
   // explanation is a guard somebody eventually deletes.
   const sceneSrc = readFileSync(join(HERE, '..', 'src', 'render', 'scene.js'), 'utf8')
     .split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
+  // ONLY #material, which is the one every ordinary surface uses. #clearMaterial
+  // sits immediately after it and IS transparent, deliberately, and is checked
+  // on its own below -- a slice that ran past it would read the see-through
+  // twin's flags as the map's and report exactly the drift it exists to catch.
   const mapMaterial = sceneSrc.slice(sceneSrc.indexOf('new THREE.ShaderMaterial('),
-                                     sceneSrc.indexOf('#build'))
+                                     sceneSrc.indexOf('#clearMaterial'))
 
   // Does the shader ever emit a fragment whose alpha is not 1?
+  //
+  // Of the OPAQUE compilation, which is what the map material gets: the source
+  // also carries a `#ifdef DNP_ALPHA` branch for surfaces a map asked to see
+  // through, and the preprocessor removes it from every other draw. Cutting it
+  // out here is what makes this a question about the material under test rather
+  // than about the file it shares.
+  const opaqueOnly = (src) => src.replace(/#ifdef DNP_ALPHA[\s\S]*?#else/, '')
   const writes = [...FRAGMENT_SHADER.matchAll(/gl_FragColor\s*=\s*([^;]+);/g)].map((m) => m[1])
   const needsBlending = (src) =>
     [...src.matchAll(/gl_FragColor\s*=\s*([^;]+);/g)]
       .map((m) => m[1]).some((w) => !/,\s*1\.0\s*\)/.test(w))
 
   check(writes.length > 0, `the fragment shader writes gl_FragColor (${writes.length} site)`)
-  check(!needsBlending(FRAGMENT_SHADER),
-        'every write ends at alpha 1.0, so the material needs no blending')
+  check(!needsBlending(opaqueOnly(FRAGMENT_SHADER)),
+        'every opaque write ends at alpha 1.0, so the material needs no blending')
   check(FRAGMENT_SHADER.includes('discard'),
         'because the occlusion window is resolved by discard, not by alpha')
   check(mapMaterial.length > 0 && !/transparent:\s*true/.test(mapMaterial),
         'and the map material is not marked transparent')
+
+  // CONTROL: the cut is a cut. The source really does contain a write that
+  // needs blending -- the transparent branch -- so `opaqueOnly` removing
+  // nothing would be caught here rather than passing quietly.
+  check(needsBlending(FRAGMENT_SHADER),
+        'CONTROL: the whole source DOES contain a blending write, inside the ifdef')
+
+  // AND THE SEE-THROUGH TWIN IS THE OPPOSITE, in both files. A grate or a glass
+  // floor has to blend and must not write depth, which is exactly the cost the
+  // map material refuses -- so the two materials must disagree, on purpose, and
+  // a change that made them agree again would break one of them silently.
+  const clearMaterial = sceneSrc.slice(sceneSrc.indexOf('#clearMaterial'),
+                                       sceneSrc.indexOf('materialFor ('))
+  check(/transparent:\s*true/.test(clearMaterial),
+        'the see-through material IS transparent')
+  check(/depthWrite:\s*false/.test(clearMaterial),
+        'and does not write depth, or what is behind it would be rejected')
+  check(/FRAGMENT_SHADER_ALPHA/.test(clearMaterial),
+        'and it is the only one compiled with the alpha branch')
+  check(!/FRAGMENT_SHADER_ALPHA/.test(mapMaterial),
+        'CONTROL: the map material is not')
 
   // CONTROL: the drift this exists for. The map material as it used to be must
   // be caught -- otherwise the assertion above is satisfied by a slice that

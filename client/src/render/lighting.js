@@ -148,6 +148,10 @@ export const FRAGMENT_SHADER = /* glsl */`
   precision highp float;
   uniform sampler2D map;
   uniform vec2 repeat;
+  // Only read under DNP_ALPHA; declared unconditionally because an unused
+  // uniform costs nothing and two shader sources differing in their DECLARATION
+  // block is two sources to keep in step.
+  uniform float opacity;
   uniform int numLights;
   uniform vec3 occludeTarget;
   uniform float occludeRadius;
@@ -238,9 +242,27 @@ export const FRAGMENT_SHADER = /* glsl */`
       if (alpha < t) discard;
     }
 
+#ifdef DNP_ALPHA
+    // A TRANSPARENT SURFACE: a grate, a window, a sheet of glass over the room
+    // below. The picture's own alpha channel starts to matter here and nowhere
+    // else, and the cheap discard goes first so a fully-holed fragment costs no
+    // blend and leaves the depth buffer alone.
+    if (texel.a < 0.01) discard;
+    gl_FragColor = vec4(texel.rgb * lit, texel.a * opacity);
+#else
+    // OPAQUE, and literally so: every fragment writes alpha 1, which is what
+    // lets the map keep early-z. See the material's own comment in scene.js.
     gl_FragColor = vec4(texel.rgb * lit, 1.0);
+#endif
   }
 `
+
+// The same shader, for surfaces the map asked to see through.
+//
+// A define rather than a second source, so the opaque path compiles from
+// exactly the text it always did: a transparency feature that changed how every
+// wall in the map is lit would be a much worse trade than the one being made.
+export const FRAGMENT_SHADER_ALPHA = `#define DNP_ALPHA\n` + FRAGMENT_SHADER
 
 /**
  * Build the uniform block for a light set.

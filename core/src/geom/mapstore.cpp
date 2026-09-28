@@ -646,15 +646,36 @@ u64 MapStorage::hash() const noexcept {
             h.byte(static_cast<unsigned char>(textures_[i].name[k]));
         }
     }
+    // A FLAT'S STYLE IS FOLDED IN ONLY WHEN IT SAYS SOMETHING.
+    //
+    // Not an optimisation. This hash answers "did we parse the same file", and
+    // a map's identity should not change because it was saved by a newer
+    // writer: a level with no rotated floors is the same level before and after
+    // the format learned about rotation, and its hash is what
+    // modules/doom2/assets/music/index.json is keyed by.
+    //
+    // It costs nothing in coverage. The format's own fuzz test asserts there
+    // are no don't-care bytes, and there are none here either: "default" has
+    // exactly one encoding, so flipping any bit of a default style produces a
+    // non-default one, which IS folded in and caught.
+    const auto fold = [&](const SurfaceStyle& st) {
+        if (st.is_default()) return;
+        h.u32v(st.angle);
+        h.fxv(st.off_x); h.fxv(st.off_y); h.fxv(st.scale);
+        h.byte(st.alpha);
+    };
     for (u32 i = 0; i < sector_count_; ++i) {
         const SectorRender& r = sector_render_[i];
         h.u32v(r.floor_tex); h.u32v(r.ceil_tex); h.byte(r.light_level);
+        fold(r.floor);
+        fold(r.ceil);
     }
     for (u32 i = 0; i < side_count_; ++i) {
         const SideRender& r = side_render_[i];
         h.u32v(r.upper); h.u32v(r.middle); h.u32v(r.lower);
         h.byte(r.peg_flags);
         h.fxv(r.x_offset); h.fxv(r.y_offset);
+        if (r.alpha != 255) h.byte(r.alpha);
     }
 
     h.u32v(spawn_count_);

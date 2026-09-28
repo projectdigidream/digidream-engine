@@ -11,7 +11,8 @@ import { buildMapSurfaces, buildSectorSurfaces, mergeByTexture } from '../mapgeo
 import { makeTextureSet, loadRealTextures, DEFAULT_WORLD_SIZE } from './textures.js'
 import { NO_TEXTURE } from '../mapdata.js'
 import {
-  VERTEX_SHADER, FRAGMENT_SHADER, lightUniforms, MAX_ACTIVE_LIGHTS
+  VERTEX_SHADER, FRAGMENT_SHADER, FRAGMENT_SHADER_ALPHA, lightUniforms,
+  MAX_ACTIVE_LIGHTS
 } from './lighting.js'
 import { distanceForFraming } from '../camera.js'
 
@@ -51,6 +52,12 @@ export class MapView {
     // multiplier. See lighting.js -- multiplying, which is what vertexColors on
     // a standard material does, makes a torch in a dark room stay dark.
     this.materials = this.textures.map((tex) => this.#material(tex))
+
+    // The see-through twins, built on demand and keyed by texture AND opacity.
+    // On demand because a map with no transparent surface -- which is every map
+    // that existed before this -- must pay for nothing: no second material, no
+    // second shader compile, no second draw call.
+    this.clearMaterials = new Map()
 
     // Anything the map left untextured. Visible rather than invisible: a
     // missing texture should look like a missing texture, not like a hole.
@@ -156,8 +163,47 @@ export class MapView {
     return res
   }
 
-  materialFor (texture) {
-    return texture === NO_TEXTURE ? this.missing : (this.materials[texture] ?? this.missing)
+  /**
+   * The see-through twin of one texture's material, at one opacity.
+   *
+   * It SHARES the `map` and `repeat` uniform objects with its opaque twin
+   * rather than copying their values. Those are written later -- when the real
+   * picture arrives, and again every time the animator swaps a frame -- and a
+   * copy taken at construction would leave a grate showing the placeholder
+   * checker for the rest of the session while the wall beside it was fine.
+   */
+  #clearMaterial (texture, alpha) {
+    const base = this.materials[texture]
+    if (!base) return this.missing
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        map: base.uniforms.map,
+        repeat: base.uniforms.repeat,
+        opacity: { value: alpha },
+        ...this.lightUniforms
+      },
+      vertexShader: VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER_ALPHA,
+      side: THREE.FrontSide,
+      // The two flags the opaque material argues AGAINST at length, here for
+      // the surfaces that genuinely need them: blended, sorted, and not writing
+      // depth, so what is behind a grate is drawn rather than rejected. That
+      // cost is why it is opt-in per surface and why the map has to ask.
+      transparent: true,
+      depthWrite: false
+    })
+  }
+
+  materialFor (texture, alpha = 1) {
+    if (texture === NO_TEXTURE) return this.missing
+    if (!(alpha < 1)) return this.materials[texture] ?? this.missing
+    const key = `${texture}:${alpha}`
+    let m = this.clearMaterials.get(key)
+    if (!m) {
+      m = this.#clearMaterial(texture, alpha)
+      this.clearMaterials.set(key, m)
+    }
+    return m
   }
 
   /**
@@ -234,7 +280,7 @@ export class MapView {
     const surfaces = []
     for (const i of indices) surfaces.push(...buildSectorSurfaces(this.map, i))
     for (const g of mergeByTexture(surfaces)) {
-      const mesh = new THREE.Mesh(geometryFromGroup(g), this.materialFor(g.texture))
+      const mesh = new THREE.Mesh(geometryFromGroup(g), this.materialFor(g.texture, g.alpha))
       mesh.frustumCulled = false
       this.root.add(mesh)
       into.push(mesh)

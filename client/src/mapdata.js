@@ -75,7 +75,25 @@ export function readMap (map) {
       firstTri: u32[b32 + 5], triCount: u32[b32 + 6],
       floorTex: u32[b32 + 7], ceilTex: u32[b32 + 8],
       light: u32[b32 + 9],
-      thickness: fxToFloat(i64[b64 + 2])
+      thickness: fxToFloat(i64[b64 + 2]),
+      // How each flat is painted. Turns rather than brad, because that is what
+      // every angle becomes the moment it reaches this side; alpha as a
+      // fraction, because that is what a material takes. Both conversions
+      // happen once here rather than per vertex per rebuild.
+      floorStyle: {
+        turns: u32[b32 + 10] / 4294967296,
+        offX: fxToFloat(i64[b64 + 3]),
+        offY: fxToFloat(i64[b64 + 4]),
+        scale: fxToFloat(i64[b64 + 5]),
+        alpha: u32[b32 + 11] / 255
+      },
+      ceilStyle: {
+        turns: u32[b32 + 12] / 4294967296,
+        offX: fxToFloat(i64[b64 + 6]),
+        offY: fxToFloat(i64[b64 + 7]),
+        scale: fxToFloat(i64[b64 + 8]),
+        alpha: u32[b32 + 13] / 255
+      }
     }
   }
 
@@ -92,7 +110,8 @@ export function readMap (map) {
       upper: u32[b32 + 4], middle: u32[b32 + 5], lower: u32[b32 + 6],
       peg: u32[b32 + 7],
       xOffset: fxToFloat(i64[b64]),
-      yOffset: fxToFloat(i64[b64 + 1])
+      yOffset: fxToFloat(i64[b64 + 1]),
+      alpha: u32[b32 + 8] / 255
     }
   }
 

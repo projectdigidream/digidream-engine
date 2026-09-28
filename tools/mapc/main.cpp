@@ -15,6 +15,7 @@
 //
 //   # comment
 //   sector floor 0 ceil 40 tag 1 light 200 floortex FLOOR4 ceiltex CEIL3 skirt 2
+//   sector floorangle 45 floorscale 2 flooroffx 8 flooralpha 128   (and ceil*)
 //     vertex 0  0   wall           tex BRICK1
 //     vertex 40 0   neighbor 1     upper STEP2 lower STEP1 unpeg-lower
 //     vertex 40 40  wall           tex BRICK1 xoff 8
@@ -97,6 +98,17 @@ void err(int line, const char* fmt, ...) {
 // double: a double would round "0.1" before it ever reached fixed point, and
 // the whole map would inherit an error introduced by the compiler rather than
 // by the format.
+// ONE FLAT'S STYLE ATTRIBUTE, for whichever of the two flats named it.
+//
+// Written once rather than eight times. A floor and a ceiling take the same
+// four, and two copies of this is two places for a range check to be forgotten
+// -- which is how `light` would have shipped without its 0..255 test.
+//
+// Returns false for a suffix it does not know, so the caller can report the
+// whole word the author actually typed rather than a fragment of it.
+bool flat_attr(int line, const std::string& key, const std::string& val,
+               SurfaceStyle& st);
+
 bool parse_fx(const std::string& tok, fx& out) {
     size_t i = 0;
     bool neg = false;
@@ -128,6 +140,49 @@ bool parse_fx(const std::string& tok, fx& out) {
     const i64 num = whole * scale + frac;
     out = fx::from_frac(neg ? -num : num, scale);
     return true;
+}
+
+bool flat_attr(int line, const std::string& key, const std::string& val,
+               SurfaceStyle& st) {
+    if (key == "angle") {
+        // DEGREES here, brad in the file.
+        //
+        // Through parse_fx and then INTEGER division, not through a double.
+        // Degrees are what a person editing a floor pattern thinks in, and a
+        // parsed fx already holds `deg * 2^32` exactly -- so the brad is that
+        // raw over 360, which is one integer division that the editor's own
+        // parser can reproduce bit for bit on the same token. A double would
+        // have made this the one number two implementations of the grammar
+        // could round differently.
+        fx deg{};
+        if (!parse_fx(val, deg)) { err(line, "bad angle '%s'", val.c_str()); return true; }
+        st.angle = static_cast<u32>((deg.raw / 360) & 0xFFFFFFFF);
+        return true;
+    }
+    if (key == "offx") {
+        if (!parse_fx(val, st.off_x)) err(line, "bad offset '%s'", val.c_str());
+        return true;
+    }
+    if (key == "offy") {
+        if (!parse_fx(val, st.off_y)) err(line, "bad offset '%s'", val.c_str());
+        return true;
+    }
+    if (key == "scale") {
+        // Refused rather than clamped, and refused HERE rather than at load:
+        // zero is a division, and an author who wrote one wants to be told.
+        fx v{};
+        if (!parse_fx(val, v)) err(line, "bad scale '%s'", val.c_str());
+        else if (v.raw <= 0) err(line, "scale must be greater than zero, got '%s'", val.c_str());
+        else st.scale = v;
+        return true;
+    }
+    if (key == "alpha") {
+        const int a = std::atoi(val.c_str());
+        if (a < 0 || a > 255) err(line, "alpha must be 0..255, got '%s'", val.c_str());
+        else st.alpha = static_cast<u8>(a);
+        return true;
+    }
+    return false;
 }
 
 // Intern a texture name, reporting the two ways it can fail rather than
@@ -380,6 +435,19 @@ int main(int argc, char** argv) {
                 }
                 else if (tok[i] == "floortex") sector_render.floor_tex = intern(lineno, store, tok[i + 1]);
                 else if (tok[i] == "ceiltex") sector_render.ceil_tex = intern(lineno, store, tok[i + 1]);
+                // HOW THE FLAT IS PAINTED. `floorangle`, `ceilscale`,
+                // `flooralpha` and the rest: one prefix naming which surface,
+                // one suffix naming which attribute. The exact matches above
+                // come first, so `floor` and `floortex` are still themselves.
+                else if (tok[i].compare(0, 5, "floor") == 0 ||
+                         tok[i].compare(0, 4, "ceil") == 0) {
+                    const bool is_floor = tok[i][0] == 'f';
+                    const std::string sub = tok[i].substr(is_floor ? 5 : 4);
+                    SurfaceStyle& st = is_floor ? sector_render.floor : sector_render.ceil;
+                    if (!flat_attr(lineno, sub, tok[i + 1], st)) {
+                        err(lineno, "unknown sector attribute '%s'", tok[i].c_str());
+                    }
+                }
                 else err(lineno, "unknown sector attribute '%s'", tok[i].c_str());
             }
         } else if (tok[0] == "hole") {
@@ -434,6 +502,15 @@ int main(int argc, char** argv) {
                         err(lineno, "yoff needs a number"); break;
                     }
                     ++i;
+                } else if (tok[i] == "alpha") {
+                    // A GRATE. 255 is the solid sheet this renderer drew for
+                    // every wall; anything less lets the picture's own alpha
+                    // channel through, which is how Doom's fences and windows
+                    // are made and what this could not express at all.
+                    if (i + 1 >= tok.size()) { err(lineno, "alpha needs 0..255"); break; }
+                    const int a = std::atoi(tok[++i].c_str());
+                    if (a < 0 || a > 255) err(lineno, "alpha must be 0..255, got '%s'", tok[i].c_str());
+                    else v.render.alpha = static_cast<u8>(a);
                 } else if (tok[i] == "unpeg-upper") v.render.peg_flags |= peg_flag::UPPER_UNPEGGED;
                 else if (tok[i] == "unpeg-lower") v.render.peg_flags |= peg_flag::LOWER_UNPEGGED;
                 else err(lineno, "unknown edge attribute '%s'", tok[i].c_str());

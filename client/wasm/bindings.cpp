@@ -257,6 +257,20 @@ void dnp_map_sector(const geom::MapStorage* m, unsigned i, long long* out64, uns
     out32[7] = r.floor_tex;
     out32[8] = r.ceil_tex;
     out32[9] = r.light_level;
+    // HOW EACH FLAT IS PAINTED. Appended, both flats together, for the reason
+    // the agent layout above states at length: this is mirrored by hand in
+    // client/src/mapdata.js, so a slot INSERTED here renumbers everything after
+    // it on one side only.
+    out64[3] = r.floor.off_x.raw;
+    out64[4] = r.floor.off_y.raw;
+    out64[5] = r.floor.scale.raw;
+    out64[6] = r.ceil.off_x.raw;
+    out64[7] = r.ceil.off_y.raw;
+    out64[8] = r.ceil.scale.raw;
+    out32[10] = r.floor.angle;
+    out32[11] = r.floor.alpha;
+    out32[12] = r.ceil.angle;
+    out32[13] = r.ceil.alpha;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -277,6 +291,7 @@ void dnp_map_side(const geom::MapStorage* m, unsigned i, long long* out64, unsig
     out32[5] = r.middle;
     out32[6] = r.lower;
     out32[7] = r.peg_flags;
+    out32[8] = r.alpha;
 }
 
 // Bulk, because a per-index call for twelve thousand indices is the one place
@@ -726,6 +741,38 @@ void dnp_map_set_sector_render(geom::MapStorage* m, unsigned i, unsigned floor_t
     // draws as a slab edge -- so it goes to the Sector, not to SectorRender.
     // One number, which is what makes the picture and the collision agree.
     m->sector_mut(i).thickness = fx::from_raw(thickness64[0]);
+}
+
+// HOW A FLAT IS PAINTED: `which` is 0 for the floor and 1 for the ceiling, and
+// off64 is {off_x, off_y, scale} in raw fx.
+//
+// ITS OWN CALL rather than more arguments on set_sector_render, and the reason
+// is the shared scratch buffer: a caller that passed the old argument list
+// would leave the new slots holding whatever the last call left there, and a
+// sector would come out rotated by a number nobody wrote. A separate entry
+// point is one a caller either makes or does not.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_flat_style(geom::MapStorage* m, unsigned i, unsigned which,
+                            unsigned angle, unsigned alpha,
+                            const long long* off64) {
+    if (i >= m->sector_count()) return;
+    geom::SectorRender& r = m->sector_render_mut(i);
+    geom::SurfaceStyle& st = which == 0 ? r.floor : r.ceil;
+    st.angle = angle;
+    st.alpha = static_cast<u8>(alpha);
+    st.off_x = fx::from_raw(off64[0]);
+    st.off_y = fx::from_raw(off64[1]);
+    st.scale = fx::from_raw(off64[2]);
+    // A scale of zero is a division, and save_map would write a file its own
+    // loader refuses. The editor already refuses one at parse; this is the
+    // gate that makes the refusal structural.
+    if (st.scale.raw <= 0) st.scale = fx::one();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_side_alpha(geom::MapStorage* m, unsigned i, unsigned alpha) {
+    if (i >= m->view().side_count) return;
+    m->side_render_mut(i).alpha = static_cast<u8>(alpha);
 }
 
 EMSCRIPTEN_KEEPALIVE

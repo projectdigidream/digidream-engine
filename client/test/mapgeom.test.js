@@ -14,7 +14,7 @@
 //      and it only shows once something moves, which is the worst time to
 //      find out.
 //
-import { buildSectorSurfaces, mergeByTexture, SURFACE } from '../src/mapgeom.js'
+import { buildSectorSurfaces, mergeByTexture, flatUV, SURFACE } from '../src/mapgeom.js'
 import { NO_TEXTURE, NO_SECTOR, PEG } from '../src/mapdata.js'
 
 let checks = 0
@@ -320,6 +320,86 @@ console.log('\n--- merging ---')
   const s1 = mergeByTexture(buildSectorSurfaces(fixture(), 1))
   check(near(s0[0].colors[0], 1), 'sector 0 is fully lit')
   check(near(s1[0].colors[0], 128 / 255), 'sector 1 carries its own lower light level')
+}
+
+console.log('\n--- how a flat is painted ---')
+{
+  // THE DEFAULT IS THE PROJECTION THAT WAS ALWAYS THERE. Straight down the
+  // vertical axis, in world coordinates, with v running the other way -- and a
+  // sector that asks for nothing must still get exactly this, or every map in
+  // the repository moves the day the field is added.
+  const [du, dv] = flatUV(3, 5, undefined)
+  check(near(du, 3) && near(dv, -5), `no style is the plain projection (${du}, ${dv})`)
+  const [eu, ev] = flatUV(3, 5, { turns: 0, offX: 0, offY: 0, scale: 1, alpha: 1 })
+  check(near(eu, 3) && near(ev, -5), 'and so is a style that says nothing')
+
+  // A QUARTER TURN. Checked at a point on an axis, where the answer is exact
+  // and a sign error cannot hide in a rounding: (1, 0) has uv (1, 0), and
+  // turning it a quarter sends it to (0, 1).
+  const [qu, qv] = flatUV(1, 0, { turns: 0.25, scale: 1 })
+  check(near(qu, 0, 1e-12) && near(qv, 1, 1e-12),
+        `a quarter turn sends (1,0) to (${qu.toFixed(3)}, ${qv.toFixed(3)})`)
+  // And half a turn is the negation, which a rotation built the wrong way round
+  // would also satisfy at a quarter -- so both are asked.
+  const [hu, hv] = flatUV(2, -3, { turns: 0.5, scale: 1 })
+  check(near(hu, -2, 1e-12) && near(hv, -3, 1e-12),
+        `half a turn negates (${hu.toFixed(3)}, ${hv.toFixed(3)})`)
+
+  // SCALE MAKES THE PATTERN BIGGER, which means FEWER texture units across the
+  // same world distance. The direction is the whole of what an author will get
+  // wrong first, so it is asserted rather than described.
+  const [su] = flatUV(4, 0, { scale: 2 })
+  check(near(su, 2), `scale 2 draws the tile twice as large (u ${su})`)
+  const [tu] = flatUV(4, 0, { scale: 0.5 })
+  check(near(tu, 8), `and scale 0.5 half the size (u ${tu})`)
+  // A scale of zero is a division. Refused at bake and at load; this is the
+  // third gate, because a style reaches here from more places than a map.
+  const [zu, zv] = flatUV(3, 5, { scale: 0 })
+  check(near(zu, 3) && near(zv, -5), 'a scale of zero falls back to one rather than to infinity')
+
+  // THE OFFSET IS IN WORLD UNITS AT ANY SCALE, which is the property that makes
+  // it usable: nudging a pattern two units east must not mean something
+  // different once the tiles are drawn larger.
+  const [ou] = flatUV(0, 0, { offX: 2, scale: 1 })
+  const [ou2] = flatUV(0, 0, { offX: 2, scale: 2 })
+  const [pu2] = flatUV(2, 0, { offX: 0, scale: 2 })
+  check(near(ou, 2), `an offset of two shifts by two (${ou})`)
+  check(near(ou2, pu2),
+        'and at scale 2 it shifts the pattern by the same world distance a body would walk')
+
+  // ORDER: turn, then shift, then scale. A version that shifted before turning
+  // would rotate the offset with the pattern and put it somewhere else.
+  const [ru] = flatUV(1, 0, { turns: 0.25, offX: 1, scale: 1 })
+  check(near(ru, 1, 1e-12), `the offset is applied after the turn (${ru.toFixed(3)})`)
+}
+
+console.log('\n--- transparent surfaces ---')
+{
+  // A sector that asks to be seen through says so on every one of its surfaces,
+  // and one that does not is fully opaque -- which is what keeps the material
+  // choice out of the renderer's guesswork.
+  const m = fixture()
+  m.sectors[0].floorStyle = { turns: 0, offX: 0, offY: 0, scale: 1, alpha: 0.5 }
+  m.sides[0].alpha = 0.25
+  const surf = buildSectorSurfaces(m, 0)
+  const floor = find(surf, SURFACE.FLOOR)
+  const wall = find(surf, SURFACE.MIDDLE, 0)
+  check(near(floor.alpha, 0.5), `the floor carries its opacity (${floor.alpha})`)
+  check(near(wall.alpha, 0.25), `and the wall its own (${wall.alpha})`)
+  check(near(find(surf, SURFACE.CEIL).alpha, 1),
+        'while the ceiling, which asked for nothing, stays opaque')
+
+  // AND THEY DO NOT SHARE A DRAW. Two surfaces with the same picture and
+  // different opacities choose different materials -- one keeps early-z, the
+  // other is blended and sorted -- so merging them would let whichever arrived
+  // first decide for both.
+  const a = { texture: 3, alpha: 1, light: 255, positions: [0, 0, 0], normals: [0, 1, 0], uvs: [0, 0], indices: [0] }
+  const b = { ...a, alpha: 0.5 }
+  check(mergeByTexture([a, b]).length === 2, 'one picture at two opacities is two draws')
+  // CONTROL: the same picture at the SAME opacity is still one draw, or the
+  // split is not a split -- it is merging having stopped working.
+  check(mergeByTexture([a, { ...a }]).length === 1, 'and at one opacity it is still one')
+  check(mergeByTexture([a, b])[0].alpha === 1, 'each group carries the opacity its material needs')
 }
 
 console.log(`\nmapgeom: ${checks} checks, ${fails} failures`)

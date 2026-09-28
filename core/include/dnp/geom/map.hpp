@@ -245,6 +245,54 @@ inline constexpr u8 LOWER_UNPEGGED = 1u << 1;
 // opening itself (middle -- a grate, a window frame). Which fields are visible
 // follows from the two sectors' heights and is computed at draw time, so a
 // moving sector reveals and hides them without the map being edited.
+// HOW A FLAT IS PAINTED, beyond which picture goes on it.
+//
+// A floor's texture is projected straight down the vertical axis from WORLD
+// coordinates, so every sector's floor lines up with its neighbours' by
+// construction -- which is what a tiled floor should do, and is why for a long
+// time there was nothing here to configure. This is the escape hatch for the
+// cases where that is exactly wrong: a pattern laid at an angle to the grid, a
+// logo that has to sit in one place, a tile drawn at twice the size.
+//
+// PURELY COSMETIC, and that is what keeps it in the render view rather than in
+// Sector. The simulation never reads a byte of it. `thickness` is the
+// cautionary tale in the other direction -- it started life over here on the
+// assumption that it was decoration, and collision from below is what proved
+// it was not.
+struct SurfaceStyle {
+    // A turn in 2^32, the engine's angle everywhere else. Rotation is about
+    // the world origin, not the sector's, for the same reason the projection
+    // is: two sectors sharing a pattern must share the frame it is drawn in.
+    u32 angle = 0;
+
+    // Shifted AFTER the rotation and the scale, in world units, so nudging a
+    // pattern into place does not mean undoing a rotation in your head.
+    fx  off_x{};
+    fx  off_y{};
+
+    // HOW MANY TIMES LARGER the pattern is drawn. One is the size every flat
+    // was drawn at before this existed, and is the default. Zero is refused at
+    // bake and clamped on load: it is a division.
+    fx  scale = fx::one();
+
+    // 255 is opaque and is drawn exactly as it always was -- no blending, no
+    // sorting, early-z intact. Anything less makes the surface transparent, and
+    // the texture's own alpha channel starts to matter with it: a grate is a
+    // holed picture at 254, a sheet of glass is a solid one at 128.
+    u8  alpha = 255;
+
+    // IS THIS THE MAP THAT WAS ALWAYS DRAWN? Read by the content hash, which
+    // folds these fields only when they say something -- so a file written
+    // before they existed and one written after it hash identically, and a map
+    // does not change identity by being re-saved. Every non-default value is
+    // hashed, and "default" has exactly one encoding, so no byte is a
+    // don't-care.
+    bool is_default() const noexcept {
+        return angle == 0 && off_x.raw == 0 && off_y.raw == 0 &&
+               scale.raw == fx::one().raw && alpha == 255;
+    }
+};
+
 struct SideRender {
     u16 upper  = NO_TEXTURE;
     u16 middle = NO_TEXTURE;
@@ -252,6 +300,12 @@ struct SideRender {
     u8  peg_flags = 0;
     fx  x_offset{};   // texture alignment along the wall
     fx  y_offset{};
+
+    // As SurfaceStyle::alpha, and only that: a wall already has its offsets and
+    // its pegging, and Doom's walls do not rotate or scale. What was missing
+    // was the grate -- a two-sided line with a holed picture on it, which this
+    // renderer drew as a solid sheet.
+    u8  alpha = 255;
 };
 
 struct SectorRender {
@@ -264,6 +318,14 @@ struct SectorRender {
     // nothing at all, because a black screen looks like a broken renderer and a
     // flatly-lit one looks like exactly what it is.
     u8 light_level = 255;
+
+    // Both flats, because they are the same surface seen from two sides and a
+    // map with a rotated floor pattern almost always wants the ceiling to
+    // match. Appended rather than inserted: SectorRender is aggregate-
+    // initialised in tests, and Sector's own comment records what putting a
+    // field in the middle of one of these costs.
+    SurfaceStyle floor{};
+    SurfaceStyle ceil{};
 };
 
 // The scripts a map needs to behave correctly, named by the map itself.
