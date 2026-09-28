@@ -47,6 +47,14 @@ export function readSwingShape (world, agent) {
     halfArc: par('attack_half_arc'),
     from: par('attack_sweep_from'),
     to: par('attack_sweep_to'),
+    // THE VERTICAL HALF OF THE ARC. `halfPitch` of 0 means the engine does no
+    // vertical test at all, which is not the same as a flat swing: the collider
+    // is then bounded only by the bodies' heights, and a flat fan is the honest
+    // drawing of that. Non-zero and it is a real surface with a top and a
+    // bottom, which is what gets drawn instead.
+    pitchFrom: par('attack_pitch_from'),
+    pitchTo: par('attack_pitch_to'),
+    halfPitch: par('attack_half_pitch'),
     // U8 parameters are stored as integers, not fixed-point fractions.
     ticks: Number(world.getParamRaw(agent, world.paramId('attack_ticks'))),
     cooldown: Number(world.getParamRaw(agent, world.paramId('attack_cooldown')))
@@ -73,14 +81,26 @@ export function sweptSpan (shape) {
   // sweep. The sweep is fixed; the region is the parameters again.
   const lo = Math.min(shape.from, shape.to) - shape.halfArc
   const hi = Math.max(shape.from, shape.to) + shape.halfArc
-  return { mid: (lo + hi) / 2, half: (hi - lo) / 2 }
+  // The same question vertically, so the faint region covers the whole volume
+  // an overhead swing passes through rather than just its widest slice.
+  const plo = Math.min(shape.pitchFrom, shape.pitchTo) - shape.halfPitch
+  const phi = Math.max(shape.pitchFrom, shape.pitchTo) + shape.halfPitch
+  return {
+    mid: (lo + hi) / 2, half: (hi - lo) / 2,
+    pitchMid: (plo + phi) / 2,
+    // Zero stays zero: "no vertical test" must not become a tall region, or the
+    // faint wedge would claim a limit the engine does not apply.
+    pitchHalf: shape.halfPitch > 0 ? (phi - plo) / 2 : 0
+  }
 }
 
 /** Whether two shapes would draw differently. */
 export function sameSwingShape (a, b) {
   if (!a || !b) return false
   return a.reach === b.reach && a.inner === b.inner && a.halfArc === b.halfArc &&
-         a.from === b.from && a.to === b.to
+         a.from === b.from && a.to === b.to &&
+         a.pitchFrom === b.pitchFrom && a.pitchTo === b.pitchTo &&
+         a.halfPitch === b.halfPitch
 }
 
 /**
@@ -102,7 +122,7 @@ export function sameSwingShape (a, b) {
  * observe -- costs more than it is worth. Stated here rather than discovered
  * from a test that counts nine of ten.
  */
-export function sweepOffset ({ from, to, ticks, left }) {
+export function swingPhase ({ ticks, left }) {
   if (!left || left <= 0) return null
   // total - 1, not total: N ticks visit N positions, and for the first to be
   // `from` and the last `to` the step is 1/(N-1). Mirrors World::resolve_attack
@@ -110,8 +130,28 @@ export function sweepOffset ({ from, to, ticks, left }) {
   // one step short of the angle it was told to sweep to.
   const total = ticks > 0 ? ticks : 1
   const elapsed = total - left
-  const phase = total > 1 ? Math.max(0, Math.min(1, elapsed / (total - 1))) : 0.5
+  return total > 1 ? Math.max(0, Math.min(1, elapsed / (total - 1))) : 0.5
+}
+
+export function sweepOffset ({ from, to, ticks, left }) {
+  const phase = swingPhase({ ticks, left })
+  if (phase === null) return null
   return from + (to - from) * phase
+}
+
+/**
+ * Where the collider is TILTED to, as a turn fraction. 0 is level, 0.25 is
+ * straight up.
+ *
+ * The same phase as the horizontal sweep and deliberately so: the engine lerps
+ * both from one `phase` in one place (World::resolve_attack), so an overhead
+ * chop that arrives at its lowest angle exactly as it arrives at its widest is
+ * a property of the simulation, not a coincidence of two renderers agreeing.
+ */
+export function pitchOffset ({ pitchFrom, pitchTo, ticks, left }) {
+  const phase = swingPhase({ ticks, left })
+  if (phase === null) return null
+  return pitchFrom + (pitchTo - pitchFrom) * phase
 }
 
 /**
@@ -137,6 +177,22 @@ export function swingYaw (facingTurns, offsetTurns) {
 }
 
 /**
+ * Point a mesh along an engine heading AND elevation.
+ *
+ * The yaw is a rotation about world Y; the pitch is about the mesh's own Z
+ * AFTER that, which is the horizontal axis perpendicular to the aim -- so a
+ * positive pitch raises the front of the wedge and leaves its width alone.
+ * Setting `rotation.x`/`.z` directly would compose in Euler order and tilt the
+ * wedge about a world axis, which rolls it sideways as soon as the yaw is not
+ * zero.
+ */
+export function aimSwing (mesh, facingTurns, offsetTurns, pitchTurns = 0) {
+  mesh.rotation.set(0, 0, 0)
+  mesh.rotateY(swingYaw(facingTurns, offsetTurns))
+  if (pitchTurns) mesh.rotateZ(pitchTurns * Math.PI * 2)
+}
+
+/**
  * A wedge lying in the XZ plane, centred on the origin, opening along +X.
  *
  * Built once per shape and reused: the swing's angle changes every tick and its
@@ -144,8 +200,15 @@ export function swingYaw (facingTurns, offsetTurns) {
  * allocate a buffer per frame for the duration of every swing.
  */
 export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, innerUnits = 0,
+                                        halfPitchTurns = 0,
                                         segments = 12, faint = false }) {
   const half = halfArcTurns * Math.PI * 2
+  if (halfPitchTurns > 0) {
+    return new THREE.Mesh(
+      swingPatchGeometry(THREE, { reachUnits, innerUnits, halfArcTurns,
+                                  halfPitchTurns, segments }),
+      swingMaterial(THREE, faint))
+  }
   const shape = new THREE.Shape()
   if (innerUnits > 0) {
     // A RING SEGMENT, not a wedge. attack_min_reach is the parameter that
@@ -178,7 +241,63 @@ export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, innerUnits = 0
   // laid down once here rather than by every caller remembering to.
   geo.rotateX(Math.PI / 2)
 
-  const mat = new THREE.MeshBasicMaterial({
+  const mesh = new THREE.Mesh(geo, swingMaterial(THREE, faint))
+  mesh.renderOrder = 998
+  mesh.visible = false
+  return mesh
+}
+
+/**
+ * THE SURFACE THE COLLIDER ACTUALLY OCCUPIES, when it has a vertical arc.
+ *
+ * A flat fan is the right drawing while `attack_half_pitch` is zero, because
+ * the engine then does no vertical test and the collider is bounded only by the
+ * bodies' heights. The moment a weapon declares a vertical half-arc that stops
+ * being true: an overhead chop is a patch with a top and a bottom, and drawing
+ * it flat shows it hitting things directly above and below that it cannot.
+ *
+ * Built as the shell between the inner and outer reach, swept over both angles,
+ * because the pair of surfaces is what reads as a volume once they are
+ * transparent. The side walls are not drawn -- two surfaces and a gap is enough
+ * to see where the thing is, and closing the box costs geometry nobody looks at.
+ *
+ * Local frame matches the flat fan's: +X is the aim, ±Z is the horizontal
+ * spread, ±Y is the vertical. So aimSwing points either kind the same way.
+ */
+export function swingPatchGeometry (THREE, { reachUnits, innerUnits = 0,
+                                             halfArcTurns, halfPitchTurns,
+                                             segments = 12 }) {
+  const ha = halfArcTurns * Math.PI * 2
+  const hp = halfPitchTurns * Math.PI * 2
+  const radii = innerUnits > 0 ? [innerUnits, reachUnits] : [reachUnits]
+  const pos = []
+  const idx = []
+  for (const r of radii) {
+    const base = pos.length / 3
+    for (let j = 0; j <= segments; j++) {
+      const p = -hp + (2 * hp * j) / segments
+      const cp = Math.cos(p)
+      for (let i = 0; i <= segments; i++) {
+        const a = -ha + (2 * ha * i) / segments
+        pos.push(r * cp * Math.cos(a), r * Math.sin(p), r * cp * Math.sin(a))
+      }
+    }
+    const row = segments + 1
+    for (let j = 0; j < segments; j++) {
+      for (let i = 0; i < segments; i++) {
+        const v = base + j * row + i
+        idx.push(v, v + 1, v + row, v + 1, v + row + 1, v + row)
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  geo.setIndex(idx)
+  return geo
+}
+
+function swingMaterial (THREE, faint) {
+  return new THREE.MeshBasicMaterial({
     color: faint ? 0x4488ff : 0xff5544,
     transparent: true,
     // Two wedges, and the pairing is what makes a 167 ms sweep readable: the
@@ -194,10 +313,6 @@ export function makeSwingMesh (THREE, { reachUnits, halfArcTurns, innerUnits = 0
     depthTest: false,
     depthWrite: false
   })
-  const mesh = new THREE.Mesh(geo, mat)
-  mesh.renderOrder = 998
-  mesh.visible = false
-  return mesh
 }
 
 
@@ -258,7 +373,8 @@ export class SwingTrail {
     this.live = []
     for (let i = 0; i < this.poolSize; i++) {
       const m = makeSwingMesh(this.THREE, {
-        reachUnits: shape.reach, innerUnits: shape.inner, halfArcTurns: shape.halfArc
+        reachUnits: shape.reach, innerUnits: shape.inner,
+        halfArcTurns: shape.halfArc, halfPitchTurns: shape.halfPitch
       })
       // Dimmer than the live collider and drawn under it, so the current
       // position stays legible against its own history.
@@ -277,7 +393,7 @@ export class SwingTrail {
    * renderer has no tick of its own to compare against, and the frame clock is
    * not one.
    */
-  offer ({ shape, left, offsetTurns, facingTurns, x, y, z, now }) {
+  offer ({ shape, left, offsetTurns, pitchTurns = 0, facingTurns, x, y, z, now }) {
     if (!sameSwingShape(shape, this.shape)) this.#rebuild(shape)
     if (!left || left <= 0 || offsetTurns === null) { this.lastLeft = null; return false }
     if (left === this.lastLeft) return false
@@ -289,7 +405,7 @@ export class SwingTrail {
     // worse than a short one.
     if (!mesh) return false
     mesh.position.set(x, y, z)
-    mesh.rotation.y = swingYaw(facingTurns, offsetTurns)
+    aimSwing(mesh, facingTurns, offsetTurns, pitchTurns)
     mesh.visible = true
     mesh.material.opacity = TRAIL_OPACITY
     this.live.push({ mesh, born: now })

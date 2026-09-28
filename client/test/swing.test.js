@@ -195,9 +195,27 @@ function fakeThree () {
         this.geometry = g
         this.material = m
         this.visible = false
-        this.rotation = { x: 0, y: 0, z: 0 }
+        // Enough of Object3D for aimSwing: a rotation with `set`, and the
+        // two local-axis rotate helpers. The stub used to be a bare {x,y,z},
+        // which is the fake offering LESS than the real thing -- aimSwing
+        // exists precisely because setting `.x`/`.z` directly composes in Euler
+        // order and rolls the wedge, so a stub that only allows that cannot
+        // test the thing that replaced it.
+        //
+        // rotateY then rotateZ is tracked as the pair of angles rather than a
+        // matrix: what the tests ask is "which way is it pointing", and the
+        // real composition is three's problem.
+        this.rotation = {
+          x: 0,
+          y: 0,
+          z: 0,
+          set (x, y, z) { this.x = x; this.y = y; this.z = z }
+        }
         this.position = { x: 0, y: 0, z: 0, set (x, y, z) { this.x = x; this.y = y; this.z = z } }
       }
+
+      rotateY (a) { this.rotation.y += a }
+      rotateZ (a) { this.rotation.z += a }
     }
   }
 }
@@ -357,6 +375,77 @@ check(fadeTrail(0.5, 0.5) === 0, 'and at its life it is gone')
   const single = sweptSpan({ from: -0.1, to: 0.1, halfArc: 0.05, ticks: 1 })
   check(Number.isFinite(single.mid) && single.half >= 0.05,
         'a one-tick swing still has a region')
+}
+
+console.log('\n--- the vertical arc is drawn, and only when the engine applies one ---')
+{
+  const { swingPatchGeometry, pitchOffset, sweptSpan, aimSwing, sameSwingShape } =
+    await import('../src/render/swing.js')
+
+  // A patch, not a fan: the surface has a top and a bottom, so its vertices
+  // must span both angles. Local frame matches the flat fan's -- +X the aim,
+  // +-Z the horizontal spread, +-Y the vertical.
+  const pos = []
+  const THREE = {
+    BufferGeometry: class { setAttribute (n, a) { this.a = a } setIndex (i) { this.i = i } },
+    Float32BufferAttribute: class { constructor (a) { pos.push(...a) } }
+  }
+  swingPatchGeometry(THREE, {
+    reachUnits: 2, innerUnits: 0, halfArcTurns: 1 / 8, halfPitchTurns: 1 / 16, segments: 6
+  })
+  let minY = Infinity; let maxY = -Infinity; let maxX = -Infinity
+  for (let i = 0; i < pos.length; i += 3) {
+    minY = Math.min(minY, pos[i + 1]); maxY = Math.max(maxY, pos[i + 1])
+    maxX = Math.max(maxX, pos[i])
+  }
+  // A sixteenth of a turn either side of level, at reach 2, is +-2*sin(22.5deg).
+  const want = 2 * Math.sin((1 / 16) * Math.PI * 2)
+  check(Math.abs(maxY - want) < 1e-6 && Math.abs(minY + want) < 1e-6,
+        `the patch spans +-${want.toFixed(3)} vertically (got ${minY.toFixed(3)}..${maxY.toFixed(3)})`)
+  // CONTROL: a flat fan has no vertical extent at all, so a version that
+  // ignored halfPitch would give minY === maxY === 0 above.
+  check(minY < 0 && maxY > 0, 'CONTROL: it really has a top and a bottom')
+  check(Math.abs(maxX - 2) < 1e-6, 'and it still reaches its declared distance')
+
+  // The pitch is lerped from the SAME phase as the yaw, so the two arrive
+  // together. A one-tick swing takes the middle of both.
+  const sh = { pitchFrom: -0.25, pitchTo: 0.25, ticks: 5 }
+  check(pitchOffset({ ...sh, left: 5 }) === -0.25, 'the first live tick is at pitch_from')
+  check(pitchOffset({ ...sh, left: 1 }) === 0.25, 'and the last is at pitch_to')
+  check(pitchOffset({ ...sh, left: 3 }) === 0, 'the middle is halfway between')
+  check(pitchOffset({ ...sh, left: 0 }) === null, 'and no swing is null, not a number')
+
+  // ZERO STAYS ZERO. `attack_half_pitch` of 0 means the engine does no vertical
+  // test, and a region drawn with a height would claim a limit that is not
+  // applied -- the faint wedge is the one thing on screen that says what CAN be
+  // hit.
+  const flat = sweptSpan({ from: -0.125, to: 0.125, halfArc: 0.125,
+                           pitchFrom: 0, pitchTo: 0, halfPitch: 0 })
+  check(flat.pitchHalf === 0, 'no declared pitch means no drawn height')
+  const tall = sweptSpan({ from: 0, to: 0, halfArc: 0.125,
+                           pitchFrom: -0.125, pitchTo: 0.125, halfPitch: 1 / 32 })
+  check(tall.pitchHalf > 0.125, `CONTROL: a declared one covers the whole sweep (${tall.pitchHalf})`)
+  check(Math.abs(tall.pitchMid) < 1e-9, 'and is centred between its endpoints')
+
+  // A shape that differs only in pitch must rebuild, or an overhead swing keeps
+  // drawing the flat fan the previous weapon had.
+  const base = { reach: 2, inner: 0, halfArc: 0.125, from: 0, to: 0,
+                 pitchFrom: 0, pitchTo: 0, halfPitch: 0 }
+  check(sameSwingShape(base, { ...base }), 'an identical shape is the same shape')
+  check(!sameSwingShape(base, { ...base, halfPitch: 0.05 }),
+        'CONTROL: one that differs only in pitch is not')
+
+  // Yaw and pitch compose about the right axes: the pitch is applied to the
+  // mesh's own Z after the yaw, so it never rolls the wedge.
+  const m = { rotation: { x: 0, y: 0, z: 0, set (x, y, z) { this.x = x; this.y = y; this.z = z } },
+              rotateY (a) { this.rotation.y += a }, rotateZ (a) { this.rotation.z += a } }
+  aimSwing(m, 0.25, 0, 1 / 8)
+  check(Math.abs(m.rotation.y - 0.25 * Math.PI * 2) < 1e-9, 'the yaw is the facing plus the offset')
+  check(Math.abs(m.rotation.z - (1 / 8) * Math.PI * 2) < 1e-9, 'and the pitch is its own axis')
+  check(m.rotation.x === 0, 'and nothing touches X, which would roll it')
+  aimSwing(m, 0.25, 0, 1 / 8)
+  check(Math.abs(m.rotation.z - (1 / 8) * Math.PI * 2) < 1e-9,
+        'CONTROL: aiming twice does not accumulate')
 }
 
 console.log(`\nswing: ${checks} checks, ${fails} failures`)

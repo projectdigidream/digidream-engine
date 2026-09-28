@@ -523,27 +523,27 @@ else
   node app/test/launch.test.js | tail -2
   (cd server/edge && node test/framing.test.js \
      && node test/relay.test.js | tail -2 \
-     && node test/noupstream.test.js 2>/dev/null | tail -2 \
+     && node test/noupstream.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# NOT tail -2. This one has failed intermittently in the suite while` \
      `# passing every time it is run by hand, and each occurrence has cost a` \
      `# bisect because the summary is all that survived -- the line naming the` \
      `# assertion was thrown away by the tail. Same shape as delta.test.js` \
      `# below: keep the failures, drop the passes.` \
      && node test/ui.test.js 2>/dev/null | grep -E 'FAIL|ui:' \
-     && node test/e2e.test.js 2>/dev/null | tail -2 \
+     && node test/e2e.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/delta.test.js 2>/dev/null | grep -E 'FAIL|failures' \
-     && node test/mapdata.test.js 2>/dev/null | tail -2 \
+     && node test/mapdata.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && DNP_MAP="$ROOT/build/$HOST_ARCH/big.dnpm" DNP_WT_PORT=34471 DNP_LINK_PORT=34541 \
-        node test/mapdata.test.js 2>/dev/null | tail -2 \
-     && node test/platform.test.js 2>/dev/null | tail -2 \
-     && node test/crush.test.js 2>/dev/null | tail -2 \
-     && node test/phase3.test.js 2>/dev/null | tail -2 \
-     && node test/params.test.js 2>/dev/null | tail -2 \
-     && node test/lua.test.js 2>/dev/null | tail -2 \
-     && node test/doors.test.js 2>/dev/null | tail -2 \
-     && node test/triggers.test.js 2>/dev/null | tail -2 \
-     && node test/attack.test.js 2>/dev/null | tail -2 \
-     && node test/enemies.test.js 2>/dev/null | tail -2 \
+        node test/mapdata.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/platform.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/crush.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/phase3.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/params.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/lua.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/doors.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/triggers.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/attack.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/enemies.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# WHICH entities a full snapshot spends its budget on. A datagram holds` \
      `# about 46 and a real level has more, so the choice is the whole question,` \
      `# and docs/protocol.md 5.4 has always specified distance then staleness.` \
@@ -551,9 +551,9 @@ else
      `# a player was told about whatever the map placed first however far away it` \
      `# had wandered -- and 211 of 250 monsters were never sent ONCE. The control` \
      `# is in the test: restore index order and four of its seven checks fail.` \
-     && node test/snapshot_order.test.js 2>/dev/null | tail -2 \
-     && node test/levels.test.js 2>/dev/null | tail -2 \
-     && node test/live.test.js 2>/dev/null | tail -2)
+     && node test/snapshot_order.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/levels.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters
   # MUST mispredict. If it does not, the replication is doing nothing and the
@@ -616,7 +616,7 @@ else
   # A scripted change to the RULES rather than the state: it travels on the
   # reliable channel with an epoch, not as a snapshot flag.
   (cd server/edge && DNP_EFFECTS=1 DNP_WT_PORT=34496 DNP_LINK_PORT=34578 \
-     node test/lua.test.js 2>/dev/null | tail -2)
+     node test/lua.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   echo
   echo "--- client prediction against the real server ---"

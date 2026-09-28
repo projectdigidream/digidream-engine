@@ -37,8 +37,8 @@ import { LocalConnection, hasLocalTransport } from './net_local.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { parseAtlas, pivotDisagreement } from './render/atlas.js'
-import { sweepOffset, makeSwingMesh, swingYaw, readSwingShape, sameSwingShape,
-         sweptSpan, SwingTrail } from './render/swing.js'
+import { sweepOffset, pitchOffset, makeSwingMesh, aimSwing, readSwingShape,
+         sameSwingShape, sweptSpan, SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { UiView } from './render/ui.js'
 import { wantsTouch } from './touch.js'
@@ -855,6 +855,7 @@ const SHOW_SWING = params.get('swing') !== '0'
 let swingShape = null
 let swingSpan = 0
 let swingMid = 0
+let swingPitchMid = 0
 let swingWhole = null
 let swing = null
 // The offset most recently drawn, for the HUD. Null when nothing is swinging.
@@ -870,12 +871,15 @@ function rebuildSwing (shape) {
   const swept = sweptSpan(shape)
   swingSpan = swept.half
   swingMid = swept.mid
+  swingPitchMid = swept.pitchMid
   swingWhole = makeSwingMesh(THREE, {
     reachUnits: shape.reach, innerUnits: shape.inner,
-    halfArcTurns: swingSpan, segments: 24, faint: true
+    halfArcTurns: swingSpan, halfPitchTurns: swept.pitchHalf,
+    segments: 24, faint: true
   })
   swing = makeSwingMesh(THREE, {
-    reachUnits: shape.reach, innerUnits: shape.inner, halfArcTurns: shape.halfArc
+    reachUnits: shape.reach, innerUnits: shape.inner,
+    halfArcTurns: shape.halfArc, halfPitchTurns: shape.halfPitch
   })
   scene.add(swingWhole)
   scene.add(swing)
@@ -1527,6 +1531,9 @@ function frame (now) {
     // The engine's own numbers, run through the engine's own formula. See
     // render/swing.js: the offset is a turn fraction from the aim.
     const off = sweepOffset({ ...swingShape, left: a.attackLeft })
+    // The vertical half of the same sweep, from the same phase, so an overhead
+    // chop tilts as it widens rather than the two being separately guessed.
+    const pitch = pitchOffset({ ...swingShape, left: a.attackLeft }) ?? 0
     swingLastOff = off
     const facingTurns = (a.facing >>> 0) / 4294967296
     // Drawn at the middle of the body rather than at its feet: a collider
@@ -1543,19 +1550,20 @@ function frame (now) {
     // because that one is about WHEN rather than about shape.
     swingWhole.visible = true
     swingWhole.position.set(subject.x, at - 0.02, subject.z)
-    swingWhole.rotation.y = swingYaw(facingTurns, swingMid)
+    aimSwing(swingWhole, facingTurns, swingMid, swingPitchMid)
 
     swing.visible = off !== null
     if (off !== null) {
       swing.position.set(subject.x, at, subject.z)
-      swing.rotation.y = swingYaw(facingTurns, off)
+      aimSwing(swing, facingTurns, off, pitch)
     }
 
     // One segment per TICK of the swing, at the angle the collider held then.
     // Offered every frame and added only when the countdown moves, so the trail
     // has as many segments as the swing had ticks whatever the display rate is.
     swingTrail.offer({
-      shape: swingShape, left: a.attackLeft, offsetTurns: off, facingTurns,
+      shape: swingShape, left: a.attackLeft, offsetTurns: off,
+      pitchTurns: pitch, facingTurns,
       x: subject.x, y: at - 0.01, z: subject.z, now: performance.now() / 1000
     })
     swingTrail.update(performance.now() / 1000)
