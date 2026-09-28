@@ -474,6 +474,41 @@ int main(int argc, char** argv) {
     // room's shape rather than the weapon's.
     CHECK(num("pellet_lines") > 1);
 
+    // AND SEVEN TRACERS, EACH DOWN ITS OWN LINE.
+    //
+    // This is what a player actually sees, and it was wrong while everything
+    // else was right: the tracer carried the body's FACING with no pellet
+    // offset, so seven rays were cast, seven scattered, seven landed in
+    // different places -- and seven tracers were drawn on top of each other
+    // down the centre line. One visible ray. The damage was correct and the
+    // picture was a lie, which is the worst way round, because nothing that
+    // measures damage can notice.
+    //
+    // Recorded by replacing dnp.vfx, which is an ordinary field on the `dnp`
+    // table, so everything up to the binding is the real code path.
+    if (!run("vfx_log = {}\n"
+             "local real_vfx = dnp.vfx\n"
+             "dnp.vfx = function(style, pos, angle, len)\n"
+             "  vfx_log[#vfx_log + 1] = angle\n"
+             "  return real_vfx(style, pos, angle, len)\n"
+             "end\n"
+             "weapons.get(dnp.players()[1]:index()).ammo.shells = 20\n",
+             "recording tracers")) return 1;
+    press_for(20, 20, "shotgun");
+    if (!run("local seen, n = {}, 0\n"
+             "for _, a in ipairs(vfx_log) do\n"
+             "  if not seen[a] then seen[a] = true; n = n + 1 end\n"
+             "end\n"
+             "tracers = #vfx_log\n"
+             "tracer_angles = n\n", "counting tracers")) return 1;
+    std::printf("  one blast drew %d tracers along %d distinct angles\n",
+                (int)num("tracers"), (int)num("tracer_angles"));
+    CHECK(num("tracers") == 7);
+    // SEVEN DISTINCT, not "more than one": the angles are the spread rolls
+    // themselves, so two pellets sharing one is a coincidence of the generator
+    // rather than of the room, and asserting the full count is fair.
+    CHECK(num("tracer_angles") == 7);
+
     // CONTROL, and it is the point: the CHAINGUN declares a spread too but fires
     // ONE ray, so its shots must reach one distance each. If this also came back
     // plural, the count above would be measuring something other than the

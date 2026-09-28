@@ -1220,12 +1220,20 @@ function acts.hitscan(m, a)
     -- than a guess, and the direction is the body's FACING rather than its
     -- aim: turning is a rate, so those differ while a monster is still coming
     -- round, and drawing the intent puts the line beside the thing it hit.
+    --
+    -- PLUS THIS PELLET'S OWN OFFSET, which is the whole of what makes a shotgun
+    -- look like one. Without it every pellet's tracer is drawn down the centre
+    -- line: seven rays are cast, seven scatter, seven land in different places
+    -- -- and seven tracers are stacked on top of each other, so the player sees
+    -- ONE. The damage was right and the picture was a lie, which is the worst
+    -- way round.
     if a.tracer then
       local from = m.p or m.e:pos()
       local muzzle = vec3.new(from.x, from.y, at.z)
       local len = dnp.length(vec3.new(at.x - muzzle.x, at.y - muzzle.y, ZERO))
       -- Length in 1/256 units, which the event carries as a u32.
-      dnp.vfx(a.tracer, muzzle, m.e:facing(), (len * fx.int(256)).int)
+      dnp.vfx(a.tracer, muzzle, wrap_brad(m.e:facing() + off),
+              (len * fx.int(256)).int)
     end
 
     -- An observability hook, for anything that wants to know what the shots
