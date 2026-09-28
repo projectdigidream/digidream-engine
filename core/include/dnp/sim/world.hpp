@@ -123,7 +123,20 @@ struct PendingVfx {
     u32  param = 0;
 };
 
-inline constexpr u32 MAX_PENDING_VFX = 32;
+// What one TICK may queue, and it matches proto::MAX_VFX -- what one snapshot
+// may carry -- deliberately.
+//
+// The two have to agree, because they fail differently: the writer's overflow
+// is logged ("N vfx dropped (budget)") and the engine's is a silent `false`
+// nobody checks. An engine smaller than the wire throws events away before
+// anything can report it.
+//
+// 32 stopped being enough the moment every hit also drew blood. A super shotgun
+// is twenty pellets, and twenty tracers beside twenty sprays is forty events
+// from one press -- so nine of them vanished, and which nine depended on the
+// order the script happened to emit in. At 34 bytes apiece the whole buffer is
+// two kilobytes; the cap is here to bound a burst, not to save memory.
+inline constexpr u32 MAX_PENDING_VFX = 64;
 
 // An agent swung at something and connected.
 //

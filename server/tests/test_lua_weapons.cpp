@@ -454,6 +454,33 @@ int main(int argc, char** argv) {
     std::printf("  pistol held 40 ticks: %d shots\n", semi_events);
     CHECK(semi_events == 1);
 
+    // ------------------------------------- one tick's worth of events fits
+    //
+    // MAX_PENDING_VFX is what the engine can queue in a tick and proto::MAX_VFX
+    // is what a snapshot can carry. They have to agree, because an event the
+    // engine refuses never reaches the writer that would have dropped it -- and
+    // the engine's refusal is SILENT while the writer's is logged.
+    //
+    // This got tight the moment every hit also drew blood: a super shotgun is
+    // twenty pellets, and twenty tracers beside twenty sprays is forty events
+    // from one press.
+    //
+    // Counted straight off the world, because press_for drives the weapon
+    // rather than the server loop and so nothing drains the queue under it --
+    // which is exactly the condition being measured.
+    if (!run("local inv = weapons.get(dnp.players()[1]:index())\n"
+             "inv.have.supershotgun = true\n"
+             "inv.ammo.shells = 40\n", "arming the super shotgun")) return 1;
+    world.clear_vfx();
+    press_for(20, 20, "supershotgun");
+    std::printf("  one super shotgun blast queued %u events (the engine holds %u)\n",
+                world.vfx_count(), sim::MAX_PENDING_VFX);
+    // Twenty tracers and twenty sprays, plus a muzzle flash. If this is capped
+    // at the limit, events are being thrown away before anything can send them.
+    CHECK(world.vfx_count() >= 40);
+    CHECK(world.vfx_count() < sim::MAX_PENDING_VFX);
+    world.clear_vfx();
+
     // ------------------------------------------- the pellets really do scatter
     //
     // THE ASSERTION THAT WAS MISSING. Everything above proves the shotgun casts
@@ -687,6 +714,9 @@ int main(int argc, char** argv) {
     // collider, a missile in flight and a recoil impulse are all things only
     // the engine does, and a harness that skipped it would be measuring a
     // sequence no game runs.
+    // What the ENGINE queued for the wire, tick by tick. Kept because the queue
+    // is cleared every tick, below.
+    std::vector<u16> queued_vfx;
     u32 server_tick_n = 0;
     const auto server_tick = [&](u16 buttons) {
         set_buttons(buttons);
@@ -712,6 +742,14 @@ int main(int argc, char** argv) {
                 vm.end_hook("on_attack", world.tick(), 2);
             }
         }
+        // AND THE PENDING VFX ARE DRAINED, exactly as main.cpp:2089 drains them
+        // once the snapshots are written. The queue holds MAX_PENDING_VFX = 32
+        // and a server empties it every tick; a harness that never did
+        // saturated after the first few shots and then silently rejected
+        // everything -- so a script that fired its event perfectly looked like
+        // an engine that had not queued one.
+        for (u32 i = 0; i < world.vfx_count(); ++i) queued_vfx.push_back(world.vfx(i).kind);
+        world.clear_vfx();
         ++server_tick_n;
     };
 
@@ -1224,6 +1262,7 @@ int main(int argc, char** argv) {
              "mobs.live[bystander:index()].hp = 200\n"
              "wall_hp0 = mobs.live[bystander:index()].hp\n",
              "placing a bystander")) return 1;
+    queued_vfx.clear();
     server_tick(0);
     server_tick(proto::button::ATTACK_PRIMARY);
     for (int i = 0; i < 60; ++i) server_tick(0);
@@ -1235,9 +1274,19 @@ int main(int argc, char** argv) {
              "  if k == 13 then smoke = smoke + 1 end\n"
              "end\n"
              "wall_fire, wall_smoke = fire, smoke\n", "reading the blast")) return 1;
+    // AND IT REACHED THE ENGINE'S EVENT LIST, which is what actually gets
+    // encoded into the snapshot. Counting the Lua calls proves the script fired
+    // and nothing more: a binding that rejected the event, or a world that had
+    // no room for it, would leave the script looking perfectly correct and the
+    // player looking at nothing.
+    int engine_fire = 0;
+    for (const u16 k : queued_vfx) if (k == 11) ++engine_fire;
     std::printf("  a rocket into a wall: %d fireball and %d smoke bursts, "
-                "a bystander went %d -> %d\n", (int)num("wall_fire"),
-                (int)num("wall_smoke"), (int)num("wall_hp0"), (int)num("wall_hp1"));
+                "a bystander went %d -> %d; the engine queued %d fireball "
+                "event(s) for the wire\n", (int)num("wall_fire"),
+                (int)num("wall_smoke"), (int)num("wall_hp0"), (int)num("wall_hp1"),
+                engine_fire);
+    CHECK(engine_fire >= 1);
     // IT EXPLODED. Both kinds its on_hit declares, drawn at the impact whether
     // or not anything was standing there.
     CHECK(num("wall_fire") >= 1);
