@@ -84,13 +84,27 @@ export function parseVfx (text) {
           // to black would be soot rather than absence -- there the whole burst
           // fades together on the material, because per-point opacity needs a
           // custom shader and a shader is a lot to carry for smoke.
-          blend: 'additive'
+          blend: 'additive',
+          // ATTACHED EMITTERS. `attach 1` makes the event's `param` an ENTITY
+          // INDEX rather than an emission radius, and turns the burst into an
+          // emitter that follows that entity: new particles come out of where
+          // it is NOW, not where it was when the event was sent.
+          //
+          // `rate` is particles a second and `linger` is how long it keeps
+          // going after the last event. There is no stop message and there does
+          // not need to be: a weapon that repeats, like a chainsaw's `cut`,
+          // re-sends its event every few ticks, and each one pushes the
+          // deadline out. Let go of the trigger and it lapses.
+          attach: 0,
+          rate: 40,
+          linger: 0.2
         }
       : { id, type, colour: 0xffdd55, width: 0.04, life: 0.12 }
     const NUM = {
       width: 'width', life: 'life', life_var: 'lifeVar', count: 'count',
       speed: 'speed', speed_var: 'speedVar', cone: 'cone', gravity: 'gravity',
-      drag: 'drag', size: 'size', size_end: 'sizeEnd'
+      drag: 'drag', size: 'size', size_end: 'sizeEnd',
+      attach: 'attach', rate: 'rate', linger: 'linger'
     }
     for (let k = 3; k < tok.length; k += 2) {
       const key = tok[k]
@@ -285,6 +299,10 @@ export class VfxView {
     this.parts = []
     this.maxBursts = 24
     this.lastNow = null
+    // Attached emitters, keyed by kind AND entity so one chainsaw does not
+    // cancel another's. Re-triggering refreshes the deadline rather than
+    // stacking a second emitter on the same body.
+    this.emitters = new Map()
 
     for (let i = 0; i < poolSize; i++) {
       // A unit-length box along +X, scaled per shot. A line primitive would be
@@ -386,8 +404,63 @@ export class VfxView {
     this.parts.push({ def, parts, points, maxLife: Math.max(...parts.map((p) => p.life)) })
   }
 
-  /** Fade everything live, and return expired meshes to the pool. */
-  update (now) {
+  /** What a kind is, so a caller can branch before it computes a tracer's ends. */
+  kindOf (kind) { return this.kinds.get(kind) }
+
+  /**
+   * Keep an attached emitter alive, creating it if it is not already running.
+   *
+   * `entity` is the index the event carried in `param`; the caller resolves it
+   * to a position every frame through `update`'s `locate`. Nothing is drawn
+   * here -- an emitter with no located entity emits nothing and quietly lapses,
+   * which is what happens when whatever it was following dies.
+   */
+  attach (kind, entity, dirTurns, now) {
+    const def = this.kinds.get(kind)
+    if (!def || def.type !== 'particles') return
+    const key = `${kind}:${entity}`
+    const live = this.emitters.get(key)
+    if (live) {
+      live.until = now + (def.linger ?? 0.2)
+      live.dir = dirTurns
+      return
+    }
+    if (this.emitters.size >= this.maxBursts) return
+    // Capacity for as many as can be alive at once, plus a second's slack, so
+    // the buffer is allocated ONCE and emission appends into it. A growing
+    // buffer per frame is the allocation this whole file avoids.
+    const maxLife = (def.life ?? 0.5) + (def.lifeVar ?? 0)
+    const cap = Math.min(512, Math.ceil((def.rate ?? 40) * (maxLife + 1)))
+    const THREE = this.THREE
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(cap * 3), 3))
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(cap * 3), 3))
+    const mat = new THREE.PointsMaterial({
+      size: def.size ?? 0.1,
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      sizeAttenuation: true,
+      blending: def.blend === 'alpha' ? THREE.NormalBlending : THREE.AdditiveBlending
+    })
+    const points = new THREE.Points(geo, mat)
+    points.frustumCulled = false
+    this.scene.add(points)
+    this.emitters.set(key, {
+      def, entity, dir: dirTurns, points, parts: [], cap, carry: 0,
+      until: now + (def.linger ?? 0.2)
+    })
+  }
+
+  /**
+   * Fade everything live, and return expired meshes to the pool.
+   *
+   * `locate(entity)` answers where an attached emitter's body is right now, or
+   * null if it is gone. Supplied by the caller because only it knows how to
+   * find one -- the local player and a remote entity come from different
+   * places, and this file should not learn the difference.
+   */
+  update (now, locate = null) {
     for (let i = this.live.length - 1; i >= 0; i--) {
       const e = this.live[i]
       const f = fade(now - e.born, e.life)
@@ -437,7 +510,52 @@ export class VfxView {
         (((b.def.sizeEnd ?? 0) - (b.def.size ?? 0.1)) * Math.min(1, Math.max(0, age)))
       if (b.def.blend === 'alpha') b.points.material.opacity = 1 - Math.min(1, Math.max(0, age))
     }
+
+    for (const [key, em] of [...this.emitters]) {
+      // WHERE THE BODY IS NOW. This is the whole point of an attached emitter:
+      // a burst spawns where the event said and a moving player runs out from
+      // under it, leaving the sparks behind in a line. Emitting from the
+      // located position each frame keeps them on the saw.
+      const at = locate ? locate(em.entity) : null
+      if (at && now < em.until) {
+        em.carry += (em.def.rate ?? 40) * dt
+        const want = Math.floor(em.carry)
+        if (want > 0) {
+          em.carry -= want
+          const room = em.cap - em.parts.length
+          const n = Math.max(0, Math.min(want, room))
+          if (n > 0) {
+            // emitBurst's `count` is the burst size, so it is asked for exactly
+            // as many as this frame earned rather than the kind's own number.
+            for (const p of emitBurst({ ...em.def, count: n }, at, em.dir, 0)) {
+              em.parts.push(p)
+            }
+          }
+        }
+      }
+      stepParticles(em.parts, dt, em.def)
+      if (em.parts.length === 0 && (!at || now >= em.until)) {
+        this.scene.remove(em.points)
+        em.points.geometry.dispose()
+        em.points.material.dispose()
+        this.emitters.delete(key)
+        continue
+      }
+      const pos = em.points.geometry.attributes.position
+      const col = em.points.geometry.attributes.color
+      for (let k = 0; k < em.parts.length; k++) {
+        const p = em.parts[k]
+        pos.array[k * 3] = p.x; pos.array[k * 3 + 1] = p.y; pos.array[k * 3 + 2] = p.z
+        const c = rampColour(em.def.colour, em.def.colourEnd ?? 0, p.age / p.life)
+        col.array[k * 3] = c.r; col.array[k * 3 + 1] = c.g; col.array[k * 3 + 2] = c.b
+      }
+      em.points.geometry.setDrawRange(0, em.parts.length)
+      pos.needsUpdate = true
+      col.needsUpdate = true
+    }
   }
+
+  get emitterCount () { return this.emitters.size }
 
   get burstCount () { return this.parts.length }
 }

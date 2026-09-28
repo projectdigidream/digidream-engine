@@ -508,8 +508,19 @@ weapon_vocab = {
 
     { name = "vfx",
       args = { { name = "effect", type = "int" },
-               { name = "length", type = "int", optional = true } },
-      doc = "A visual effect at the muzzle, by catalogue id. A muzzle flash." },
+               { name = "length", type = "int", optional = true },
+               { name = "attach", type = "bool", optional = true,
+                 doc = "Send the player's ENTITY INDEX instead of the length, " ..
+                       "which an `attach` particle kind reads as \"follow " ..
+                       "this body\". That is what makes a continuous spray " ..
+                       "stay on the weapon: without it each burst spawns where " ..
+                       "the event said and a moving player runs out from under " ..
+                       "it, leaving the sparks behind in a line.\n" ..
+                       "There is no stop event and none is needed -- a phase " ..
+                       "that repeats pushes the emitter's deadline out, and " ..
+                       "letting go of the trigger lets it lapse." } },
+      doc = "A visual effect at the player, by catalogue id. A muzzle flash, " ..
+            "or with `attach` a spray that follows them." },
 
     { name = "lua",
       args = { { name = "fn", type = "string" } },

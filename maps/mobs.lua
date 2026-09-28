@@ -2115,6 +2115,11 @@ function launch(m, kind, ang, offset)
     vec3.new(from.x + d.x * off, from.y + d.y * off,
              from.z + (def.z_offset or ZERO)))
   if p == nil then return end
+  -- WHICH WAY IT IS POINTING. A missile is the one prop with a heading worth
+  -- replicating, and without this every rocket reported zero -- so an eight-view
+  -- sprite with all eight rotations extracted showed rotation 1 from every
+  -- angle, which reads as the art missing its rotations.
+  p:set_facing(wrap_brad(ang))
   if def.anim_fly then p:set_animation(def.anim_fly) end
   flying[p:index()] = {
     p = p, def = def, dir = d, ang = ang,
@@ -2226,6 +2231,10 @@ local function update_missiles(tick)
         if d > cap then d = cap elseif d < -cap then d = -cap end
         s.ang = s.ang + d
         s.dir = dnp.dir(s.ang)
+        -- And the SPRITE turns with it. A revenant's missile that steers but
+        -- keeps its launch heading shows the wrong one of its eight views for
+        -- the rest of its flight.
+        s.p:set_facing(wrap_brad(s.ang))
       end
 
       -- WHAT DOES IT REACH FIRST -- a wall, or somebody?

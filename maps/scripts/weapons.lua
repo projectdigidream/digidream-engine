@@ -768,6 +768,16 @@ end
 
 -- Announce what is about to happen, so a client can draw a warning. Rides the
 -- existing vfx event; see mobs.telegraph for what `param` carries.
+-- A visual effect, at the player. `attach` sends the player's ENTITY INDEX in
+-- place of the radius, which is what turns a burst into an emitter that follows
+-- them: without it the sparks spawn where the event said and a moving player
+-- runs out from under them, leaving a line behind.
+function acts.vfx(c, a)
+  local p = c.e:pos()
+  dnp.vfx(a.effect, p, c.e:facing(),
+          a.attach and c.e:index() or (a.length or 0))
+end
+
 function acts.telegraph(c, a)
   local p, origin = c.e:pos(), nil
   if a.offset and a.offset ~= ZERO then
@@ -788,11 +798,6 @@ function acts.set_anim(c, a) c.e:set_animation(a.state) end
 
 function acts.switch_if_empty(c)
   if not has_ammo(c.inv, c.def) then switch_to_usable(c.inv) end
-end
-
-function acts.vfx(c, a)
-  local p = c.e:pos()
-  dnp.vfx(a.effect, p, c.e:facing(), a.length or 0)
 end
 
 function acts.lua(c, a)

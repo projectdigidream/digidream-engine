@@ -300,5 +300,82 @@ console.log('\n--- a particle kind draws through the same spawn as everything el
         `CONTROL: its Points was removed from the scene (${scene.children.length} left, the 2 tracers)`)
 }
 
+console.log('\n--- an attached emitter follows the body it came from ---')
+{
+  const { kinds } = parseVfx(
+    'vfx 20 particles attach 1 rate 60 linger 0.2 life 5 speed 0 speed_var 0 gravity 0 drag 0')
+  const scene = {
+    children: [],
+    add (o) { this.children.push(o) },
+    remove (o) { const i = this.children.indexOf(o); if (i >= 0) this.children.splice(i, 1) }
+  }
+  const view = new VfxView({ THREE: fakeTHREE(), scene, catalogue: { kinds }, poolSize: 2 })
+
+  // The body walks along +X. `locate` is what the caller supplies; here it is a
+  // moving point, which is the whole case this exists for.
+  let bodyX = 0
+  const locate = (index) => (index === 7 ? { x: bodyX, y: 0, z: 0 } : null)
+
+  check(view.kindOf(20).attach === 1, 'the kind says it attaches')
+  view.attach(20, 7, 0, 0)
+  check(view.emitterCount === 1, 'and an emitter starts')
+  // NOT a burst, and not a tracer: it must not have taken either pool.
+  check(view.burstCount === 0 && view.live.length === 0,
+        'CONTROL: it is neither a burst nor a tracer')
+
+  // Walk it a long way while it emits. The particles have no speed and no
+  // gravity, so wherever they are is where they were BORN -- which makes the
+  // spread of their positions exactly the spread of the emitter's.
+  for (let f = 1; f <= 30; f++) {
+    bodyX += 0.5
+    view.attach(20, 7, 0, f / 60)        // the weapon keeps re-triggering
+    view.update(f / 60, locate)
+  }
+  const em = [...view.emitters.values()][0]
+  const xs = em.parts.map((p) => p.x)
+  check(xs.length > 0, `it emitted (${xs.length} particles)`)
+  check(Math.max(...xs) - Math.min(...xs) > 5,
+        `and they were born ALONG the walk, not at one spot (${(Math.max(...xs) - Math.min(...xs)).toFixed(1)} apart)`)
+  // THE CLAIM: the newest particles are where the body is NOW. A burst spawned
+  // once at the event's position would leave every particle behind at x=0.
+  check(Math.abs(Math.max(...xs) - bodyX) < 0.6,
+        `the newest are on the body (${Math.max(...xs).toFixed(2)} vs ${bodyX.toFixed(2)})`)
+
+  // LINGER: it keeps going briefly after the last event, then stops emitting.
+  const before = em.parts.length
+  for (let f = 31; f <= 60; f++) view.update(f / 60, locate)   // no more attach()
+  check(em.parts.length > before, 'CONTROL: it kept emitting through the linger')
+  const after = em.parts.length
+  for (let f = 61; f <= 120; f++) view.update(f / 60, locate)
+  check(em.parts.length === after, 'and stopped once the linger ran out')
+
+  // A body that is gone stops it, and the emitter is cleaned up once its last
+  // particle has expired.
+  // `life_var` is spelled out rather than defaulted: the default is 0.25, which
+  // against a life of 0.1 gives particles that expire almost at once -- so an
+  // emitter nobody re-triggered was legitimately dead by frame 10, and the
+  // assertion below failed five runs in six for a reason that was not the one
+  // it names.
+  const short = parseVfx('vfx 21 particles attach 1 rate 60 linger 0.05 life 0.1 life_var 0').kinds
+  const v2 = new VfxView({ THREE: fakeTHREE(), scene, catalogue: { kinds: short }, poolSize: 1 })
+  // Re-triggered every frame, as a held trigger does. An emitter is kept alive
+  // by its events, not by existing.
+  for (let f = 1; f <= 10; f++) {
+    v2.attach(21, 3, 0, f / 60)
+    v2.update(f / 60, () => ({ x: 0, y: 0, z: 0 }))
+  }
+  check(v2.emitterCount === 1, 'an emitter with a body is alive')
+  for (let f = 11; f <= 90; f++) v2.update(f / 60, () => null)   // the body died
+  check(v2.emitterCount === 0, 'and one whose body is gone is cleaned up')
+
+  // Re-triggering the same kind on the same body REFRESHES rather than stacking
+  // -- a chainsaw held for ten seconds must not leave fifty emitters behind.
+  const v3 = new VfxView({ THREE: fakeTHREE(), scene, catalogue: { kinds }, poolSize: 1 })
+  for (let f = 0; f < 50; f++) v3.attach(20, 7, 0, f / 60)
+  check(v3.emitterCount === 1, 'fifty triggers on one body are one emitter')
+  v3.attach(20, 8, 0, 1)
+  check(v3.emitterCount === 2, 'CONTROL: a different body gets its own')
+}
+
 console.log(`\nvfx: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

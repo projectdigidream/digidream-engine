@@ -363,26 +363,26 @@ else
   node client/test/snapshots.test.js
   # Pure: no wasm, no GPU. The geometry rules of a Doom-style renderer are
   # arithmetic, and arithmetic is worth asserting rather than screenshotting.
-  node client/test/mapgeom.test.js | tail -2
-  node client/test/camera.test.js | tail -2
+  node client/test/mapgeom.test.js | grep -E 'FAIL|failures'
+  node client/test/camera.test.js | grep -E 'FAIL|failures'
   # Which animation a body should be playing. Pure, and the seam a mesh renderer
   # would later consume unchanged -- so the state machine is decided once here
   # rather than twice, once per renderer, and found to disagree.
-  node client/test/animstate.test.js | tail -2
+  node client/test/animstate.test.js | grep -E 'FAIL|failures'
   # The camera's path curve. Pure arithmetic, and the half of the path feature
   # that has no other way to be checked: a curve that quietly returned its
   # polyline would look right in every screenshot, so most of this file is the
   # control that says it bends.
-  node client/test/spline.test.js | tail -2
+  node client/test/spline.test.js | grep -E 'FAIL|failures'
   # And the same curve fed the points a .map file actually holds, through the
   # wasm module the client predicts with. The claim it alone can make: the arc
   # length tools/mapc baked into the file is the one this client rides at, which
   # is what every cutscene's timing rests on.
-  node client/test/paths.test.js | tail -2
+  node client/test/paths.test.js | grep -E 'FAIL|failures'
   # CAMERA_SET's field ids are positional across C++ and JavaScript with no
   # shared header. Getting them out of step changes the pitch when a map asks
   # for a lead, in every level already shipped, and nothing else would notice.
-  node client/test/proto_camera.test.js | tail -2
+  node client/test/proto_camera.test.js | grep -E 'FAIL|failures'
   # TOUCH, which is arithmetic and a state machine: where the stick's origin
   # is, what counts as a push, who owns which finger. The claims worth having
   # are the ones with a wrong answer you could ship -- pushing your thumb up
@@ -395,7 +395,7 @@ else
   # It also asserts the stick and the keyboard hand the SAME world vector to
   # camera.js -- one implementation of "a push on screen is a direction in the
   # world", with a control that the comparison can fail.
-  node client/test/touch.test.js | tail -2
+  node client/test/touch.test.js | grep -E 'FAIL|failures'
   # THE CLIENT, LOADED IN A BROWSER. tdz.test.js above checks main.js's
   # declaration order statically and says why that was all it could do:
   # main.js "wants a DOM, a WebGL context, three.js and a live WebTransport
@@ -408,37 +408,37 @@ else
   #
   # Self-gated like the editor's: it launches headless Chrome, so it skips
   # loudly without DNP_CLIENT_PAGE_TEST=1 rather than costing every run.
-  node client/test/page.test.js | tail -2
-  node client/test/entities.test.js | tail -2
-  node client/test/lighting.test.js | tail -2
-  node client/test/shadows.test.js | tail -2
+  node client/test/page.test.js | grep -E 'FAIL|failures'
+  node client/test/entities.test.js | grep -E 'FAIL|failures'
+  node client/test/lighting.test.js | grep -E 'FAIL|failures'
+  node client/test/shadows.test.js | grep -E 'FAIL|failures'
   # Static, and about the one client file nothing else loads.
-  node client/test/tdz.test.js | tail -2
-  node client/test/props.test.js | tail -2
+  node client/test/tdz.test.js | grep -E 'FAIL|failures'
+  node client/test/props.test.js | grep -E 'FAIL|failures'
   # ThreeSprite sheets: where a trimmed frame sits on its canvas, how that
   # becomes a quad hanging off the feet, and which rectangle of the packed
   # image it samples. Pure arithmetic over a manifest -- no sheet, no GPU.
-  node client/test/atlas.test.js | tail -2
-  node client/test/swing.test.js | tail -2
-  node client/test/vfx.test.js | tail -2
+  node client/test/atlas.test.js | grep -E 'FAIL|failures'
+  node client/test/swing.test.js | grep -E 'FAIL|failures'
+  node client/test/vfx.test.js | grep -E 'FAIL|failures'
   # Panels: the client's decoder against real bytes from the C++ encoder.
-  node client/test/ui.test.js | tail -2
+  node client/test/ui.test.js | grep -E 'FAIL|failures'
   # The MUSIC message: a cue name, a fade and a moment survive the wire as the
   # server writes them, and a moment the protocol does not know is refused.
-  node client/test/proto_music.test.js | tail -2
+  node client/test/proto_music.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
-  node client/test/animtex.test.js | tail -2
+  node client/test/animtex.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.
   # Skips itself when midisynth's wasm has not been built.
-  node client/test/music.test.js | tail -2
+  node client/test/music.test.js | grep -E 'FAIL|failures'
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
-  node client/test/mapmesh.test.js | tail -2
+  node client/test/mapmesh.test.js | grep -E 'FAIL|failures'
   # What the renderer does PER FRAME, in counts rather than milliseconds -- a
   # count is the same on every machine and a millisecond is whatever the laptop
   # was doing at the time. Guards the dirty check that stops the map being
   # re-derived sixty times a second once a level's first door has opened.
-  node client/test/renderbudget.test.js | tail -2
+  node client/test/renderbudget.test.js | grep -E 'FAIL|failures'
   # THE STUDIO (docs/STUDIO.md). Its compiler is mapc built to wasm, and the
   # first claim is that a bake on the device is a bake on the workstation:
   # byte for byte, over the map corpus, against the native binary. Then the

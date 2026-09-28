@@ -720,6 +720,26 @@ int l_prop_set_pos(lua_State* L) {
     return 0;
 }
 
+// prop:set_facing(brad)
+//
+// Which way a prop is POINTING, which is not something it has until a script
+// says so: a key and a barrel have no heading worth replicating, and every prop
+// spawned so far has been one of those.
+//
+// A MISSILE is not. `PropState::facing` has existed and been replicated in the
+// entity block since props were drawn at all, and nothing could write it -- so
+// every rocket in flight reported a heading of zero, and an eight-view sprite
+// with eight rotations extracted showed rotation 1 from every angle. It read as
+// the sprite lacking its rotations, which it does not.
+int l_prop_set_facing(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
+    if (e < 0) return 0;
+    ctx.world->prop_mut(static_cast<u32>(e)).facing =
+        brad(static_cast<u32>(luaL_checknumber(L, 2)));
+    return 0;
+}
+
 int l_prop_set_animation(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
@@ -765,6 +785,7 @@ const luaL_Reg PROP_METHODS[] = {
     {"set_solid", l_prop_set_solid},
     {"pos", l_prop_pos},
     {"set_animation", l_prop_set_animation},
+    {"set_facing", l_prop_set_facing},
     {"set_pos", l_prop_set_pos},
     {"despawn", l_prop_despawn},
     {nullptr, nullptr},

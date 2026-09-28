@@ -94,6 +94,9 @@ local fx = {
 local PROP_METHODS = {
   valid = true, index = true, pos = true, set_pos = true, kind = true,
   despawn = true, set_animation = true, set_solid = true, solid = true,
+  -- A missile is the one prop with a heading worth replicating, so it is the
+  -- one prop that sets its own.
+  set_facing = true,
   facing = true,
 }
 
@@ -207,6 +210,10 @@ function Ent:release(buttons)
   self.input.buttons = bit.band(self.input.buttons or 0, bit.bnot(buttons or 0))
   self.pressed = self.input.buttons
 end
+-- Which way a PROP points. The engine has always had the field and nothing
+-- could write it, so the harness never needed it either -- until a missile
+-- started setting its own heading so its eight-view sprite picks a view.
+function Ent:set_facing(a) self.aim = a end
 function Ent:kind() return self.what end
 -- Where the body is actually POINTING, which lags where it has been told to
 -- point. `facing` used to return a constant 0 here, so every test happened to

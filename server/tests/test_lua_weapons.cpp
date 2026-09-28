@@ -795,7 +795,14 @@ int main(int argc, char** argv) {
              "-- every weapon above and is long dead, and measuring a rocket\n"
              "-- against a corpse's hit points reports no damage from a rocket\n"
              "-- that worked perfectly.\n"
-             "target = mobs.spawn('zombieman', vec3.new(fx.frac(40,48), fx.int(0), fx.int(0)))\n"
+             "-- IN FRONT OF WHEREVER THE PLAYER IS. Absolute coordinates were\n"
+             "-- fine while the player sat on the origin and stopped being fine\n"
+             "-- the moment another block moved them: the rocket then flew off\n"
+             "-- past a target twenty units away and the test read as a rocket\n"
+             "-- that does no damage.\n"
+             "local pp = p:pos()\n"
+             "target = mobs.spawn('zombieman',\n"
+             "  vec3.new(pp.x + fx.frac(40,48), pp.y, pp.z))\n"
              "hp_before_rocket = target_hp()\n", "arming the rocket launcher")) return 1;
     CHECK(num("hp_before_rocket") > 0);
     server_tick(0);

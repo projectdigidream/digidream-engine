@@ -1396,6 +1396,18 @@ function drainSnapshots () {
       // means they are on screen and something else is wrong.
       vfxSeen++
       if (!vfx) { vfxNoView++; continue }
+      // AN ATTACHED EMITTER READS `param` AS AN ENTITY, not as a length.
+      //
+      // Branching here rather than inside spawn because tracerEnds would turn
+      // an entity index into a distance and hand the renderer a point several
+      // hundred units away -- the two meanings of `param` have to be told apart
+      // before anything does arithmetic on it.
+      const vdef = vfx.kindOf(v.kind)
+      if (vdef?.attach) {
+        vfx.attach(v.kind, v.param, (v.dir >>> 0) / 4294967296,
+                   performance.now() / 1000)
+        continue
+      }
       const { from, to } = tracerEnds(v, fxToFloat)
       vfx.spawn(v.kind,
                 { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
@@ -1630,7 +1642,18 @@ function frame (now) {
     // Fading them against the earlier stamp gave them a negative age, which
     // used to mean "retire immediately". Out of `if (props)` for the same
     // reason as the animator: a tracer is not a prop.
-    if (vfx) vfx.update(performance.now() / 1000)
+    // WHERE AN ATTACHED EMITTER'S BODY IS RIGHT NOW. The local player is not in
+    // `others` -- an observer never receives its own entity block -- so the two
+    // come from different places, and vfx.js is not told the difference.
+    if (vfx) {
+      vfx.update(performance.now() / 1000, (index) => {
+        if (myAgentIndex !== null && index === myAgentIndex) {
+          return { x: subject.x, y: subject.y + bodyHeight / 2, z: subject.z }
+        }
+        const ent = others.entities.get(index)
+        return ent ? ent.mesh.position : null
+      })
+    }
     if (props) {
       // ORDER MATTERS HERE, and it used to be wrong.
       //
