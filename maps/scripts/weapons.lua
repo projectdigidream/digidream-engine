@@ -376,24 +376,62 @@ function W.check_weapon(name, def, deferred)
 
       for i, tr in ipairs(trans or {}) do
         local twhere = pwhere .. " transition " .. i
-        if type(tr) ~= "table" or type(tr.when) ~= "string" then
+        if type(tr) ~= "table" or (type(tr.when) ~= "string" and
+                                   type(tr.when) ~= "table") then
           complain("%s: every transition is {when = '<condition>', to = " ..
-                   "'<phase>', ...}", twhere)
+                   "'<phase>', ...} or {when = {{cond = '<condition>', ...}, " ..
+                   "...}, to = '<phase>'}", twhere)
         else
-          local spec = COND[tr.when]
-          if spec == nil then
-            complain("%s: unknown condition '%s'", twhere, tr.when)
-          else
-            if def.phases[tr.to] == nil then
-              complain("%s: `to` names phase '%s', which this weapon does not have",
-                       twhere, tostring(tr.to))
-            end
+          if def.phases[tr.to] == nil then
+            complain("%s: `to` names phase '%s', which this weapon does not have",
+                     twhere, tostring(tr.to))
+          end
+          -- ONE CONDITION OR SEVERAL, and the several are ANDed.
+          --
+          -- The single-string form was the whole vocabulary at first, and it
+          -- could not say "the button went down AND there is no ammunition" --
+          -- so `no_ammo` alone routed an empty weapon to its dry click while it
+          -- was merely being HELD, and the auto-switch took it out of the
+          -- player's hands the instant they selected it from the panel. A
+          -- weapon you cannot choose to carry is not a weapon.
+          --
+          -- The list form is the mob vocabulary's shape, which has always had
+          -- it: `when = { { cond = "...", ... }, ... }`.
+          if type(tr.when) == "string" then
             local args = {}
             for k, v in pairs(tr) do
               if k ~= "when" and k ~= "to" then args[k] = v end
             end
-            check_fields(args, index_by_name(spec.args), twhere, ctx, spec.args)
-            for k, v in pairs(args) do tr[k] = v end
+            local spec = COND[tr.when]
+            if spec == nil then
+              complain("%s: unknown condition '%s'", twhere, tr.when)
+            else
+              check_fields(args, index_by_name(spec.args), twhere, ctx, spec.args)
+              for k, v in pairs(args) do tr[k] = v end
+            end
+          elseif #tr.when == 0 then
+            -- Vacuously true, which is `always` written the long way round and
+            -- almost certainly a truncated edit.
+            complain("%s: `when` is an empty list, which would fire every " ..
+                     "tick. Write `when = 'always'` if that is the intent.",
+                     twhere)
+          else
+            for j, one in ipairs(tr.when) do
+              local owhere = ("%s condition %d"):format(twhere, j)
+              if type(one) ~= "table" or type(one.cond) ~= "string" then
+                complain("%s: every entry is {cond = '<condition>', ...}", owhere)
+              else
+                local spec = COND[one.cond]
+                if spec == nil then
+                  complain("%s: unknown condition '%s'", owhere, one.cond)
+                else
+                  local args = {}
+                  for k, v in pairs(one) do if k ~= "cond" then args[k] = v end end
+                  check_fields(args, index_by_name(spec.args), owhere, ctx, spec.args)
+                  for k, v in pairs(args) do one[k] = v end
+                end
+              end
+            end
           end
         end
       end
@@ -776,10 +814,27 @@ local function run_sequence(c, ph)
   end
 end
 
+-- Does one transition fire? `when` is a condition NAME, whose arguments live on
+-- the transition itself, or a LIST of {cond = name, ...args} ALL of which must
+-- hold. The list is what lets a transition say "the button went down and there
+-- is no ammunition", which one condition cannot.
+local function transition_fires(c, tr)
+  if type(tr.when) == "string" then
+    local fn = conds[tr.when]
+    return fn ~= nil and fn(c, tr) and true or false
+  end
+  -- An empty list would be vacuously true, which is `always` written the long
+  -- way round and almost certainly a mistake; it is refused at load.
+  for _, one in ipairs(tr.when or {}) do
+    local fn = conds[one.cond]
+    if fn == nil or not fn(c, one) then return false end
+  end
+  return true
+end
+
 local function first_transition(c, ph)
   for _, tr in ipairs(ph.transitions or {}) do
-    local fn = conds[tr.when]
-    if fn and fn(c, tr) then return tr.to end
+    if transition_fires(c, tr) then return tr.to end
   end
   return nil
 end

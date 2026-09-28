@@ -441,6 +441,56 @@ int main(int argc, char** argv) {
     std::printf("  pistol held 40 ticks: %d shots\n", semi_events);
     CHECK(semi_events == 1);
 
+    // ------------------------------------------- the pellets really do scatter
+    //
+    // THE ASSERTION THAT WAS MISSING. Everything above proves the shotgun casts
+    // SEVEN rays; nothing proved they go anywhere different. A `count` that
+    // worked and a `spread` that was dropped would have passed every one of
+    // them -- and that is not hypothetical, it is precisely the bug
+    // maps/scripts/mobs.lua had for its whole life, where every monster
+    // declared a spread and the call site passed two arguments.
+    //
+    // Recorded at the binding, through mobs.on_shot's `reached`: seven pellets
+    // down one line reach the same distance, and seven down different lines do
+    // not.
+    if (!run("shot_reach = {}\n"
+             "mobs.on_shot = function(m, target, reached)\n"
+             "  shot_reach[#shot_reach + 1] = reached and reached.raw or -1\n"
+             "end\n"
+             "weapons.get(dnp.players()[1]:index()).ammo.shells = 20\n",
+             "recording reach")) return 1;
+    press_for(20, 20, "shotgun");
+    if (!run("local seen, n = {}, 0\n"
+             "for _, r in ipairs(shot_reach) do\n"
+             "  if not seen[r] then seen[r] = true; n = n + 1 end\n"
+             "end\n"
+             "pellets = #shot_reach\n"
+             "pellet_lines = n\n", "counting the pellets")) return 1;
+    std::printf("  one shotgun blast: %d pellets reaching %d distinct distances\n",
+                (int)num("pellets"), (int)num("pellet_lines"));
+    CHECK(num("pellets") == 7);
+    // MORE THAN ONE. Not seven: two pellets can land on the same wall at the
+    // same distance by geometry, and demanding seven would be asserting the
+    // room's shape rather than the weapon's.
+    CHECK(num("pellet_lines") > 1);
+
+    // CONTROL, and it is the point: the CHAINGUN declares a spread too but fires
+    // ONE ray, so its shots must reach one distance each. If this also came back
+    // plural, the count above would be measuring something other than the
+    // scatter -- the player turning, say.
+    if (!run("shot_reach = {}\n"
+             "weapons.get(dnp.players()[1]:index()).ammo.bullets = 200\n",
+             "recording again")) return 1;
+    press_for(3, 3, "chaingun");
+    if (!run("single_pellets = #shot_reach", "counting one shot")) return 1;
+    std::printf("  CONTROL: a chaingun burst put out %d ray(s) per shot\n",
+                (int)num("single_pellets"));
+    CHECK(num("single_pellets") >= 1);
+    CHECK(num("single_pellets") < 7);
+    if (!run("mobs.on_shot = function(m, target, reached)\n"
+             "  shot_log[#shot_log + 1] = (target ~= nil) and 1 or 0\n"
+             "end\n", "restoring the shot counter")) return 1;
+
     // ------------------------------------------------------------- ammunition
     if (!run("weapons.get(dnp.players()[1]:index()).ammo.shells = 10",
              "setting shells")) return 1;
@@ -463,6 +513,48 @@ int main(int argc, char** argv) {
     // reaches the fists, which is a player punching something at range with
     // fifty bullets in their pocket.
     CHECK(str("fallback") == "pistol");
+
+    // ------------------------------------------- an empty weapon is still yours
+    //
+    // THE PANEL BUG. `no_ammo` alone routed a weapon to its `dry` phase while it
+    // was merely being HELD, and `dry` auto-switches -- so choosing an empty
+    // shotgun from the weapon panel put the pistol back in your hands on the
+    // very next tick, every time, and an empty weapon could not be carried at
+    // all. Reported as the panel malfunctioning, which is exactly what it looks
+    // like from the outside.
+    //
+    // The fix is a transition that requires the button AND the empty pool, which
+    // the vocabulary could not say until `when` learned to take a list.
+    if (!run("local inv = weapons.get(dnp.players()[1]:index())\n"
+             "inv.have = { fists = true, pistol = true, shotgun = true }\n"
+             "inv.ammo.shells = 0\n"
+             "inv.ammo.bullets = 50\n"
+             "inv.current = 'shotgun'\n"
+             "weapons.rearm_player(dnp.players()[1]:index())\n", "choosing an empty gun"))
+        return 1;
+    set_buttons(0);
+    for (int i = 0; i < 10; ++i) {
+        const std::string step =
+            "local p = dnp.players()[1]\n"
+            "weapons.tick_player(p, p:index(), " + std::to_string(++fake_tick) + ")\n";
+        if (!run(step.c_str(), "carrying it")) return 1;
+    }
+    if (!run("carried = weapons.get(dnp.players()[1]:index()).current",
+             "reading what is held")) return 1;
+    std::printf("  an empty shotgun, carried for 10 ticks, is still a %s\n",
+                str("carried").c_str());
+    CHECK(str("carried") == "shotgun");
+
+    // CONTROL: pulling the trigger on it DOES put something usable in your
+    // hands. Without this the line above passes against a build where the
+    // auto-switch was simply deleted rather than narrowed to a press.
+    const int dry_events = press_for(10, 10, "shotgun");
+    if (!run("after_dry = weapons.get(dnp.players()[1]:index()).current",
+             "reading what is held now")) return 1;
+    std::printf("  CONTROL: pulling its trigger switches to %s (%d shots fired)\n",
+                str("after_dry").c_str(), dry_events);
+    CHECK(str("after_dry") == "pistol");
+    CHECK(dry_events == 0);
 
     // -------------------------------------------------------------- pickups
     if (!run("local p = dnp.players()[1]\n"

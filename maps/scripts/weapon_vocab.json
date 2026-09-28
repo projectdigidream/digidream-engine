@@ -399,7 +399,7 @@
       "type": "actions"
     },
     {
-      "doc": "A list of {when = <condition>, to = <phase>, ...args}, checked IN ORDER every tick, first match wins. Order is the whole mechanism for a charge: put `held_for 60 -> fire_big` above `button_released -> fire` and a long hold takes the first.",
+      "doc": "A list of {when = <condition>, to = <phase>, ...args}, checked IN ORDER every tick, first match wins. Order is the whole mechanism for a charge: put `held_for 60 -> fire_big` above `button_released -> fire` and a long hold takes the first.\n`when` is a condition NAME, whose arguments sit on the transition itself, OR a list of {cond = <name>, ...args} ALL of which must hold -- the mob vocabulary's shape. The list is what lets a transition say 'the button went down AND there is no ammunition', which one condition cannot: `no_ammo` on its own fires while a weapon is merely being HELD, so an empty weapon would be taken out of the player's hands the instant they chose it, every tick, and could never be carried at all.",
       "name": "transitions",
       "optional": true,
       "type": "table"

@@ -1198,13 +1198,18 @@ function acts.hitscan(m, a)
     end
     local target, at = dnp.hitscan(m.e, a.range, off)
     -- A shot that reached nothing is still a SHOT. It draws no tracer and does
-    -- no damage, but it is reported, because the observability hook below is how
-    -- a test tells "the state machine never fired" from "the aim was off" -- and
-    -- those have opposite fixes. Returning here conflated them the moment spread
-    -- made a monster capable of missing everything.
+    -- no damage, but it is reported, because the observability hook is how a
+    -- test tells "the state machine never fired" from "the aim was off" -- and
+    -- those have opposite fixes.
+    --
+    -- AND THE REST OF THE PELLETS STILL GO. This used to `return`, which leaves
+    -- the whole function and not the iteration, so ONE pellet finding nothing
+    -- cancelled the other six -- a shotgun fired at open sky put out a single
+    -- ray. It was invisible in a room, because a ray that reaches a wall has an
+    -- impact point and every pellet then flew.
     if at == nil then
       if M.on_shot then M.on_shot(m, nil, a.range) end
-      return
+      goto next_pellet
     end
 
     -- The tracer carries its START, its DIRECTION and its LENGTH. A client
@@ -1235,6 +1240,8 @@ function acts.hitscan(m, a)
     -- The shot ARRIVES. dnp.hitscan already answered what was in the way,
     -- walls included, so a target here is one the bullet actually reached.
     if target ~= nil and target:valid() then hurt(target, a.damage, m) end
+
+    ::next_pellet::
   end
 end
 
