@@ -279,10 +279,21 @@ int main(int argc, char** argv) {
     // Stubbing the handle's method instead would have tested the weapon against
     // a button source no game has -- the mistake this file's own header is
     // about, one level down.
+    // The aim rides along with the buttons, because they are one input frame:
+    // setting them separately means whichever was written last wins and the
+    // other is silently zeroed.
+    u32 aim_raw = 0;
     const auto set_buttons = [&](u16 mask) {
         proto::InputFrame f{};
         f.buttons = mask;
+        f.aim = brad(aim_raw);
         world.set_input(player, f);
+    };
+    // Turns, the engine's own unit. Facing is a RATE (turn_speed), so the body
+    // takes a few ticks to come round -- a caller has to step the world after
+    // this, not just set it.
+    const auto set_aim = [&](double turns) {
+        aim_raw = static_cast<u32>(static_cast<i64>(turns * 4294967296.0) & 0xFFFFFFFF);
     };
 
     // Hold ATTACK_PRIMARY for `held` of `ticks` ticks and answer how many
@@ -1169,6 +1180,75 @@ int main(int argc, char** argv) {
     std::printf("  after declaring a fifth pool: %s\n", str("label_list2").c_str());
     CHECK(num("sliders2") == 5);
     CHECK(str("label_list2") == "Bullets, Shells, Goo, Rockets, Cells");
+
+    // --------------------------------------------- a rocket fired at a WALL
+    //
+    // THE ONE THAT WAS REPORTED. `on_hit` ran only when a missile reached an
+    // ENTITY, so a rocket that stopped against geometry -- which is most of
+    // them -- played its burst animation and ran none of its on_hit: no damage,
+    // no blast, no explosion. Doom's whole rocket jump is a rocket fired at the
+    // floor, and a rocket into a wall is what a player mostly does.
+    //
+    // Fired at the room's edge with the victim beside the impact rather than in
+    // the rocket's path, so what is measured is the BLAST and not a direct hit.
+    // A player's input comes from their session, so it is driven through the
+    // world the way every other press in this file is.
+    if (!run("dnp.players()[1]:teleport(vec3.new(fx.int(-55), fx.int(0), fx.int(0)))",
+             "facing a wall")) return 1;
+    // Round to face -X, where the wall is five units away. Turning is a rate,
+    // so it is given long enough to actually get there before anything fires.
+    set_aim(0.5);
+    for (int i = 0; i < 30; ++i) server_tick(0);
+    if (!run("wall_facing = (dnp.players()[1]:facing() / 4294967296)",
+             "reading the facing")) return 1;
+    std::printf("  the player faces %.3f of a turn (0.5 is at the near wall)\n",
+                num("wall_facing"));
+    CHECK(std::abs(num("wall_facing") - 0.5) < 0.02);
+    if (!run("local p = dnp.players()[1]\n"
+             "local inv = weapons.get(p:index())\n"
+             "inv.have.rocketlauncher = true\n"
+             "inv.current = 'rocketlauncher'\n"
+             "inv.ammo.rockets = 10\n"
+             "weapons.rearm_player(p:index())\n"
+             "wall_vfx = {}\n"
+             "local real_vfx = dnp.vfx\n"
+             "dnp.vfx = function(kind, pos, ang, param)\n"
+             "  wall_vfx[#wall_vfx + 1] = kind\n"
+             "  return real_vfx(kind, pos, ang, param)\n"
+             "end\n"
+             "-- BESIDE the wall, not in the rocket's path: a direct hit would\n"
+             "-- prove the old code path, which already worked.\n"
+             "local pp = p:pos()\n"
+             "bystander = mobs.spawn('zombieman',\n"
+             "  vec3.new(fx.int(-59), pp.y + fx.int(1), pp.z))\n"
+             "mobs.live[bystander:index()].hp = 200\n"
+             "wall_hp0 = mobs.live[bystander:index()].hp\n",
+             "placing a bystander")) return 1;
+    server_tick(0);
+    server_tick(proto::button::ATTACK_PRIMARY);
+    for (int i = 0; i < 60; ++i) server_tick(0);
+    if (!run("local r = mobs.live[bystander:index()]\n"
+             "wall_hp1 = r and r.hp or -1\n"
+             "local fire, smoke = 0, 0\n"
+             "for _, k in ipairs(wall_vfx) do\n"
+             "  if k == 11 then fire = fire + 1 end\n"
+             "  if k == 13 then smoke = smoke + 1 end\n"
+             "end\n"
+             "wall_fire, wall_smoke = fire, smoke\n", "reading the blast")) return 1;
+    std::printf("  a rocket into a wall: %d fireball and %d smoke bursts, "
+                "a bystander went %d -> %d\n", (int)num("wall_fire"),
+                (int)num("wall_smoke"), (int)num("wall_hp0"), (int)num("wall_hp1"));
+    // IT EXPLODED. Both kinds its on_hit declares, drawn at the impact whether
+    // or not anything was standing there.
+    CHECK(num("wall_fire") >= 1);
+    CHECK(num("wall_smoke") >= 1);
+    // AND IT HURT SOMEBODY STANDING NEARBY, which is the half a burst animation
+    // cannot fake.
+    CHECK(num("wall_hp1") < num("wall_hp0"));
+    if (!run("dnp.vfx = real_vfx_restore or dnp.vfx\n"
+             "if bystander:valid() then bystander:despawn() end\n"
+             "dnp.players()[1]:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n",
+             "clearing up")) return 1;
 
     // ================================================================
     // A COMBO ESCALATES, which one shared `swing` could not express.

@@ -2260,7 +2260,19 @@ local function update_missiles(tick)
 
       if hit ~= nil or blocked then
         if at ~= nil then s.p:set_pos(at) end
-        if hit ~= nil and def.on_hit then
+        -- ON A WALL TOO, not only on a body.
+        --
+        -- This used to read `hit ~= nil`, so a missile that stopped against
+        -- geometry -- which is most of them -- played its burst animation and
+        -- ran none of its on_hit at all: no damage, no blast, no explosion. A
+        -- rocket fired at a wall was a puff of sprite and nothing else, and
+        -- Doom's whole rocket jump is a rocket fired at the floor.
+        --
+        -- `target` is then nil, which every action already copes with by
+        -- construction: acts.damage early-returns without one, and damage_area
+        -- and vfx are about the PLACE -- they read `impact`, which is set just
+        -- below whether or not anybody was standing there.
+        if def.on_hit then
           -- The missile's OWNER is what runs on_hit, with the thing it reached
           -- as the target -- so `melee` and `damage_area` mean the same in a
           -- missile as they do in a state, and the runtime does not need a
