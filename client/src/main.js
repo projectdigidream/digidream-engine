@@ -24,6 +24,7 @@ import {
 } from './render/scene.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
+  viewYaw,
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
@@ -306,6 +307,13 @@ let yaw = START_YAW
 // camera in the level. Resolved to a spline inside the frame loop, where the
 // map certainly exists -- a level's CAMERA_SET arrives on join, possibly before
 // the map is parsed and certainly before `camera` is made.
+// WHERE THE CAMERA IS ACTUALLY LOOKING, as of the last frame it drew.
+//
+// Equal to `yaw` for a free camera and not equal to it on a path, which is the
+// whole reason it exists -- see viewYaw. Held from frame to frame because the
+// input is built before the camera runs, so the stick is mapped through the
+// view the player was looking at when they pushed it.
+let camViewYaw = 0
 let camPathTag = -1
 let camPaths = []
 let camPathSpline = null
@@ -1290,9 +1298,12 @@ function currentInput () {
   const len = Math.hypot(mx, my)
   if (len > 1) { mx /= len; my /= len }
 
-  // Screen-relative, from the same yaw the camera uses. See camera.js: the two
-  // are halves of one fact and deriving them separately is how they invert.
-  const { x: wx, y: wy } = screenRelativeMove(mx, my, yaw)
+  // Screen-relative, from the yaw the camera is actually LOOKING along rather
+  // than from the orbit angle. See camera.js: the two are halves of one fact
+  // and deriving them separately is how they invert -- and on a camera path
+  // they are not the same number at all, so a stick mapped through the orbit
+  // angle pushes the player somewhere unrelated to what is on screen.
+  const { x: wx, y: wy } = screenRelativeMove(mx, my, camViewYaw)
 
   let buttons = 0
   if (held.has('Space')) buttons |= BUTTON.JUMP
@@ -1609,7 +1620,7 @@ function frame (now) {
     // A sprite quad has to face the camera, and keep its own heading somewhere
     // the billboard has not overwritten -- the same two lines every remote body
     // gets, which the local one never needed while it was a capsule.
-    body.rotation.y = billboardYaw(yaw)
+    body.rotation.y = billboardYaw(camViewYaw)
     body.userData.facingTurns = ((a.facing >>> 0) / 4294967296)
   }
 
@@ -1668,7 +1679,7 @@ function frame (now) {
       //
       // Billboarding is yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.
-      const bb = billboardYaw(yaw)
+      const bb = billboardYaw(camViewYaw)
       for (const ent of others.entities.values()) {
         ent.mesh.rotation.y = bb
         // Which way the thing is POINTING, kept on the mesh for the eight-view
@@ -1709,11 +1720,6 @@ function frame (now) {
   // leaving this inside `if (LIVE)` would mean a player stood frozen in solo
   // mode while every barrel around them animated.
   //
-  // The camera's position is handed in so a sprite can choose which of its eight
-  // views to show: the view depends on the angle between the thing's facing and
-  // the direction to the viewer, and only the caller knows the second half.
-  if (props) props.update(now / 1000, cam3.position)
-
   // The camera follows the PREDICTED position -- here, whichever of the two
   // modes produced it. Never a snapshot: see camera.js.
   // Pitch arrives in TURNS, which is the engine's angle unit everywhere else;
@@ -1782,6 +1788,28 @@ function frame (now) {
   const eye = camera.update(subject, dt, facingDirection(a.facing), camPathSpline)
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
+  // What the next frame's input and this frame's billboards are measured
+  // against. Written here because only now is it known: the path crossfade is
+  // resolved inside camera.update.
+  camViewYaw = viewYaw(eye, yaw, camera.pathMix)
+
+  // The prop clock, OUT of `if (LIVE)`.
+  //
+  // The same argument the animated surfaces above make for themselves: the
+  // local player's own animation is neither a live feature nor a prop feature,
+  // and leaving this inside `if (LIVE)` would mean a player stood frozen in
+  // solo mode while every barrel around them animated.
+  //
+  // The camera's position is handed in so a sprite can choose which of its
+  // eight views to show: the view depends on the angle between the thing's
+  // facing and the direction to the viewer, and only the caller knows the
+  // second half.
+  //
+  // AFTER the camera has been placed, not before. It used to run sixty lines
+  // earlier and hand over LAST frame's position, which is a frame of lag on an
+  // orbit camera and a much larger error on a path, where the eye can cross the
+  // room between two frames.
+  if (props) props.update(now / 1000, cam3.position)
 
   const tDraw = performance.now()
   renderer.render(scene, cam3)

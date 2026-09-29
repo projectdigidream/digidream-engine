@@ -617,6 +617,48 @@ export function billboardYaw (yaw) {
 }
 
 /**
+ * The yaw the camera is ACTUALLY looking along, for the frame it just produced.
+ *
+ * `yaw` is the orbit angle the player steers, and for a free camera it is also
+ * where the camera is: the offset is built from it. On a PATH it is neither.
+ * The eye is wherever the spline put it and the look-at is wherever the shot
+ * points, and the orbit angle goes on being whatever the stick last said --
+ * so billboards turned by `yaw` face a camera that is not there any more, and
+ * a stick mapped through `yaw` pushes the player in a direction that has
+ * nothing to do with what is on screen. Both were reported together, which is
+ * the clue that they are one fact read twice.
+ *
+ * `eye` is what Camera.update returned: a position and a look-at, already
+ * crossfaded between the free solution and the path's by `mix`. The direction
+ * from the look-at BACK to the eye is the same vector cameraOffset builds from
+ * the orbit yaw, so `atan2(dz, dx)` of it is a yaw in the same convention.
+ *
+ * Blended from the orbit yaw by `mix` rather than used raw, and that is not
+ * timidity: at mix 0 this returns `yaw` EXACTLY, so a camera with no path is
+ * unchanged to the bit. The derived angle differs slightly from the orbit one
+ * even with no path -- the eye eases toward its offset and the look-at leads
+ * the subject -- and a billboard that picked up that lag would have every
+ * sprite in every existing map wobble as the camera settled.
+ *
+ * Over the SHORT arc, because a yaw is an angle: blending 350 degrees to 10 the
+ * long way round spins every sprite in the level through 340 degrees during a
+ * one-second crossfade.
+ */
+export function viewYaw (eye, yaw, mix = 0) {
+  if (!(mix > 0) || !eye?.lookAt) return yaw
+  const dx = eye.x - eye.lookAt.x
+  const dz = eye.z - eye.lookAt.z
+  // Straight down: the look-at is directly under the eye and the direction has
+  // no yaw to read. The orbit angle is the only answer that is not a guess.
+  if (dx === 0 && dz === 0) return yaw
+  const want = Math.atan2(dz, dx)
+  let d = (want - yaw) % (Math.PI * 2)
+  if (d > Math.PI) d -= Math.PI * 2
+  else if (d < -Math.PI) d += Math.PI * 2
+  return yaw + d * Math.min(1, mix)
+}
+
+/**
  * An agent's facing, as a unit direction in THREE space.
  *
  * `raw` is a brad: a full turn in 2^32, which is how the engine stores an angle

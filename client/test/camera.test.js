@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -739,6 +739,58 @@ console.log('\n--- the blend does not depend on the frame rate ---')
   const a = at(30), b = at(60), d = at(144)
   check(Math.abs(a - b) < 0.01 && Math.abs(b - d) < 0.01,
     `one second of blend is the same at 30/60/144 Hz (${a.toFixed(4)}, ${b.toFixed(4)}, ${d.toFixed(4)})`)
+}
+
+console.log('\n--- the yaw the camera is actually looking along ---')
+{
+  // Reported as two symptoms and it is one fact: on a camera path the sprites
+  // faced the wrong way and the stick pushed the wrong way. Both were reading
+  // the ORBIT yaw, which on a path is neither where the camera is nor where it
+  // is pointing -- it is whatever the stick last said.
+
+  // With no path in play this must be the orbit yaw EXACTLY. Not nearly: every
+  // sprite in every existing map is turned by this number, and the derived
+  // angle lags it while the camera eases, so anything other than an identity
+  // here is a wobble nobody asked for.
+  const anywhere = { x: 3, y: 9, z: -4, lookAt: { x: 0, y: 0, z: 0 } }
+  for (const y of [0, 0.7, -2.2, Math.PI, 5.9]) {
+    check(viewYaw(anywhere, y, 0) === y, `mix 0 is the orbit yaw exactly (${y})`)
+  }
+  check(viewYaw(anywhere, 1.25, undefined) === 1.25, 'and so is no mix at all')
+
+  // THE CONVENTION. A free camera's eye IS the orbit offset from its look-at,
+  // so reading the direction back must give the orbit yaw again -- which is
+  // what lets one number serve the billboards and the stick.
+  for (const y of [0, 0.7, -2.2, 2.9]) {
+    const off = cameraOffset(y, 12)
+    const eye = { x: off.x, y: off.y, z: off.z, lookAt: { x: 0, y: 0, z: 0 } }
+    check(near(viewYaw(eye, y, 1), y, 1e-9),
+          `a free camera's own eye reads back as its orbit yaw (${y})`)
+  }
+
+  // ON A PATH, fully attached: the answer is where the shot is pointing and has
+  // nothing to do with the orbit angle. Here the eye is due east of its
+  // look-at, which is yaw 0, while the stick last said half a turn.
+  const east = { x: 10, y: 4, z: 0, lookAt: { x: 0, y: 0, z: 0 } }
+  check(near(viewYaw(east, Math.PI, 1), 0, 1e-9) ||
+        near(Math.abs(viewYaw(east, Math.PI, 1)), Math.PI * 2, 1e-9),
+        `a path camera reads its own direction (${viewYaw(east, Math.PI, 1).toFixed(4)})`)
+  // CONTROL: and it is NOT the orbit yaw, or the assertion above is satisfied
+  // by a function that ignores the eye entirely -- which is the bug.
+  check(!near(viewYaw(east, Math.PI, 1), Math.PI, 1e-6),
+        'CONTROL: and it is not the orbit angle it was handed')
+
+  // THE SHORT ARC. An orbit yaw just under half a turn and a path direction
+  // just over it are three degrees apart, not three hundred and fifty-seven --
+  // and a crossfade the long way round spins every sprite in the level.
+  const west = { x: -10, y: 4, z: -0.3, lookAt: { x: 0, y: 0, z: 0 } }
+  const midway = viewYaw(west, Math.PI - 0.02, 0.5)
+  check(Math.abs(midway) > 3, `half way across the wrap stays near a half turn (${midway.toFixed(4)})`)
+
+  // Straight down: the look-at is directly under the eye, so the direction has
+  // no yaw in it at all. The orbit angle is the only answer that is not made up.
+  const overhead = { x: 5, y: 40, z: 5, lookAt: { x: 5, y: 0, z: 5 } }
+  check(viewYaw(overhead, 1.1, 1) === 1.1, 'a camera looking straight down keeps the orbit yaw')
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
