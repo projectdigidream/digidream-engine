@@ -248,5 +248,75 @@ if (!existsSync(MAP)) {
   check(raw === 300, `CONTROL: without the cache, ${raw} lookups for the same work`)
 }
 
+// --- a sector that slides is DRAWN where it slid to -------------------------
+//
+// Heights were the whole story for a lift, a door and a crusher, and exactly
+// half of it for a sector that travels: the engine moved its points, the
+// client's own simulation moved its points, and the render model went on
+// holding the ones the map was baked with. A sliding platform was solid where
+// it had arrived and drawn where it started.
+{
+  console.log('\na sector that travels')
+
+  const sectors = [{ floorZ: 0, ceilZ: 8, firstPoint: 0, pointCount: 4 }]
+  const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }]
+  let at = 0
+  const readLive = () => ({
+    floorZ: 0,
+    ceilZ: 8,
+    points: [{ x: at, y: 0 }, { x: 10 + at, y: 0 }, { x: 10 + at, y: 10 }, { x: at, y: 10 }],
+    motion: { offX: at, offY: 0, pivotX: 0, pivotY: 0, turns: 0 }
+  })
+
+  // The first observation ESTABLISHES the placement -- the render model had
+  // none -- so it reports a change; the second identical one must not, which is
+  // the property the whole rebuild budget rests on.
+  followMovers([0], readLive, sectors, points)
+  check(followMovers([0], readLive, sectors, points) === false,
+        'a sector that has not moved since reports no change')
+  at = 3
+  check(followMovers([0], readLive, sectors, points) === true,
+        'and one that slid three units reports one')
+  check(points[0].x === 3 && points[1].x === 13,
+        `the footprint followed it (${points[0].x}, ${points[1].x})`)
+  check(points[0].y === 0, 'and only along the axis it travelled')
+  check(sectors[0].motion.offX === 3, 'and the render model knows where it was placed')
+
+  // A TURN with no travel at all still counts. A sector spinning about its own
+  // middle has the same offset every tick and different points every tick, so a
+  // dirty check that watched the offset would freeze it on screen while it went
+  // on turning in the simulation.
+  at = 3
+  let spun = 0
+  const readSpun = () => {
+    const a = spun * Math.PI / 2
+    const c = Math.cos(a)
+    const sn = Math.sin(a)
+    const turn = (p) => ({ x: p.x * c - p.y * sn, y: p.x * sn + p.y * c })
+    return {
+      floorZ: 0,
+      ceilZ: 8,
+      points: [turn({ x: -5, y: -5 }), turn({ x: 5, y: -5 }),
+               turn({ x: 5, y: 5 }), turn({ x: -5, y: 5 })],
+      motion: { offX: 0, offY: 0, pivotX: 0, pivotY: 0, turns: spun / 4 }
+    }
+  }
+  followMovers([0], readSpun, sectors, points)
+  spun = 1
+  check(followMovers([0], readSpun, sectors, points) === true,
+        'a quarter turn with no travel is movement too')
+  check(Math.abs(points[0].x - 5) < 1e-9 && Math.abs(points[0].y + 5) < 1e-9,
+        `the corner turned to (${points[0].x.toFixed(2)}, ${points[0].y.toFixed(2)})`)
+  check(sectors[0].motion.turns === 0.25, 'and the placement carries the angle')
+
+  // CONTROL: the reader that only has heights -- which is every test of the
+  // rebuild budget above, and was every caller before this -- must behave
+  // exactly as it did. A version that required points would have made the door
+  // fixture report movement on every frame of its 540 still ones.
+  const onlyHeights = [{ floorZ: 0, ceilZ: 8, firstPoint: 0, pointCount: 4 }]
+  check(followMovers([0], () => ({ floorZ: 0, ceilZ: 8 }), onlyHeights, points) === false,
+        'CONTROL: a reader with no footprint reports no movement')
+}
+
 console.log(`\nrenderbudget: ${checks} checks, ${fails} failures`)
 process.exit(fails ? 1 : 0)

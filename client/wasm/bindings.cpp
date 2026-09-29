@@ -366,6 +366,30 @@ int dnp_world_start_parametric(sim::World* w, unsigned sector, const long long* 
                                          pivot, sf, st) ? 1 : 0;
 }
 
+// Where a moving sector currently IS, beyond its heights: the offset it has
+// travelled and the angle it has turned through.
+//
+// The renderer needs both, and not to draw the polygon -- the points it reads
+// are already live -- but to paint a flat that is ANCHORED to its sector. A
+// pattern tied to the sector has to be evaluated in the sector's own frame, and
+// that frame is exactly "undo the offset, undo the turn".
+//
+// Returns 0 when the sector has no motion, which is almost every sector, so the
+// caller can skip the work rather than subtract zeros.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_sector_motion(const sim::World* w, unsigned sector,
+                            long long* out64, unsigned* out32) {
+    const i32 mi = w->motions().find(sector);
+    if (mi < 0) return 0;
+    const sim::SectorMotion& m = w->motions().at(static_cast<u32>(mi));
+    out64[0] = m.offset.x.raw;
+    out64[1] = m.offset.y.raw;
+    out64[2] = m.pivot.x.raw;
+    out64[3] = m.pivot.y.raw;
+    out32[0] = m.angle;
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_set_discrete(sim::World* w, unsigned sector, const long long* off64,
                            unsigned target) {

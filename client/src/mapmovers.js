@@ -33,14 +33,15 @@
 //
 
 /**
- * Copy the engine's live sector heights into the render model.
+ * Copy the engine's live sector geometry into the render model.
  *
  * @param movers    sector indices that have ever been declared as moving
- * @param readLive  (index) -> { floorZ, ceilZ }, the engine's current heights
+ * @param readLive  (index) -> { floorZ, ceilZ, points?, motion? }
  * @param sectors   the render model's sector array, mutated in place
- * @returns whether any height differs from what was already there
+ * @param points    the render model's shared point array, mutated in place
+ * @returns whether anything differs from what was already there
  */
-export function followMovers (movers, readLive, sectors) {
+export function followMovers (movers, readLive, sectors, points) {
   let moved = false
   for (const i of movers) {
     const live = readLive(i)
@@ -54,6 +55,40 @@ export function followMovers (movers, readLive, sectors) {
       s.floorZ = live.floorZ
       s.ceilZ = live.ceilZ
       moved = true
+    }
+
+    // AND THE FOOTPRINT, which for a long time nothing copied at all.
+    //
+    // Heights are the whole story for a lift, a door and a crusher, and they
+    // are exactly half of it for a sector that slides or turns: the engine
+    // moved its points, the client's simulation moved its points, and the
+    // render model went on holding the ones the map was baked with. A sliding
+    // platform was solid where it had arrived and DRAWN where it started.
+    //
+    // Guarded on the reader offering any, so a caller that only has heights --
+    // and every test of the rebuild budget is one -- behaves as it always did.
+    if (points && live.points) {
+      for (let k = 0; k < live.points.length; k++) {
+        const p = points[s.firstPoint + k]
+        const q = live.points[k]
+        if (!p || (p.x === q.x && p.y === q.y)) continue
+        p.x = q.x
+        p.y = q.y
+        moved = true
+      }
+    }
+
+    // How the sector is PLACED, for a flat painted on it rather than on the
+    // world. Not geometry -- the points above already carry the movement -- but
+    // the frame a texture anchored to this sector is evaluated in.
+    const m = live.motion
+    if (m) {
+      const was = s.motion
+      if (!was || was.offX !== m.offX || was.offY !== m.offY ||
+          was.turns !== m.turns || was.pivotX !== m.pivotX || was.pivotY !== m.pivotY) {
+        s.motion = m
+        moved = true
+      }
     }
   }
   return moved

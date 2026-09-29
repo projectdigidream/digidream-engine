@@ -1506,7 +1506,8 @@ function frame (now) {
   // from the baked heights draws it shut for a frame before the next frame
   // corrects it.
   const tFollow = performance.now()
-  const moved = movers.length > 0 && followMovers(movers, liveSector, mapData.sectors)
+  const moved = movers.length > 0 &&
+                followMovers(movers, liveSector, mapData.sectors, mapData.points)
   blend('follow', performance.now() - tFollow)
 
   // AND THE REBUILD IS GUARDED ON MOVEMENT, not on there being movers at all.
@@ -1923,9 +1924,34 @@ function frame (now) {
 function liveSector (i) {
   const M = core.M
   M._dnp_map_sector(map.ptr, i, core.buf64, core.buf32)
-  const { i64 } = core.views
+  const { i64, u32 } = core.views
   const b = core.buf64 / 8
-  return { floorZ: fxToFloat(i64[b]), ceilZ: fxToFloat(i64[b + 1]) }
+  const b32 = core.buf32 / 4
+  const out = { floorZ: fxToFloat(i64[b]), ceilZ: fxToFloat(i64[b + 1]) }
+
+  // ITS POINTS, for a sector that slides or turns. Read only for the movers,
+  // once a frame, and only while something is actually moving -- followMovers
+  // is the thing that decides whether a rebuild follows.
+  const first = u32[b32]
+  const count = u32[b32 + 1]
+  if (count > 0) {
+    const pts = new Array(count)
+    for (let k = 0; k < count; k++) {
+      M._dnp_map_point(map.ptr, first + k, core.buf64)
+      pts[k] = { x: fxToFloat(i64[b]), y: fxToFloat(i64[b + 1]) }
+    }
+    out.points = pts
+  }
+
+  // And where the engine has placed it, for a flat anchored to the sector.
+  if (M._dnp_world_sector_motion(world.ptr, i, core.buf64, core.buf32)) {
+    out.motion = {
+      offX: fxToFloat(i64[b]), offY: fxToFloat(i64[b + 1]),
+      pivotX: fxToFloat(i64[b + 2]), pivotY: fxToFloat(i64[b + 3]),
+      turns: u32[b32] / 4294967296
+    }
+  }
+  return out
 }
 
 // EVERYTHING IN, THEN PLAY.
