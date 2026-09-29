@@ -663,6 +663,7 @@ u64 MapStorage::hash() const noexcept {
         h.u32v(st.angle);
         h.fxv(st.off_x); h.fxv(st.off_y); h.fxv(st.scale);
         h.byte(st.alpha);
+        h.byte(st.anchor);
     };
     for (u32 i = 0; i < sector_count_; ++i) {
         const SectorRender& r = sector_render_[i];

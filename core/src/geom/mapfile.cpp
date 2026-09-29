@@ -163,6 +163,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.fxraw(st.off_y);
         w.fxraw(st.scale);
         w.u8v(st.alpha);
+        w.u8v(st.anchor);
     };
     for (u32 i = 0; i < m.sector_count; ++i) {
         const SectorRender& r = rd.sector(i);
@@ -674,6 +675,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     // A file older than the styles leaves them at their defaults, which is
     // exactly how it was always drawn. See MAP_MIN_VERSION.
     const bool has_styles = version >= 12;
+    const bool has_anchor = version >= 13;
     const auto read_style = [&](SurfaceStyle& st) {
         if (!has_styles) return true;
         st.angle = r.u32v();
@@ -681,6 +683,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         st.off_y = r.fxraw();
         st.scale = r.fxraw();
         st.alpha = r.u8v();
+        if (has_anchor) st.anchor = r.u8v();
         // A scale of zero or less is a division, and the file on disk is not
         // necessarily the one mapc wrote. REFUSED rather than repaired: a
         // repair would silently turn a flipped bit back into the default, and

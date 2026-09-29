@@ -151,6 +151,11 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
  * what a tiled floor should do, and is why for a long time there was nothing
  * here to configure.
  *
+ * `place` is where the engine has put the sector -- its offset, its pivot and
+ * its angle -- and is read only by a style that asked to be anchored to the
+ * sector rather than to the world. A sector that does not move has none, and
+ * for one at rest the two frames coincide anyway.
+ *
  * `style` is the escape hatch, in the order an author would say it out loud:
  * turn the pattern, then shift it, then draw it larger. The shift is in WORLD
  * units and is applied before the scale, so "move it two units east" means the
@@ -162,9 +167,29 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
  * the transform can be asserted without a GPU: an angle convention reasoned
  * about instead of checked has shipped mirrored twice in this renderer.
  */
-export function flatUV (x, y, style) {
-  let u = x
-  let v = -y
+export function flatUV (x, y, style, place) {
+  let px = x
+  let py = y
+  // ANCHORED TO THE SECTOR: undo whatever it has travelled and turned through
+  // before projecting, so the pattern is evaluated in the frame the sector was
+  // authored in and therefore rides it.
+  //
+  // The sector places its authored points at `R(turns)*(q - pivot) + pivot +
+  // off`, so this is that read backwards -- and for a sector at rest it is the
+  // identity, which is why anchoring changes nothing that does not move.
+  if (style?.anchor === 1 && place) {
+    const ox = place.pivotX ?? 0
+    const oy = place.pivotY ?? 0
+    const dx = px - (place.offX ?? 0) - ox
+    const dy = py - (place.offY ?? 0) - oy
+    const a = -(place.turns ?? 0) * Math.PI * 2
+    const c = Math.cos(a)
+    const sn = Math.sin(a)
+    px = dx * c - dy * sn + ox
+    py = dx * sn + dy * c + oy
+  }
+  let u = px
+  let v = -py
   const turns = style?.turns ?? 0
   if (turns !== 0) {
     const a = turns * Math.PI * 2
@@ -246,7 +271,7 @@ export function buildSectorSurfaces (map, sectorIndex) {
         // from below, so its winding is reversed just after this -- and
         // reversing the geometry without reversing the uvs would leave its
         // texture mirrored relative to the floor's.
-        const [fu, fv] = flatUV(p.x, p.y, style)
+        const [fu, fv] = flatUV(p.x, p.y, style, s.motion)
         uvs.push(up ? fu : -fu, fv)
       }
       indices.push(local)

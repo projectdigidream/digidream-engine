@@ -85,14 +85,16 @@ export function readMap (map) {
         offX: fxToFloat(i64[b64 + 3]),
         offY: fxToFloat(i64[b64 + 4]),
         scale: fxToFloat(i64[b64 + 5]),
-        alpha: u32[b32 + 11] / 255
+        alpha: u32[b32 + 11] / 255,
+        anchor: u32[b32 + 14]
       },
       ceilStyle: {
         turns: u32[b32 + 12] / 4294967296,
         offX: fxToFloat(i64[b64 + 6]),
         offY: fxToFloat(i64[b64 + 7]),
         scale: fxToFloat(i64[b64 + 8]),
-        alpha: u32[b32 + 13] / 255
+        alpha: u32[b32 + 13] / 255,
+        anchor: u32[b32 + 15]
       }
     }
   }

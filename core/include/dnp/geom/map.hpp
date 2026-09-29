@@ -281,6 +281,18 @@ struct SurfaceStyle {
     // holed picture at 254, a sheet of glass is a solid one at 128.
     u8  alpha = 255;
 
+    // WHOSE COORDINATES THE PATTERN IS PAINTED IN. 0 is the world, which is
+    // what a flat has always been projected from and is why neighbouring
+    // floors line up. 1 is the SECTOR's own frame: the pattern is undone by
+    // whatever the sector has travelled and turned through before it is
+    // sampled, so it rides the sector instead of the sector sliding under it.
+    //
+    // Only a sector that moves can tell the difference, and for one that does
+    // it is the difference between a platform with a floor and a window onto a
+    // floor somewhere else. At rest the two are identical, which is what makes
+    // 0 the right default: nothing that does not move changes.
+    u8  anchor = 0;
+
     // IS THIS THE MAP THAT WAS ALWAYS DRAWN? Read by the content hash, which
     // folds these fields only when they say something -- so a file written
     // before they existed and one written after it hash identically, and a map
@@ -289,7 +301,7 @@ struct SurfaceStyle {
     // don't-care.
     bool is_default() const noexcept {
         return angle == 0 && off_x.raw == 0 && off_y.raw == 0 &&
-               scale.raw == fx::one().raw && alpha == 255;
+               scale.raw == fx::one().raw && alpha == 255 && anchor == 0;
     }
 };
 

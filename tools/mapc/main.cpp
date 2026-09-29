@@ -16,6 +16,7 @@
 //   # comment
 //   sector floor 0 ceil 40 tag 1 light 200 floortex FLOOR4 ceiltex CEIL3 skirt 2
 //   sector floorangle 45 floorscale 2 flooroffx 8 flooralpha 128   (and ceil*)
+//   sector flooranchor sector     -- the pattern rides the sector, not the world
 //     vertex 0  0   wall           tex BRICK1
 //     vertex 40 0   neighbor 1     upper STEP2 lower STEP1 unpeg-lower
 //     vertex 40 40  wall           tex BRICK1 xoff 8
@@ -180,6 +181,15 @@ bool flat_attr(int line, const std::string& key, const std::string& val,
         const int a = std::atoi(val.c_str());
         if (a < 0 || a > 255) err(line, "alpha must be 0..255, got '%s'", val.c_str());
         else st.alpha = static_cast<u8>(a);
+        return true;
+    }
+    if (key == "anchor") {
+        // Whose coordinates the pattern is painted in. Only a sector that MOVES
+        // can tell the two apart, which is why `world` is the default and why
+        // nothing that does not move changes.
+        if (val == "world")       st.anchor = 0;
+        else if (val == "sector") st.anchor = 1;
+        else err(line, "anchor must be 'world' or 'sector', got '%s'", val.c_str());
         return true;
     }
     return false;

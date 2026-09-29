@@ -8,6 +8,7 @@
 // the first collision query.
 //
 #include <cstdio>
+#include <tuple>
 
 #include "dnp/geom/mapfile.hpp"
 #include "dnp/physics/collide.hpp"
@@ -93,6 +94,7 @@ static void build_reference(MapStorage& s) {
     s.sector_render_mut(0).floor.alpha = 128;
     s.sector_render_mut(1).ceil.angle = 0xC0000000u;          // three eighths
     s.sector_render_mut(2).ceil.scale = fx::from_frac(1, 4);
+    s.sector_render_mut(2).floor.anchor = 1;
     s.side_render_mut(2).alpha = 200;
     s.side_render_mut(3).y_offset = fx::from_int(-4);
     s.side_render_mut(9).upper = step;
@@ -137,56 +139,80 @@ static void test_a_map_written_before_styles_still_loads() {
 
     // The two render sections are the last thing before the trailing hash, so
     // the bytes ahead of them are byte-identical between the two versions.
-    constexpr size_t SECTOR_12 = 5 + 2 * 29, SECTOR_11 = 5;
-    constexpr size_t SIDE_12 = 24, SIDE_11 = 23;
+    // A style is 30 bytes at 13 and 29 at 12; a side gained its alpha at 12.
+    constexpr size_t STYLE_13 = 30, STYLE_12 = 29;
+    constexpr size_t SECTOR_13 = 5 + 2 * STYLE_13;
+    constexpr size_t SIDE_13 = 24;
     const u32 sectors = src.view().sector_count;
     const u32 sides = src.view().side_count;
-    const size_t tail = sectors * SECTOR_12 + sides * SIDE_12 + 8;
+    const size_t tail = sectors * SECTOR_13 + sides * SIDE_13 + 8;
     CHECK(n > tail);
     const size_t head = n - tail;
 
     static u8 old[8192];
-    size_t m = 0;
-    for (size_t i = 0; i < head; ++i) old[m++] = buf[i];
-    old[4] = 11; old[5] = 0;
-    size_t at = head;
-    for (u32 i = 0; i < sectors; ++i, at += SECTOR_12) {
-        for (size_t k = 0; k < SECTOR_11; ++k) old[m++] = buf[at + k];
-    }
-    for (u32 i = 0; i < sides; ++i, at += SIDE_12) {
-        for (size_t k = 0; k < SIDE_11; ++k) old[m++] = buf[at + k];
-    }
-    for (size_t k = 0; k < 8; ++k) old[m++] = buf[at + k];   // the hash
-
     static MapStorage dst;
-    ByteReader r(old, m);
-    const MapLoadStatus st = load_map(r, dst);
-    CHECK(st == MapLoadStatus::Ok);
-    // THE HASH IS THE CLAIM. load_map already compares it against the one the
-    // file carries, so reaching Ok says the recomputed hash matched -- and this
-    // says it matched the one the NEW writer produces for the same map.
-    CHECK(dst.hash() == src.hash());
-    for (u32 i = 0; i < dst.view().sector_count; ++i) {
-        CHECK(dst.render_view().sector(i).floor.is_default());
-        CHECK(dst.render_view().sector(i).ceil.is_default());
-    }
-    for (u32 i = 0; i < dst.view().side_count; ++i) {
-        CHECK(dst.render_view().side(i).alpha == 255);
+
+    // Rewrite the two render sections at an older layout, keeping everything
+    // ahead of them byte for byte -- which is what makes this a test of the
+    // WINDOW rather than of a fixture somebody recorded once.
+    const auto downgrade = [&](u16 version, size_t style_bytes, size_t side_bytes) {
+        size_t m = 0;
+        for (size_t i = 0; i < head; ++i) old[m++] = buf[i];
+        old[4] = static_cast<u8>(version); old[5] = 0;
+        size_t at = head;
+        for (u32 i = 0; i < sectors; ++i, at += SECTOR_13) {
+            for (size_t k = 0; k < 5; ++k) old[m++] = buf[at + k];   // tex, tex, light
+            for (size_t flat = 0; flat < 2; ++flat) {
+                for (size_t k = 0; k < style_bytes; ++k) {
+                    old[m++] = buf[at + 5 + flat * STYLE_13 + k];
+                }
+            }
+        }
+        for (u32 i = 0; i < sides; ++i, at += SIDE_13) {
+            for (size_t k = 0; k < side_bytes; ++k) old[m++] = buf[at + k];
+        }
+        for (size_t k = 0; k < 8; ++k) old[m++] = buf[at + k];       // the hash
+        return m;
+    };
+
+    // Version 11 knew no styles at all, and its sides carried no alpha.
+    // Version 12 knew the styles and not the anchor. Both must load, and both
+    // must hash to what this writer produces for the same map.
+    const u16 versions[2] = {11, 12};
+    const size_t style_len[2] = {0, STYLE_12};
+    const size_t side_len[2] = {23, 24};
+    for (int v = 0; v < 2; ++v) {
+        const size_t len = downgrade(versions[v], style_len[v], side_len[v]);
+        ByteReader r(old, len);
+        const MapLoadStatus st = load_map(r, dst);
+        CHECK(st == MapLoadStatus::Ok);
+        // THE HASH IS THE CLAIM. load_map already compares it against the one
+        // the file carries, so reaching Ok says the recomputed hash matched --
+        // and this says it matched the one the NEW writer produces.
+        CHECK(dst.hash() == src.hash());
+        for (u32 i = 0; i < dst.view().sector_count; ++i) {
+            CHECK(dst.render_view().sector(i).floor.is_default());
+            CHECK(dst.render_view().sector(i).ceil.is_default());
+        }
+        for (u32 i = 0; i < dst.view().side_count; ++i) {
+            CHECK(dst.render_view().side(i).alpha == 255);
+        }
     }
 
     // CONTROL: the window has a bottom. A file one version older than the
-    // oldest supported is refused, or "we accept 11 and 12" is really "we
+    // oldest supported is refused, or "we accept 11 through 13" is really "we
     // accept anything" and the version field means nothing.
     // `dst` again rather than a third arena: load_map clears its destination
     // before it reads a byte, so a refused load leaves nothing behind.
+    const size_t len = downgrade(11, 0, 23);
     old[4] = 10;
-    ByteReader r10(old, m);
+    ByteReader r10(old, len);
     CHECK(load_map(r10, dst) == MapLoadStatus::BadVersion);
 
     // And so is one newer than this writer knows how to produce.
-    old[4] = 13;
-    ByteReader r13(old, m);
-    CHECK(load_map(r13, dst) == MapLoadStatus::BadVersion);
+    old[4] = 14;
+    ByteReader r14(old, len);
+    CHECK(load_map(r14, dst) == MapLoadStatus::BadVersion);
 }
 
 static void test_roundtrip() {
@@ -258,6 +284,7 @@ static void test_roundtrip() {
         CHECK(x.off_y == y.off_y);
         CHECK(x.scale == y.scale);
         CHECK(x.alpha == y.alpha);
+        CHECK(x.anchor == y.anchor);
     };
     for (u32 i = 0; i < ra.sector_count && i < rb.sector_count; ++i) {
         CHECK(ra.sector(i).floor_tex == rb.sector(i).floor_tex);

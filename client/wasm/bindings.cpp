@@ -271,6 +271,8 @@ void dnp_map_sector(const geom::MapStorage* m, unsigned i, long long* out64, uns
     out32[11] = r.floor.alpha;
     out32[12] = r.ceil.angle;
     out32[13] = r.ceil.alpha;
+    out32[14] = r.floor.anchor;
+    out32[15] = r.ceil.anchor;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -786,13 +788,14 @@ void dnp_map_set_sector_render(geom::MapStorage* m, unsigned i, unsigned floor_t
 // point is one a caller either makes or does not.
 EMSCRIPTEN_KEEPALIVE
 void dnp_map_set_flat_style(geom::MapStorage* m, unsigned i, unsigned which,
-                            unsigned angle, unsigned alpha,
+                            unsigned angle, unsigned alpha, unsigned anchor,
                             const long long* off64) {
     if (i >= m->sector_count()) return;
     geom::SectorRender& r = m->sector_render_mut(i);
     geom::SurfaceStyle& st = which == 0 ? r.floor : r.ceil;
     st.angle = angle;
     st.alpha = static_cast<u8>(alpha);
+    st.anchor = static_cast<u8>(anchor);
     st.off_x = fx::from_raw(off64[0]);
     st.off_y = fx::from_raw(off64[1]);
     st.scale = fx::from_raw(off64[2]);

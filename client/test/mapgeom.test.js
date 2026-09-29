@@ -373,6 +373,54 @@ console.log('\n--- how a flat is painted ---')
   check(near(ru, 1, 1e-12), `the offset is applied after the turn (${ru.toFixed(3)})`)
 }
 
+console.log('\n--- a flat painted on its sector ---')
+{
+  // A flat is projected from WORLD coordinates, which is why neighbouring
+  // floors line up -- and is exactly wrong for a platform that moves: the
+  // sector slides out from under its own pattern. `anchor: 1` undoes whatever
+  // the sector has travelled and turned through first, so the pattern rides it.
+  const world = { turns: 0, offX: 0, offY: 0, scale: 1, alpha: 1, anchor: 0 }
+  const rides = { ...world, anchor: 1 }
+  const slid = { offX: 3, offY: 0, pivotX: 0, pivotY: 0, turns: 0 }
+
+  // A platform authored at x=10 that has slid three units east: the point is at
+  // 13 now, and the pattern on it must still be the pattern that was at 10.
+  const [au] = flatUV(13, 0, rides, slid)
+  check(near(au, 10), `an anchored flat samples where the point was authored (${au})`)
+  // CONTROL: the same point, painted on the world, samples where it IS -- which
+  // is the sector sliding under its own floor, and is what this is for.
+  const [wu] = flatUV(13, 0, world, slid)
+  check(near(wu, 13), `and a world-painted one samples where it is now (${wu})`)
+
+  // A QUARTER TURN about the origin. The point is at (0, 5) now; un-turning it
+  // puts it back at (5, 0), which is where it was drawn.
+  const spun = { offX: 0, offY: 0, pivotX: 0, pivotY: 0, turns: 0.25 }
+  const [su, sv] = flatUV(0, 5, rides, spun)
+  check(near(su, 5, 1e-9) && near(sv, 0, 1e-9),
+        `a turn is undone too (${su.toFixed(3)}, ${sv.toFixed(3)})`)
+  // CONTROL: without the anchor the pattern stays put in the world while the
+  // sector turns through it.
+  const [tu, tv] = flatUV(0, 5, world, spun)
+  check(near(tu, 0) && near(tv, -5), 'and a world-painted one does not follow the turn')
+
+  // ABOUT A PIVOT that is not the origin, because a sector spins about its own
+  // middle far more often than about (0, 0) -- and a version that forgot the
+  // pivot would pass both checks above and be wrong everywhere else.
+  const off = { offX: 0, offY: 0, pivotX: 10, pivotY: 10, turns: 0.25 }
+  // Authored five units north of the pivot at (10, 15); a quarter turn sends it
+  // to (5, 10), which is where it is asked about. A version that turned about
+  // the origin would answer (5, -10) and pass both checks above.
+  const [pu, pv] = flatUV(5, 10, rides, off)
+  check(near(pu, 10, 1e-9) && near(pv, -15, 1e-9),
+        `and it turns about the pivot, not the origin (${pu.toFixed(3)}, ${pv.toFixed(3)})`)
+
+  // A SECTOR THAT DOES NOT MOVE has no placement at all, and an anchored flat
+  // on one must be exactly the world projection -- or asking for the anchor
+  // would move every pattern in the map the moment it was authored.
+  const [nu, nv] = flatUV(13, 7, rides, undefined)
+  check(near(nu, 13) && near(nv, -7), 'a sector at rest paints the same either way')
+}
+
 console.log('\n--- transparent surfaces ---')
 {
   // A sector that asks to be seen through says so on every one of its surfaces,
