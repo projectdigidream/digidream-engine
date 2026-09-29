@@ -76,10 +76,32 @@ struct SectorMotion {
     u32 duration_ticks = 0;
     LoopMode loop = LoopMode::Once;
 
+    // AND A TURN, about `pivot`, over the same phase.
+    //
+    // In brad and SIGNED AND UNWRAPPED, which is why these are i64 and not the
+    // u32 every other angle in the engine is: a turn is 2^32, so a u32 endpoint
+    // cannot say "three times round" -- 0 to 2^32 is 0 to 0 -- and it cannot
+    // say which way. The applied angle is this value taken modulo the turn,
+    // which is where it becomes an ordinary brad again.
+    //
+    // A rotating sector is the same idea as a sliding one and a harder version
+    // of it: a slider stops being where the map says it is, and a spinner stops
+    // being the SHAPE the map says it is, from the point of view of everything
+    // that asks which sector a point is in.
+    fx2 pivot{};
+    i64 spin_from = 0;
+    i64 spin_to = 0;
+
     // Current and previous offsets. The difference is the sector's velocity for
     // this tick, which is what an entity inherits on detach (§3.2.5).
     fx3 offset{};
     fx3 prev_offset{};
+
+    // Current and previous angle, as an ordinary brad. Kept beside the offsets
+    // and for the same reason: a rider is carried by the DIFFERENCE, and a
+    // difference needs both ends.
+    u32 angle = 0;
+    u32 prev_angle = 0;
 
     // How far the FLOOR moved this tick. This, not the raw offset, is what an
     // entity riding the sector experiences: a descending ceiling displaces
@@ -94,12 +116,42 @@ struct SectorMotion {
     // Velocity of the surface a rider stands on. Inherited once on detach --
     // (pos_now - pos_last) / dt, exactly as the design specifies.
     fx3 velocity() const noexcept { return floor_delta() * fx::from_int(TICK_RATE_HZ); }
+
+    // Did anything turn this tick? One comparison, so the rotation path costs
+    // nothing at all for the lifts and doors that are every other mover.
+    bool turning() const noexcept { return angle != prev_angle; }
+
+    // WHERE A POINT STANDING ON THIS SECTOR GOES, this tick.
+    //
+    // floor_delta() is the same displacement for everybody, which is true of a
+    // translation and false of a turn: a rider near the pivot travels a
+    // centimetre while one at the rim travels a metre. So a rider is carried
+    // by asking where ITS OWN point lands.
+    //
+    // Derived rather than guessed. The sector's placement is
+    // `T(q) = R(angle)*(q - pivot) + pivot + offset` applied to the authored
+    // points, so a body standing at `p` last tick was standing on the base
+    // point `T_prev^-1(p)`, and this tick that base point is at `T(T_prev^-1(p))`.
+    // The pivot and the offsets cancel to leave one rotation by the DIFFERENCE
+    // of the two angles, which is the whole of it:
+    //
+    //     new = R(angle - prev_angle) * (p - prev_offset_xy - pivot) + pivot + offset_xy
+    //
+    // Reduces to floor_delta() exactly when the two angles are equal, which is
+    // asserted rather than assumed.
+    fx3 carry_delta(fx2 p) const noexcept;
 };
 
 // Offset of a parametric motion at `tick`. A pure function of its arguments --
 // which is precisely what lets the client evaluate it for a tick the server has
 // not reached yet.
 fx3 parametric_offset(const SectorMotion& m, u32 tick) noexcept;
+
+// And its angle at `tick`, on the SAME phase, so a sector that both slides and
+// turns arrives at both endpoints together. Integer arithmetic throughout:
+// `from + (to - from) * t / duration` is exact at both ends, which is what
+// fx_lerp's own contract buys for the offset and what a brad gets for free.
+u32 parametric_angle(const SectorMotion& m, u32 tick) noexcept;
 
 class SectorMotionSet {
 public:
@@ -120,9 +172,14 @@ public:
     i32 find(u32 sector) const noexcept;
 
     // Start a parametric motion. Lua-triggered; from here it runs predictably.
+    // `pivot`, `spin_from` and `spin_to` are the turn; all three default to
+    // "no turn", so every existing caller is a pure translation and reads
+    // exactly as it did.
     bool start_parametric(u32 sector, fx3 from, fx3 to, u32 start_tick,
                           u32 duration_ticks, LoopMode loop,
-                          MotionTarget target = MotionTarget::Both) noexcept;
+                          MotionTarget target = MotionTarget::Both,
+                          fx2 pivot = fx2{}, i64 spin_from = 0,
+                          i64 spin_to = 0) noexcept;
 
     // Set an offset directly. Unpredictable by construction, so an anchored
     // entity falls back to anchor-relative prediction on the client.

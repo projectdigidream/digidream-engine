@@ -843,11 +843,22 @@ int l_sector_ceil(lua_State* L) {
     return 1;
 }
 
-// sector:move_parametric(from, to, duration_ticks [, loop] [, target])
+// sector:move_parametric(from, to, duration_ticks [, loop] [, target]
+//                        [, spin_degrees] [, pivot])
 //
 // PARAMETRIC: a pure function of the tick, so it is replicated once and every
 // client computes it for ticks the server has not reached (design §3.1.2). Free
 // to replicate and free to predict.
+//
+// `spin_degrees` turns the footprint about `pivot` over the same duration, so a
+// platform that slides and turns is one motion arriving at both endpoints
+// together. The pivot defaults to the mean of the sector's corners, which is
+// what an author means by "spin it" and saves them looking up world
+// coordinates for a sector they identified by tag.
+//
+// The turn is measured FROM WHERE THE SECTOR IS, not from its authored
+// orientation. A second spin on a sector already turned ninety degrees would
+// otherwise snap it back to square before starting.
 int l_sector_move_parametric(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const u32 s = check_sector(L, 1);
@@ -875,10 +886,45 @@ int l_sector_move_parametric(lua_State* L) {
         lua_pushboolean(L, 0);
         return 1;
     }
+
+    // THE TURN. Degrees in, brad out, through the fx the argument already is:
+    // a parsed fx holds `deg * 2^32` exactly, so the brad is that raw over 360
+    // and there is no double anywhere in it.
+    i64 spin_from = 0;
+    i64 spin_to = 0;
+    fx2 pivot{};
+    if (!lua_isnoneornil(L, 7)) {
+        const fx deg = check_fx(L, 7);
+        const i32 mi = ctx.world->motions().find(s);
+        if (mi >= 0) spin_from = static_cast<i64>(ctx.world->motions().at(static_cast<u32>(mi)).angle);
+        spin_to = spin_from + deg.raw / 360;
+
+        if (!lua_isnoneornil(L, 8)) {
+            const fx3 p = check_vec3(L, 8);
+            pivot = fx2{p.x, p.y};
+        } else {
+            // The mean of the corners, the same one the nav graph measures its
+            // costs between -- deliberately not the area centroid, for the
+            // reason navgraph.cpp gives: a shape's corners are what a person
+            // drew, and the mean of them is where they would point.
+            const geom::Sector& sec = ctx.world->map()->sector(s);
+            i64 sx = 0, sy = 0;
+            for (u16 k = 0; k < sec.point_count; ++k) {
+                sx += ctx.world->map()->point(sec.first_point + k).x.raw;
+                sy += ctx.world->map()->point(sec.first_point + k).y.raw;
+            }
+            if (sec.point_count > 0) {
+                pivot = fx2{fx::from_raw(sx / sec.point_count),
+                            fx::from_raw(sy / sec.point_count)};
+            }
+        }
+    }
+
     // start_tick is NOW, not zero: a motion declared at load time and one
     // declared by a trigger mid-match must both mean "begin from here".
     lua_pushboolean(L, ctx.world->motions().start_parametric(
-        s, from, to, ctx.world->tick(), dur, loop, target) ? 1 : 0);
+        s, from, to, ctx.world->tick(), dur, loop, target,
+        pivot, spin_from, spin_to) ? 1 : 0);
     return 1;
 }
 

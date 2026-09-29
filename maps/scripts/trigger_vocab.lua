@@ -347,6 +347,24 @@ trigger_vocab = {
         { name = "dy",      type = "fx", optional = true,
           doc = "The same along y. Give both for a diagonal; `speed` is then " ..
                 "along the line actually travelled, not along either axis." },
+        { name = "spin",    type = "fx", optional = true,
+          doc = "Degrees the footprint TURNS, about `pivot_x`/`pivot_y` or " ..
+                "about the mean of the sector's own corners. Measured from " ..
+                "where the sector is now, not from its authored orientation, " ..
+                "so a second spin on a turned sector does not snap it back to " ..
+                "square first. Negative turns the other way, and past 360 " ..
+                "goes round more than once -- both of which a wrapped angle " ..
+                "could not say." },
+        { name = "spin_speed", type = "fx", optional = true,
+          doc = "Degrees per tick, for the turn. Defaults to 1, which is a " ..
+                "revolution in six seconds. A move that both travels and " ..
+                "turns takes the LONGER of the two durations, so the two " ..
+                "arrive together rather than one waiting for the other." },
+        { name = "pivot_x", type = "fx", optional = true,
+          doc = "Where the turn is centred. Both default to the mean of the " ..
+                "sector's corners -- what somebody means by 'spin it', and " ..
+                "one fewer coordinate to look up for a sector named by tag." },
+        { name = "pivot_y", type = "fx", optional = true },
         { name = "speed",   type = "fx",
           doc = "Units per tick. Never zero: a door that shut instantly would " ..
                 "crush whoever stood under it with no warning." },
@@ -364,9 +382,9 @@ trigger_vocab = {
             "the server has not reached, so a door costs one message and " ..
             "predicts free.\n" ..
             "Vertical by default -- name `dx` or `dy` and the footprint " ..
-            "slides instead, which the engine has always been able to do and " ..
-            "this vocabulary could not ask for. The two combine: a lift that " ..
-            "also travels is one action." },
+            "slides instead, and `spin` and it TURNS. All three combine: a " ..
+            "lift that also travels and turns is one action, on one phase, " ..
+            "arriving at every endpoint together." },
 
     { name = "sector_stop",
       args = { { name = "sector", type = "sector", optional = true, one_of = "target" },

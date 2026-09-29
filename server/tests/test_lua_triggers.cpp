@@ -93,11 +93,12 @@ function sector:neighbors()
   for _, n in ipairs(self.nb) do out[#out + 1] = SECTORS[n] end
   return out
 end
-function sector:move_parametric(from, to, n, loop, surface)
+function sector:move_parametric(from, to, n, loop, surface, spin, pivot)
   if self.refuse then return false end
   note(("move %d %s to=%s ticks=%d %s"):format(self.i, surface, tostring(to.z), n, loop))
   MOVES[#MOVES + 1] = { sector = self.i, surface = surface, z = to.z,
-                        x = to.x, y = to.y, ticks = n, loop = loop }
+                        x = to.x, y = to.y, ticks = n, loop = loop,
+                        spin = spin, pivot = pivot }
   return true
 end
 function sector:set_offset(v)
@@ -548,6 +549,46 @@ triggers.load{ name = 'slide', triggers = {
     CHECK(f.truth("MOVES[2].ticks == 10"));
 }
 
+// AND IT CAN TURN. A rotating platform is a harder thing than a sliding one --
+// it stops being the SHAPE the map says it is -- and core/tests/test_sectormotion
+// measures what that does to riders. This is about the vocabulary reaching it.
+static void test_a_sector_can_be_spun() {
+    std::printf("triggers: a platform can be spun, about a pivot or its own middle\n");
+
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+triggers.load{ name = 'spin', triggers = {
+  { name = 'turn', event = 'on_cross',
+    actions = { { a = 'sector_move', sector = 1, surface = 'both',
+                  spin = 90, spin_speed = 3, speed = '0.5' } } },
+  { name = 'about a point', event = 'on_interact',
+    actions = { { a = 'sector_move', sector = 1, surface = 'both',
+                  spin = 90, spin_speed = 3, speed = '0.5',
+                  pivot_x = 4, pivot_y = 7 } } },
+} }
+)LUA"));
+
+    f.fire("on_cross", 0, {"ENT(0)", "11", "SEC(0)"});
+    CHECK(f.truth("#MOVES == 1"));
+    CHECK(f.truth("MOVES[1].spin == fx.int(90)"));
+    // Ninety degrees at three a tick. The TURN sets the duration here, because
+    // there is no travel at all -- and `speed` alone would have said one tick,
+    // which is a platform that teleports round.
+    CHECK(f.truth("MOVES[1].ticks == 30"));
+    // No pivot named, so the runtime passes none and the binding falls back to
+    // the mean of the sector's own corners. Passing (0,0) instead would spin
+    // every sector about the map origin, which is a very different picture.
+    CHECK(f.truth("MOVES[1].pivot == nil"));
+
+    f.exec("TICK = 40");
+    f.fire("on_interact", 40, {"ENT(0)", "2", "SEC(0)"});
+    CHECK(f.truth("#MOVES == 2"));
+    CHECK(f.truth("MOVES[2].pivot ~= nil"));
+    CHECK(f.truth("MOVES[2].pivot.x == fx.int(4)"));
+    CHECK(f.truth("MOVES[2].pivot.y == fx.int(7)"));
+}
+
 // CONTROL: a move that names no dx or dy is the vertical one it always was.
 //
 // Without this the two assertions above are satisfied by a runtime that puts
@@ -572,6 +613,9 @@ triggers.load{ name = 'lift', triggers = {
     CHECK(f.truth("MOVES[1].y == fx.int(0)"));
     CHECK(f.truth("MOVES[1].z == fx.int(4)"));
     CHECK(f.truth("MOVES[1].ticks == 8"));
+    // And no turn, which is the other half of the control: a runtime that put
+    // a spin in every move would turn every door in every converted level.
+    CHECK(f.truth("MOVES[1].spin == nil"));
 }
 
 static void test_a_moving_sector_refuses_a_second_start() {
@@ -1444,6 +1488,7 @@ int main(int argc, char** argv) {
     test_conditions_select();
     test_a_door_is_a_sector_and_a_side();
     test_a_sector_can_be_moved_sideways();
+    test_a_sector_can_be_spun();
     test_a_move_with_no_travel_is_still_vertical();
     test_a_moving_sector_refuses_a_second_start();
     test_once_is_spent_only_on_success();

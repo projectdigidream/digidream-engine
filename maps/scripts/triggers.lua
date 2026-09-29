@@ -432,9 +432,27 @@ local function move_one(s, args)
   -- reproduce.
   local plan = dnp.length(vec3.new(to.x - from.x, to.y - from.y, ZERO))
   local n = ticks_for(dnp.length(vec3.new(plan, to.z - from.z, ZERO)), as_fx(args.speed))
+
+  -- AND A TURN, on the same phase.
+  --
+  -- Its own speed, in degrees per tick, because "units per tick" and "degrees
+  -- per tick" are not the same quantity and one argument meaning both is how
+  -- an author ends up tuning a number that does two things. When a move does
+  -- both, the LONGER of the two durations wins: they share one phase, so the
+  -- alternative is one of them arriving and then waiting.
+  local spin = args.spin ~= nil and as_fx(args.spin) or nil
+  local pivot = nil
+  if spin ~= nil then
+    local sn = ticks_for(spin, as_fx(args.spin_speed or 1))
+    if sn > n then n = sn end
+    if args.pivot_x ~= nil or args.pivot_y ~= nil then
+      pivot = vec3.new(as_fx(args.pivot_x or 0), as_fx(args.pivot_y or 0), ZERO)
+    end
+  end
+
   local loop = args.loop or "once"
 
-  if not s:move_parametric(from, to, n, loop, surface) then return false end
+  if not s:move_parametric(from, to, n, loop, surface, spin, pivot) then return false end
 
   -- A looping motion never settles, so it is never "busy" -- otherwise a
   -- pingpong crusher would refuse every later trigger aimed at it forever.

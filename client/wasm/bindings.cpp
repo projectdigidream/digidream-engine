@@ -346,15 +346,24 @@ unsigned dnp_world_add_motion(sim::World* w, geom::MapStorage* m, unsigned secto
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_start_parametric(sim::World* w, unsigned sector, const long long* from64,
                                const long long* to64, unsigned start_tick,
-                               unsigned duration_ticks, unsigned loop, unsigned target) {
+                               unsigned duration_ticks, unsigned loop, unsigned target,
+                               const long long* spin64) {
     const fx3 from{fx::from_raw(from64[0]), fx::from_raw(from64[1]), fx::from_raw(from64[2])};
     const fx3 to{fx::from_raw(to64[0]), fx::from_raw(to64[1]), fx::from_raw(to64[2])};
     // `target` decides whether the path moves the floor, the ceiling or both.
     // Dropping it would put a crusher's floor where its ceiling belongs and
     // mispredict every entity standing in the sector.
+    //
+    // `spin64` is {pivot.x, pivot.y, spin_from, spin_to} and may be null for a
+    // motion that only travels -- which is every motion this engine had before
+    // turntables, and is what keeps a lift's path one buffer write.
+    const fx2 pivot = spin64 ? fx2{fx::from_raw(spin64[0]), fx::from_raw(spin64[1])} : fx2{};
+    const long long sf = spin64 ? spin64[2] : 0;
+    const long long st = spin64 ? spin64[3] : 0;
     return w->motions().start_parametric(sector, from, to, start_tick, duration_ticks,
                                          static_cast<sim::LoopMode>(loop),
-                                         static_cast<sim::MotionTarget>(target)) ? 1 : 0;
+                                         static_cast<sim::MotionTarget>(target),
+                                         pivot, sf, st) ? 1 : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE

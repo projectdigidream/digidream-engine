@@ -384,7 +384,13 @@ export function decodeControlMessage (buf) {
       durationTicks: r.u32(),
       loopMode: r.u8(),
       from: r.vec3raw(),
-      to: r.vec3raw()
+      to: r.vec3raw(),
+      // The turn. `spinFrom`/`spinTo` are SIGNED and UNWRAPPED brad in 64 bits,
+      // because a u32 can say neither "twice round" nor "the other way", and
+      // both are things a rotating platform does.
+      pivot: { x: r.i64(), y: r.i64() },
+      spinFrom: r.i64(),
+      spinTo: r.i64()
     }
     return r.ok ? msg : null
   }

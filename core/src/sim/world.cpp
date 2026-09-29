@@ -267,7 +267,14 @@ void World::step_agent(u32 i) noexcept {
             // fling, and it is the same handoff pattern used for climb release,
             // grapple release and controller detach.
             const i32 mi = prev_anchor >= 0 ? motions_.find(static_cast<u32>(prev_anchor)) : -1;
-            if (mi >= 0) a.vel += motions_.at(static_cast<u32>(mi)).velocity();
+            if (mi >= 0) {
+                // FROM WHERE IT WAS STANDING, so stepping off a turntable
+                // throws you along the tangent at your own radius rather than
+                // at the sector's. The two are the same number for everything
+                // that does not turn.
+                const SectorMotion& mm = motions_.at(static_cast<u32>(mi));
+                a.vel += mm.carry_delta(fx2{a.pos.x, a.pos.y}) * fx::from_int(TICK_RATE_HZ);
+            }
             a.mv.anchored = false;
         }
 
@@ -342,7 +349,14 @@ void World::carry_anchored() noexcept {
         // The floor's displacement, not the sector's raw offset: a rider is
         // carried by the surface under its feet, and a descending ceiling moves
         // no surface anybody is standing on.
-        a.pos += motions_.at(static_cast<u32>(mi)).floor_delta();
+        //
+        // AND OF ITS OWN POINT, not of the sector as a whole. That is the same
+        // number for a lift or a slider and is not for a turntable, where a
+        // rider near the pivot travels a hair and one at the rim travels the
+        // circumference. carry_delta reduces to floor_delta exactly when
+        // nothing turned, so the common path is unchanged.
+        a.pos += motions_.at(static_cast<u32>(mi))
+                     .carry_delta(fx2{a.pos.x, a.pos.y});
     }
 }
 
@@ -395,7 +409,12 @@ void World::sweep_moving_sectors() noexcept {
         // straight up displaces no horizontal space, and running the test for it
         // would push every agent standing beside the shaft away from a wall that
         // never came at them.
-        if (d.x.raw == 0 && d.y.raw == 0) continue;
+        //
+        // A TURN counts as moving even when the offset did not: a sector
+        // spinning about its own centre travels nowhere and sweeps the room
+        // anyway, which is most of what makes a rotating platform interesting
+        // and all of what makes it dangerous.
+        if (d.x.raw == 0 && d.y.raw == 0 && !m.turning()) continue;
 
         for (u32 i = 0; i < agent_high_water_; ++i) {
             if (!agents_[i].active) continue;

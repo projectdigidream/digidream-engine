@@ -550,6 +550,172 @@ static void test_a_still_platform_carries_nobody() {
     CHECK(w.agent(a).pos.x == x0);
 }
 
+// ------------------------------------------------------------ turntables
+
+// A sector that TURNS, which is a harder thing than one that slides.
+//
+// A lift leaves its footprint where the map says it is. A slider stops being
+// where the map says it is. A spinner stops being the SHAPE the map says it is,
+// and the displacement it hands its riders is no longer one number: a body near
+// the pivot travels a hair while one at the rim travels the circumference. That
+// is the whole reason carry_delta takes a point.
+static void test_the_angle_is_a_pure_function_of_the_tick() {
+    std::printf("motion: a turn is a pure function of the tick, unwrapped\n");
+
+    SectorMotion m;
+    m.type = MotionType::Parametric;
+    m.start_tick = 0;
+    m.duration_ticks = 100;
+    m.loop = LoopMode::Once;
+
+    // A quarter turn. 2^30 of the 2^32 turn, and EXACT at both ends -- which is
+    // what integer interpolation buys and what going through fx would round.
+    m.spin_from = 0;
+    m.spin_to = 1073741824;   // 2^30
+    CHECK(parametric_angle(m, 0) == 0u);
+    CHECK(parametric_angle(m, 50) == 536870912u);     // 2^29, half way
+    CHECK(parametric_angle(m, 100) == 1073741824u);
+    CHECK(parametric_angle(m, 400) == 1073741824u);   // holds at the end
+
+    // TWO WHOLE TURNS, which is why the endpoints are i64 and not the u32 every
+    // other angle in this engine is: 2 * 2^32 is not a u32, and as one it would
+    // be zero -- a spin that does nothing at all.
+    m.spin_from = 0;
+    m.spin_to = 8589934592LL;                          // 2 * 2^32
+    CHECK(parametric_angle(m, 0) == 0u);
+    CHECK(parametric_angle(m, 25) == 2147483648u);     // half a turn, a quarter through
+    CHECK(parametric_angle(m, 50) == 0u);              // one whole turn
+    CHECK(parametric_angle(m, 100) == 0u);             // two, back where it started
+
+    // AND IT HAS A SIGN. Unwrapped endpoints are also what says which way round.
+    m.spin_from = 0;
+    m.spin_to = -1073741824LL;
+    CHECK(parametric_angle(m, 100) == 3221225472u);    // -2^30 as a brad
+    CHECK(parametric_angle(m, 50) == 3758096384u);     // -2^29
+
+    // A motion that does not turn answers its endpoint whatever the tick, so a
+    // lift pays for none of this.
+    m.spin_from = 0;
+    m.spin_to = 0;
+    CHECK(parametric_angle(m, 7) == 0u);
+}
+
+// carry_delta must reduce to floor_delta EXACTLY when nothing turned, or every
+// lift and slider in the engine quietly starts taking a different code path
+// that happens to agree most of the time.
+static void test_carrying_reduces_to_the_old_answer_without_a_turn() {
+    std::printf("motion: without a turn, a rider is carried exactly as before\n");
+
+    SectorMotion m;
+    m.offset = fx3{F(3), F(4), F(5)};
+    m.prev_offset = fx3{F(1), F(1), F(1)};
+    m.pivot = fx2{F(10), F(10)};
+    for (int x = -2; x <= 2; ++x) {
+        for (int y = -2; y <= 2; ++y) {
+            const fx3 a = m.carry_delta(fx2{F(x * 7), F(y * 7)});
+            const fx3 b = m.floor_delta();
+            CHECK(a.x == b.x && a.y == b.y && a.z == b.z);
+        }
+    }
+    // CONTROL: give it a turn and the two stop agreeing, or the comparison
+    // above is satisfied by a carry_delta that ignores its argument.
+    m.angle = 1073741824u;
+    const fx3 turned = m.carry_delta(fx2{F(20), F(10)});
+    CHECK(!(turned.x == m.floor_delta().x && turned.y == m.floor_delta().y));
+}
+
+static void test_a_rotating_platform_carries_its_rider_around() {
+    std::printf("motion: a turntable carries its rider around the pivot\n");
+
+    // static: a World is 385 KB and these are inlined into main's frame under
+    // the sanitizers, where four of them together overflow an 8 MB stack.
+    static Slider stage;
+    static World w;
+    stage.attach(w);
+
+    // The platform is x 20..30, y 0..20, so its middle is (25, 10). One rider
+    // three units out along +x, and one standing ON the pivot.
+    const fx2 pivot{F(25), F(10)};
+    const u32 rim = w.spawn(fx3{F(28), F(10), F(1)});
+    const u32 hub = w.spawn(fx3{F(25), F(10), F(1)});
+    w.motions().add(stage.store, 0);
+
+    // Land and anchor BEFORE the spin starts. A body still falling is not
+    // riding anything, and a footprint turning under it would sweep it instead.
+    for (int i = 0; i < 40; ++i) {
+        w.set_input(rim, proto::InputFrame{});
+        w.set_input(hub, proto::InputFrame{});
+        w.step();
+    }
+    CHECK(w.agent(rim).mv.anchored);
+    CHECK(w.agent(hub).mv.anchored);
+
+    const fx2 p0{w.agent(rim).pos.x, w.agent(rim).pos.y};
+    const fx2 h0{w.agent(hub).pos.x, w.agent(hub).pos.y};
+
+    // A quarter turn, from here, over 240 ticks.
+    w.motions().start_parametric(0, fx3::zero(), fx3::zero(), w.tick(), 240,
+                                 LoopMode::Once, MotionTarget::Both,
+                                 pivot, 0, 1073741824LL);
+    for (int i = 0; i < 260; ++i) {
+        w.set_input(rim, proto::InputFrame{});
+        w.set_input(hub, proto::InputFrame{});
+        w.step();
+    }
+
+    const fx2 p1{w.agent(rim).pos.x, w.agent(rim).pos.y};
+    const fx2 h1{w.agent(hub).pos.x, w.agent(hub).pos.y};
+    std::printf("       rim rode (%.2f, %.2f) -> (%.2f, %.2f); hub (%.2f, %.2f) -> (%.2f, %.2f)\n",
+                D(p0.x), D(p0.y), D(p1.x), D(p1.y), D(h0.x), D(h0.y), D(h1.x), D(h1.y));
+
+    // A quarter turn about (25, 10) sends (28, 10) to (25, 13). The tolerance
+    // is a fifth of a unit: the rider is carried by a fixed-point rotation
+    // applied once a tick for 240 ticks, and the controller runs between them.
+    const fx tol = fx::from_frac(1, 5);
+    CHECK(p1.x > F(25) - tol && p1.x < F(25) + tol);
+    CHECK(p1.y > F(13) - tol && p1.y < F(13) + tol);
+
+    // AND IT IS STILL ABOARD -- being moved is not the same as being carried.
+    CHECK(w.agent(rim).mv.anchored);
+    CHECK(w.agent(rim).mv.anchor == 0);
+
+    // THE CONTROL, and it is what proves the displacement is per-POINT: the
+    // rider standing on the pivot went round with the platform and therefore
+    // went nowhere. A carry that used one delta for the whole sector would have
+    // moved it exactly as far as the rim.
+    CHECK(h1.x == h0.x);
+    CHECK(h1.y == h0.y);
+}
+
+// The footprint itself really turned, not just the bodies on it. A carry that
+// moved riders while the polygon stayed put would pass every assertion above
+// and leave everyone standing off the edge of a platform that never moved.
+static void test_a_rotating_sector_moves_its_own_points() {
+    std::printf("motion: and the footprint turns with them\n");
+
+    static Slider stage;
+    static World w;
+    stage.attach(w);
+    w.motions().add(stage.store, 0);
+
+    const geom::Sector& s = stage.store.view().sector(0);
+    const fx2 before = stage.store.view().point(s.first_point);
+
+    // Half a turn about the middle, which sends every corner to the opposite
+    // one -- the one rotation whose answer needs no trigonometry to check.
+    w.motions().start_parametric(0, fx3::zero(), fx3::zero(), 0, 60, LoopMode::Once,
+                                 MotionTarget::Both, fx2{F(25), F(10)}, 0,
+                                 2147483648LL);
+    for (int i = 0; i < 70; ++i) w.step();
+
+    const fx2 after = stage.store.view().point(s.first_point);
+    std::printf("       corner (%.2f, %.2f) -> (%.2f, %.2f)\n",
+                D(before.x), D(before.y), D(after.x), D(after.y));
+    const fx tol = fx::from_frac(1, 100);
+    CHECK(after.x > F(50) - before.x - tol && after.x < F(50) - before.x + tol);
+    CHECK(after.y > F(20) - before.y - tol && after.y < F(20) - before.y + tol);
+}
+
 // Stepping off a moving walkway should throw you, the same way stepping off a
 // rising lift does. §3.2.5 says a detaching entity inherits the surface's
 // velocity once, and nothing about that says vertical.
@@ -629,6 +795,10 @@ int main() {
     test_riding_a_lift();
     test_a_horizontal_platform_carries_its_rider();
     test_a_still_platform_carries_nobody();
+    test_the_angle_is_a_pure_function_of_the_tick();
+    test_carrying_reduces_to_the_old_answer_without_a_turn();
+    test_a_rotating_platform_carries_its_rider_around();
+    test_a_rotating_sector_moves_its_own_points();
     test_detaching_inherits_horizontal_momentum();
     test_a_platform_moving_into_its_neighbour_stays_coherent();
     test_detach_inherits_momentum();

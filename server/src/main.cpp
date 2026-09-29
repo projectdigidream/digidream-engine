@@ -226,6 +226,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         w.u8v(static_cast<u8>(m.loop));
         w.vec3_raw(m.from);
         w.vec3_raw(m.to);
+        // The turn, appended: where it pivots and how far round it goes. The
+        // endpoints are SIGNED and UNWRAPPED brad, which is why they are 64 bit
+        // -- a u32 cannot say "twice round" or "the other way".
+        w.fxraw(m.pivot.x);
+        w.fxraw(m.pivot.y);
+        w.u64v(static_cast<u64>(m.spin_from));
+        w.u64v(static_cast<u64>(m.spin_to));
         const size_t end = w.size();
         const u32 body = static_cast<u32>(end - len_pos - 4);
         buf[len_pos]     = static_cast<u8>(body & 0xFF);
@@ -242,12 +249,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
     // Two parametric motions are the same motion iff a client computing either
     // one would land on the same offset for every tick. That is exactly the
-    // descriptor -- endpoints, start, duration, loop, target -- and NOT the
-    // current offset, which is derived from it.
+    // descriptor -- endpoints, start, duration, loop, target, and the turn --
+    // and NOT the current offset or angle, which are derived from it.
     static bool same_motion(const sim::SectorMotion& a, const sim::SectorMotion& b) {
         return a.sector == b.sector && a.type == b.type && a.target == b.target &&
                a.start_tick == b.start_tick && a.duration_ticks == b.duration_ticks &&
-               a.loop == b.loop && a.from == b.from && a.to == b.to;
+               a.loop == b.loop && a.from == b.from && a.to == b.to &&
+               a.pivot == b.pivot && a.spin_from == b.spin_from &&
+               a.spin_to == b.spin_to;
     }
 
     // A door opened mid-match has to reach the clients, or they predict against

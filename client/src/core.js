@@ -336,9 +336,16 @@ export class WasmWorld {
     const b = this.core.buf64 / 8
     i64[b] = msg.from.x; i64[b + 1] = msg.from.y; i64[b + 2] = msg.from.z
     i64[b + 3] = msg.to.x; i64[b + 4] = msg.to.y; i64[b + 5] = msg.to.z
+    // The turn: {pivot.x, pivot.y, spinFrom, spinTo}, written even when it is
+    // all zeros. Passing the pointer unconditionally rather than branching is
+    // what keeps "a motion that only travels" from being a second code path
+    // that agrees with the first until it does not.
+    i64[b + 6] = msg.pivot?.x ?? 0n; i64[b + 7] = msg.pivot?.y ?? 0n
+    i64[b + 8] = msg.spinFrom ?? 0n; i64[b + 9] = msg.spinTo ?? 0n
     return M._dnp_world_start_parametric(
       this.ptr, msg.sector, this.core.buf64, this.core.buf64 + 24,
-      msg.startTick, msg.durationTicks, msg.loopMode, msg.motionTarget ?? 0) !== 0
+      msg.startTick, msg.durationTicks, msg.loopMode, msg.motionTarget ?? 0,
+      this.core.buf64 + 48) !== 0
   }
 
   /**

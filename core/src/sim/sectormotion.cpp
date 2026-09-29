@@ -1,32 +1,43 @@
 #include "dnp/sim/sectormotion.hpp"
 
+#include "dnp/math/trig.hpp"
 #include "dnp/sim/state_hash.hpp"
 
 namespace dnp::sim {
 
-fx3 parametric_offset(const SectorMotion& m, u32 tick) noexcept {
-    if (m.duration_ticks == 0) return m.to;
+namespace {
 
+// HOW FAR THROUGH ITS PATH, as a tick count in [0, duration].
+//
+// Shared by the offset and the angle rather than computed twice, because a
+// sector that both slides and turns must arrive at both endpoints on the same
+// tick -- and two copies of a ping-pong fold is two places for one of them to
+// be off by one.
+u32 phase_ticks(const SectorMotion& m, u32 tick) noexcept {
     // Before the start tick the motion has not begun. Unsigned tick arithmetic
     // would wrap here and place a not-yet-started sector somewhere arbitrary,
     // so the comparison is explicit.
-    if (tick <= m.start_tick) return m.from;
+    if (tick <= m.start_tick) return 0;
 
     const u32 elapsed = tick - m.start_tick;
-    u32 t = 0;
     switch (m.loop) {
         case LoopMode::Once:
-            t = elapsed >= m.duration_ticks ? m.duration_ticks : elapsed;
-            break;
+            return elapsed >= m.duration_ticks ? m.duration_ticks : elapsed;
         case LoopMode::Loop:
-            t = elapsed % m.duration_ticks;
-            break;
+            return elapsed % m.duration_ticks;
         case LoopMode::PingPong: {
             const u32 cycle = elapsed % (m.duration_ticks * 2);
-            t = cycle <= m.duration_ticks ? cycle : (m.duration_ticks * 2 - cycle);
-            break;
+            return cycle <= m.duration_ticks ? cycle : (m.duration_ticks * 2 - cycle);
         }
     }
+    return 0;
+}
+
+}  // namespace
+
+fx3 parametric_offset(const SectorMotion& m, u32 tick) noexcept {
+    if (m.duration_ticks == 0) return m.to;
+    const u32 t = phase_ticks(m, tick);
 
     // fx_lerp returns exactly `from` at 0 and exactly `to` at 1
     // (docs/physics-contract.md rule 4). That is why a lift settles precisely on
@@ -36,6 +47,38 @@ fx3 parametric_offset(const SectorMotion& m, u32 tick) noexcept {
     return fx3{fx_lerp(m.from.x, m.to.x, phase),
                fx_lerp(m.from.y, m.to.y, phase),
                fx_lerp(m.from.z, m.to.z, phase)};
+}
+
+u32 parametric_angle(const SectorMotion& m, u32 tick) noexcept {
+    if (m.spin_from == m.spin_to) return static_cast<u32>(m.spin_to & 0xFFFFFFFF);
+    if (m.duration_ticks == 0) return static_cast<u32>(m.spin_to & 0xFFFFFFFF);
+    const u32 t = phase_ticks(m, tick);
+
+    // INTEGER, not fx_lerp. A brad is already an integer count of a 2^32 turn,
+    // so this is exact at both ends by construction -- t == 0 gives spin_from
+    // and t == duration gives spin_to, with nothing to round. Going through fx
+    // would divide a turn by 2^32 and multiply it back.
+    //
+    // i64 throughout because the endpoints are unwrapped: four turns is 2^34,
+    // and the product below is that times the tick count.
+    const i64 span = m.spin_to - m.spin_from;
+    const i64 v = m.spin_from + span * static_cast<i64>(t) / static_cast<i64>(m.duration_ticks);
+    return static_cast<u32>(v & 0xFFFFFFFF);
+}
+
+fx3 SectorMotion::carry_delta(fx2 p) const noexcept {
+    const fx3 d = floor_delta();
+    if (angle == prev_angle) return d;
+
+    // See the header. One rotation by the difference of the two angles, about
+    // the pivot, with the previous offset taken off first because `p` is where
+    // the body is NOW -- which is where the sector put it last tick.
+    const fx2 r{p.x - prev_offset.x - pivot.x, p.y - prev_offset.y - pivot.y};
+    const fx2 c = fx_dir(brad(angle - prev_angle));
+    const fx2 turned{r.x * c.x - r.y * c.y, r.x * c.y + r.y * c.x};
+    return fx3{turned.x + pivot.x + offset.x - p.x,
+               turned.y + pivot.y + offset.y - p.y,
+               d.z};
 }
 
 u32 SectorMotionSet::add(const geom::MapStorage& map, u32 sector) noexcept {
@@ -68,7 +111,8 @@ i32 SectorMotionSet::find(u32 sector) const noexcept {
 
 bool SectorMotionSet::start_parametric(u32 sector, fx3 from, fx3 to, u32 start_tick,
                                        u32 duration_ticks, LoopMode loop,
-                                       MotionTarget target) noexcept {
+                                       MotionTarget target, fx2 pivot,
+                                       i64 spin_from, i64 spin_to) noexcept {
     const i32 i = find(sector);
     if (i < 0) return false;
     SectorMotion& m = motions_[static_cast<u32>(i)];
@@ -79,6 +123,9 @@ bool SectorMotionSet::start_parametric(u32 sector, fx3 from, fx3 to, u32 start_t
     m.start_tick = start_tick;
     m.duration_ticks = duration_ticks;
     m.loop = loop;
+    m.pivot = pivot;
+    m.spin_from = spin_from;
+    m.spin_to = spin_to;
     return true;
 }
 
@@ -98,9 +145,11 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
     for (u32 i = 0; i < count_; ++i) {
         SectorMotion& m = motions_[i];
         m.prev_offset = m.offset;
+        m.prev_angle = m.angle;
 
         if (m.type == MotionType::Parametric) {
             m.offset = parametric_offset(m, tick);
+            m.angle = parametric_angle(m, tick);
         }
         // ScriptedDiscrete keeps whatever set_discrete() last wrote; Static
         // keeps a zero offset.
@@ -131,14 +180,30 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
         else                                   s.ceil_z = m.base_ceil;
 
         if (m.offset.x.raw != 0 || m.offset.y.raw != 0 ||
-            m.prev_offset.x.raw != 0 || m.prev_offset.y.raw != 0) {
+            m.prev_offset.x.raw != 0 || m.prev_offset.y.raw != 0 ||
+            m.angle != 0 || m.prev_angle != 0) {
             // Horizontal motion moves the footprint, so the points have to be
-            // rewritten. The triangulation is unaffected -- translating a
-            // polygon cannot change which vertices are ears -- so this is a
-            // pure vertex update, exactly as §3.1.1 describes.
-            for (u16 k = 0; k < m.base_point_count; ++k) {
-                map.point_mut(s.first_point + k) =
-                    fx2{m.base_points[k].x + m.offset.x, m.base_points[k].y + m.offset.y};
+            // rewritten. The triangulation is unaffected -- translating OR
+            // ROTATING a polygon cannot change which vertices are ears -- so
+            // this is a pure vertex update, exactly as §3.1.1 describes.
+            //
+            // The rotation is skipped entirely at angle zero, which is every
+            // lift, door and slider: fx_dir(0) is (1, 0) and the multiply would
+            // be an identity nobody needs to pay for once per point per tick.
+            if (m.angle == 0) {
+                for (u16 k = 0; k < m.base_point_count; ++k) {
+                    map.point_mut(s.first_point + k) =
+                        fx2{m.base_points[k].x + m.offset.x, m.base_points[k].y + m.offset.y};
+                }
+            } else {
+                const fx2 c = fx_dir(brad(m.angle));
+                for (u16 k = 0; k < m.base_point_count; ++k) {
+                    const fx2 r{m.base_points[k].x - m.pivot.x,
+                                m.base_points[k].y - m.pivot.y};
+                    map.point_mut(s.first_point + k) =
+                        fx2{r.x * c.x - r.y * c.y + m.pivot.x + m.offset.x,
+                            r.x * c.y + r.y * c.x + m.pivot.y + m.offset.y};
+                }
             }
         }
     }
@@ -198,6 +263,11 @@ void SectorMotionSet::hash_into(StateHasher& h) const noexcept {
         h.vec3(m.prev_offset);
         h.vec3(m.from);
         h.vec3(m.to);
+        h.u32v(m.angle);
+        h.u32v(m.prev_angle);
+        h.vec2(m.pivot);
+        h.u64v(static_cast<u64>(m.spin_from));
+        h.u64v(static_cast<u64>(m.spin_to));
         h.u32v(m.start_tick);
         h.u32v(m.duration_ticks);
         h.byte(static_cast<unsigned char>(m.loop));
