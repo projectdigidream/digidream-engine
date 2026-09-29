@@ -336,6 +336,17 @@ trigger_vocab = {
           doc = "Added to the resolved height. A Doom door opens to the " ..
                 "lowest neighbouring ceiling less four Doom units, which is " ..
                 "to = lowest_neighbour_ceiling with offset = \"-0.0834\"." },
+        { name = "dx",      type = "fx", optional = true,
+          doc = "How far the footprint travels along the map's x axis. This " ..
+                "is a SIDEWAYS platform, and it is a different thing from a " ..
+                "lift: a lift leaves its footprint where the map says it is, " ..
+                "and a slider stops being there -- so it pushes what is in " ..
+                "its way and carries what stands on it. `surface` does not " ..
+                "apply to it, because a sector cannot have its floor in one " ..
+                "place and its ceiling in another." },
+        { name = "dy",      type = "fx", optional = true,
+          doc = "The same along y. Give both for a diagonal; `speed` is then " ..
+                "along the line actually travelled, not along either axis." },
         { name = "speed",   type = "fx",
           doc = "Units per tick. Never zero: a door that shut instantly would " ..
                 "crush whoever stood under it with no warning." },
@@ -351,7 +362,11 @@ trigger_vocab = {
       doc = "PARAMETRIC sector motion: a start offset, an end offset, a " ..
             "duration. Replicated once and computed by every client for ticks " ..
             "the server has not reached, so a door costs one message and " ..
-            "predicts free." },
+            "predicts free.\n" ..
+            "Vertical by default -- name `dx` or `dy` and the footprint " ..
+            "slides instead, which the engine has always been able to do and " ..
+            "this vocabulary could not ask for. The two combine: a lift that " ..
+            "also travels is one action." },
 
     { name = "sector_stop",
       args = { { name = "sector", type = "sector", optional = true, one_of = "target" },

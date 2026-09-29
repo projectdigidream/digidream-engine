@@ -30,6 +30,9 @@ dnp = {
   ui_set = function() end,
   camera = function() end,
   level_camera = function() end,
+  path_length = function() return nil end,
+  -- Used by sector_move to turn a sideways travel into a duration.
+  length = function(v) return v and v.x or 0 end,
   music = function() end,
   vfx = function() return false end,
   random = function(lo) return lo end,

@@ -405,9 +405,33 @@ local function move_one(s, args)
   local height = resolve_height(s, args.to, args.height ~= nil and as_fx(args.height) or nil)
   if args.offset ~= nil then height = height + as_fx(args.offset) end
 
+  -- AND SIDEWAYS. `dx`/`dy` move the footprint; the engine has carried riders
+  -- and shoved bodies horizontally since sector motion existed, and this
+  -- vocabulary had no way to ask for it -- so every sliding platform in the
+  -- repository was raw Lua.
+  local dx = args.dx ~= nil and as_fx(args.dx) or ZERO
+  local dy = args.dy ~= nil and as_fx(args.dy) or ZERO
+
   local from = off
-  local to = vec3.new(off.x, off.y, height - base)
-  local n = ticks_for(to.z - from.z, as_fx(args.speed))
+  local to = vec3.new(off.x + dx, off.y + dy, height - base)
+
+  -- A SLIDE ALONE DOES NOT ALSO COME HOME. `to` and `height` are both absent
+  -- for a pure sideways move, and resolve_height then answers "the base
+  -- floor" -- which is the right default for a lift with nothing else said
+  -- and quite wrong here: a platform already raised would drop back as it
+  -- travelled, which nobody asked for and no argument would have prevented.
+  if args.to == nil and args.height == nil and (args.dx ~= nil or args.dy ~= nil) then
+    to = vec3.new(to.x, to.y, from.z)
+  end
+
+  -- ALONG THE LINE ACTUALLY TRAVELLED, so `speed` means the same thing for a
+  -- lift, a slider and a diagonal. dnp.length is the engine's own 2D length --
+  -- it ignores z, deliberately, because almost every caller wants plan
+  -- distance -- so the third axis comes from a second call on the result.
+  -- Two exact fixed-point roots rather than one approximation nobody can
+  -- reproduce.
+  local plan = dnp.length(vec3.new(to.x - from.x, to.y - from.y, ZERO))
+  local n = ticks_for(dnp.length(vec3.new(plan, to.z - from.z, ZERO)), as_fx(args.speed))
   local loop = args.loop or "once"
 
   if not s:move_parametric(from, to, n, loop, surface) then return false end

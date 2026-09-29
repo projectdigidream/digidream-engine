@@ -53,6 +53,18 @@
           "type": "fx"
         },
         {
+          "doc": "How far the footprint travels along the map's x axis. This is a SIDEWAYS platform, and it is a different thing from a lift: a lift leaves its footprint where the map says it is, and a slider stops being there -- so it pushes what is in its way and carries what stands on it. `surface` does not apply to it, because a sector cannot have its floor in one place and its ceiling in another.",
+          "name": "dx",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "doc": "The same along y. Give both for a diagonal; `speed` is then along the line actually travelled, not along either axis.",
+          "name": "dy",
+          "optional": true,
+          "type": "fx"
+        },
+        {
           "doc": "Units per tick. Never zero: a door that shut instantly would crush whoever stood under it with no warning.",
           "name": "speed",
           "type": "fx"
@@ -81,7 +93,7 @@
           "type": "int"
         }
       ],
-      "doc": "PARAMETRIC sector motion: a start offset, an end offset, a duration. Replicated once and computed by every client for ticks the server has not reached, so a door costs one message and predicts free.",
+      "doc": "PARAMETRIC sector motion: a start offset, an end offset, a duration. Replicated once and computed by every client for ticks the server has not reached, so a door costs one message and predicts free.\nVertical by default -- name `dx` or `dy` and the footprint slides instead, which the engine has always been able to do and this vocabulary could not ask for. The two combine: a lift that also travels is one action.",
       "name": "sector_move"
     },
     {

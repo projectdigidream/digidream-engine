@@ -97,7 +97,7 @@ function sector:move_parametric(from, to, n, loop, surface)
   if self.refuse then return false end
   note(("move %d %s to=%s ticks=%d %s"):format(self.i, surface, tostring(to.z), n, loop))
   MOVES[#MOVES + 1] = { sector = self.i, surface = surface, z = to.z,
-                        ticks = n, loop = loop }
+                        x = to.x, y = to.y, ticks = n, loop = loop }
   return true
 end
 function sector:set_offset(v)
@@ -169,6 +169,13 @@ dnp = {
     note(("music %s %s %s %s"):format(e and tostring(e.i) or "all", cue, tostring(fade), tostring(at)))
   end,
   vfx = function(kind, pos, dir, param) note(("vfx %d"):format(kind)); return true end,
+  -- The engine's own 2D length, faked with a double root. The runtime uses it
+  -- to turn a sideways move's travel into a duration, so a stub without it
+  -- raises the moment a trigger names `dx`.
+  length = function(v)
+    local x, y = tonumber(tostring(v.x)), tonumber(tostring(v.y))
+    return fx.parse(("%.6f"):format(math.sqrt(x * x + y * y)))
+  end,
 }
 )LUA";
 
@@ -489,6 +496,82 @@ triggers.load{ name = 'door', triggers = {
     CHECK(f.truth("MOVES[1].loop == 'once'"));
     // 1.9166 units at 0.25 a tick is 7 ticks, floored, and never zero.
     CHECK(f.truth("MOVES[1].ticks == 7"));
+}
+
+// A PLATFORM THAT GOES SIDEWAYS, from the vocabulary rather than from raw Lua.
+//
+// The engine has carried riders and shoved bodies horizontally since sector
+// motion existed -- core/tests/test_sectormotion.cpp measures both -- and this
+// vocabulary could only ask for heights, so every sliding platform in the
+// repository was a hand-written script.
+static void test_a_sector_can_be_moved_sideways() {
+    std::printf("triggers: a platform can be sent sideways, not only up\n");
+
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+triggers.load{ name = 'slide', triggers = {
+  { name = 'go', event = 'on_cross',
+    actions = { { a = 'sector_move', sector = 1, surface = 'both',
+                  dx = 6, speed = '0.5' } } },
+  { name = 'diagonal', event = 'on_interact',
+    actions = { { a = 'sector_move', sector = 1, surface = 'both',
+                  dx = 3, dy = 4, speed = '0.5' } } },
+} }
+)LUA"));
+
+    f.fire("on_cross", 0, {"ENT(0)", "11", "SEC(0)"});
+    CHECK(f.truth("#MOVES == 1"));
+    CHECK(f.truth("MOVES[1].x == fx.int(6)"));
+    CHECK(f.truth("MOVES[1].y == fx.int(0)"));
+    // AND IT DOES NOT ALSO COME HOME. `to` and `height` are absent, and
+    // resolve_height answers "the base floor" for that -- which is right for a
+    // lift with nothing else said and wrong here. A platform already raised
+    // would otherwise sink as it travelled.
+    CHECK(f.truth("MOVES[1].z == fx.int(0)"));
+    // Six units at half a unit a tick.
+    CHECK(f.truth("MOVES[1].ticks == 12"));
+
+    // ALONG THE LINE ACTUALLY TRAVELLED. 3 and 4 is 5, not 7 and not 4 -- so
+    // `speed` means the same thing for a lift, a slider and a diagonal.
+    // A version that added the axes would say 14 ticks and one that took the
+    // larger would say 8.
+    //
+    // AFTER the first slide has arrived. A sector still in flight refuses a
+    // second start -- the rule the door test above is about -- and a diagonal
+    // measured against a refusal reports no move at all, not a wrong duration.
+    f.exec("TICK = 20");
+    f.fire("on_interact", 20, {"ENT(0)", "2", "SEC(0)"});
+    CHECK(f.truth("#MOVES == 2"));
+    CHECK(f.truth("MOVES[2].x == fx.int(3)"));
+    CHECK(f.truth("MOVES[2].y == fx.int(4)"));
+    CHECK(f.truth("MOVES[2].ticks == 10"));
+}
+
+// CONTROL: a move that names no dx or dy is the vertical one it always was.
+//
+// Without this the two assertions above are satisfied by a runtime that puts
+// the travel somewhere in every move -- and every door in every converted level
+// would have started sliding.
+static void test_a_move_with_no_travel_is_still_vertical() {
+    std::printf("triggers: CONTROL -- a move naming no travel stays where it is\n");
+
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+triggers.load{ name = 'lift', triggers = {
+  { name = 'up', event = 'on_cross',
+    actions = { { a = 'sector_move', sector = 1, surface = 'floor',
+                  to = 'absolute', height = 4, speed = '0.5' } } },
+} }
+)LUA"));
+
+    f.fire("on_cross", 0, {"ENT(0)", "11", "SEC(0)"});
+    CHECK(f.truth("#MOVES == 1"));
+    CHECK(f.truth("MOVES[1].x == fx.int(0)"));
+    CHECK(f.truth("MOVES[1].y == fx.int(0)"));
+    CHECK(f.truth("MOVES[1].z == fx.int(4)"));
+    CHECK(f.truth("MOVES[1].ticks == 8"));
 }
 
 static void test_a_moving_sector_refuses_a_second_start() {
@@ -1360,6 +1443,8 @@ int main(int argc, char** argv) {
     test_a_broken_table_loads_nothing();
     test_conditions_select();
     test_a_door_is_a_sector_and_a_side();
+    test_a_sector_can_be_moved_sideways();
+    test_a_move_with_no_travel_is_still_vertical();
     test_a_moving_sector_refuses_a_second_start();
     test_once_is_spent_only_on_success();
     test_run_after_is_a_deadline_not_a_wait();
