@@ -136,6 +136,9 @@ public:
     u64 bytes_sent = 0;
     u64 snapshots_sent = 0;
     u64 entities_omitted = 0;
+    // The budget report's own rate limit (send_snapshots).
+    u32 omitted_reported_tick = 0;
+    u64 omitted_since_report = 0;
 
     // Forget everything about the world this session was watching, without
     // touching who it is or what it has sent us.

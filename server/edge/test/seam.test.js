@@ -7,21 +7,20 @@
 // seam_b's beginning at local x = 0 are the same line. Neither map has ever
 // seen the other.
 //
-// What this asserts, and they are three different claims:
+// The two maps and the third beside them are ONE WORLD on the server (a
+// region: every level on the metamap's grid). What this asserts:
 //
-//   1. the player who walked east is in the other map -- a second WELCOME, a
-//      different map hash;
-//   2. they arrived AT THE SAME WORLD POINT they left from. A seam is a change
-//      of frame and nothing else, so the local coordinate jumps by exactly one
-//      pitch and the world coordinate does not move at all. This is the one
-//      that distinguishes a seam from a teleport;
-//   3. they kept their momentum. A crossing that stops you dead is a loading
-//      screen with the screen taken out.
+//   1. walking east moves the player from level 0 into level 1 WITHOUT a
+//      second WELCOME: the server says HOME, and nothing is re-placed;
+//   2. the body's position is one continuous path in world coordinates --
+//      through the boundary at x = 40 with no jump -- and it keeps its speed
+//      and its handle, because it is the same body in the same world;
+//   3. the neighbourhood is re-stated from the new home (moves, no maps).
 //
 // The CONTROL is the same walk with the metamap withheld. Without a pitch the
-// cells are not composed in world space, there is no seam to cross, and the
-// player walks off the end of the corridor and falls -- so a pass here has to
-// mean the metamap did something.
+// cells are not composed in world space, there is no region and no seam, and
+// the player walks off the end of the corridor and falls -- so a pass here has
+// to mean the metamap did something.
 //
 import { spawn } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
@@ -104,6 +103,7 @@ const cw = control.writable.getWriter()
 const dw = wt.datagrams.createWritable().getWriter()
 
 const welcomes = []
+const homes = []
 const snapshots = []
 const nbr = []
 const moves = []
@@ -125,6 +125,7 @@ const streamsAfter = []
         const m = decodeControlMessage(buf.subarray(0, 4 + len))
         buf = buf.subarray(4 + len)
         if (m?.type === MSG.WELCOME) welcomes.push(m)
+        else if (m?.type === MSG.HOME) homes.push({ ...m, afterSnapshots: snapshots.length })
         // The cells next door, and the streams that follow them. Counted here
         // rather than reassembled: what this asserts is that the observer is
         // TOLD about the level across its boundary and where it sits, which is
@@ -176,60 +177,32 @@ async function walkEast () {
   }))
 }
 
-// The last position reported while still in the first map, and the first
-// reported after the second WELCOME.
-//
-// BY ARRIVAL, not by "whatever is latest when the welcome is noticed". The
-// welcome comes up the control stream and snapshots come as datagrams, so the
-// newest snapshot at the moment the welcome is seen is usually still one from
-// the map just left -- and reading it as the arrival makes the crossing look
-// like a jump of exactly one pitch. It passed for as long as the timing
-// happened to put a fresh snapshot in between, which is not a property of the
-// code under test.
-const at = (p) => ({ x: fxToNumber(p.self.pos.x), y: fxToNumber(p.self.pos.y),
-                     z: fxToNumber(p.self.pos.z), vx: fxToNumber(p.self.vel.x) })
-let lastInA = null
-let firstInB = null
-let seenAtCross = -1
+// Every self position the server reported, in order, in world coordinates.
+const path = []
 for (let i = 0; i < 700; i++) {
   await walkEast()
   await sleep(6)
-  if (welcomes.length === 1) {
-    const s = snapshots.at(-1)
-    if (s?.self) { lastInA = at(s); seenAtCross = snapshots.length }
-  } else if (welcomes.length >= 2 && !firstInB) {
-    const s = snapshots.slice(seenAtCross).find((x) => x?.self)
-    if (s) firstInB = at(s)
-  }
 }
 await sleep(300)
-
-console.log(`  welcomes ${welcomes.length}`)
-if (lastInA) console.log(`  last in A: x=${lastInA.x.toFixed(3)} vx=${lastInA.vx.toFixed(3)}`)
-if (firstInB) console.log(`  first in B: x=${firstInB.x.toFixed(3)} vx=${firstInB.vx.toFixed(3)}`)
-
+for (const snap of snapshots) {
+  if (!snap?.self) continue
+  path.push({ x: fxToNumber(snap.self.pos.x), z: fxToNumber(snap.self.pos.z),
+              vx: fxToNumber(snap.self.vel.x), sector: snap.self.sector, tick: snap.serverTick })
+}
+console.log(`  welcomes ${welcomes.length}, homes ${homes.map((h) => h.level).join(' ') || 'none'}`)
+console.log(`  x from ${path[0]?.x.toFixed(2)} to ${path.at(-1)?.x.toFixed(2)}`)
 console.log(`  neighbours announced: ${nbr.map((n) => `L${n.level}@(${n.dx},${n.dy})`).join(' ') || 'none'}`)
 console.log(`  neighbours moved    : ${moves.map((m) => `L${m.level}@(${m.dx},${m.dy})`).join(' ') || 'none'}`)
 
 if (NO_METAMAP) {
-  // CONTROL: no pitch, so the cells are not composed and there is no seam. The
-  // player walks off the end of the corridor and falls out of the world.
-  check(welcomes.length === 1,
-        `CONTROL: with no metamap nobody crosses (${welcomes.length} welcome)`)
-  // CONTROL for the neighbour announcements too: with no layout there is no
-  // cell to be next to, so a client is told about nothing. Without this, a
-  // server that announced every level to everybody would pass the tests below.
-  check(nbr.length === 0,
-        `CONTROL: and no neighbour is announced (${nbr.length})`)
-  check(lastInA !== null && lastInA.z < 0,
-        `CONTROL: and they fall off the end instead (z=${lastInA ? lastInA.z.toFixed(2) : 'n/a'})`)
+  // CONTROL: no pitch, so no region and no seam. The player walks off the end
+  // of the corridor and falls out of the world.
+  check(homes.length === 0, `CONTROL: with no metamap nobody is re-homed (${homes.length})`)
+  check(nbr.length === 0, `CONTROL: and no neighbour is announced (${nbr.length})`)
+  const lowest = Math.min(...path.map((p) => p.z))
+  check(lowest < 0, `CONTROL: and they fall off the end instead (lowest z=${lowest.toFixed(2)})`)
 } else {
-  // (4) THE FAR SIDE WAS ALREADY ON SCREEN.
-  //
-  // What makes a seam a seam rather than a loading screen: the level across the
-  // boundary is announced on JOIN, with the offset that composes it, and its
-  // geometry follows. Without this the corridor leads into black and the
-  // crossing arrives as a cut.
+  // (0) THE FAR SIDE WAS ALREADY THERE, announced on join with its offset.
   const onJoin = nbr.filter((n) => n.afterWelcomes === 1)
   check(onJoin.length === 2, `both cells next door are announced on join (${onJoin.length})`)
   const east = onJoin.find((n) => Math.abs(n.dx - PITCH) < 0.001 && Math.abs(n.dy) < 0.001)
@@ -237,76 +210,44 @@ if (NO_METAMAP) {
   check(onJoin.every((n) => n.bytes > 0),
         `and the geometry follows each (${onJoin.map((n) => n.bytes).join(', ')} bytes)`)
 
-  // (5) A CROSSING DOES NOT RE-SEND WHAT THE CLIENT ALREADY HAS.
-  //
-  // This is what makes a seam cheap rather than the most expensive thing in the
-  // game. Walking one cell changes where every neighbour sits and which ones
-  // they are hardly at all: seam_c is next to both halves, so it must arrive as
-  // an offset and not as a map. Nine cells' geometry rebuilt to step through a
-  // doorway is the loading screen a seam exists to abolish.
-  const movedAfter = moves.filter((m) => m.afterWelcomes >= 2)
-  const mappedAfter = nbr.filter((n) => n.afterWelcomes >= 2)
-  check(movedAfter.length >= 1,
-        `the retained cell is re-stated, not re-sent (${movedAfter.length} move(s))`)
-  check(movedAfter.some((m) => m.level === onJoin.find((n) => n !== east)?.level ||
-                               onJoin.some((n) => n.level === m.level && n !== east)),
-        'and it is the one that was never entered')
-  // NO MAP CROSSES THE WIRE AT ALL.
-  //
-  // The level entered was streamed as a neighbour on join and the level left
-  // was the home map, and by the holding rule (docs/protocol.md 8.5) the client
-  // has both until the server drops them. So the welcome says the map does not
-  // follow, and the level left is MOVED to minus a pitch like any other cell
-  // the client holds.
-  //
-  // This asserted one map (the level left) for a while, when "held" was the
-  // server's guess about the client's bookkeeping and a wrong guess lost a cell
-  // for the rest of the session. It is not a guess now; it is the protocol.
-  check(mappedAfter.length === 0,
-        `no neighbour map is streamed for a crossing (${mappedAfter.length})`)
-  check(streamsAfter.filter((n) => n >= 2).length === 0,
-        `and no home map either (${streamsAfter.filter((n) => n >= 2).length} stream(s) after the crossing)`)
-  check(welcomes.length === 2 && welcomes[1].mapFollows === false,
-        'the crossing welcome says its map does not follow')
-  // CONTROL: the join's welcome did send one, so the flag is not stuck false.
-  check(welcomes[0]?.mapFollows === true && streamsAfter.some((n) => n === 1),
-        'CONTROL: while the join\'s welcome did, and its map came')
-  check(welcomes.length === 2 && welcomes[1].homeLevel === east?.level,
-        `and names the level entered (${welcomes[1]?.homeLevel} vs ${east?.level})`)
-  const leftMoved = movedAfter.find((m) => m.level === welcomes[0]?.homeLevel)
-  check(!!leftMoved && Math.abs(leftMoved.dx + PITCH) < 0.001,
-        `the level just left is moved to minus a pitch (${leftMoved?.dx})`)
-  // CONTROL: and the level just ENTERED is neither sent nor moved -- it is
-  // underfoot, not next door.
-  check(!mappedAfter.some((n) => n.level === east?.level) &&
-        !movedAfter.some((m) => m.level === east?.level),
-        'and the level just entered is neither sent nor moved')
+  // (1) ONE WORLD: a HOME, not a second WELCOME.
+  check(welcomes.length === 1, `nobody was re-placed (${welcomes.length} welcome)`)
+  check(welcomes[0]?.region === true, 'the welcome says the level shares its world')
+  check(homes.length >= 1 && homes[0].level === east?.level,
+        `the server re-homed the player into the level east (${homes.map((h) => h.level).join(' ')})`)
+  check(serverLog.includes('walked from level 0 into level 1'), 'and says so')
 
-  // (1) somewhere else.
-  check(welcomes.length === 2, `the player crossed (${welcomes.length} welcomes)`)
-  check(welcomes.length === 2 && welcomes[0].mapHash !== welcomes[1].mapHash,
-        'into a different map')
-  check(serverLog.includes('crossed the seam'), 'and the server says which way')
-
-  // (2) THE SAME WORLD POINT. The local coordinate jumps by exactly one pitch,
-  // which is what makes the world coordinate not move at all.
-  if (lastInA && firstInB) {
-    const worldA = lastInA.x + 0 * PITCH
-    const worldB = firstInB.x + 1 * PITCH
-    console.log(`  world x: ${worldA.toFixed(3)} -> ${worldB.toFixed(3)}`)
-    check(Math.abs(worldB - worldA) < 1.5,
-          `the world coordinate did not jump (${(worldB - worldA).toFixed(3)} units)`)
-    // CONTROL for that: the LOCAL coordinate did jump, and by about a pitch --
-    // otherwise "it did not move" is satisfied by a player who never left.
-    check(lastInA.x - firstInB.x > PITCH * 0.8,
-          `while the local one moved a pitch (${(lastInA.x - firstInB.x).toFixed(1)})`)
-
-    // (3) still walking.
-    check(firstInB.vx > 0.5, `and kept their momentum (vx ${firstInB.vx.toFixed(2)})`)
-    check(firstInB.z > -1, `and did not fall (z ${firstInB.z.toFixed(2)})`)
-  } else {
-    check(false, 'positions either side of the seam were recorded')
+  // (2) ONE CONTINUOUS PATH through the boundary, in world coordinates.
+  const across = path.filter((p) => p.x > PITCH + 1)
+  check(path.length > 0 && across.length > 0,
+        `the body is past the boundary at x=${PITCH} (reached ${path.at(-1)?.x.toFixed(2)})`)
+  let worstStep = 0
+  for (let i = 1; i < path.length; i++) {
+    const dt = Math.max(1, path[i].tick - path[i - 1].tick)
+    worstStep = Math.max(worstStep, Math.abs(path[i].x - path[i - 1].x) / dt)
   }
+  // A walk is 8 units a second, 0.13 a tick. Anything like a pitch is a jump.
+  check(worstStep < 0.5, `and never jumped (worst ${worstStep.toFixed(3)} a tick)`)
+  const nearSeam = path.filter((p) => Math.abs(p.x - PITCH) < 4)
+  check(nearSeam.length > 0 && nearSeam.every((p) => p.vx > 0.5),
+        `it kept its speed through the boundary (vx ${nearSeam.map((p) => p.vx.toFixed(1)).slice(0, 4).join(' ')})`)
+  check(path.every((p) => p.z > -1), 'and did not fall')
+  // The same world names the sector by the level it is in: chunk key 0, then 1.
+  const keys = [...new Set(path.filter((p) => p.sector >= 0).map((p) => p.sector >>> 16))]
+  check(keys.includes(0) && keys.includes(1),
+        `the sector the body stands in is named by its level (${keys.join(' then ')})`)
+
+  // (3) THE NEIGHBOURHOOD IS RE-STATED FROM THE NEW HOME, and nothing streamed.
+  const movedAfter = moves.filter((m) => m.afterWelcomes === 1)
+  const left = movedAfter.find((m) => m.level === welcomes[0]?.homeLevel)
+  check(!!left && Math.abs(left.dx + PITCH) < 0.001,
+        `the level left is moved to minus a pitch (${left?.dx})`)
+  check(nbr.filter((n) => n.afterWelcomes >= 1).length === onJoin.length,
+        'and no neighbour map is streamed for the walk')
+  check(streamsAfter.filter((n) => n === 1).length === 1 + onJoin.length,
+        `nor any home map (${streamsAfter.length} stream(s), all at the join)`)
+  check(!movedAfter.some((m) => m.level === east?.level),
+        'and the level walked into is not moved: it is underfoot')
 }
 
 try { await cw.close() } catch {}

@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
     std::FILE* in = std::fopen(argv[1], "rb");
     if (!in) { std::fprintf(stderr, "cannot open %s\n", argv[1]); return 1; }
 
-    MapStorage store;
+    static MapStorage store;   // static: a MapStorage is several megabytes
     store.clear();
 
     // Scripts the map declared, resolved and copied after the map itself is

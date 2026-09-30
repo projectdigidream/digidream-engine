@@ -288,6 +288,26 @@ const musicCues = []
 // The last input sampled, for the body watch (client/src/seam/diag.js).
 let lastSampled = null
 
+// --- the region (docs/protocol.md §8.7) -------------------------------------
+//
+// When the level shares its world with its neighbours, this client SIMULATES
+// them too: its store holds every level it holds, each at its cell's origin,
+// joined where they meet (geom::MapStorage::add_chunk) -- the same world the
+// server steps. Walking from one level into the next is then walking between
+// two rooms: the server says HOME and nothing is re-placed, re-predicted or
+// re-based. Everything, body and camera and every view, is in WORLD coordinates.
+//
+// Outside a region (no metamap pitch) the home map is the whole world, its
+// origin is zero, and all of this is the identity.
+let region = false
+let homeLevel = -1
+let homeOrigin = { x: 0, y: 0 }          // engine units, for drawing
+let homeOriginRaw = { x: 0n, y: 0n }     // raw fx, for placing chunks exactly
+let simStore = null                      // the world's store: the region's, or the home map
+const chunkMaps = new Map()              // level -> its own parse, for every level held (region)
+const motionNames = new Set()            // every sector name a motion has been declared for
+const sideTextureLog = new Map()         // level -> switches thrown in it, for when it is home
+
 let conn = null
 let welcome = null
 // Panels the server has opened on us. Not simulation state: never hashed, never
@@ -407,6 +427,9 @@ if (LIVE) {
       else if (m.type === MSG.NEIGHBOUR_DROP) seamEvents.push({ drop: m.level })
       // Still held, somewhere else. No geometry follows.
       else if (m.type === MSG.NEIGHBOUR_MOVE) seamEvents.push({ move: m })
+      // The body walked into another level of the same world. In order, like
+      // everything else about levels: the moves that follow are from there.
+      else if (m.type === MSG.HOME) seamEvents.push({ home: m.level })
       else if (m.type === MSG.MAP_DATA) {
         if (!stream) {
           report('[seam] VIOLATION: map data with no map announced', 'error')
@@ -604,7 +627,19 @@ let mapData = readMap(map)
 // positions, which refreshPathPositions re-reads per frame for the one path the
 // camera is actually on.
 camPaths = readPaths(map)
-let world = core.createWorld({ map })
+region = LIVE && !!welcome?.region
+homeLevel = welcome?.homeLevel ?? 0
+if (region) {
+  homeOriginRaw = { x: welcome.origin.x, y: welcome.origin.y }
+  homeOrigin = { x: fxToFloat(homeOriginRaw.x), y: fxToFloat(homeOriginRaw.y) }
+  shiftPaths(camPaths)
+  simStore = core.createStore()
+  if (!simStore.addChunk(homeLevel, map, homeOriginRaw)) throw new Error('the home level does not fit')
+  chunkMaps.set(homeLevel, map)
+} else {
+  simStore = map
+}
+let world = core.createWorld({ map: simStore })
 
 if (LIVE && welcome && map.hash !== welcome.mapHash) {
   // Same bytes, different parse: that is a build mismatch, and it is worth
@@ -632,9 +667,36 @@ let movers = []
 // rebuilding the whole map each time would be a visible stutter for nothing.
 function takeMotion (m) {
   if (!world.applyMotionSet(m)) return false
-  if (movers.includes(m.sector)) return false
-  movers.push(m.sector)
+  motionNames.add(m.sector)
+  // Drawn moving only in the home level's view; the rest are simulated.
+  const local = homeLocal(m.sector)
+  if (local < 0 || movers.includes(local)) return false
+  movers.push(local)
   return true
+}
+
+// A sector or side NAME (docs/protocol.md §8.6) as an index into the home
+// level's own map, or -1 when it belongs to another level. Outside a region
+// the name is the index.
+function homeLocal (name) {
+  if (!region) return name
+  return (name >>> 16) === homeLevel ? (name & 0xFFFF) : -1
+}
+
+// A path's live points, re-read. NOT in a region: the level's own parse is not
+// the one simulated there (the region's store is, and it carries no paths), so
+// its paths hold still -- a path on a moving platform in a region level does
+// not follow the platform. Known, and the place to fix it is add_chunk.
+function refreshPath (p) {
+  return region ? false : refreshPathPositions(map, p)
+}
+
+// A level's camera paths are in its own coordinates; the camera is in the world's.
+function shiftPaths (paths) {
+  if (!region || (homeOrigin.x === 0 && homeOrigin.y === 0)) return
+  for (const p of paths) {
+    for (let k = 0; k + 2 < p.pos.length; k += 3) { p.pos[k] += homeOrigin.x; p.pos[k + 1] += homeOrigin.y }
+  }
 }
 
 if (LIVE) {
@@ -712,7 +774,9 @@ if (LIVE) {
   }
 }
 
-let spawn = map.spawnForTag(SPAWN)
+// Where the server put the body, in the world's coordinates -- the same point as
+// the map's spawn for a level on its own, and the only right one in a region.
+let spawn = (LIVE && welcome?.arrival) ? welcome.arrival : map.spawnForTag(SPAWN)
 let agent = world.spawn(spawn)
 
 // Our own entity index, as the SERVER numbers it -- not this world's slot
@@ -792,6 +856,8 @@ const scene = new THREE.Scene()
 stage('geometry', 0, 'building geometry')
 let view = new MapView(mapData)
 stage('geometry', 1)
+// Engine (x, y) -> Three (x, ., -y), at the level's origin in the world.
+view.root.position.set(homeOrigin.x, 0, -homeOrigin.y)
 scene.add(view.root)
 // Only these sectors are rebuilt per frame; everything else is built once.
 if (movers.length) view.setDynamicSectors(movers)
@@ -920,7 +986,7 @@ const hood = new Neighbourhood({
   make: makeNeighbourView,
   // Engine z-up (x, y) -> Three y-up (x, ., -y), as every vertex in mapgeom.js.
   show (v, dx, dy) {
-    v.root.position.set(dx, 0, -dy)
+    v.root.position.set(homeOrigin.x + dx, 0, -(homeOrigin.y + dy))
     if (!v.root.parent) scene.add(v.root)
   },
   hide (v) { scene.remove(v.root) },
@@ -943,11 +1009,17 @@ function drainSeam () {
       if (enterLevel(e.welcome, e.bytes)) welcome = e.welcome
     } else if (e.map) {
       const m = e.map
+      if (region) addChunk(m.level, e.bytes, m.dxRaw, m.dyRaw)
       hood.map(m.level, m.dx, m.dy, m.dxRaw, m.dyRaw, e.bytes)
     } else if (e.move) {
       const m = e.move
       hood.move(m.level, m.dx, m.dy, m.dxRaw, m.dyRaw)
-    } else if (e.drop !== undefined) hood.drop(e.drop)
+    } else if (e.drop !== undefined) {
+      if (region) dropChunk(e.drop)
+      hood.drop(e.drop)
+    } else if (e.home !== undefined) {
+      walkInto(e.home)
+    }
   }
   // ONE UPLOAD PER FRAME. A cell you cannot reach yet appearing over the next
   // eight frames is invisible; eight in one frame is a stutter you feel.
@@ -956,6 +1028,102 @@ function drainSeam () {
     if (b.error) console.warn(`[seam] neighbour ${b.level}: ${b.error}`)
     else hood.built(b.level, b.token, b)
   }
+}
+
+// A HELD LEVEL IS SIMULATED, in a region: it becomes a chunk of this client's
+// world at its origin, joined to what it meets, so the body walks into it the
+// way the server's does. The parse is kept -- it is what the level's view and
+// its hash, spawns and texture scale come from when it becomes home.
+function addChunk (level, bytes, dxRaw, dyRaw) {
+  if (chunkMaps.has(level)) dropChunk(level)
+  const r = core.loadMap(bytes)
+  if (!r.ok) { report(`[seam] level ${level} would not load (status ${r.status})`, 'error'); return }
+  const at = { x: homeOriginRaw.x + dxRaw, y: homeOriginRaw.y + dyRaw }
+  if (!simStore.addChunk(level, r.map, at)) {
+    report(`[seam] level ${level} does not fit in this client's world`, 'error')
+    r.map.destroy()
+    return
+  }
+  chunkMaps.set(level, r.map)
+  world.setMap(simStore)
+}
+
+function dropChunk (level) {
+  const range = simStore.chunkRange(level)
+  if (range) {
+    world.forgetSectors(range.sectorFirst, range.sectorCount)
+    simStore.removeChunk(level)
+    world.setMap(simStore)
+  }
+  chunkMaps.get(level)?.destroy()
+  chunkMaps.delete(level)
+  sideTextureLog.delete(level)
+}
+
+/**
+ * THE BODY WALKED INTO ANOTHER LEVEL OF THE REGION (MSG_HOME).
+ *
+ * Nothing about the simulation changes: same world, same body, same predictor,
+ * same camera -- which is the whole point, and why this is short. What does
+ * change is which level's view is the full, animated one; whose music plays;
+ * whose paths the camera may follow; and what every held level's offset is
+ * measured from.
+ */
+function walkInto (level) {
+  const entry = hood.held.get(level)
+  const parse = chunkMaps.get(level)
+  if (!entry || !entry.placed || !parse) {
+    report(`[seam] VIOLATION: walked into level ${level}, which is not held here`, 'error')
+    return
+  }
+  // The new home's origin, before the neighbourhood re-places its views from it.
+  homeOriginRaw = { x: homeOriginRaw.x + entry.dxRaw, y: homeOriginRaw.y + entry.dyRaw }
+  homeOrigin = { x: fxToFloat(homeOriginRaw.x), y: fxToFloat(homeOriginRaw.y) }
+  const got = hood.enter(level, { bytes: liveMapBytes, view })
+  homeLevel = level
+  map = parse
+  mapData = readMap(map)
+  liveMapBytes = got.bytes
+  camPaths = readPaths(map)
+  shiftPaths(camPaths)
+  camPathIndex = -1
+  camPathSpline = null
+  lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
+  VOID_FLOOR = lowestFloor - 40
+
+  // THE VIEW: the one drawn next door is promoted, as a WELCOME's is, and given
+  // the full map so its movers can be split out and animated.
+  const promoted = got.view
+  if (promoted) {
+    view = promoted
+    view.map = mapData
+    view.root.position.set(homeOrigin.x, 0, -homeOrigin.y)
+    if (!view.root.parent) scene.add(view.root)
+    animator = new TextureAnimator({
+      groups: animCatalogue.groups,
+      names: mapData.textures,
+      materials: view.materials,
+      frameTexture: (n) => view.frameTextures?.get(n) ?? null
+    })
+  } else {
+    view = new MapView(mapData)
+    view.root.position.set(homeOrigin.x, 0, -homeOrigin.y)
+    scene.add(view.root)
+    loadMapTextures().catch((e) => say(`textures failed to load: ${e.message}`))
+  }
+  movers = [...motionNames].map(homeLocal).filter((i) => i >= 0)
+  if (movers.length) view.setDynamicSectors(movers)
+  // Switches thrown in it while it was next door, now that it can show them.
+  for (const m of sideTextureLog.get(level) ?? []) sideTextures.push(m)
+  sideTextureLog.delete(level)
+
+  playMapMusic(map.hash, 1200)
+  crossing.mark(0)
+  if (params.get('autowalk') === 'shuttle') autowalkDir = -autowalkDir
+  const here = world.readAgent(agent)
+  report(`[seam] walked into level ${level}, view ${promoted ? 'promoted' : 'built'}` +
+         ` (${fxToFloat(here.pos.x).toFixed(2)},${fxToFloat(here.pos.y).toFixed(2)} sector ${here.sector})` +
+         `; holding ${hood.describe()}`)
 }
 
 /**
@@ -1126,11 +1294,11 @@ const shadows = new ShadowCaster({ THREE, scene, radius: bodyRadius, bodyHeight 
 // beneath and drawing a disc at some default height would put it in mid-air.
 function groundUnder (x, z) {
   // three-space back to engine: x stays, three z is the negated engine y.
-  const s = map.findSector(x, -z)
+  const s = simStore.findSector(x, -z)
   if (s < 0) return null
-  return toThreeY(liveSector(s).floorZ)
+  return toThreeY(liveStoreSector(s).floorZ)
 }
-const onGround = (x, z) => map.findSector(x, -z) >= 0
+const onGround = (x, z) => simStore.findSector(x, -z) >= 0
 
 // The prop catalogue, and the sprite frames it names.
 //
@@ -1340,6 +1508,12 @@ function enterLevel (w, streamed) {
   // The level left becomes held, with the bytes and view it was using; the
   // level entered stops being held, and every other cell is re-stated relative
   // to it. From here `view` belongs to the neighbourhood unless it comes back.
+  // THE FRAME FIRST: every held view is re-placed as the neighbourhood re-homes,
+  // and it is placed from the new home's origin.
+  const wasRegion = region
+  region = !!w.region
+  homeOriginRaw = region ? { x: w.origin.x, y: w.origin.y } : { x: 0n, y: 0n }
+  homeOrigin = { x: fxToFloat(homeOriginRaw.x), y: fxToFloat(homeOriginRaw.y) }
   const got = hood.enter(w.homeLevel, { bytes: liveMapBytes, view })
   if (streamed && got && got.view !== view) {
     report(`[seam] VIOLATION: the map of level ${w.homeLevel} was sent, and it was held`, 'error')
@@ -1373,57 +1547,42 @@ function enterLevel (w, streamed) {
   camPaths = readPaths(map)
   camPathIndex = -1
   camPathSpline = null
+  homeLevel = w.homeLevel
 
-  // WHERE THE BODY GOES, and a seam is not a spawn.
-  //
-  // Across a seam the server carries the body over at the same world point, in
-  // the other level's words: the departure minus the offset that level was
-  // drawn at a moment ago. The client does the same, in exact fixed point --
-  // a fraction of a unit out here is a misprediction on the first tick -- with
-  // the three fields the server carries: position, velocity, facing.
-  //
-  // The server says which it did (WELCOME.exact_arrival). An exit into a level
-  // that happens to be next door is still an exit.
-  const leaving = (w.exactArrival && got?.placed) ? world.readAgent(agent) : null
-  world = core.createWorld({ map })
-  spawn = map.spawnForTag(SPAWN)
-  agent = world.spawn(leaving
-    ? { x: leaving.pos.x - got.dxRaw, y: leaving.pos.y - got.dyRaw, z: leaving.pos.z }
-    : spawn)
-  // AND ONLY IF IT LANDS SOMEWHERE. World::spawn always returns an index, and
-  // a body in no sector is a body the controller does not move. Only the core
-  // knows whether a point is in a sector (height matters as well as the
-  // footprint), so the body is placed and then asked. A fresh world rather
-  // than a second spawn, because there is no despawn on this side.
-  let atSeam = leaving !== null
-  // How far the body was put from where the client's own prediction said.
-  let correction = 0
-  if (atSeam) {
-    // THE CLIENT'S OWN CONTINUATION, FIRST. It is ahead of the server by its
-    // lead, so taking it keeps the view where it was. But at a turn-round it
-    // can be short of the boundary the server crossed -- 39.92 of a 40-unit
-    // cell -- and then it lands just outside the level entered. The server's
-    // own arrival (WELCOME.arrival) is exact and always inside; the spawn
-    // point was the old fallback and was a teleport across the level.
-    let placed = world.readAgent(agent)
-    if (placed.sector < 0) {
-      const guess = placed.pos
-      world = core.createWorld({ map })
-      agent = world.spawn(w.arrival)
-      placed = world.readAgent(agent)
-      correction = Math.hypot(fxToFloat(placed.pos.x - guess.x), fxToFloat(placed.pos.y - guess.y))
-      report(`[seam] the predicted arrival was in no sector; using the server's` +
-             ` (${fxToFloat(placed.pos.x).toFixed(3)},${fxToFloat(placed.pos.y).toFixed(3)})`)
+  // THE WORLD. Outside a region, the level's own map. In one, a store of every
+  // level held: the one entered at its origin, the rest at theirs, joined where
+  // they meet -- rebuilt here because an exit is the one time the body really
+  // does go somewhere else (walking between levels never comes through here).
+  if (!wasRegion) { for (const [, m] of chunkMaps) if (m !== map) m.destroy(); chunkMaps.clear() }
+  if (region) {
+    const old = chunkMaps.get(w.homeLevel)
+    if (old && old !== map) old.destroy()
+    chunkMaps.set(w.homeLevel, map)
+    for (const [li, m] of [...chunkMaps]) {
+      if (li !== w.homeLevel && !hood.has(li)) { m.destroy(); chunkMaps.delete(li) }
     }
-    if (placed.sector < 0) {
-      report('[seam] the server\'s arrival is in no sector either; using the spawn point', 'warn')
-      world = core.createWorld({ map })
-      agent = world.spawn(spawn)
-      atSeam = false
-    } else {
-      world.writeAgent(agent, { ...placed, vel: leaving.vel, facing: leaving.facing })
+    shiftPaths(camPaths)
+    simStore = core.createStore()
+    simStore.addChunk(w.homeLevel, map, homeOriginRaw)
+    for (const [li, n] of hood.held) {
+      if (!n.placed) continue
+      let m = chunkMaps.get(li)
+      if (!m) {
+        const r = core.loadMap(n.bytes)
+        if (!r.ok) continue
+        m = r.map
+        chunkMaps.set(li, m)
+      }
+      simStore.addChunk(li, m, { x: homeOriginRaw.x + n.dxRaw, y: homeOriginRaw.y + n.dyRaw })
     }
+  } else {
+    simStore = map
   }
+  world = core.createWorld({ map: simStore })
+  // Where the server put the body, in the world's coordinates.
+  spawn = w.arrival
+  agent = world.spawn(spawn)
+  const atSeam = false
 
   // A new level is a new entity index: keeping the old one would mirror a body
   // on top of us and us onto somebody else.
@@ -1447,24 +1606,17 @@ function enterLevel (w, streamed) {
   if (promoted) {
     view = promoted
     view.map = mapData
-    view.root.position.set(0, 0, 0)
+    view.root.position.set(homeOrigin.x, 0, -homeOrigin.y)
     if (!view.root.parent) scene.add(view.root)
   } else {
     view = new MapView(mapData)
+    view.root.position.set(homeOrigin.x, 0, -homeOrigin.y)
     scene.add(view.root)
   }
 
-  // THE CAMERA. At a seam the body is at the same world point in different
-  // words, so the camera is re-stated in them too and the view does not move.
-  // Otherwise the body really did go somewhere else, which is what snapTo is
-  // for. Three-space: the body's engine delta (-dx, -dy) is (-dx, 0, +dy).
-  if (atSeam) camera.rebase({ x: -got.dx, y: 0, z: got.dy })
-  else {
-    camera.snapTo({
-      x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y))
-    })
-  }
-  crossing.mark(correction)
+  camera.snapTo({
+    x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y))
+  })
   if (params.get('autowalk') === 'shuttle') autowalkDir = -autowalkDir
 
   // A NEW MAP IS A NEW TRACK, crossfaded rather than cut. music.play() is a
@@ -1493,6 +1645,8 @@ function enterLevel (w, streamed) {
   }
 
   movers = []
+  motionNames.clear()
+  sideTextureLog.clear()
   // A new map may ship a different avatar, so the body is rebuilt.
   bodyAvatar = -1
   buildBody()
@@ -1810,7 +1964,7 @@ function frame (now) {
       const before = world.readAgent(agent)
       predictor.step(f)
       const after = world.readAgent(agent)
-      if (before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
+      if (!region && before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
         // AND STOPPED, not merely put back.
         //
         // Restoring the position and keeping the velocity that carried it out
@@ -1850,10 +2004,23 @@ function frame (now) {
     }
     while (sideTextures.length) {
       const m = sideTextures.shift()
-      const sector = view.setSideTexture(m.side, m.field, m.name.toUpperCase(),
+      // By name: a switch thrown in another level of the region waits until
+      // that level is home, when its full view exists to show it.
+      if (region && (m.side >>> 16) !== homeLevel) {
+        const k = m.side >>> 16
+        if (!sideTextureLog.has(k)) sideTextureLog.set(k, [])
+        sideTextureLog.get(k).push(m)
+        continue
+      }
+      if (region) {
+        if (!sideTextureLog.has(homeLevel)) sideTextureLog.set(homeLevel, [])
+        sideTextureLog.get(homeLevel).push(m)
+      }
+      const side = homeLocal(m.side)
+      const sector = view.setSideTexture(side, m.field, m.name.toUpperCase(),
         { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
       if (sector >= 0) {
-        mapData.sides[m.side] = view.map.sides[m.side]
+        mapData.sides[side] = view.map.sides[side]
         view.setDynamicSectors([...new Set([...movers, sector])])
         view.rebuildDynamic()
       }
@@ -2104,7 +2271,7 @@ function frame (now) {
     }
     if (camPathIndex >= 0) {
       const p = camPaths[camPathIndex]
-      const moved = refreshPathPositions(map, p)
+      const moved = refreshPath(p)
       if (pathView && moved) pathView.update(new Set([p.index]))
       if (!camPathSpline || moved) {
         // THREE space, because that is the space `subject` is in and the space
@@ -2135,7 +2302,7 @@ function frame (now) {
     const moved = new Set()
     for (const p of camPaths) {
       if (p.index === camPathIndex) continue   // already refreshed above
-      if (refreshPathPositions(map, p)) moved.add(p.index)
+      if (refreshPath(p)) moved.add(p.index)
     }
     if (moved.size) pathView.update(moved)
     pathView.setActive(camPathTag)
@@ -2312,9 +2479,21 @@ function frame (now) {
 // The live floor/ceiling of a sector, read from the wasm store that sector
 // motion writes into. Recomputing it in JS would be a second implementation of
 // parametric_offset, and the two would disagree the first time either changed.
+// A sector of the HOME level's own map, by its own index, in its own
+// coordinates: what the home view is built from and what followMovers compares.
 function liveSector (i) {
+  if (!region) return liveStoreSector(i)
+  const s = world.sectorByName((homeLevel << 16) | i)
+  const out = liveStoreSector(s < 0 ? i : s)
+  if (out.points) for (const p of out.points) { p.x -= homeOrigin.x; p.y -= homeOrigin.y }
+  if (out.motion) { out.motion.pivotX -= homeOrigin.x; out.motion.pivotY -= homeOrigin.y }
+  return out
+}
+
+// A sector of the world's store, by the store's index, in world coordinates.
+function liveStoreSector (i) {
   const M = core.M
-  M._dnp_map_sector(map.ptr, i, core.buf64, core.buf32)
+  M._dnp_map_sector(simStore.ptr, i, core.buf64, core.buf32)
   const { i64, u32 } = core.views
   const b = core.buf64 / 8
   const b32 = core.buf32 / 4
@@ -2328,7 +2507,7 @@ function liveSector (i) {
   if (count > 0) {
     const pts = new Array(count)
     for (let k = 0; k < count; k++) {
-      M._dnp_map_point(map.ptr, first + k, core.buf64)
+      M._dnp_map_point(simStore.ptr, first + k, core.buf64)
       pts[k] = { x: fxToFloat(i64[b]), y: fxToFloat(i64[b + 1]) }
     }
     out.points = pts

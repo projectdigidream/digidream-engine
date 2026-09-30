@@ -28,6 +28,8 @@ export const MSG = {
   NEIGHBOUR_DROP: 0x29,
   // Same level, new offset, no geometry: what a crossing does to most of them.
   NEIGHBOUR_MOVE: 0x2A,
+  // The body walked into another level of the same world (docs/protocol.md 8.7).
+  HOME: 0x2B,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -386,8 +388,15 @@ export function decodeControlMessage (buf) {
       mapFollows: r.u8() !== 0,
       // The body kept its place across a seam (true) or was put at a spawn.
       exactArrival: r.u8() !== 0,
-      // Where the server put the body, raw fx, in this level's coordinates.
-      arrival: { x: r.i64(), y: r.i64(), z: r.i64() }
+      // Where the server put the body, raw fx, in the world's coordinates.
+      arrival: { x: r.i64(), y: r.i64(), z: r.i64() },
+      // Where this level's own coordinates begin in the world's, raw fx. Zero
+      // for a level simulated on its own; its cell's origin for a level in a
+      // region. The client draws and simulates everything in world coordinates.
+      origin: { x: r.i64(), y: r.i64() },
+      // Whether this level shares its world with its neighbours (a region):
+      // then crossing into one is a HOME message, not another WELCOME.
+      region: r.u8() !== 0
     }
     return r.ok ? msg : null
   }
@@ -456,6 +465,10 @@ export function decodeControlMessage (buf) {
     const level = r.u16(), dxRaw = r.i64(), dyRaw = r.i64()
     const msg = { type, level, dxRaw, dyRaw,
                   dx: fxToNumber(dxRaw), dy: fxToNumber(dyRaw) }
+    return r.ok ? msg : null
+  }
+  if (type === MSG.HOME) {
+    const msg = { type, level: r.u16() }
     return r.ok ? msg : null
   }
   if (type === MSG.NEIGHBOUR_DROP) {

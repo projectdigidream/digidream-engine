@@ -132,6 +132,12 @@ export class Core {
     return w
   }
 
+  /**
+   * An EMPTY store, to be filled with chunks: a region's world on the client
+   * (geom::MapStorage::add_chunk). Every level held is added at its origin.
+   */
+  createStore () { return new WasmMap(this, this.M._dnp_map_create()) }
+
   /** Parse a baked .dnpm buffer. Returns { ok, status, map } . */
   loadMap (bytes) {
     const ptr = this.M._malloc(bytes.length)
@@ -161,6 +167,24 @@ export class WasmMap {
 
   destroy () { this.core.M._dnp_map_destroy(this.ptr); this.ptr = 0 }
   get sectorCount () { return this.core.M._dnp_map_sector_count(this.ptr) }
+
+  /** Copy `src` in as chunk `key` at raw-fx origin {x, y}. False when it would not fit. */
+  addChunk (key, src, origin) {
+    const { i64 } = this.core.views
+    const b = this.core.buf64 / 8
+    i64[b] = BigInt(origin.x); i64[b + 1] = BigInt(origin.y)
+    return this.core.M._dnp_map_add_chunk(this.ptr, src.ptr, key, this.core.buf64) !== 0xFFFFFFFF
+  }
+
+  /** The chunk's { sectorFirst, sectorCount, sideFirst, sideCount }, or null. */
+  chunkRange (key) {
+    if (!this.core.M._dnp_map_chunk_range(this.ptr, key, this.core.buf32)) return null
+    const u32 = this.core.views.u32
+    const b = this.core.buf32 / 4
+    return { sectorFirst: u32[b], sectorCount: u32[b + 1], sideFirst: u32[b + 2], sideCount: u32[b + 3] }
+  }
+
+  removeChunk (key) { return this.core.M._dnp_map_remove_chunk(this.ptr, key) !== 0 }
 
   /**
    * The body proportions this map declares, as raw fx.
@@ -334,6 +358,18 @@ export class WasmWorld {
     if (name === undefined || name === null || name < 0) return -1
     return this.core.M._dnp_world_sector_by_name(this.ptr, name | 0)
   }
+
+  /**
+   * Attach a (changed) map: after a region's store gained or lost a chunk,
+   * the world must read the new view of it.
+   */
+  setMap (map) {
+    this.core.M._dnp_world_set_map(this.ptr, map.ptr)
+    this.map = map
+  }
+
+  /** Forget the motions of sectors [first, first + count): their chunk is gone. */
+  forgetSectors (first, count) { this.core.M._dnp_world_forget_sectors(this.ptr, first, count) }
 
   /** Register a sector as movable and start a parametric motion on it. */
   applyMotionSet (msg) {

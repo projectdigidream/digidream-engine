@@ -1,37 +1,26 @@
 //
-// WALKING ACROSS A SEAM, IN A BROWSER, AND LOOKING AT THE VIEW.
+// WALKING FROM ONE LEVEL INTO THE NEXT, IN A BROWSER, AND LOOKING AT THE VIEW.
 //
-// A seam is a change of frame and nothing else: the body is at the same world
-// point said in the next level's words. So crossing one must not change what is
-// on screen -- the camera and the body have to move by exactly the same amount,
-// and the difference between those two numbers is the whole of what a player
-// means by "it twitches".
+// The seam fixture's three maps are one world on the server (a region) and on
+// this client too: the client holds its neighbours as chunks of its own
+// simulation, in world coordinates. Walking east out of level 0 is then walking
+// between two rooms -- the server says HOME, and nothing is re-placed,
+// re-predicted or re-based. So what is on screen must not change at all: the
+// camera moves by what the body moves, which is one frame of walking.
 //
-// THIS EXISTS BECAUSE FOUR SEPARATE THINGS BROKE IT and every one of them
-// looked identical from the outside:
-//
-//   the body arrived at the map's spawn instead of the boundary;
-//   its facing and velocity were reset, so the view swung and the motion stalled;
-//   the neighbouring cells stayed at their old offsets for a frame, so the whole
-//     world jumped rather than the camera;
-//   and adoptMap ended with an unconditional camera.snapTo(spawn) that silently
-//     overwrote every one of the fixes above it.
-//
-// Four rounds of "the camera twitches" and four different causes. None of them
-// was findable by looking at the screen, and all of them are one number here.
+// This used to measure a jump of one pitch and ask that the camera jump with
+// it. Four separate bugs lived in that jump (a spawn-point arrival, a velocity
+// reset, neighbours a frame late, a stray snapTo). There is no jump now.
 //
 // The seam FIXTURE rather than a converted level, because a bot cannot walk
 // through MAP01 to reach a boundary: seam_a is a room and a corridor pointing
 // due east, and ?autowalk=east pushes east in world terms whatever the camera
-// is doing. Three cells, because a crossing has to have a neighbour to RETAIN
-// -- see maps/seam_c.map.
+// is doing.
 //
 //   DNP_CLIENT_PAGE_TEST=1 node client/test/seamcam.test.js
 //
-// DNP_SEAMCAM_SHUTTLE=1 is the harder run: maps sent in 128-byte chunks, so
-// every transfer is part-delivered for a while, and the browser turns round at
-// every crossing -- east, back west, east again -- which is what walking into
-// the level just left looks like, and the commonest thing anybody does.
+// DNP_SEAMCAM_SHUTTLE=1 is the harder run: maps sent in 128-byte chunks, and
+// the browser turns round at every level change -- east, back west, east again.
 //
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -147,45 +136,38 @@ for (const l of seam) console.log(`  ${l.trim()}`)
 // here. "chunk out of order (expected 0, got 65536)" was exactly that, and this
 // check would have stayed quiet through it.
 check(!seam.some((l) => /failed|STUCK|VIOLATION|NOT MOVING/.test(l)),
-      `the crossing reported no fault (${seam.filter((l) => /failed|STUCK|VIOLATION|NOT MOVING/.test(l)).length})`)
-check(seam.some((l) => l.includes('crossing:')), 'the browser walked across a seam')
-check(seam.some((l) => l.includes('arrived at the seam')),
-      'and its body arrived at the boundary, not at the spawn point')
+      `nothing went wrong (${seam.filter((l) => /failed|STUCK|VIOLATION|NOT MOVING/.test(l)).length})`)
+const walks = seam.filter((l) => l.includes('walked into level'))
+check(walks.length >= CROSSINGS, `the browser walked into the next level (${walks.length})`)
+// NO RE-PLACEMENT: one world, so no level change goes through a WELCOME.
+check(!seam.some((l) => l.includes('entered level')), 'and nothing was re-placed on the way')
+// IN WORLD COORDINATES: past the boundary at x = 40 is x > 40, not a local x
+// near zero. CONTROL for the continuity claims below -- a client still in its
+// old level's frame would report the same small slip and be somewhere else.
+const xs = walks.map((l) => Number(l.match(/\((-?[\d.]+),/)?.[1]))
+check(xs.length > 0 && xs.every((x) => Number.isFinite(x) && x > 36 && x < 44),
+      `at the boundary, in world coordinates (x ${xs.map((x) => x.toFixed(2)).join(', ')})`)
 
 // [body, camera, slip, slip on the frame before, arrival correction]
 const slips = [...pageLog.matchAll(/body moved ([\d.]+), camera moved ([\d.]+), slip ([\d.]+) \(the frame before: ([\d.]+), correction ([\d.]+)\)/g)]
   .map((m) => m.slice(1).map(Number))
-check(slips.length >= CROSSINGS, `and reported what each crossing did to the view (${slips.length})`)
+check(slips.length >= CROSSINGS, `and reported what each did to the view (${slips.length})`)
 if (slips.length) {
-  // THE CLAIM. The camera moved with the body, so the view did not change.
-  // What the CROSSING adds. A walking camera trails the body a little every
-  // frame, and just after a turn-round by a tenth of a unit or so; that is the
-  // camera's follow, the same on the frame before as on the crossing. A
-  // crossing that re-placed the camera or the body shows as a jump here --
-  // beyond the correction, when the client's prediction fell short of the
-  // boundary and the server's arrival was used: the body really moves by that
-  // much, and the camera follows it rather than jumping with it.
-  const worst = Math.max(...slips.map(([, , slip, before, corr]) => slip - before - corr))
-  check(worst < 0.08, `the camera moved with the body (worst added slip ${worst.toFixed(3)})`)
-  // CONTROL: they both really moved, by about the pitch the metamap declares.
-  // Two numbers that were both zero would agree perfectly and prove nothing --
-  // and a client that never crossed would produce exactly that.
-  check(slips.every(([body, cam]) => body > 30 && cam > 30),
-        `CONTROL: and each really moved a pitch (${slips.map(([b]) => b.toFixed(1)).join(', ')})`)
+  // THE CLAIM. Nothing jumped: the body moved one frame of walking, and the
+  // camera with it.
+  check(slips.every(([body]) => body < 0.5),
+        `the body did not jump (${slips.map(([b]) => b.toFixed(3)).join(', ')})`)
+  const worst = Math.max(...slips.map(([, , slip, before]) => slip - before))
+  check(worst < 0.08, `the camera moved with it (worst added slip ${worst.toFixed(3)})`)
 }
 if (SHUTTLE) {
-  // EVERY CROSSING WAS INTO A LEVEL ALREADY HELD, the way back included: no
-  // map was streamed for any of them, and each view was promoted.
-  const entered = seam.filter((l) => l.includes('entered level'))
-  check(entered.length >= CROSSINGS && entered.every((l) => l.includes(': held') && l.includes('view promoted')),
-        `every crossing entered a held, built level (${entered.map((l) => l.match(/level (\d+)/)[1]).join(' -> ')})`)
-  check(new Set(entered.map((l) => l.match(/level (\d+)/)[1])).size >= 2,
-        'and it went back and forth rather than onward')
-  // CONTROL: the maps really did arrive in pieces, or this run is the
-  // single-chunk one under another name.
+  const into = walks.map((l) => l.match(/walked into level (\d+)/)[1])
+  check(new Set(into).size >= 2, `it went back and forth (${into.join(' -> ')})`)
+  check(walks.every((l) => l.includes('view promoted')), 'every level walked into was already drawn')
+  // CONTROL: the maps really did arrive in pieces.
   const chunks = [...pageLog.matchAll(/bytes in (\d+) chunk/g)].map((m) => Number(m[1]))
   check(chunks.length > 0 && chunks.every((n) => n > 1),
-        `CONTROL: and every neighbour map came in several chunks (${chunks.join(', ')})`)
+        `CONTROL: every neighbour map came in several chunks (${chunks.join(', ')})`)
 }
 
 done()

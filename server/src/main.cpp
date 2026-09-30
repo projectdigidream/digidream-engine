@@ -91,12 +91,29 @@ inline constexpr u32 NAV_REBUILD_TICKS = 15;
 //
 // A level off the metamap's grid has a Host of its own, reading that level's
 // map directly, exactly as before. Levels on the grid share one (the region).
+inline constexpr u32 NO_OWNER = 0xFFFFFFFFu;
+
 struct Host {
     sim::World       world;
     // The geometry `world` collides against: the owning level's own store for
     // a host of its own, or the region's store of chunks.
     geom::MapStorage* store = nullptr;
     geom::MapData*    view = nullptr;
+
+    // A REGION owns its store: every level on the grid, each copied in at its
+    // cell's origin (geom::MapStorage::add_chunk). Null for a level's own host,
+    // which reads that level's map.
+    std::unique_ptr<geom::MapStorage> region_store;
+    geom::MapData                     region_view{};
+    bool is_region() const noexcept { return region_store != nullptr; }
+
+    // WHICH LEVEL'S SCRIPT SPAWNED EACH ENTITY, or NO_OWNER. In a region every
+    // level's monsters and props share one world; this is how an event about
+    // one reaches the script that is keeping track of it, and how a level
+    // being unloaded knows what to take with it. Unused by a host of its own.
+    u32  owner[sim::MAX_ENTITIES];
+
+    Host() { for (u32 i = 0; i < sim::MAX_ENTITIES; ++i) owner[i] = NO_OWNER; }
 
     // Health per agent slot. Server state: see WorldContext::hp.
     i32              hp[sim::MAX_AGENTS];
@@ -404,7 +421,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // news to somebody standing in MAP02, and sending it would name a
             // sector index that means something else entirely there.
             for (auto& [id, s] : sessions) {
-                if (s.hello_done && s.level == li) send_motion(L, id, m);
+                if (s.hello_done && same_world(s, li)) send_motion(L, id, m);
             }
         }
         if (ms.count() > L.sent_motion_count) L.sent_motion_count = ms.count();
@@ -481,7 +498,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // trip.
         L.param_epoch[agent] = static_cast<u8>(L.param_epoch[agent] + 1);
         for (auto& [id, s] : sessions) {
-            if (s.hello_done && s.level == li) send_param_update(L, id, agent, false, &field_id, 1);
+            if (s.hello_done && same_world(s, li)) send_param_update(L, id, agent, false, &field_id, 1);
         }
     }
 
@@ -655,7 +672,50 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         std::fprintf(stderr,
                      "[srv] metamap %s: %u of %u level(s) placed, radius %u\n",
                      path, placed, level_count(), meta.radius);
+        // A PITCH COMPOSES THE LEVELS IN WORLD SPACE, so the ones on the grid
+        // share one world: a region. Walking from one into the next is then
+        // walking between two rooms. Without a pitch the grid is only a
+        // residency hint and every level keeps a world of its own.
+        if (placed > 0 && meta.pitch_x.raw > 0 && meta.pitch_y.raw > 0) {
+            region_ = std::make_unique<Host>();
+            region_->region_store = std::make_unique<geom::MapStorage>();
+            region_->store = region_->region_store.get();
+            region_->view = &region_->region_view;
+            std::fprintf(stderr, "[srv] region: the %u level(s) on the grid share one world\n",
+                         placed);
+        }
         return true;
+    }
+
+    // THE REGION: one world for every level on the metamap's grid (see Host).
+    std::unique_ptr<Host> region_;
+    bool in_region(u32 li) const {
+        return region_ && li < levels.size() && levels[li].cell.on_grid;
+    }
+    // How many levels are in the region right now.
+    u32 region_live_count() const {
+        u32 n = 0;
+        for (u32 i = 0; i < levels.size(); ++i) if (in_region(i) && levels[i].live) ++n;
+        return n;
+    }
+    // Whether two levels' bodies are in the same world: one level, or two
+    // levels of the region.
+    bool same_host(u32 a, u32 b) const {
+        if (a == b) return true;
+        return in_region(a) && in_region(b);
+    }
+    // Whether session `s` has a body in the world level `li` is simulated in.
+    bool same_world(const Session& s, u32 li) const {
+        return s.has_agent && same_host(s.level, li);
+    }
+    // A level's spawn point, in its world's coordinates.
+    fx3 spawn_of(const Level& L, u32 li) const {
+        const fx3 p = L.map_bytes.empty()
+                          ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
+                          : L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len);
+        if (!in_region(li)) return p;
+        const fx2 o = origin_of(li);
+        return fx3{p.x + o.x, p.y + o.y, p.z};
     }
 
     // Bring a declared level's payload into memory.
@@ -670,7 +730,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
         LevelSlot& slot = levels[li];
         const char* path = slot.path.c_str();
-        auto lp = std::make_unique<Level>();
+        auto lp = std::make_unique<Level>(in_region(li) ? region_.get() : nullptr);
         Level& L = *lp;
 
         std::FILE* f = std::fopen(path, "rb");
@@ -693,8 +753,26 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
 
         L.view = L.map_store.view();
-        L.world.set_map(&L.view);
-        L.world.set_map_storage(&L.map_store);
+        if (L.own) {
+            L.world.set_map(&L.view);
+            L.world.set_map_storage(&L.map_store);
+        } else {
+            // INTO THE REGION, at its cell's origin, joined to whatever it
+            // meets. The level keeps its own parse for its script and spawns.
+            Host& H = *L.host;
+            const bool first = region_live_count() == 0;
+            if (H.store->add_chunk(li, L.map_store, origin_of(li)) == geom::NO_CHUNK) {
+                std::fprintf(stderr, "[srv] level %u (%s) does not fit in the region's world\n",
+                             li, path);
+                return false;
+            }
+            H.region_view = H.store->view();
+            H.world.set_map(&H.region_view);
+            H.world.set_map_storage(H.store);
+            if (first) H.world.set_tick(clock_);
+            std::fprintf(stderr, "[srv] level %u joined the region: %u edge(s) stitched\n",
+                         li, H.store->stitch_count());
+        }
         L.map_hash = L.map_store.hash();
 
         std::fprintf(stderr, "[srv] level %u  %s: %u sectors, %u sides, hash %016llX\n",
@@ -737,10 +815,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             std::fprintf(stderr, "[srv] map has more sectors than the nav graph holds\n");
             return false;
         }
-        report_reachability(L);
+        L.nav_heights = 0;
+        report_reachability(L, li);
 
-        // ON THE SERVER'S CLOCK, before anything can read it. See clock_.
-        L.world.set_tick(clock_);
+        // ON THE SERVER'S CLOCK, before anything can read it. See clock_. A
+        // region's world keeps one clock for all of its levels (set above when
+        // it received its first).
+        if (L.own) L.world.set_tick(clock_);
 
         slot.live = std::move(lp);
 
@@ -782,6 +863,32 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         LevelSlot& slot = levels[li];
         std::fprintf(stderr, "[srv] level %u (%s) unloaded at tick %u\n",
                      li, slot.path.c_str(), slot.live->world.tick());
+        Level& L = *slot.live;
+        if (!L.own) {
+            // OUT OF THE REGION, taking with it everything its script spawned:
+            // a level that comes back runs its script again and places them
+            // afresh, which is what Doom does with a level you left.
+            Host& H = *L.host;
+            for (u32 e = 0; e < sim::MAX_ENTITIES; ++e) {
+                if (H.owner[e] != li) continue;
+                H.owner[e] = NO_OWNER;
+                if (sim::World::is_prop(e)) {
+                    if (H.world.prop(e).active) H.world.despawn_prop(e);
+                } else if (H.world.agent(e).active) {
+                    H.effects.clear_agent(e);
+                    H.world.despawn(e);
+                }
+            }
+            if (const geom::Chunk* c = H.store->find_chunk(li)) {
+                H.world.motions().forget_sectors(c->sectors.first, c->sectors.count);
+            }
+            H.store->remove_chunk(li);
+            H.region_view = H.store->view();
+            // Motion indices shifted with the removal: tell everybody again.
+            H.sent_motion_count = 0;
+            H.nav_graph.build(H.region_view);
+            H.nav_heights = 0;
+        }
         slot.live.reset();
     }
 
@@ -842,13 +949,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // A flood fill over the same edge test A* uses, so it reports what pathing
     // would actually find rather than what the topology suggests. Sectors are
     // counted once; the queue is the caller's stack-free scratch.
-    void report_reachability(Level& L) {
+    void report_reachability(Level& L, u32 li) {
         const geom::MapData& map = *L.host->view;
         static u8  seen[nav::MAX_NAV_NODES];
         static u32 queue[nav::MAX_NAV_NODES];
         for (u32 i = 0; i < L.nav_graph.node_count(); ++i) seen[i] = 0;
 
-        const fx3 origin = L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len);
+        const fx3 origin = spawn_of(L, li);
         const i32 start = geom::find_sector(map, fx2{origin.x, origin.y});
         if (start < 0) {
             std::fprintf(stderr, "[srv] spawn '%s' is not inside any sector\n", spawn_tag);
@@ -990,7 +1097,18 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             link.send_control(id, msg, w.size());
             // Immediately after the selector, which is what makes the stream
             // that follows unambiguous on a reliable ordered channel.
-            if (m.say == server::world::NeighbourSay::Map) send_map(*levels[m.level].live, id);
+            if (m.say == server::world::NeighbourSay::Map) {
+                Level& N = *levels[m.level].live;
+                send_map(N, id);
+                // IN A REGION the client SIMULATES what it holds, not only
+                // draws it: so the doors already open in it, and the switches
+                // already thrown, follow its map exactly as its own level's
+                // follow a WELCOME.
+                if (same_world(s, m.level)) {
+                    send_motion_sets(N, id);
+                    for (const auto& t : N.side_textures) send_side_texture(s, m.level, t);
+                }
+            }
         }
     }
 
@@ -1013,33 +1131,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // drift, and the way they would drift is that the second one forgets a
     // message and the symptom is a client predicting against the wrong map.
     //
-    // HOW A BODY ARRIVES, when it is not arriving at a spawn point.
-    //
-    // A player walking across a seam is not respawning: they keep the speed
-    // they were carrying, the direction they were looking, and the exact place
-    // they were standing -- expressed in the new level's own coordinates. A
-    // spawn tag would put them somewhere else entirely and stop them dead,
-    // which is what "seamless" is the opposite of.
-    struct Arrival {
-        bool exact = false;
-        fx3  pos{};
-        fx3  vel{};
-        brad facing{};
-    };
-
     // Returns false only when the target level is full.
-    // The default is a plain arrival at the spawn. Written as a named constant
-    // rather than a default-constructed temporary in the signature, because a
-    // default member initialiser is not available inside the class that owns
-    // the type.
-    static const Arrival& at_spawn() {
-        static const Arrival a{};
-        return a;
-    }
+    //
+    // Always at a spawn point. Walking between two levels of the region is not
+    // a placement at all (update_region_homes); this is the join, and exits.
     bool place_in_level(Session& s, u32 id, u32 li) {
-        return place_in_level(s, id, li, at_spawn());
-    }
-    bool place_in_level(Session& s, u32 id, u32 li, const Arrival& at) {
         if (li >= level_count()) {
             std::fprintf(stderr, "[srv] session %u: level %u does not exist\n", id, li);
             return false;
@@ -1089,11 +1185,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             s.reset_input();
         }
 
-        const fx3 spawn_pos =
-            at.exact ? at.pos
-                     : (L.map_bytes.empty()
-                            ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
-                            : L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len));
+        const fx3 spawn_pos = spawn_of(L, li);
         const u32 agent = L.world.spawn(spawn_pos);
         if (agent >= sim::MAX_AGENTS) {
             std::fprintf(stderr, "[srv] session %u: level %u has no free body slot\n", id, li);
@@ -1102,17 +1194,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
         // Full health on arrival, including on a map change: a slot is reused
         // as players come and go, and inheriting the last occupant's health
-        // would be a bug that only shows up on a busy server.
-        //
-        // EXCEPT ACROSS A SEAM, where nothing happened: a player who walked
-        // three feet has not been healed, and a corridor that restores you to
-        // full is a corridor people walk back and forth along.
-        if (!at.exact) L.hp[agent] = 100;
-        else {
-            sim::AgentState& body = L.world.agent_mut(agent);
-            body.vel = at.vel;
-            body.facing = at.facing;
-        }
+        // would be a bug that only shows up on a busy server. (Walking between
+        // two levels of the region is not an arrival and heals nobody.)
+        L.hp[agent] = 100;
 
         // The body the MAP is built for, before anything captures this agent's
         // parameters as its base.
@@ -1162,21 +1246,24 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // Appended, so a reader of the older layout still reads the rest.
         w.u16v(static_cast<u16>(li));
         w.u8v(map_follows ? 1 : 0);
-        // Whether the body arrived where it was, in this level's words (a seam),
-        // or at a spawn point. The client places itself the same way; without
-        // this it has to guess, and an exit into an adjacent level looks like a
-        // crossing.
-        w.u8v(at.exact ? 1 : 0);
-        // WHERE the body is, in this level's coordinates, on this tick. The
-        // client prefers its own continuation of the body it was predicting,
-        // which is ahead of this by its lead; when that lands in no sector --
-        // it had not quite reached the boundary the server crossed -- this is
-        // the answer, and a spawn point never is.
+        // exact_arrival: always 0 now. A body walking between two levels of
+        // the region is re-homed (MSG_HOME), never re-placed; this is a spawn.
+        w.u8v(0);
+        // Where the body is, in the WORLD's coordinates, on this tick.
         {
             const fx3 p = L.world.agent(agent).pos;
             w.i64v(p.x.raw);
             w.i64v(p.y.raw);
             w.i64v(p.z.raw);
+        }
+        // Where this level's own coordinates begin in the world's (zero for a
+        // level simulated on its own), and whether it shares its world with
+        // its neighbours -- then walking into one is a HOME, not a WELCOME.
+        {
+            const fx2 o = in_region(li) ? origin_of(li) : fx2{};
+            w.i64v(o.x.raw);
+            w.i64v(o.y.raw);
+            w.u8v(in_region(li) ? 1 : 0);
         }
         const size_t end = w.size();
         const u32 body_len = static_cast<u32>(end - len_pos - 4);
@@ -1207,7 +1294,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         send_motion_sets(L, id);
         // And the switches already thrown in this level. A wall that changed
         // before you arrived is part of the world you are arriving in.
-        for (const auto& t : L.side_textures) send_side_texture(s, t);
+        for (const auto& t : L.side_textures) send_side_texture(s, li, t);
         // And the level's camera, if its script set one: the angle the map was
         // made for, and whether it may be turned away from.
         if (L.has_camera) send_camera(s, L.camera);
@@ -1234,7 +1321,12 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         L.ctx.world       = &L.world;
         L.ctx.commands    = &L.commands;
         L.ctx.effects     = &L.effects;
-        L.ctx.map_store   = &L.map_store;
+        // The WORLD'S store: live heights, motions, joins. A region level's
+        // script addresses its own part of it through the frame below.
+        L.ctx.map_store   = L.host->store;
+        L.ctx.chunk       = L.own ? nullptr : L.host->store->find_chunk(li);
+        L.ctx.origin      = L.own ? fx2{} : origin_of(li);
+        L.ctx.owner       = L.own ? nullptr : L.host->owner;
         // Borrowed. The level owns its graph and rebuilds it on a shape
         // commit; a copy here would path over a map that no longer exists.
         L.ctx.nav         = &L.nav_graph;
@@ -1545,7 +1637,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // Dispatched in a fixed order (crushes, then interactions, each in the
     // order the log recorded, which is ascending agent index) so that two
     // scripts racing for the same door resolve the same way on a replay.
-    void dispatch_events(Level& L) {
+    // WHOSE EVENT IS IT. In a world of its own, every event is the level's.
+    // In the region: an event about a sector or side belongs to the level that
+    // sector is in; one about a monster or prop to the level whose script
+    // spawned it; one about a player to the level the player is standing in.
+    bool owns_sector(const Level& L, u32 li, i32 sector) const {
+        if (L.own) return true;
+        return sector >= 0 && L.host->store->chunk_of_sector(static_cast<u32>(sector)) == li;
+    }
+    bool owns_entity(const Level& L, u32 li, u32 e) const {
+        if (L.own) return true;
+        if (e >= sim::MAX_ENTITIES) return false;
+        const u32 o = L.host->owner[e];
+        if (o != NO_OWNER) return o == li;
+        // Nobody's (a player): whoever's ground it stands on.
+        if (sim::World::is_prop(e)) return false;
+        return owns_sector(L, li, L.world.agent(e).mv.sector);
+    }
+
+    void dispatch_events(Level& L, u32 li) {
         if (!L.vm.is_open()) return;
         const u32 t = L.world.tick();
 
@@ -1558,6 +1668,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // ceiling sat on someone would be a different design decision, and
             // one a script can make for itself from on_tick.
             if (L.crush_reported_tick[e.entity] != t || !L.crush_seen[e.entity]) continue;
+            if (!owns_sector(L, li, static_cast<i32>(e.sector))) continue;
             for (u32 h = 0; h < L.vm.hook_count("on_crush"); ++h) {
                 if (!L.vm.begin_hook_at("on_crush", h)) continue;
                 lua::push_entity(L.vm.state(), L.ctx, e.entity);
@@ -1572,14 +1683,17 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         for (u32 i = 0; i < uses.count(); ++i) {
             const sim::InteractEvent& e = uses.at(i);
             if (e.entity >= sim::MAX_AGENTS || e.sector < 0) continue;
+            if (!owns_sector(L, li, e.sector)) continue;
             const char* hook = e.kind == sim::TouchKind::Use ? "on_interact" : "on_cross";
+            // The level's own side number: its script keys its doors by it.
+            const i32 local_side = L.ctx.side_to_local(static_cast<i32>(e.side));
             for (u32 h = 0; h < L.vm.hook_count(hook); ++h) {
                 if (!L.vm.begin_hook_at(hook, h)) continue;
                 lua::push_entity(L.vm.state(), L.ctx, e.entity);
                 // The SIDE INDEX, as a plain number, because that is the key a
                 // generated script indexes its table of doors by. dnp.side(i)
                 // turns it into neighbour and flags when the script wants them.
-                lua_pushnumber(L.vm.state(), e.side);
+                lua_pushnumber(L.vm.state(), local_side);
                 lua::push_sector(L.vm.state(), static_cast<u32>(e.sector));
                 L.vm.end_hook(hook, t, 3);
             }
@@ -1592,6 +1706,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         const sim::PropEventLog& pe = L.world.prop_events();
         for (u32 i = 0; i < pe.count(); ++i) {
             const sim::PropEvent& e = pe.at(i);
+            if (!owns_entity(L, li, e.prop)) continue;
             const char* hook = e.kind == sim::PropEventKind::Use ? "on_prop_use" : "on_touch";
             for (u32 h = 0; h < L.vm.hook_count(hook); ++h) {
                 if (!L.vm.begin_hook_at(hook, h)) continue;
@@ -1606,6 +1721,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         const sim::AttackLog& hits = L.world.attacks();
         for (u32 i = 0; i < hits.count(); ++i) {
             const sim::AttackEvent& e = hits.at(i);
+            if (!owns_entity(L, li, e.target)) continue;
             for (u32 h = 0; h < L.vm.hook_count("on_attack"); ++h) {
                 if (!L.vm.begin_hook_at("on_attack", h)) continue;
                 lua::push_entity(L.vm.state(), L.ctx, e.attacker);
@@ -1641,14 +1757,23 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // sending a full parameter set every tick an effect is running.
     void refresh_effect_params(u32 li) {
         Level& L = level(li);
-        if (!L.vm.is_open()) return;
-
+        // Effects are per BODY, so per world: in the region, once per tick for
+        // all of its levels, dirtied by any of their scripts.
+        bool dirty = false;
+        bool any_vm = false;
+        for (u32 k = 0; k < levels.size(); ++k) {
+            if (!levels[k].live || !same_host(k, li)) continue;
+            Level& K = level(k);
+            if (!K.vm.is_open()) continue;
+            any_vm = true;
+            dirty = dirty || K.ctx.effects_dirty;
+            K.ctx.effects_dirty = false;
+        }
+        if (!any_vm) return;
         const bool expired = L.effects.expire(L.world.tick());
-        if (!expired && !L.ctx.effects_dirty) return;
-        L.ctx.effects_dirty = false;
-
+        if (!expired && !dirty) return;
         for (auto& [id, s] : sessions) {
-            if (!s.has_agent || s.level != li) continue;
+            if (!same_world(s, li)) continue;
             const u32 a = s.agent;
 
             const physics::MoveParams want = L.effects.compute(a);
@@ -1670,7 +1795,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // extra times for no reason.
             L.param_epoch[a] = static_cast<u8>(L.param_epoch[a] + 1);
             for (auto& [oid, os] : sessions) {
-                if (os.hello_done && os.level == li) send_param_update(L, oid, a, false, changed, n);
+                if (os.hello_done && same_world(os, li)) send_param_update(L, oid, a, false, changed, n);
             }
         }
     }
@@ -1835,7 +1960,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
         refresh_nav_if_stale(li);
         report_crushes(L);
-        dispatch_events(L);
+        dispatch_events(L, li);
 
         const u64 t_lua1 = perf.every ? now_us() : 0;
         if (L.vm.is_open()) {
@@ -1947,11 +2072,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
         for (auto& kv : sessions) {
             Session& s = kv.second;
-            if (s.has_agent && s.level == level_index) send_side_texture(s, t);
+            if (same_world(s, level_index)) send_side_texture(s, level_index, t);
         }
     }
 
-    void send_side_texture(Session& s, const proto::SideTexture& t) {
+    void send_side_texture(Session& s, u32 owner_level, const proto::SideTexture& t) {
         u8 buf[512];
         ByteWriter w(buf, sizeof(buf));
         const size_t len_pos = w.mark();
@@ -1959,7 +2084,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         w.u8v(proto::MSG_SIDE_TEXTURE);
         // The side's NAME on the wire, resolved against this level's store.
         proto::SideTexture named = t;
-        named.side = level(s.level).map_store.side_name(static_cast<i32>(t.side));
+        named.side = level(owner_level).host->store->side_name(static_cast<i32>(t.side));
         proto::encode_side_texture(w, named);
         if (!w.ok()) return;
         const size_t end = w.size();
@@ -2082,7 +2207,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     Session* session_for(u32 level_index, u32 agent) {
         for (auto& kv : sessions) {
             Session& s = kv.second;
-            if (s.has_agent && s.level == level_index && s.agent == agent) return &s;
+            if (same_world(s, level_index) && s.agent == agent) return &s;
         }
         return nullptr;
     }
@@ -2131,90 +2256,63 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         return server::world::cell_origin(levels[li].cell, meta.pitch_x, meta.pitch_y);
     }
 
-    struct SeamCrossing {
-        u32  session;
-        u32  to_level;
-        fx3  pos;      // in the destination's own coordinates
-        fx3  vel;
-        brad facing;
-    };
-    std::vector<SeamCrossing> pending_seams;
-
-    // A BODY THAT HAS WALKED OUT OF ITS CELL BELONGS TO THE NEXT ONE.
+    // THE BODY WALKED INTO ANOTHER LEVEL OF THE REGION, and that is all.
     //
-    // Checked after every level has stepped and before anything is sent, so a
-    // player never appears in a snapshot standing outside the world their
-    // coordinates are expressed in.
+    // Same world, same agent, same input ring, same snapshot history -- none
+    // of what a WELCOME resets. What changes is the level it is IN: whose
+    // music and camera apply, what every held level's offset is measured
+    // from, which level counts as occupied. So the session is re-homed, told
+    // with a HOME message, and its neighbourhood re-stated from there.
     //
-    // PLAYERS ONLY. A monster belongs to the level it was placed in -- its mob
-    // record, its target and its nav graph all live there -- and handing one
-    // across would mean moving a mind as well as a body. What a neighbouring
-    // level's monsters do about somebody standing on the far side of a seam is
-    // the question after this one.
-    void collect_seam_crossings() {
-        if (meta.pitch_x <= fx::zero() || meta.pitch_y <= fx::zero()) return;
+    // This replaced the seam CROSSING, which moved the body into a different
+    // simulation at every cell boundary -- a reseat, a new predictor on the
+    // client, and every bug that came with that.
+    void update_region_homes() {
+        if (!region_) return;
+        bool moved = false;
         for (auto& [id, s] : sessions) {
-            if (!s.has_agent || !is_live(s.level)) continue;
-            const LevelSlot& from = levels[s.level];
-            if (!from.cell.on_grid) continue;
-
-            const fx2 origin = origin_of(s.level);
-            const sim::AgentState& a = level(s.level).world.agent(s.agent);
-            if (!a.active) continue;
-            const fx wx = a.pos.x + origin.x;
-            const fx wy = a.pos.y + origin.y;
-            const i32 cx = server::world::cell_index(wx, meta.pitch_x);
-            const i32 cy = server::world::cell_index(wy, meta.pitch_y);
-            if (cx == from.cell.x && cy == from.cell.y) continue;
-
-            i32 to = -1;
-            for (u32 i = 0; i < levels.size(); ++i) {
-                if (levels[i].cell.on_grid && levels[i].cell.x == cx && levels[i].cell.y == cy) {
-                    to = static_cast<i32>(i);
-                    break;
-                }
+            if (!s.has_agent || !in_region(s.level)) continue;
+            const sim::AgentState& a = region_->world.agent(s.agent);
+            if (!a.active || a.mv.sector < 0) continue;
+            const u32 now = region_->store->chunk_of_sector(static_cast<u32>(a.mv.sector));
+            if (now == geom::NO_CHUNK || now == s.level || !is_live(now)) continue;
+            const u32 was = s.level;
+            s.level = now;
+            // The level left becomes held like any other; the one entered was
+            // held already (it is next door), so no map follows.
+            if (!server::world::rehome(s.held, s.has_home, was, now)) {
+                std::fprintf(stderr, "[srv] session %u walked into level %u, which it did "
+                             "not hold\n", id, now);
+                send_map(level(now), id);
             }
-            if (to < 0) continue;   // walked into empty space; the map will stop them
-
-            // The SAME POINT, said in the destination's coordinates. A seam is
-            // a change of frame and nothing else, which is what makes it
-            // invisible: subtract one origin, add the other.
-            const fx2 dest = origin_of(static_cast<u32>(to));
-            pending_seams.push_back(SeamCrossing{
-                id, static_cast<u32>(to),
-                fx3{wx - dest.x, wy - dest.y, a.pos.z},
-                a.vel, a.facing});
+            send_home(id, now);
+            sync_neighbours(s, id);
+            Level& L = level(now);
+            if (L.has_camera) send_camera(s, L.camera);
+            std::fprintf(stderr, "[srv] session %u walked from level %u into level %u\n",
+                         id, was, now);
+            moved = true;
         }
+        // Who is where decides what is resident.
+        if (moved) refresh_residency();
     }
 
-    void apply_seam_crossings() {
-        if (pending_seams.empty()) return;
-        for (const SeamCrossing& c : pending_seams) {
-            auto it = sessions.find(c.session);
-            if (it == sessions.end() || !it->second.has_agent) continue;
-            Arrival at;
-            at.exact = true;
-            at.pos = c.pos;
-            at.vel = c.vel;
-            at.facing = c.facing;
-            const u32 was = it->second.level;
-            if (!place_in_level(it->second, c.session, c.to_level, at)) {
-                std::fprintf(stderr, "[srv] session %u could not cross into level %u\n",
-                             c.session, c.to_level);
-                continue;
-            }
-            std::fprintf(stderr, "[srv] session %u crossed the seam: level %u -> %u\n",
-                         c.session, was, c.to_level);
-        }
-        pending_seams.clear();
-        refresh_residency();
+    void send_home(u32 id, u32 li) {
+        u8 msg[16];
+        ByteWriter w(msg, sizeof(msg));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_HOME);
+        w.u16v(static_cast<u16>(li));
+        finish_frame(msg, len_pos, w.size());
+        link.send_control(id, msg, w.size());
     }
 
     void apply_map_changes() {
         if (pending_changes.empty()) return;
         for (const MapChange& c : pending_changes) {
             for (auto& [id, s] : sessions) {
-                if (!s.has_agent || s.level != c.from_level || s.agent != c.agent) continue;
+                if (!same_world(s, c.from_level) || s.agent != c.agent) continue;
                 const std::string from = levels[c.from_level].path;
                 if (!place_in_level(s, id, c.to_level)) {
                     std::fprintf(stderr, "[srv] session %u cannot enter level %u (full)\n",
@@ -2303,6 +2401,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // UNLOADED level has no clock to keep, and its slot holds the tick
             // it stopped at until somebody comes near enough to want it back.
             if (!is_live(li)) continue;
+            // The region's levels tick together, below.
+            if (in_region(li)) continue;
             if (!level_occupied(li)) {
                 // The clock and the map, and nothing else. NOT a skipped tick:
                 // every level keeps the same count, because a level whose clock
@@ -2338,9 +2438,113 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // that while a world is mid-step would mutate the entity set a tick is
         // iterating. It also keeps the rule the command queue already follows:
         // scripts ask, and the ask lands at a defined point.
+        if (region_ && region_live_count() > 0) tick_region();
         apply_map_changes();
-        collect_seam_crossings();
-        apply_seam_crossings();
+        update_region_homes();
+    }
+
+    // WHICH OF THE REGION'S LEVELS ARE AWAKE this tick: one a player is in, or
+    // within a quarter of a cell of. Only those run their scripts, and only
+    // their bodies are stepped -- what an empty level not ticking used to buy,
+    // said per level of one world. Walking up to a boundary wakes the level
+    // beyond it before you reach it.
+    std::vector<u8> region_awake_;
+    void compute_region_awake() {
+        region_awake_.assign(levels.size(), 0);
+        const Host& H = *region_;
+        const fx mx = fx::from_raw(meta.pitch_x.raw / 4);
+        const fx my = fx::from_raw(meta.pitch_y.raw / 4);
+        const auto wake_near = [&](fx3 p) {
+            for (u32 li = 0; li < levels.size(); ++li) {
+                if (!in_region(li) || !levels[li].live) continue;
+                const fx2 o = origin_of(li);
+                if (p.x >= o.x - mx && p.x <= o.x + meta.pitch_x + mx &&
+                    p.y >= o.y - my && p.y <= o.y + meta.pitch_y + my) {
+                    region_awake_[li] = 1;
+                }
+            }
+        };
+        for (const auto& [id, s] : sessions) {
+            if (!s.has_agent || !in_region(s.level)) continue;
+            wake_near(H.world.agent(s.agent).pos);
+        }
+        if (test_player && in_region(0) && levels[0].live) region_awake_[0] = 1;
+    }
+
+    // ONE TICK OF THE REGION: every level's script around one step of one world.
+    void tick_region() {
+        Host& H = *region_;
+        compute_region_awake();
+        u32 first = NO_OWNER;
+        for (u32 li = 0; li < levels.size(); ++li) {
+            if (in_region(li) && levels[li].live) { first = li; break; }
+        }
+
+        // A body is asleep when the level that spawned it is. Players are
+        // nobody's, so never.
+        for (u32 a = 0; a < H.world.agent_high_water(); ++a) {
+            sim::AgentState& ag = H.world.agent_mut(a);
+            if (!ag.active) continue;
+            const u32 o = H.owner[a];
+            ag.asleep = o != NO_OWNER && o < levels.size() && !region_awake_[o];
+        }
+
+        for (auto& [id, s] : sessions) {
+            if (s.has_agent && in_region(s.level)) H.world.set_input(s.agent, s.take());
+        }
+
+        bool any = false;
+        for (u32 li = 0; li < levels.size(); ++li) {
+            if (!in_region(li) || !levels[li].live || !region_awake_[li]) continue;
+            any = true;
+            Level& L = level(li);
+            const u64 t_lua0 = perf.every ? now_us() : 0;
+            if (L.vm.is_open()) {
+                L.vm.begin_tick();
+                L.vm.call_hook("on_tick", H.world.tick());
+            }
+            if (perf.every) perf.lua_us += now_us() - t_lua0;
+            drive_param_test(li);
+            flush_lua_commands(L);
+        }
+        refresh_effect_params(first);
+
+        if (!any) {
+            // Nobody near anything: the clock and the map, as an empty level.
+            H.world.step_idle();
+            ++idle_levels_skipped_;
+            return;
+        }
+        const u64 t_step0 = perf.every ? now_us() : 0;
+        H.world.step();
+        if (perf.every) {
+            perf.step_us += now_us() - t_step0;
+            perf.bp_full += H.world.broadphase_full();
+        }
+        refresh_nav_if_stale(first);
+        report_crushes(level(first));
+        for (u32 li = 0; li < levels.size(); ++li) {
+            if (!in_region(li) || !levels[li].live || !region_awake_[li]) continue;
+            Level& L = level(li);
+            dispatch_events(L, li);
+            const u64 t_lua1 = perf.every ? now_us() : 0;
+            if (L.vm.is_open()) L.vm.call_hook("on_post_tick", H.world.tick());
+            if (perf.every) perf.lua_us += now_us() - t_lua1;
+            flush_lua_commands(L);
+        }
+        replicate_motion_changes(first);
+        if (H.world.prop_epoch() != H.prop_epoch_seen) {
+            H.prop_epoch_seen = H.world.prop_epoch();
+            H.props_changed_tick = H.world.tick() + 1;
+        }
+        for (u32 li = 0; li < levels.size(); ++li) {
+            if (!in_region(li) || !levels[li].live || !region_awake_[li]) continue;
+            Level& L = level(li);
+            if (L.vm.is_open()) {
+                L.vm.end_tick(H.world.tick());
+                L.vm.gc_step();
+            }
+        }
     }
 
     // Transients are cleared AFTER sending, not once a tick.
@@ -2714,9 +2918,21 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             s.last_snapshot_sent = world.tick();
             const size_t n = w.finish();
             if (omitted > 0) {
-                // Protocol R10: never silently cap.
-                std::fprintf(stderr, "[srv] tick %u session %u: %u entities omitted (budget)\n",
-                             world.tick(), id, omitted);
+                // Protocol R10: never silently cap. But said once every ten
+                // seconds, not per snapshot: a region's world holds every
+                // resident level's monsters, the budget is exceeded on every
+                // datagram by design (nearest first), and a line thirty times
+                // a second is a log nobody can read anything else in.
+                s.omitted_since_report += omitted;
+                if (s.omitted_reported_tick == 0 ||
+                    world.tick() - s.omitted_reported_tick >= 10 * sim::TICK_RATE_HZ) {
+                    std::fprintf(stderr, "[srv] tick %u session %u: %u entities omitted "
+                                 "(budget) in this snapshot, %llu since the last report\n",
+                                 world.tick(), id, omitted,
+                                 static_cast<unsigned long long>(s.omitted_since_report));
+                    s.omitted_reported_tick = world.tick();
+                    s.omitted_since_report = 0;
+                }
             }
             if (vfx_dropped > 0) {
                 // Same rule, and it had been broken here: transients are sent

@@ -15,6 +15,8 @@
 //
 #include <emscripten/emscripten.h>
 
+#include <unordered_map>
+
 #include "dnp/geom/mapfile.hpp"
 #include "dnp/physics/params_table.hpp"
 #include "dnp/sim/testmap.hpp"
@@ -320,11 +322,19 @@ unsigned dnp_map_texture_name(const geom::MapStorage* m, unsigned i, char* out, 
 
 // Attach a loaded map to a world. The view is stored out of line because
 // World keeps a pointer to it.
+// ONE VIEW PER WORLD, kept for as long as the world lives. It used to be a ring
+// of eight shared by everybody, which was fine while a world's map never
+// changed; a region's store changes whenever a level is added or dropped, and
+// set_map is called again each time -- eight of those and the ring handed this
+// world's slot to the next caller. Node-based, so a reference stays valid.
+static std::unordered_map<sim::World*, geom::MapData>& world_views() {
+    static std::unordered_map<sim::World*, geom::MapData> views;
+    return views;
+}
+
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_set_map(sim::World* w, geom::MapStorage* m) {
-    static geom::MapData views[8];
-    static int next = 0;
-    geom::MapData& v = views[next++ % 8];
+    geom::MapData& v = world_views()[w];
     v = m->view();
     w->set_map(&v);
     // Mutable storage too: sector motion writes moved geometry back, and
@@ -427,7 +437,33 @@ EMSCRIPTEN_KEEPALIVE
 sim::World* dnp_world_create() { return new sim::World(); }
 
 EMSCRIPTEN_KEEPALIVE
-void dnp_world_destroy(sim::World* w) { delete w; }
+void dnp_world_destroy(sim::World* w) { world_views().erase(w); delete w; }
+
+// A REGION's store on the client: the levels it holds, each at its cell's
+// origin, joined where they meet (geom::MapStorage::add_chunk). The world the
+// client predicts in is then the same world the server simulates.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_add_chunk(geom::MapStorage* dst, const geom::MapStorage* src, unsigned key,
+                           const long long* origin64) {
+    return dst->add_chunk(key, *src, fx2{fx::from_raw(origin64[0]), fx::from_raw(origin64[1])});
+}
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_remove_chunk(geom::MapStorage* dst, unsigned key) { return dst->remove_chunk(key) ? 1 : 0; }
+// A chunk's sector and side ranges: out32 = {sector first, count, side first,
+// count}. 0 when it is not resident.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_chunk_range(const geom::MapStorage* m, unsigned key, unsigned* out32) {
+    const geom::Chunk* c = m->find_chunk(key);
+    if (!c) return 0;
+    out32[0] = c->sectors.first; out32[1] = c->sectors.count;
+    out32[2] = c->sides.first;   out32[3] = c->sides.count;
+    return 1;
+}
+// Motions of sectors a removed chunk owned.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_forget_sectors(sim::World* w, unsigned first, unsigned count) {
+    w->motions().forget_sectors(first, count);
+}
 
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_reset(sim::World* w) { w->reset(); }

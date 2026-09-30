@@ -52,7 +52,9 @@ namespace dnp::geom {
 // store could hold several maps at once: a 3x3 neighbourhood of Doom II's larger
 // levels is ~2700 sectors and ~18000 sides.
 inline constexpr u32 MAX_MAP_POINTS  = 65535;
-inline constexpr u32 MAX_MAP_SECTORS = 8192;
+// 16384: the busiest 3x3 of the generated doomworld test levels is 8380, most
+// of it ground tiles. Still inside the u16 a sector index is kept in.
+inline constexpr u32 MAX_MAP_SECTORS = 16384;
 inline constexpr u32 MAX_MAP_SIDES   = 65535;
 inline constexpr u32 MAX_MAP_TRI_IDX = 196608;  // 3 per triangle
 inline constexpr u32 MAX_MAP_SPAWNS  = 64;

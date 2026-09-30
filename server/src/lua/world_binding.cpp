@@ -75,7 +75,7 @@ int l_entity_pos(lua_State* L) {
     const i32 a = resolve(L, ctx, check_handle(L, 1));
     if (a < 0) { lua_pushnil(L); return 1; }
     // Reads are immediate: the live world, not a queued view of it.
-    push_vec3(L, ctx.world->agent(static_cast<u32>(a)).pos);
+    push_vec3(L, ctx.to_local(ctx.world->agent(static_cast<u32>(a)).pos));
     return 1;
 }
 
@@ -98,7 +98,8 @@ int l_entity_sector(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
     if (a < 0) { lua_pushnil(L); return 1; }
-    lua_pushnumber(L, ctx.world->agent(static_cast<u32>(a)).mv.sector);
+    // The level's own number for it: -1 when the body stands in another level.
+    lua_pushnumber(L, ctx.sector_to_local(ctx.world->agent(static_cast<u32>(a)).mv.sector));
     return 1;
 }
 
@@ -116,7 +117,7 @@ int l_entity_teleport(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
     if (a < 0) return 0;                          // defined no-op
-    const fx3 p = check_vec3(L, 2);
+    const fx3 p = ctx.to_world(check_vec3(L, 2));
     if (ctx.commands->push(Command{CmdKind::Teleport, static_cast<u32>(a), p})) {
         ++ctx.stats.commands_queued;
     }
@@ -688,7 +689,7 @@ int l_prop_pos(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
     if (e < 0) { lua_pushnil(L); return 1; }
-    push_vec3(L, ctx.world->prop(static_cast<u32>(e)).pos);
+    push_vec3(L, ctx.to_local(ctx.world->prop(static_cast<u32>(e)).pos));
     return 1;
 }
 
@@ -709,7 +710,7 @@ int l_prop_set_pos(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
     if (e < 0) return 0;
-    const fx3 p = check_vec3(L, 2);
+    const fx3 p = ctx.to_world(check_vec3(L, 2));
     // Quantised, for the reason spawn_prop is: a solid prop is simulated on
     // both sides and entity positions are quantised on the wire, so a value
     // the wire cannot carry exactly makes the two copies disagree.
@@ -815,7 +816,9 @@ bool sector_in_range(WorldContext& ctx, u32 s) {
 }
 
 int l_sector_index(lua_State* L) {
-    lua_pushnumber(L, check_sector(L, 1));
+    // The level's own number (-1 for another level's sector, reached across a
+    // join): the object holds the world's index, the script sees its own.
+    lua_pushnumber(L, ctx_of(L).sector_to_local(static_cast<i32>(check_sector(L, 1))));
     return 1;
 }
 
@@ -900,7 +903,7 @@ int l_sector_move_parametric(lua_State* L) {
         spin_to = spin_from + deg.raw / 360;
 
         if (!lua_isnoneornil(L, 8)) {
-            const fx3 p = check_vec3(L, 8);
+            const fx3 p = ctx.to_world(check_vec3(L, 8));
             pivot = fx2{p.x, p.y};
         } else {
             // The mean of the corners, the same one the nav graph measures its
@@ -1039,6 +1042,9 @@ int l_dnp_entities(lua_State* L) {
     // own loops use, or a replay of the command log stops matching.
     for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
         if (!ctx.world->agent(i).active) continue;
+        // In a shared world: this level's own, and the players. Another level's
+        // monsters are that level's script's business.
+        if (ctx.owner && ctx.world->agent(i).kind != 0 && ctx.owner[i] != ctx.level) continue;
         push_entity(L, ctx, i);
         lua_rawseti(L, -2, ++n);
     }
@@ -1096,9 +1102,11 @@ int l_dnp_player_count(lua_State* L) {
 int l_dnp_sectors(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     lua_newtable(L);
-    const u32 n = ctx.world->map() ? ctx.world->map()->sector_count : 0;
+    // The level's own sectors, keyed by its own numbers.
+    const u32 n = ctx.chunk ? ctx.chunk->sectors.count
+                            : (ctx.world->map() ? ctx.world->map()->sector_count : 0);
     for (u32 i = 0; i < n; ++i) {
-        push_sector(L, i);
+        push_sector(L, static_cast<u32>(ctx.sector_from_local(static_cast<i32>(i))));
         lua_rawseti(L, -2, static_cast<int>(i) + 1);
     }
     return 1;
@@ -1126,7 +1134,7 @@ int l_dnp_random(lua_State* L) {
 // on a converted Doom map is what dnp.sectors() costs every call.
 int l_dnp_sector(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
-    const int i = static_cast<int>(luaL_checknumber(L, 1));
+    const int i = ctx.sector_from_local(static_cast<int>(luaL_checknumber(L, 1)));
     const u32 n = ctx.world->map() ? ctx.world->map()->sector_count : 0;
     if (i < 0 || static_cast<u32>(i) >= n) { lua_pushnil(L); return 1; }
     push_sector(L, static_cast<u32>(i));
@@ -1141,7 +1149,7 @@ int l_dnp_sector(lua_State* L) {
 // reads as one thought -- which is exactly what a door script does with it.
 int l_dnp_side(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
-    const int i = static_cast<int>(luaL_checknumber(L, 1));
+    const int i = ctx.side_from_local(static_cast<int>(luaL_checknumber(L, 1)));
     const geom::MapData* m = ctx.world->map();
     if (!m || i < 0 || static_cast<u32>(i) >= m->side_count) { lua_pushnil(L); return 1; }
     const geom::Side& sd = m->side(static_cast<u32>(i));
@@ -1170,7 +1178,7 @@ int l_dnp_spawn_prop(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     size_t len = 0;
     const char* name = luaL_checklstring(L, 1, &len);
-    const fx3 pos = check_vec3(L, 2);
+    const fx3 pos = ctx.to_world(check_vec3(L, 2));
 
     if (ctx.props == nullptr || ctx.props->empty()) {
         // Named in terms of the FILE, because that is what is wrong. A map
@@ -1213,6 +1221,7 @@ int l_dnp_spawn_prop(lua_State* L) {
     ctx.world->prop_mut(e).radius = ctx.prop_radius(kind);
     ctx.world->prop_mut(e).height = ctx.prop_height(kind);
     ctx.world->prop_mut(e).flags  = ctx.prop_flags(kind);
+    ctx.own(e);
     push_prop(L, ctx, e);
     return 1;
 }
@@ -1228,7 +1237,7 @@ int l_dnp_spawn_enemy(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     size_t len = 0;
     const char* name = luaL_checklstring(L, 1, &len);
-    const fx3 pos = check_vec3(L, 2);
+    const fx3 pos = ctx.to_world(check_vec3(L, 2));
 
     if (ctx.props == nullptr || ctx.props->empty()) {
         return luaL_error(L,
@@ -1258,6 +1267,7 @@ int l_dnp_spawn_enemy(lua_State* L) {
         if (sp > fx::zero()) ctx.world->params_mut(a).move_speed = sp;
     }
     ctx.effects->set_base(a, ctx.world->params(a));
+    ctx.own(a);
     push_entity(L, ctx, a);
     return 1;
 }
@@ -1282,6 +1292,7 @@ int l_dnp_props(lua_State* L) {
     int n = 0;
     for (u32 e = sim::MAX_AGENTS; e < ctx.world->prop_high_water(); ++e) {
         if (!ctx.world->prop(e).active) continue;
+        if (ctx.owner && ctx.owner[e] != ctx.level) continue;   // see dnp.entities
         push_prop(L, ctx, e);
         lua_rawseti(L, -2, ++n);
     }
@@ -1408,7 +1419,7 @@ int l_dnp_hitscan(lua_State* L) {
     // anything was reached and stays at two when nothing was, so one
     // comparison distinguishes them.
     const fx end_d = best_t <= fx::one() ? range * best_t : range;
-    push_vec3(L, fx3{end.x, end.y, eye + slope * end_d});
+    push_vec3(L, ctx.to_local(fx3{end.x, end.y, eye + slope * end_d}));
     return 2;
 }
 
@@ -1844,7 +1855,7 @@ int l_dnp_vfx(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     sim::PendingVfx v;
     v.kind = static_cast<u16>(luaL_checknumber(L, 1));
-    v.pos = check_vec3(L, 2);
+    v.pos = ctx.to_world(check_vec3(L, 2));
     v.dir = brad(lua_isnoneornil(L, 3) ? 0u : static_cast<u32>(luaL_checknumber(L, 3)));
     v.param = lua_isnoneornil(L, 4) ? 0u : static_cast<u32>(luaL_checknumber(L, 4));
     lua_pushboolean(L, ctx.world->push_vfx(v) ? 1 : 0);
@@ -1934,12 +1945,12 @@ int l_dnp_length(lua_State* L) {
 int l_dnp_sweep(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const geom::MapData* m = ctx.world->map();
-    const fx3 from = check_vec3(L, 1);
+    const fx3 from = ctx.to_world(check_vec3(L, 1));
     const fx3 dir3 = check_vec3(L, 2);
     const fx dist = check_fx(L, 3);
     if (m == nullptr || dist <= fx::zero()) {
         lua_pushboolean(L, 0);
-        push_vec3(L, from);
+        push_vec3(L, ctx.to_local(from));
         return 2;
     }
     const fx2 dir = normalize(fx2{dir3.x, dir3.y});
@@ -1950,7 +1961,7 @@ int l_dnp_sweep(lua_State* L) {
         physics::raycast(*m, sector, fx2{from.x, from.y}, dir, dist, 0, from.z);
     if (!hit.blocked) {
         lua_pushboolean(L, 0);
-        push_vec3(L, from);
+        push_vec3(L, ctx.to_local(from));
         return 2;
     }
     lua_pushboolean(L, 1);
@@ -1958,7 +1969,7 @@ int l_dnp_sweep(lua_State* L) {
     // visible against the wall rather than inside it.
     const fx back = fx::from_frac(1, 10);
     const fx d = hit.distance > back ? hit.distance - back : fx::zero();
-    push_vec3(L, fx3{from.x + dir.x * d, from.y + dir.y * d, from.z});
+    push_vec3(L, ctx.to_local(fx3{from.x + dir.x * d, from.y + dir.y * d, from.z}));
     return 2;
 }
 
@@ -1977,7 +1988,7 @@ int l_dnp_sweep(lua_State* L) {
 // `false` is a wall, an entity is an entity.
 int l_dnp_sweep_hit(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
-    const fx3 from = check_vec3(L, 1);
+    const fx3 from = ctx.to_world(check_vec3(L, 1));
     const fx3 dir3 = check_vec3(L, 2);
     const fx dist = check_fx(L, 3);
     const fx radius = check_fx(L, 4);
@@ -2018,7 +2029,7 @@ int l_dnp_sweep_hit(lua_State* L) {
     // for the same reason.
     const fx back = fx::from_frac(1, 10);
     const fx d = hit.distance > back ? hit.distance - back : fx::zero();
-    push_vec3(L, fx3{from.x + dir.x * d, from.y + dir.y * d, from.z});
+    push_vec3(L, ctx.to_local(fx3{from.x + dir.x * d, from.y + dir.y * d, from.z}));
     return 2;
 }
 
@@ -2073,8 +2084,14 @@ int l_dnp_find_path(lua_State* L) {
         return 2;
     }
 
-    const i32 from = static_cast<i32>(luaL_checknumber(L, 1));
-    const i32 to   = static_cast<i32>(luaL_checknumber(L, 2));
+    // The level's own sector numbers in and out, positions in its own frame.
+    const i32 from = ctx.sector_from_local(static_cast<i32>(luaL_checknumber(L, 1)));
+    const i32 to   = ctx.sector_from_local(static_cast<i32>(luaL_checknumber(L, 2)));
+    if (from < 0 || to < 0) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "no such sector");
+        return 2;
+    }
 
     nav::NavBody body;
     if (!lua_isnoneornil(L, 3)) body.radius = check_fx(L, 3);
@@ -2104,9 +2121,11 @@ int l_dnp_find_path(lua_State* L) {
     lua_createtable(L, static_cast<int>(r.length), 0);
     for (u32 i = 0; i < r.length; ++i) {
         lua_createtable(L, 0, 3);
-        lua_pushnumber(L, path[i]);
+        lua_pushnumber(L, ctx.sector_to_local(static_cast<i32>(path[i])));
         lua_setfield(L, -2, "sector");
-        const fx2 c = ctx.nav->node(path[i]).centroid;
+        const fx3 cw = ctx.to_local(fx3{ctx.nav->node(path[i]).centroid.x,
+                                        ctx.nav->node(path[i]).centroid.y, fx::zero()});
+        const fx2 c{cw.x, cw.y};
         push_fx(L, c.x); lua_setfield(L, -2, "x");
         push_fx(L, c.y); lua_setfield(L, -2, "y");
         lua_pushboolean(L, jump[i] ? 1 : 0);

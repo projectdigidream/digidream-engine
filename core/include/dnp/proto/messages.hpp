@@ -86,6 +86,16 @@ inline constexpr u8 MSG_NEIGHBOUR_DROP = 0x29;
 // abolish. Twenty bytes instead.
 inline constexpr u8 MSG_NEIGHBOUR_MOVE = 0x2A;
 
+// THE BODY IS NOW IN THIS LEVEL, and nothing else happened.
+//
+// Several levels can share one simulation (a region: every level on a
+// metamap's grid). Walking from one into the next is then walking between two
+// rooms -- same world, same body, same agent index, no WELCOME -- and what does
+// change is which level's music plays, whose camera settings apply, and what
+// every held level's offset is measured from. `{u16 level}`. Followed by the
+// NEIGHBOUR_* messages that re-state the neighbourhood from there.
+inline constexpr u8 MSG_HOME = 0x2B;
+
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
 inline constexpr u32 MAX_INPUT_FRAMES   = 16;

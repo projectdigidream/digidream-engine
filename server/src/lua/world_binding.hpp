@@ -185,6 +185,60 @@ struct WorldContext {
     // it is not hashed, not in the determinism gate, and not something a client
     // predicts; it reaches the right client through the snapshot's private
     // block, which design section 2 already requires be per-observer.
+    // THE LEVEL'S FRAME, when its world holds other levels too (a region).
+    //
+    // A level's script is written in its own map's terms: Doom-unit positions
+    // measured from its own origin, sectors and sides numbered from its own
+    // first. In a region the world holds every level on the grid, each copied
+    // in at its cell's origin (geom::MapStorage::add_chunk), so every binding
+    // that passes a position, a sector number or a side number in or out goes
+    // through the helpers below. `chunk` null means the world is this level's
+    // alone, and they are all the identity.
+    //
+    // Sector and SIDE OBJECTS hold the world's index: only the number a script
+    // can see is translated. So a sector reached through a neighbour link in
+    // another level is still a sector -- its number is just not one this
+    // script can name (-1).
+    const geom::Chunk* chunk = nullptr;
+    fx2               origin{};
+    // Which level's script spawned each entity (see Host::owner in main.cpp).
+    u32*              owner = nullptr;
+
+    fx3 to_world(fx3 p) const noexcept {
+        return chunk ? fx3{p.x + origin.x, p.y + origin.y, p.z} : p;
+    }
+    fx3 to_local(fx3 p) const noexcept {
+        return chunk ? fx3{p.x - origin.x, p.y - origin.y, p.z} : p;
+    }
+    // The number a script uses for a world sector, or -1 if it is another level's.
+    i32 sector_to_local(i32 s) const noexcept {
+        if (!chunk || s < 0) return s;
+        const u32 u = static_cast<u32>(s);
+        if (u < chunk->sectors.first || u >= chunk->sectors.first + chunk->sectors.count) return -1;
+        return static_cast<i32>(u - chunk->sectors.first);
+    }
+    // The world sector a script's number names, or -1 if it names none.
+    i32 sector_from_local(i32 s) const noexcept {
+        if (!chunk || s < 0) return s;
+        if (static_cast<u32>(s) >= chunk->sectors.count) return -1;
+        return static_cast<i32>(chunk->sectors.first + static_cast<u32>(s));
+    }
+    i32 side_to_local(i32 s) const noexcept {
+        if (!chunk || s < 0) return s;
+        const u32 u = static_cast<u32>(s);
+        if (u < chunk->sides.first || u >= chunk->sides.first + chunk->sides.count) return -1;
+        return static_cast<i32>(u - chunk->sides.first);
+    }
+    i32 side_from_local(i32 s) const noexcept {
+        if (!chunk || s < 0) return s;
+        if (static_cast<u32>(s) >= chunk->sides.count) return -1;
+        return static_cast<i32>(chunk->sides.first + static_cast<u32>(s));
+    }
+    // Record that this level spawned `entity`.
+    void own(u32 entity) const noexcept {
+        if (owner && entity < sim::MAX_ENTITIES) owner[entity] = level;
+    }
+
     i32*              hp = nullptr;
     // Which avatar draws each player (design 4.1). Borrowed like hp, and server
     // state for the same reason: a costume is not physics, so it is not hashed,
