@@ -60,7 +60,15 @@ inline constexpr u32 MAX_MAP_RAIL_LINKS = 64;
 inline constexpr u32 MAX_MAP_PATHS       = 16;
 inline constexpr u32 MAX_MAP_PATH_POINTS = 256;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
-inline constexpr u32 MAX_MAP_TEXTURES   = 256;
+// ENOUGH FOR A WORLD, not for a room.
+//
+// 256 is generous for one converted Doom level, which uses about sixty, and is
+// nothing like enough for several composed into one map: nine of them name 564
+// distinct textures and all thirty-two name 604, because the sets overlap far
+// less than the wall count suggests. A texture id is a u16 with 0xFFFF reserved,
+// so the type has always had room; what it cost was the name table, and a
+// thousand names is 25 KB against a two-megabyte arena.
+inline constexpr u32 MAX_MAP_TEXTURES   = 1024;
 inline constexpr u32 MAX_MAP_LIGHTS     = 128;
 inline constexpr u32 MAX_MAP_HOLES      = 2048;
 
