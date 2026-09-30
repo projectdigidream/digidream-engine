@@ -257,7 +257,11 @@ static void test_determinism() {
 
     Rng rng(555);
     for (int trial = 0; trial < 60; ++trial) {
-        Stage sa, sb;
+        // Fresh each trial, and on the heap: a MapStorage is megabytes.
+        const auto sap = std::make_unique<Stage>();
+        const auto sbp = std::make_unique<Stage>();
+        Stage& sa = *sap;
+        Stage& sb = *sbp;
         const auto wap = std::make_unique<World>();
         const auto wbp = std::make_unique<World>();
         World& wa = *wap;

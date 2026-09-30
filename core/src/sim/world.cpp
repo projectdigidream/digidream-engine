@@ -532,7 +532,7 @@ void World::step() noexcept {
     // own, but it must be the SAME order on client and server, and index order
     // is the one that cannot drift as the agent set changes.
     for (u32 i = 0; i < agent_high_water_; ++i) {
-        if (agents_[i].active) step_agent(i);
+        if (agents_[i].active && !agents_[i].asleep) step_agent(i);
     }
 
     resolve_agent_collisions();
@@ -1396,6 +1396,10 @@ u64 World::hash() const noexcept {
         // disagreement about it has to show up on the gate rather than as an
         // agent being stopped by something that is not there.
         h.boolv(agents_[i].solid);
+        // Asleep is the server's decision about who is simulated at all, which
+        // the gate must see and the prediction comparison must not: no client
+        // predicts a body that is not its own.
+        h.boolv(agents_[i].asleep);
         // Agent fields the DETERMINISM GATE covers and the PREDICTION comparison
         // must not. Both are things the client cannot reproduce -- a script's
         // animation choice, and which targets a swing has already connected with

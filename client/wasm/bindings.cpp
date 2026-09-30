@@ -347,6 +347,11 @@ int dnp_world_sector_by_name(sim::World* w, int name) { return w->sector_by_name
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_sector_name(sim::World* w, int sector) { return w->sector_name(sector); }
 
+// The motion-slot capacity, so the client compares against the core's number
+// rather than a copy of it.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_max_moving_sectors() { return sim::MAX_MOVING_SECTORS; }
+
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_add_motion(sim::World* w, geom::MapStorage* m, unsigned sector) {
     return w->motions().add(*m, sector);

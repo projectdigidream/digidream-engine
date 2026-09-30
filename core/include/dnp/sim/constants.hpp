@@ -45,7 +45,13 @@ inline constexpr u32 TICK_RATE_HZ = 60;
 // mirror band in world.hpp is carved out of the prop range, and a session's
 // snapshot history is MAX_ENTITIES samples deep times SNAPSHOT_RING. Measure
 // resident memory when changing it, not just the tick.
-inline constexpr u32 MAX_AGENTS = 1024;
+// 2048 since a world holds several levels at once (geom::MapStorage::
+// add_chunk): Doom II averages 119 monsters a level, so nine average levels --
+// a 3x3 neighbourhood -- are ~1070 before anybody joins, and the nine busiest
+// 1759. Measured at 4096 and not taken: the per-agent hit bitset makes World
+// grow with the square (4.9 MB), and a session's snapshot history reached
+// 13 MB, which a server with a hundred players cannot pay.
+inline constexpr u32 MAX_AGENTS = 2048;
 
 // Written as an exact rational rather than a decimal literal, so that changing
 // the rate cannot introduce a rounding difference that only shows up as drift.

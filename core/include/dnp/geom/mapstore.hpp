@@ -47,10 +47,14 @@ namespace dnp::geom {
 // and a sector's own point count is capped by MAX_POLY_POINTS long before any
 // of this. Nothing in the file format, the wire or either hash mentions a
 // capacity, so a map baked before this reads back identically.
-inline constexpr u32 MAX_MAP_POINTS  = 16384;
-inline constexpr u32 MAX_MAP_SECTORS = 2048;
-inline constexpr u32 MAX_MAP_SIDES   = 16384;
-inline constexpr u32 MAX_MAP_TRI_IDX = 49152;   // 3 per triangle
+// And fourfold again (to the u16 ceiling for points and sides, which a
+// sector's first_point / first_side and a side's endpoints are held in) once a
+// store could hold several maps at once: a 3x3 neighbourhood of Doom II's larger
+// levels is ~2700 sectors and ~18000 sides.
+inline constexpr u32 MAX_MAP_POINTS  = 65535;
+inline constexpr u32 MAX_MAP_SECTORS = 8192;
+inline constexpr u32 MAX_MAP_SIDES   = 65535;
+inline constexpr u32 MAX_MAP_TRI_IDX = 196608;  // 3 per triangle
 inline constexpr u32 MAX_MAP_SPAWNS  = 64;
 inline constexpr u32 MAX_MAP_RAILS      = 64;
 inline constexpr u32 MAX_MAP_WAYPOINTS  = 512;
@@ -70,16 +74,18 @@ inline constexpr u32 MAX_SPAWN_TAG   = 32;
 // thousand names is 25 KB against a two-megabyte arena.
 inline constexpr u32 MAX_MAP_TEXTURES   = 1024;
 inline constexpr u32 MAX_MAP_LIGHTS     = 128;
-inline constexpr u32 MAX_MAP_HOLES      = 2048;
+inline constexpr u32 MAX_MAP_HOLES      = 8192;
 
 // The broadphase grid. 48x48 cells over the map's bounding box, and a cap on
 // total membership: a sector belongs to every cell its bounding box touches, so
 // one enormous sector could otherwise claim the whole grid. Overflowing sets
 // the grid unusable rather than truncating it, and every query falls back to
 // the linear scan -- slower, and still exactly right.
-inline constexpr u32 GRID_DIM       = 48;
+// 96 once a store can hold a neighbourhood of maps: the grid spans the whole
+// store, and 48 cells across three Doom levels is one cell per room.
+inline constexpr u32 GRID_DIM       = 96;
 inline constexpr u32 GRID_CELLS     = GRID_DIM * GRID_DIM;
-inline constexpr u32 MAX_GRID_ITEMS = 98304;
+inline constexpr u32 MAX_GRID_ITEMS = 393216;
 
 // A named landing point. Portals name one of these in the join handshake
 // (design §3.3), so each portal can deliver its arrivals somewhere specific

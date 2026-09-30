@@ -341,7 +341,7 @@ export class WasmWorld {
     const M = this.core.M
     const sector = this.sectorByName(msg.sector)
     if (sector < 0) return false
-    if (M._dnp_world_add_motion(this.ptr, this.map.ptr, sector) >= 64) return false
+    if (M._dnp_world_add_motion(this.ptr, this.map.ptr, sector) >= M._dnp_max_moving_sectors()) return false
     if (msg.motionType !== 1) return true   // discrete/static carry no path
 
     const { i64 } = this.core.views

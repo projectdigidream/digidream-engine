@@ -94,7 +94,7 @@ inline constexpr u32 MAX_INPUT_FRAMES   = 16;
 // interoperability contract and must not silently follow a simulation constant
 // -- but a static_assert in world.cpp holds the two together, so raising one
 // without the other fails the build rather than truncating a level on the wire.
-inline constexpr u32 MAX_ENTITIES       = 2432;
+inline constexpr u32 MAX_ENTITIES       = 4480;
 inline constexpr u32 MAX_VFX            = 64;
 inline constexpr u32 MAX_VISUAL_PARAMS  = 8;
 inline constexpr u32 MAX_SECTOR_OFFSETS = 32;

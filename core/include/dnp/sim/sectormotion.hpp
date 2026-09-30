@@ -27,7 +27,10 @@ namespace dnp::sim {
 
 using namespace dnp;
 
-inline constexpr u32 MAX_MOVING_SECTORS = 64;
+// 512 since a world can hold several levels: a converted Doom level references
+// dozens of doors and lifts and a slot is never freed once a sector has moved,
+// so 64 ran out inside one large level. ~3 KB a slot (the base footprint).
+inline constexpr u32 MAX_MOVING_SECTORS = 512;
 
 enum class MotionType : u8 {
     Static = 0,

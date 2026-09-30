@@ -37,13 +37,13 @@ using namespace dnp;
 // this range and a band the size of the agent space would otherwise leave
 // nothing to spawn into.
 //
-// 1024 mirror slots plus 384 spawnable, which is the same number of spawnable
-// props the 768/384 split gave -- the raise is for agents, and quietly halving
+// 2048 mirror slots plus 384 spawnable, which is the same number of spawnable
+// props the 768/384 split gave -- the raises are for agents, and quietly halving
 // what a map may place would be a different change wearing this one's clothes.
 // SPAWNABLE_PROPS is checked below rather than left to underflow: it is
 // unsigned, so MAX_PROPS < MIRROR_SLOTS would wrap to four billion and the
 // allocator would hand out prop indices on top of the mirror band.
-inline constexpr u32 MAX_PROPS    = 1408;
+inline constexpr u32 MAX_PROPS    = 2432;
 
 // The top of the prop range, which spawn_prop never allocates from.
 //
@@ -221,6 +221,16 @@ struct AgentState {
     // a client has to predict against -- a client that thought a corpse was
     // solid would be stopped by something the server walked through.
     bool solid = true;
+
+    // Not stepped: no input, no physics, where it stands. Set by the server
+    // for bodies in parts of the world nobody is near (a chunk with no player
+    // within a cell), so a world holding several levels pays for the ones
+    // somebody is in -- what an empty level not ticking used to buy.
+    //
+    // Still SOLID if it was: asleep is "not simulated", not "not there".
+    // Server-side only; no client predicts a body that is not its own. Hashed
+    // by World::hash for the gate and deliberately NOT by agent_hash.
+    bool asleep = false;
 
     // What this agent IS, for anything that is not a player.
     //

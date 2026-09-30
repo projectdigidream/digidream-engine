@@ -12,6 +12,7 @@
 // produce not just a valid triangulation but the SAME one.
 //
 #include <cstdio>
+#include <memory>
 
 #include "dnp/geom/mapstore.hpp"
 #include "dnp/sim/testmap.hpp"
@@ -398,7 +399,11 @@ static void test_commit_determinism() {
 
     Rng rng(31337);
     for (int trial = 0; trial < 200; ++trial) {
-        MapStorage a, b;
+        // Fresh each trial, on the heap: a MapStorage is megabytes.
+        const auto ap = std::make_unique<MapStorage>();
+        const auto bp = std::make_unique<MapStorage>();
+        MapStorage& a = *ap;
+        MapStorage& b = *bp;
         fx2 poly[8];
         const u32 n = 5 + rng.next_below(4);
         for (u32 i = 0; i < n; ++i) {
