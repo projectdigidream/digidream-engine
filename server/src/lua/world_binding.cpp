@@ -1448,6 +1448,18 @@ static proto::UiWidgetKind ui_kind_of(lua_State* L, const char* name) {
 //
 // What the operator actually loaded, in progression order. The index into this
 // list is what entity:change_map takes.
+// dnp.level() -> which level this script is running in
+//
+// The index `entity:change_map` takes and the position in `dnp.levels()`, minus
+// one for Lua's counting. A map's OWN script never needs it -- it knows what map
+// it is by being in it -- but a SHARED script loaded into every level does, and
+// without it the only way to tell them apart was to compare names against a
+// list the script had to be told.
+int l_dnp_level(lua_State* L) {
+    lua_pushnumber(L, ctx_of(L).level);
+    return 1;
+}
+
 int l_dnp_levels(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     lua_newtable(L);
@@ -2146,6 +2158,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"atan2", l_dnp_atan2},
     {"dir", l_dnp_dir},
     {"vfx", l_dnp_vfx},
+    {"level", l_dnp_level},
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},
     {"camera", l_dnp_camera},
