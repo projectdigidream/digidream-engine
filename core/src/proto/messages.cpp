@@ -477,14 +477,14 @@ bool decode_screen_set(ByteReader& r, ScreenSet& out) noexcept {
 }
 
 void encode_side_texture(ByteWriter& w, const SideTexture& t) noexcept {
-    w.u16v(t.side);
+    w.u32v(t.side);
     w.u8v(static_cast<u8>(t.field));
     encode_text(w, t.name);
 }
 
 bool decode_side_texture(ByteReader& r, SideTexture& out) noexcept {
     SideTexture t;
-    t.side = r.u16v();
+    t.side = r.u32v();
     const u8 f = r.u8v();
     // An unknown field is refused rather than defaulted: writing a texture to
     // the wrong band of a wall is a stranger result than nothing happening.

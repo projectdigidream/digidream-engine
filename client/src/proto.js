@@ -334,7 +334,10 @@ export function decodeControlMessage (buf) {
 
   // A side's picture changes -- a switch thrown (docs/protocol.md §11.1).
   if (type === MSG.SIDE_TEXTURE) {
-    const side = r.u16()
+    // The side's NAME: chunk key in the high half, the index within its own
+    // map in the low (geom::MapStorage::side_name). For a one-map world the
+    // name is the index.
+    const side = r.u32()
     const field = r.u8()
     if (!r.ok || field > 2) return null
     const n = r.u16()

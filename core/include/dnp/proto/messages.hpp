@@ -406,7 +406,10 @@ bool decode_camera_set(ByteReader& r, CameraSet& out) noexcept;
 enum class SideField : u8 { Upper = 0, Middle = 1, Lower = 2 };
 
 struct SideTexture {
-    u16      side = 0;
+    // On the wire, the side's NAME (geom::MapStorage::side_name): chunk key in
+    // the high half, the index within its own map in the low. For a one-map
+    // store that is the index. Held as the sender's own index until it is sent.
+    u32      side = 0;
     SideField field = SideField::Middle;
     UiText   name{};        // a texture name, reusing the capped-string type
 };

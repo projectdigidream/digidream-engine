@@ -267,19 +267,23 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // theirs from the parameters it already holds, and sending it too
             // would create a second source of truth that could disagree.
             if (m.type != sim::MotionType::ScriptedDiscrete) continue;
-            L.discrete_offsets[L.discrete_count].sector = m.sector;
+            // By NAME: the observer's store may hold a different set of maps.
+            L.discrete_offsets[L.discrete_count].sector =
+                static_cast<u32>(L.world.sector_name(static_cast<i32>(m.sector)));
             L.discrete_offsets[L.discrete_count].offset = m.offset;
             ++L.discrete_count;
         }
     }
 
-    void send_motion(u32 id, const sim::SectorMotion& m) {
+    void send_motion(const Level& L, u32 id, const sim::SectorMotion& m) {
         u8 buf[128];
         ByteWriter w(buf, sizeof(buf));
         const size_t len_pos = w.mark();
         w.u32v(0);
         w.u8v(proto::MSG_SECTOR_MOTION_SET);
-        w.u32v(m.sector);
+        // The sector's NAME, not this store's index for it (map.hpp, sector
+        // names): the client resolves it against whatever it holds.
+        w.u32v(static_cast<u32>(L.world.sector_name(static_cast<i32>(m.sector))));
         w.u8v(static_cast<u8>(m.type));
         w.u8v(static_cast<u8>(m.target));
         w.u32v(m.start_tick);
@@ -305,7 +309,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
     void send_motion_sets(Level& L, u32 id) {
         const auto& ms = L.world.motions();
-        for (u32 i = 0; i < ms.count(); ++i) send_motion(id, ms.at(i));
+        for (u32 i = 0; i < ms.count(); ++i) send_motion(L, id, ms.at(i));
     }
 
     // Two parametric motions are the same motion iff a client computing either
@@ -340,7 +344,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // news to somebody standing in MAP02, and sending it would name a
             // sector index that means something else entirely there.
             for (auto& [id, s] : sessions) {
-                if (s.hello_done && s.level == li) send_motion(id, m);
+                if (s.hello_done && s.level == li) send_motion(L, id, m);
             }
         }
         if (ms.count() > L.sent_motion_count) L.sent_motion_count = ms.count();
@@ -1893,7 +1897,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         const size_t len_pos = w.mark();
         w.u32v(0);
         w.u8v(proto::MSG_SIDE_TEXTURE);
-        proto::encode_side_texture(w, t);
+        // The side's NAME on the wire, resolved against this level's store.
+        proto::SideTexture named = t;
+        named.side = level(s.level).map_store.side_name(static_cast<i32>(t.side));
+        proto::encode_side_texture(w, named);
         if (!w.ok()) return;
         const size_t end = w.size();
         const u32 body = static_cast<u32>(end - len_pos - 4);
@@ -2343,7 +2350,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             sb.jumps_used      = self.mv.jumps_used;
             sb.dashes_used     = self.mv.dashes_used;
             sb.attack_left     = self.mv.attack_left;
-            sb.sector          = self.mv.sector;
+            sb.sector          = world.sector_name(self.mv.sector);   // by name
             sb.dash_timer      = self.mv.dash_timer;
             sb.dash_cooldown   = self.mv.dash_cooldown_timer;
             sb.hover_fuel      = self.mv.hover_fuel;
@@ -2355,7 +2362,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // it left the client carrying a stale anchor across any server-side
             // move -- see docs/protocol.md §5.1.
             sb.anchor          = proto::Handle{self.mv.anchor >= 0
-                                     ? static_cast<u32>(self.mv.anchor) + 1u : 0u};
+                                     ? static_cast<u32>(world.sector_name(self.mv.anchor)) + 1u : 0u};
             // The observer's own animation state. Every other body's reaches
             // its watchers through an EntityBlock; this one is excluded from
             // its own stream (see the `i == s.agent` skip below), so without

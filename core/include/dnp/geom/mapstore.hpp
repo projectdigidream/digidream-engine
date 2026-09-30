@@ -110,6 +110,16 @@ struct SpawnPoint {
 inline constexpr u32 MAX_CHUNKS = 64;
 inline constexpr u32 NO_CHUNK   = 0xFFFFFFFFu;
 
+// A SECTOR'S NAME: what identifies it to somebody holding a different set of
+// chunks. (chunk key << 16) | its index within its own map. A plain store --
+// one map, not built from chunks -- is chunk 0, so there a name IS the index
+// and nothing that predates chunks changes.
+//
+// Keys stop at 0x7FFF so a name fits an i32 with NO_SECTOR (-1) left over,
+// which is what the wire and the hash already carry.
+inline constexpr u32 MAX_CHUNK_KEY = 0x7FFF;
+inline constexpr u32 NO_NAME       = 0xFFFFFFFFu;
+
 struct ChunkRange {
     u32 first = 0;
     u32 count = 0;
@@ -349,6 +359,14 @@ public:
     u32 chunk_of_sector(u32 sector) const noexcept;
     // How many edge pairs are joined between chunks right now.
     u32 stitch_count() const noexcept;
+
+    // A sector's name (see NO_NAME above), and back. NO_NAME for NO_SECTOR or
+    // a slot no chunk owns; NO_SECTOR for a name not resident here. Sides are
+    // named the same way, by their index within their own map.
+    u32 sector_name(i32 sector) const noexcept;
+    i32 sector_by_name(u32 name) const noexcept;
+    u32 side_name(i32 side) const noexcept;
+    i32 side_by_name(u32 name) const noexcept;
 
     // Content hash of the geometry. Part of the world state, so a client whose
     // map has drifted from the server's is detectable rather than mysterious.

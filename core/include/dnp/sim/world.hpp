@@ -265,6 +265,20 @@ public:
     // the moved geometry back. Without it the world is read-only and no sector
     // can move.
     void set_map_storage(geom::MapStorage* store) noexcept { store_ = store; }
+
+    // A sector's NAME (geom::MapStorage::sector_name): what identifies it to a
+    // holder of a different set of chunks. The index itself when no storage is
+    // attached, and for a plain one-map store, so nothing that predates chunks
+    // changes. NO_SECTOR stays -1.
+    i32 sector_name(i32 sector) const noexcept {
+        if (!store_ || sector < 0) return sector;
+        const u32 n = store_->sector_name(sector);
+        return n == geom::NO_NAME ? -1 : static_cast<i32>(n);
+    }
+    i32 sector_by_name(i32 name) const noexcept {
+        if (!store_ || name < 0) return name;
+        return store_->sector_by_name(static_cast<u32>(name));
+    }
     SectorMotionSet& motions() noexcept { return motions_; }
     const SectorMotionSet& motions() const noexcept { return motions_; }
 

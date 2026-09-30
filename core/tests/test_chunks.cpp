@@ -260,12 +260,45 @@ static void test_two_holders_of_different_sets_agree_on_motion() {
     // CONTROL: the layouts really differ, or the agreement above is two copies
     // of one store agreeing with itself.
     CHECK(numbered_differently);
-    // AND THE CONSEQUENCE, stated so it cannot be forgotten: agent_hash hashes
-    // the sector index, so today these two would be reported as a mispredict on
-    // every tick. The wire and the hash have to name a sector by (chunk key,
-    // local index) before a client and server can hold different sets.
-    std::printf("  agent_hash %s between the two (it hashes the sector index)\n",
-                hash_differs ? "DIFFERS" : "agrees");
+    // AND THE PREDICTION COMPARISON AGREES, because it hashes sector NAMES. It
+    // hashed the index until this was written, and then every tick of this
+    // walk was a reported mispredict between two worlds that agreed exactly.
+    CHECK(!hash_differs);
+}
+
+static void test_names_travel_indices_do_not() {
+    std::printf("chunks: a sector's name is the same wherever it is held\n");
+    g_world.clear();
+    g_world.add_chunk(0, g_a, AT_A);
+    g_world.add_chunk(1, g_b, AT_B);
+    g_world2.clear();
+    g_world2.add_chunk(9, g_b, fx2{F(400), F(400)});
+    g_world2.add_chunk(0, g_a, AT_A);
+    g_world2.add_chunk(1, g_b, AT_B);
+    // B's room is local sector 1 of chunk 1, in both.
+    const i32 here = static_cast<i32>(g_world.find_chunk(1)->sectors.first + 1);
+    const i32 there = static_cast<i32>(g_world2.find_chunk(1)->sectors.first + 1);
+    CHECK(here != there);                                        // CONTROL
+    CHECK(g_world.sector_name(here) == ((1u << 16) | 1u));
+    CHECK(g_world.sector_name(here) == g_world2.sector_name(there));
+    CHECK(g_world2.sector_by_name(g_world.sector_name(here)) == there);
+    // Sides the same way.
+    const i32 side = static_cast<i32>(g_world.find_chunk(1)->sides.first + 3);
+    CHECK(g_world2.side_by_name(g_world.side_name(side)) ==
+          static_cast<i32>(g_world2.find_chunk(1)->sides.first + 3));
+    // Not resident, and nonsense, are both "nowhere".
+    CHECK(g_world.sector_by_name((9u << 16) | 0u) == NO_SECTOR);
+    CHECK(g_world.sector_by_name(NO_NAME) == NO_SECTOR);
+    CHECK(g_world.sector_name(NO_SECTOR) == NO_NAME);
+    // A plain one-map store: the name IS the index, so nothing that predates
+    // chunks changes on the wire or in the hash.
+    CHECK(g_a.sector_name(1) == 1u && g_a.sector_by_name(1) == 1);
+    CHECK(g_a.sector_name(5) == NO_NAME);
+    // Keys past the limit are refused: the name must fit an i32.
+    static MapStorage big;
+    big.clear();
+    CHECK(big.add_chunk(MAX_CHUNK_KEY + 1, g_a, AT_A) == NO_CHUNK);
+    CHECK(big.add_chunk(MAX_CHUNK_KEY, g_a, AT_A) != NO_CHUNK);
 }
 
 int main() {
@@ -275,6 +308,7 @@ int main() {
     test_a_body_walks_from_one_into_the_other();
     test_maps_come_and_go_underneath();
     test_two_holders_of_different_sets_agree_on_motion();
+    test_names_travel_indices_do_not();
     std::printf("\nchunks: %d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

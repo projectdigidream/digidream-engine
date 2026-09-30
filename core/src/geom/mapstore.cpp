@@ -560,8 +560,52 @@ void MapStorage::recount() noexcept {
     hole_count_ = nh; rail_count_ = nr; waypoint_count_ = nw; rail_link_count_ = nl;
 }
 
+u32 MapStorage::sector_name(i32 sector) const noexcept {
+    if (sector < 0) return NO_NAME;
+    const u32 s = static_cast<u32>(sector);
+    if (!chunked_) return s < sector_count_ ? s : NO_NAME;
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) {
+        const Chunk& c = chunks_[i];
+        if (c.live && s >= c.sectors.first && s < c.sectors.first + c.sectors.count) {
+            return (c.key << 16) | (s - c.sectors.first);
+        }
+    }
+    return NO_NAME;
+}
+
+i32 MapStorage::sector_by_name(u32 name) const noexcept {
+    if (name == NO_NAME) return NO_SECTOR;
+    if (!chunked_) return name < sector_count_ ? static_cast<i32>(name) : NO_SECTOR;
+    const Chunk* c = find_chunk(name >> 16);
+    const u32 local = name & 0xFFFFu;
+    if (!c || local >= c->sectors.count) return NO_SECTOR;
+    return static_cast<i32>(c->sectors.first + local);
+}
+
+u32 MapStorage::side_name(i32 side) const noexcept {
+    if (side < 0) return NO_NAME;
+    const u32 s = static_cast<u32>(side);
+    if (!chunked_) return s < side_count_ ? s : NO_NAME;
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) {
+        const Chunk& c = chunks_[i];
+        if (c.live && s >= c.sides.first && s < c.sides.first + c.sides.count) {
+            return (c.key << 16) | (s - c.sides.first);
+        }
+    }
+    return NO_NAME;
+}
+
+i32 MapStorage::side_by_name(u32 name) const noexcept {
+    if (name == NO_NAME) return -1;
+    if (!chunked_) return name < side_count_ ? static_cast<i32>(name) : -1;
+    const Chunk* c = find_chunk(name >> 16);
+    const u32 local = name & 0xFFFFu;
+    if (!c || local >= c->sides.count) return -1;
+    return static_cast<i32>(c->sides.first + local);
+}
+
 u32 MapStorage::add_chunk(u32 key, const MapStorage& src, fx2 origin) noexcept {
-    if (find_chunk(key)) return NO_CHUNK;
+    if (key > MAX_CHUNK_KEY || find_chunk(key)) return NO_CHUNK;
     // A store is either one map or a set of chunks. Mixing them would leave
     // the map's own content with no range to free and nothing to stitch by.
     if (!chunked_ && (sector_count_ != 0 || point_count_ != 0)) return NO_CHUNK;
@@ -588,8 +632,10 @@ u32 MapStorage::add_chunk(u32 key, const MapStorage& src, fx2 origin) noexcept {
         if (at > w.cap) return NO_CHUNK;
         c.*(w.which) = ChunkRange{at, w.need};
     }
-    // Every index a sector, side or rail holds must fit the u16 it is kept in.
-    if (c.points.first + c.points.count > 0x10000u || c.sides.first + c.sides.count > 0x10000u ||
+    // Every index a sector, side or rail holds must fit the u16 it is kept in,
+    // and a sector's or side's index within its own map must fit its name.
+    if (src.sector_count_ > 0x10000u || src.side_count_ > 0x10000u ||
+        c.points.first + c.points.count > 0x10000u || c.sides.first + c.sides.count > 0x10000u ||
         c.holes.first + c.holes.count > 0x10000u || c.waypoints.first + c.waypoints.count > 0x10000u) {
         return NO_CHUNK;
     }

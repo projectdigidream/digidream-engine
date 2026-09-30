@@ -1743,7 +1743,7 @@ int l_dnp_set_side_texture(lua_State* L) {
     if (ctx.ui == nullptr) return 0;
 
     proto::SideTexture t;
-    t.side = static_cast<u16>(side);
+    t.side = static_cast<u32>(side);
     t.field = f;
     if (!ui_text(L, 3, t.name, "texture name")) return 0;
     ctx.ui->set_side_texture(ctx.level, t);

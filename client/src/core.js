@@ -325,11 +325,23 @@ export class WasmWorld {
     return this.core.M._dnp_world_set_param_raw(this.ptr, idx, fieldId, this.core.buf64) !== 0
   }
 
+  /**
+   * A sector's index in THIS world's store, from the name the wire carries
+   * (geom::MapStorage::sector_name). -1 for a sector this client does not hold.
+   * For a one-map store the name is the index.
+   */
+  sectorByName (name) {
+    if (name === undefined || name === null || name < 0) return -1
+    return this.core.M._dnp_world_sector_by_name(this.ptr, name | 0)
+  }
+
   /** Register a sector as movable and start a parametric motion on it. */
   applyMotionSet (msg) {
     if (!this.map) return false
     const M = this.core.M
-    if (M._dnp_world_add_motion(this.ptr, this.map.ptr, msg.sector) >= 64) return false
+    const sector = this.sectorByName(msg.sector)
+    if (sector < 0) return false
+    if (M._dnp_world_add_motion(this.ptr, this.map.ptr, sector) >= 64) return false
     if (msg.motionType !== 1) return true   // discrete/static carry no path
 
     const { i64 } = this.core.views
@@ -343,7 +355,7 @@ export class WasmWorld {
     i64[b + 6] = msg.pivot?.x ?? 0n; i64[b + 7] = msg.pivot?.y ?? 0n
     i64[b + 8] = msg.spinFrom ?? 0n; i64[b + 9] = msg.spinTo ?? 0n
     return M._dnp_world_start_parametric(
-      this.ptr, msg.sector, this.core.buf64, this.core.buf64 + 24,
+      this.ptr, sector, this.core.buf64, this.core.buf64 + 24,
       msg.startTick, msg.durationTicks, msg.loopMode, msg.motionTarget ?? 0,
       this.core.buf64 + 48) !== 0
   }
@@ -449,7 +461,10 @@ export class WasmWorld {
   removeProp (entity) { this.core.M._dnp_world_remove_prop(this.ptr, entity) }
 
   /** Apply a scripted-discrete offset the server streamed. */
-  setDiscreteOffset (sector, offset, target = 0) {
+  setDiscreteOffset (name, offset, target = 0) {
+    // By name, like every sector the wire names (see sectorByName).
+    const sector = this.sectorByName(name)
+    if (sector < 0) return false
     const { i64 } = this.core.views
     const b = this.core.buf64 / 8
     i64[b] = offset.x; i64[b + 1] = offset.y; i64[b + 2] = offset.z

@@ -340,6 +340,13 @@ void dnp_world_set_map(sim::World* w, geom::MapStorage* m) {
 // that happen to be set up identically would predict correctly today and
 // silently diverge the moment a map changed only one of them.
 
+// A sector's NAME (geom::MapStorage::sector_name) and back. The wire carries
+// names, because the server's store and this one may hold different maps.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_sector_by_name(sim::World* w, int name) { return w->sector_by_name(name); }
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_sector_name(sim::World* w, int sector) { return w->sector_name(sector); }
+
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_add_motion(sim::World* w, geom::MapStorage* m, unsigned sector) {
     return w->motions().add(*m, sector);

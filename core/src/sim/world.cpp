@@ -606,8 +606,11 @@ u64 World::agent_hash(u32 i) const noexcept {
     // hash has to be able to see all of it.
     h.byte(static_cast<unsigned char>(m.mode));
     h.boolv(m.grounded);
-    h.i32v(m.sector);
-    h.i32v(m.anchor);
+    // By NAME, not index: a client and the server may hold different sets of
+    // chunks, so the same sector sits at different indices in their stores.
+    // For a one-map store the name is the index.
+    h.i32v(sector_name(m.sector));
+    h.i32v(sector_name(m.anchor));
     h.boolv(m.anchored);
     h.u32v(a.kind);
     // NOT animation_state, which moved to World::hash below.

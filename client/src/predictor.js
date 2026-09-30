@@ -133,7 +133,9 @@ export class Predictor {
       mode: sb.controllerMode,
       jumpsUsed: sb.jumpsUsed,
       dashesUsed: sb.dashesUsed,
-      sector: sb.sector,
+      // Named on the wire (the server's store may hold other maps); resolved
+      // against this world's own store here.
+      sector: this.world.sectorByName(sb.sector),
       dashTimer: sb.dashTimer,
       dashCooldown: sb.dashCooldown,
       hoverFuel: sb.hoverFuel,
@@ -144,7 +146,8 @@ export class Predictor {
       // The sector this entity rides, and whether it is riding it. Both are
       // controller state carried between ticks, so a replay starting from the
       // wrong anchor diverges until the entity happens to land again.
-      anchor: sb.anchor,
+      // Biased by one, 0 for none, and a NAME like sector above.
+      anchor: sb.anchor ? this.world.sectorByName(sb.anchor - 1) + 1 : 0,
       anchored: (sb.stateFlags & STATE_FLAG.ANCHORED) !== 0,
       climbing: (sb.stateFlags & STATE_FLAG.CLIMBING) !== 0,
       grappling: (sb.stateFlags & STATE_FLAG.GRAPPLING) !== 0,
