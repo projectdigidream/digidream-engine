@@ -73,6 +73,12 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sight.cpp"        -o "
 clang++ "${FLAGS[@]}" -I"$ROOT/server/src" \
         "$ROOT/server/src/world/metamap.cpp" "$ROOT/server/tests/test_metamap.cpp" \
         -o "$OUT/test_metamap"
+# What a client holds across its cell boundary, and the server's input buffer:
+# both pure enough to need no Lua and no level.
+clang++ "${FLAGS[@]}" -I"$ROOT/server/src" "$ROOT/server/tests/test_neighbours.cpp" \
+        -o "$OUT/test_neighbours"
+clang++ "${FLAGS[@]}" -I"$ROOT/server/src" "${SRCS[@]}" "$ROOT/server/tests/test_input_ring.cpp" \
+        -o "$OUT/test_input_ring"
 # A fixture generator, not a test: it prints wire bytes for the JS decoder.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tools/ui_fixture.cpp"        -o "$OUT/ui_fixture"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_turning.cpp"      -o "$OUT/test_turning"

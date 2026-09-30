@@ -163,6 +163,13 @@ fx2 cell_origin(const LevelCell& c, fx pitch_x, fx pitch_y) noexcept {
     return fx2{pitch_x * fx::from_int(c.x), pitch_y * fx::from_int(c.y)};
 }
 
+i32 cell_index(fx v, fx pitch) noexcept {
+    if (pitch.raw <= 0) return 0;
+    const i64 q = v.raw / pitch.raw;
+    const i64 r = v.raw % pitch.raw;
+    return static_cast<i32>((r != 0 && v.raw < 0) ? q - 1 : q);
+}
+
 void residency(const std::vector<LevelCell>& cells,
                const std::vector<bool>& occupied,
                u32 radius,

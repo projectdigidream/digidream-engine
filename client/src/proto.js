@@ -21,6 +21,13 @@ export const MSG = {
   SIDE_TEXTURE: 0x25,
   MUSIC: 0x26,
   SCREEN_SET: 0x27,
+  // A level next door, and where it sits relative to this one. Sent just
+  // before that level's own MAP_DATA stream, which is what identifies the
+  // stream on a channel that is reliable and ordered.
+  NEIGHBOUR_MAP: 0x28,
+  NEIGHBOUR_DROP: 0x29,
+  // Same level, new offset, no geometry: what a crossing does to most of them.
+  NEIGHBOUR_MOVE: 0x2A,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -367,7 +374,17 @@ export function decodeControlMessage (buf) {
       snapshotRate: r.u16(),
       serverTick: r.u32(),
       selfHandle: r.u32(),
-      mapHash: r.u64()
+      mapHash: r.u64(),
+      // Which level this is, and whether its map follows. False means the client
+      // already holds it -- it was streamed as a neighbour, or this is the level
+      // just left and never dropped -- and must not wait for it
+      // (docs/protocol.md §8.5).
+      homeLevel: r.u16(),
+      mapFollows: r.u8() !== 0,
+      // The body kept its place across a seam (true) or was put at a spawn.
+      exactArrival: r.u8() !== 0,
+      // Where the server put the body, raw fx, in this level's coordinates.
+      arrival: { x: r.i64(), y: r.i64(), z: r.i64() }
     }
     return r.ok ? msg : null
   }
@@ -416,6 +433,30 @@ export function decodeControlMessage (buf) {
     // Nothing is returned unless every byte was good: a parameter set that is
     // half old and half new is worse than one that is entirely stale, because
     // the stale one is at least self-consistent and the epoch names it.
+    return r.ok ? msg : null
+  }
+  if (type === MSG.NEIGHBOUR_MAP) {
+    // The offset is fx raw, not thousandths: a cell origin is an exact multiple
+    // of the pitch and the seam depends on the two sides agreeing to the bit.
+    // Rounding it for the renderer's convenience would put a visible crack
+    // along every boundary.
+    const level = r.u16(), dxRaw = r.i64(), dyRaw = r.i64()
+    // BOTH FORMS. The number positions the mesh; the raw fx repositions the
+    // BODY when this level is the one being entered, and a seam that rounded
+    // that would put the player a fraction of a unit from where the server
+    // says they are -- on every crossing, as a misprediction.
+    const msg = { type, level, dxRaw, dyRaw,
+                  dx: fxToNumber(dxRaw), dy: fxToNumber(dyRaw) }
+    return r.ok ? msg : null
+  }
+  if (type === MSG.NEIGHBOUR_MOVE) {
+    const level = r.u16(), dxRaw = r.i64(), dyRaw = r.i64()
+    const msg = { type, level, dxRaw, dyRaw,
+                  dx: fxToNumber(dxRaw), dy: fxToNumber(dyRaw) }
+    return r.ok ? msg : null
+  }
+  if (type === MSG.NEIGHBOUR_DROP) {
+    const msg = { type, level: r.u16() }
     return r.ok ? msg : null
   }
   if (type === MSG.MAP_DATA) {

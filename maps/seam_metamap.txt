@@ -1,0 +1,14 @@
+# Three cells for server/edge/test/seam.test.js.
+#
+# The pitch is what composes them: seam_b's origin is one pitch east of
+# seam_a's, so seam_a's stub ending at local x = 40 and seam_b's beginning at
+# local x = 0 are the same line in world coordinates.
+pitch 40 40
+radius 1
+
+cell 0 0 seam_a
+cell 1 0 seam_b
+# Within a radius of 1 of BOTH, so crossing between them RETAINS it. Two cells
+# alone could never show that a held neighbour is re-stated rather than re-sent,
+# because with two every crossing swaps self and neighbour and keeps nothing.
+cell 1 1 seam_c

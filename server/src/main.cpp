@@ -55,7 +55,11 @@ constexpr auto TICK_PERIOD = std::chrono::nanoseconds(1'000'000'000 / sim::TICK_
 
 // Chunk size for MAP_DATA. Well under the link frame cap, and small enough that
 // a slow client does not stall behind one enormous write.
-constexpr size_t MAP_CHUNK_BYTES = 8192;
+//
+// Settable (--map-chunk) for TESTS ONLY: the seam fixture's maps are under a
+// kilobyte, and a fault that needs a map to span several chunks -- "chunk out
+// of order (expected 0, got 65536)" was one -- does not reproduce in one.
+static size_t MAP_CHUNK_BYTES = 8192;
 
 // One map, and everything that exists per map.
 //
@@ -757,6 +761,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                 unload_level(i);
             }
         }
+
+        // WHOSE VIEW JUST CHANGED. A level coming or going is somebody else's
+        // doing -- they walked into a cell, or out of the last one keeping a
+        // map resident -- so the observers who can see it have to be told
+        // without any of them having moved. A diff in both directions, so a
+        // pass where nothing changed sends nothing.
+        for (auto& [sid, sess] : sessions) {
+            if (!sess.hello_done) continue;
+            sync_neighbours(sess, sid);
+        }
     }
 
     // How much of the map a standard body can walk to from the spawn.
@@ -808,6 +822,17 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
     }
 
+    // The four-byte length prefix every control frame starts with, written once
+    // the body's size is known. send_map did this inline and was the only
+    // sender that needed it; it is now three.
+    static void finish_frame(u8* msg, size_t len_pos, size_t end) {
+        const u32 body = static_cast<u32>(end - len_pos - 4);
+        msg[len_pos]     = static_cast<u8>(body & 0xFF);
+        msg[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
+        msg[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
+        msg[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+    }
+
     void send_map(Level& L, u32 id) {
         const std::vector<u8>& map_bytes = L.map_bytes;
         if (map_bytes.empty()) return;
@@ -824,14 +849,87 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             w.u32v(static_cast<u32>(off));
             w.bytes(map_bytes.data() + off, n);
             const size_t end = w.size();
-            const u32 body = static_cast<u32>(end - len_pos - 4);
-            msg[len_pos]     = static_cast<u8>(body & 0xFF);
-            msg[len_pos + 1] = static_cast<u8>((body >> 8) & 0xFF);
-            msg[len_pos + 2] = static_cast<u8>((body >> 16) & 0xFF);
-            msg[len_pos + 3] = static_cast<u8>((body >> 24) & 0xFF);
+            finish_frame(msg.data(), len_pos, end);
             link.send_control(id, msg.data(), end);
         }
     }
+
+    // WHAT THIS OBSERVER SHOULD BE ABLE TO SEE ACROSS ITS OWN CELL BOUNDARY.
+    //
+    // Every live level within the metamap's radius of the one it is standing
+    // in, itself excluded. An unplaced level has no neighbours and is nobody's
+    // neighbour -- `on_grid` is false and the Chebyshev test below never runs
+    // for it -- so a server with no metamap produces an empty set here for
+    // everybody, which is exactly the behaviour that existed before.
+    void neighbours_of(u32 li, std::vector<u32>& out) const {
+        out.clear();
+        if (li >= levels.size()) return;
+        const server::world::LevelCell& home = levels[li].cell;
+        if (!home.on_grid) return;
+        const i32 r = static_cast<i32>(meta.radius);
+        for (u32 i = 0; i < levels.size(); ++i) {
+            if (i == li || !levels[i].live) continue;
+            const server::world::LevelCell& c = levels[i].cell;
+            if (!c.on_grid) continue;
+            // Chebyshev, the same shape residency() keeps resident. Using a
+            // different one here would mean drawing a level that is not loaded
+            // or loading one that is never drawn.
+            const i32 dx = c.x - home.x, dy = c.y - home.y;
+            if ((dx < 0 ? -dx : dx) <= r && (dy < 0 ? -dy : dy) <= r) out.push_back(i);
+        }
+    }
+
+    // SEND WHAT CHANGED, and nothing else.
+    //
+    // A map is tens of kilobytes; re-sending the same eight every time a player
+    // walks through a door would be a megabyte of reliable traffic for a view
+    // that did not change. So this is the set difference between what the
+    // session holds and what it should (world/neighbours.hpp), in both
+    // directions.
+    //
+    // RUNS WITHOUT A PITCH TOO. Nothing is then wanted -- there is no offset a
+    // neighbour could be drawn at -- but the level just left is still held, by
+    // the rule, until it is dropped. Skipping the diff would leave every level
+    // a player had ever visited held on both sides for the rest of the session.
+    void sync_neighbours(Session& s, u32 id) {
+        std::vector<server::world::WantedLevel> want;
+        if (meta.pitch_x.raw != 0 || meta.pitch_y.raw != 0) {
+            std::vector<u32> near;
+            neighbours_of(s.level, near);
+            const fx2 home = origin_of(s.level);
+            for (const u32 li : near) {
+                const fx2 o = origin_of(li);
+                // RELATIVE, and that is the whole reason the client never needs
+                // to know its own cell: it draws the neighbour at a translation.
+                want.push_back(server::world::WantedLevel{li, (o.x - home.x).raw, (o.y - home.y).raw});
+            }
+        }
+        for (const auto& m : server::world::diff_neighbours(s.held, want, s.level)) {
+            u8 msg[32];
+            ByteWriter w(msg, sizeof(msg));
+            const size_t len_pos = w.mark();
+            w.u32v(0);
+            if (m.say == server::world::NeighbourSay::Drop) {
+                w.u8v(proto::MSG_NEIGHBOUR_DROP);
+                w.u16v(static_cast<u16>(m.level));
+            } else {
+                // A MOVE for a level already held: walking one cell changes
+                // where the cells around you are far more than which ones they
+                // are, and the client has those built.
+                w.u8v(m.say == server::world::NeighbourSay::Move ? proto::MSG_NEIGHBOUR_MOVE
+                                                                   : proto::MSG_NEIGHBOUR_MAP);
+                w.u16v(static_cast<u16>(m.level));
+                w.i64v(m.dx);
+                w.i64v(m.dy);
+            }
+            finish_frame(msg, len_pos, w.size());
+            link.send_control(id, msg, w.size());
+            // Immediately after the selector, which is what makes the stream
+            // that follows unambiguous on a reliable ordered channel.
+            if (m.say == server::world::NeighbourSay::Map) send_map(*levels[m.level].live, id);
+        }
+    }
+
     std::map<u32, Session> sessions;   // ordered: iteration order must not vary
 
     // How many level-ticks were skipped because nobody was in them. A counter
@@ -851,8 +949,33 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // drift, and the way they would drift is that the second one forgets a
     // message and the symptom is a client predicting against the wrong map.
     //
+    // HOW A BODY ARRIVES, when it is not arriving at a spawn point.
+    //
+    // A player walking across a seam is not respawning: they keep the speed
+    // they were carrying, the direction they were looking, and the exact place
+    // they were standing -- expressed in the new level's own coordinates. A
+    // spawn tag would put them somewhere else entirely and stop them dead,
+    // which is what "seamless" is the opposite of.
+    struct Arrival {
+        bool exact = false;
+        fx3  pos{};
+        fx3  vel{};
+        brad facing{};
+    };
+
     // Returns false only when the target level is full.
+    // The default is a plain arrival at the spawn. Written as a named constant
+    // rather than a default-constructed temporary in the signature, because a
+    // default member initialiser is not available inside the class that owns
+    // the type.
+    static const Arrival& at_spawn() {
+        static const Arrival a{};
+        return a;
+    }
     bool place_in_level(Session& s, u32 id, u32 li) {
+        return place_in_level(s, id, li, at_spawn());
+    }
+    bool place_in_level(Session& s, u32 id, u32 li, const Arrival& at) {
         if (li >= level_count()) {
             std::fprintf(stderr, "[srv] session %u: level %u does not exist\n", id, li);
             return false;
@@ -872,6 +995,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             return false;
         }
         Level& L = level(li);
+        // The level this client's home map is, before this changes it.
+        const u32  from_level = s.level;
+        const bool had_home   = s.has_home;
 
         // Leave the old one first. A player who has moved on must stop
         // occupying a slot in the map they left -- otherwise their body stands
@@ -899,9 +1025,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             s.reset_input();
         }
 
-        const fx3 spawn_pos = L.map_bytes.empty()
-            ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
-            : L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len);
+        const fx3 spawn_pos =
+            at.exact ? at.pos
+                     : (L.map_bytes.empty()
+                            ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
+                            : L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len));
         const u32 agent = L.world.spawn(spawn_pos);
         if (agent >= sim::MAX_AGENTS) {
             std::fprintf(stderr, "[srv] session %u: level %u has no free body slot\n", id, li);
@@ -911,7 +1039,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // Full health on arrival, including on a map change: a slot is reused
         // as players come and go, and inheriting the last occupant's health
         // would be a bug that only shows up on a busy server.
-        L.hp[agent] = 100;
+        //
+        // EXCEPT ACROSS A SEAM, where nothing happened: a player who walked
+        // three feet has not been healed, and a corridor that restores you to
+        // full is a corridor people walk back and forth along.
+        if (!at.exact) L.hp[agent] = 100;
+        else {
+            sim::AgentState& body = L.world.agent_mut(agent);
+            body.vel = at.vel;
+            body.facing = at.facing;
+        }
 
         // The body the MAP is built for, before anything captures this agent's
         // parameters as its base.
@@ -939,6 +1076,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // entities against the last one's.
         s.forget_history();
 
+        // WHETHER THE MAP FOLLOWS. Not if the client holds it already, which by
+        // the rule in world/neighbours.hpp it does exactly when this level is
+        // in `held` -- and the level just left joins `held` here, because its
+        // map was this client's home map until a moment ago.
+        const bool map_follows = !server::world::rehome(s.held, had_home, from_level, li);
+        s.has_home = true;
+
         u8 buf[128];
         ByteWriter w(buf, sizeof(buf));
         const size_t len_pos = w.mark();
@@ -951,6 +1095,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         w.u32v(L.world.tick());
         w.u32v(proto::Handle::make(agent + 1, L.world.generation(agent)).raw);
         w.u64v(L.map_hash);
+        // Appended, so a reader of the older layout still reads the rest.
+        w.u16v(static_cast<u16>(li));
+        w.u8v(map_follows ? 1 : 0);
+        // Whether the body arrived where it was, in this level's words (a seam),
+        // or at a spawn point. The client places itself the same way; without
+        // this it has to guess, and an exit into an adjacent level looks like a
+        // crossing.
+        w.u8v(at.exact ? 1 : 0);
+        // WHERE the body is, in this level's coordinates, on this tick. The
+        // client prefers its own continuation of the body it was predicting,
+        // which is ahead of this by its lead; when that lands in no sector --
+        // it had not quite reached the boundary the server crossed -- this is
+        // the answer, and a spawn point never is.
+        {
+            const fx3 p = L.world.agent(agent).pos;
+            w.i64v(p.x.raw);
+            w.i64v(p.y.raw);
+            w.i64v(p.z.raw);
+        }
         const size_t end = w.size();
         const u32 body_len = static_cast<u32>(end - len_pos - 4);
         buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -959,11 +1122,21 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         buf[len_pos + 3] = static_cast<u8>((body_len >> 24) & 0xFF);
         link.send_control(id, buf, end);
 
-        // The map follows WELCOME immediately. A client must not start
-        // predicting before it lands (docs/protocol.md 8.0) -- physics against
-        // no geometry is wrong on every tick, and the corrections would arrive
-        // as a burst of mispredictions explained nowhere near the symptom.
-        send_map(L, id);
+        // The map follows WELCOME immediately, unless the client holds it. A
+        // client must not start predicting before it has it (docs/protocol.md
+        // 8.0) -- physics against no geometry is wrong on every tick.
+        //
+        // This used to be sent ALWAYS, because skipping it made correctness
+        // depend on the server's belief about the client's bookkeeping, and
+        // that belief was wrong three times in three ways. It is not a belief
+        // any more: holding is defined by the protocol (world/neighbours.hpp),
+        // both sides keep to it, and server/tests/test_neighbours.cpp tests it.
+        if (map_follows) send_map(L, id);
+
+        // THEN THE CELLS AROUND IT, including the level just left, which is
+        // held and has no offset from this one yet. After this level's own map
+        // because that is the one everything else is measured from.
+        sync_neighbours(s, id);
         // Motion parameters follow the map. Parametric movers cost nothing
         // after this; the client computes them for any tick. A door already
         // open when you arrive is one of these.
@@ -1880,6 +2053,96 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         pending_changes.push_back(MapChange{from_level, agent, target});
     }
 
+    // WHERE A LEVEL'S OWN COORDINATES SIT IN THE WORLD.
+    //
+    // Zero for a level off the grid and zero for every level when the metamap
+    // declares no pitch, which is the same answer and means the same thing:
+    // this map's coordinates ARE world coordinates, and there is no seam to
+    // cross because there is nothing beside it.
+    fx2 origin_of(u32 li) const {
+        if (li >= levels.size()) return fx2{};
+        return server::world::cell_origin(levels[li].cell, meta.pitch_x, meta.pitch_y);
+    }
+
+    struct SeamCrossing {
+        u32  session;
+        u32  to_level;
+        fx3  pos;      // in the destination's own coordinates
+        fx3  vel;
+        brad facing;
+    };
+    std::vector<SeamCrossing> pending_seams;
+
+    // A BODY THAT HAS WALKED OUT OF ITS CELL BELONGS TO THE NEXT ONE.
+    //
+    // Checked after every level has stepped and before anything is sent, so a
+    // player never appears in a snapshot standing outside the world their
+    // coordinates are expressed in.
+    //
+    // PLAYERS ONLY. A monster belongs to the level it was placed in -- its mob
+    // record, its target and its nav graph all live there -- and handing one
+    // across would mean moving a mind as well as a body. What a neighbouring
+    // level's monsters do about somebody standing on the far side of a seam is
+    // the question after this one.
+    void collect_seam_crossings() {
+        if (meta.pitch_x <= fx::zero() || meta.pitch_y <= fx::zero()) return;
+        for (auto& [id, s] : sessions) {
+            if (!s.has_agent || !is_live(s.level)) continue;
+            const LevelSlot& from = levels[s.level];
+            if (!from.cell.on_grid) continue;
+
+            const fx2 origin = origin_of(s.level);
+            const sim::AgentState& a = level(s.level).world.agent(s.agent);
+            if (!a.active) continue;
+            const fx wx = a.pos.x + origin.x;
+            const fx wy = a.pos.y + origin.y;
+            const i32 cx = server::world::cell_index(wx, meta.pitch_x);
+            const i32 cy = server::world::cell_index(wy, meta.pitch_y);
+            if (cx == from.cell.x && cy == from.cell.y) continue;
+
+            i32 to = -1;
+            for (u32 i = 0; i < levels.size(); ++i) {
+                if (levels[i].cell.on_grid && levels[i].cell.x == cx && levels[i].cell.y == cy) {
+                    to = static_cast<i32>(i);
+                    break;
+                }
+            }
+            if (to < 0) continue;   // walked into empty space; the map will stop them
+
+            // The SAME POINT, said in the destination's coordinates. A seam is
+            // a change of frame and nothing else, which is what makes it
+            // invisible: subtract one origin, add the other.
+            const fx2 dest = origin_of(static_cast<u32>(to));
+            pending_seams.push_back(SeamCrossing{
+                id, static_cast<u32>(to),
+                fx3{wx - dest.x, wy - dest.y, a.pos.z},
+                a.vel, a.facing});
+        }
+    }
+
+    void apply_seam_crossings() {
+        if (pending_seams.empty()) return;
+        for (const SeamCrossing& c : pending_seams) {
+            auto it = sessions.find(c.session);
+            if (it == sessions.end() || !it->second.has_agent) continue;
+            Arrival at;
+            at.exact = true;
+            at.pos = c.pos;
+            at.vel = c.vel;
+            at.facing = c.facing;
+            const u32 was = it->second.level;
+            if (!place_in_level(it->second, c.session, c.to_level, at)) {
+                std::fprintf(stderr, "[srv] session %u could not cross into level %u\n",
+                             c.session, c.to_level);
+                continue;
+            }
+            std::fprintf(stderr, "[srv] session %u crossed the seam: level %u -> %u\n",
+                         c.session, was, c.to_level);
+        }
+        pending_seams.clear();
+        refresh_residency();
+    }
+
     void apply_map_changes() {
         if (pending_changes.empty()) return;
         for (const MapChange& c : pending_changes) {
@@ -2009,6 +2272,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // iterating. It also keeps the rule the command queue already follows:
         // scripts ask, and the ask lands at a defined point.
         apply_map_changes();
+        collect_seam_crossings();
+        apply_seam_crossings();
     }
 
     // Transients are cleared AFTER sending, not once a tick.
@@ -2491,6 +2756,9 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "[srv] too many --map arguments\n"); return 2; }
         } else if (std::strcmp(argv[i], "--metamap") == 0 && i + 1 < argc) {
             metamap_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--map-chunk") == 0 && i + 1 < argc) {
+            const long n = std::atol(argv[++i]);
+            MAP_CHUNK_BYTES = n < 64 ? 64 : static_cast<size_t>(n);
         } else if (std::strcmp(argv[i], "--spawn") == 0 && i + 1 < argc) {
             spawn_tag_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--param-test") == 0) {

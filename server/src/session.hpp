@@ -6,6 +6,7 @@
 #include <vector>
 #include "dnp/proto/messages.hpp"
 #include "snapshot_history.hpp"
+#include "world/neighbours.hpp"
 
 namespace dnp::server {
 
@@ -111,6 +112,21 @@ public:
         for (auto& p : open_ui) if (p.ui_id == ui_id) return &p;
         return nullptr;
     }
+
+    // WHICH LEVELS THIS CLIENT HOLDS THE MAP OF, besides the one it is in.
+    //
+    // By the rule in world/neighbours.hpp: from the moment a map starts
+    // streaming to it until a NEIGHBOUR_DROP. So this is not the server's guess
+    // about the client's bookkeeping; it is the protocol's definition of it,
+    // and the client keeps to the same one.
+    //
+    // NOT cleared on a level change. The level left joins it, the level entered
+    // leaves it (world::rehome), and the next diff re-states every offset,
+    // since each was relative to the home just left.
+    std::vector<world::HeldLevel> held;
+    // Whether a WELCOME has ever been sent, and so whether `level` names a map
+    // this client holds. False only before the first placement.
+    bool has_home = false;
 
     // What this client has been sent, for delta encoding (docs/protocol.md 5.3).
     SnapshotHistory history;
@@ -242,6 +258,43 @@ public:
             if (t > world_tick + INPUT_RING) { ++stale_world_frames; continue; }
 
             if (!started_) { next_tick_ = t; started_ = true; }
+
+            // THE CLIENT'S CLOCK MOVED, AND IT IS ALLOWED TO.
+            //
+            // On a map change the client builds a fresh predictor whose input
+            // tick starts at zero, while this ring has just been re-seeded by a
+            // bundle still in flight from before the change -- stamped in the
+            // thousands. Every frame after that is older than what the ring is
+            // waiting for, so every one is dropped below, and take() goes on
+            // repeating the last frame it ever applied: the direction the
+            // player was holding when they crossed. Fixed heading, no control,
+            // until something else resyncs. Reported exactly that way, for a
+            // long time, and not a seam bug -- it is every map change.
+            //
+            // The stale-bundle guard cannot catch it. That asks whether a
+            // bundle acknowledges a snapshot from a world this one has not
+            // reached, and every level shares one clock now, so it has.
+            //
+            // A WHOLE RING BEHIND IS NOT A STRAGGLER. A late frame is a few
+            // ticks old; nothing legitimate is a hundred and twenty-eight
+            // behind what this buffer wants. So that is read as what it is --
+            // the client counting from somewhere else -- and the buffer follows
+            // it rather than going deaf. The same depth the check below uses to
+            // reject frames too far AHEAD, for the same reason: it is the only
+            // scale on which this buffer has an opinion.
+            //
+            // Fixed here rather than by keeping the client's tick continuous:
+            // that was tried, and a tick carried across while the world's was
+            // reset leaves reconciliation replaying ticks whose inputs the new
+            // predictor never had.
+            if (t + INPUT_RING < next_tick_) {
+                for (u32 k = 0; k < INPUT_RING; ++k) have_[k] = false;
+                next_tick_ = t;
+                newest_input_tick = t;
+                consecutive_starves_ = 0;
+                last_applied_frame_ = proto::InputFrame{};
+                ++clock_resyncs;
+            }
             // Too old to matter, or so far ahead it would wrap the ring and
             // overwrite input we have not consumed yet.
             if (t < next_tick_ || t >= next_tick_ + INPUT_RING) continue;

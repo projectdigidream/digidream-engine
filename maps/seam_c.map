@@ -1,0 +1,21 @@
+# A THIRD CELL THAT NOBODY WALKS INTO.
+#
+# It sits diagonally from seam_a at (1,1) and orthogonally from seam_b, so it is
+# within a radius of 1 of BOTH: an observer in either holds it, and walking from
+# one to the other must not make the server send it again.
+#
+# That is the whole reason it exists. With only two cells every crossing swaps
+# self and neighbour, nothing is retained, and "a held neighbour is re-stated
+# rather than re-sent" has nothing to be true of. See server/edge/test/seam.test.js.
+#
+# No stub and no seam: it is never entered and never walked out of.
+body radius 0.3333 height 1.1667
+
+sector floor 0 ceil 8 floortex FLOOR1 ceiltex CEIL1
+  vertex 10 10 wall tex WALL1
+  vertex 30 10 wall tex WALL1
+  vertex 30 30 wall tex WALL1
+  vertex 10 30 wall tex WALL1
+end
+
+spawn start 20 20 1

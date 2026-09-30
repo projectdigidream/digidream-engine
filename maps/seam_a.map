@@ -1,0 +1,30 @@
+# The west half of a seam, for server/edge/test/seam.test.js.
+#
+# A room and a corridor that ENDS AT THE CELL BOUNDARY. The map is laid out in
+# its own coordinates inside [0, 40) -- the pitch its metamap declares -- and
+# the engine adds the cell origin, so local x = 40 here is the same line as
+# local x = 0 in the cell to the east.
+#
+# The last edge is `open` and not `wall`: the sector simply ends. A body walks
+# off it and the server hands it to the next level on the same tick.
+body radius 0.3333 height 1.1667
+
+# 0: the room
+sector floor 0 ceil 8 floortex FLOOR1 ceiltex CEIL1
+  vertex  2 10 wall tex WALL1
+  vertex 20 10 wall tex WALL1
+  vertex 20 18 neighbor 1
+  vertex 20 22 wall tex WALL1
+  vertex 20 30 wall tex WALL1
+  vertex  2 30 wall tex WALL1
+end
+
+# 1: the stub, out to the boundary
+sector floor 0 ceil 6 floortex FLOOR1 ceiltex CEIL1
+  vertex 20 22 neighbor 0
+  vertex 20 18 wall tex WALL1
+  vertex 40 18 open
+  vertex 40 22 wall tex WALL1
+end
+
+spawn start 6 20 1

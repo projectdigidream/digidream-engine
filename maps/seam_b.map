@@ -1,0 +1,25 @@
+# The east half of the same seam. See maps/seam_a.map.
+#
+# Its stub BEGINS at local x = 0, which is where its neighbour's ends: the two
+# never see each other and meet because they aim at the same coordinates.
+body radius 0.3333 height 1.1667
+
+# 0: the stub, from the boundary
+sector floor 0 ceil 6 floortex FLOOR1 ceiltex CEIL1
+  vertex  0 22 open
+  vertex  0 18 wall tex WALL1
+  vertex 20 18 neighbor 1
+  vertex 20 22 wall tex WALL1
+end
+
+# 1: the room
+sector floor 0 ceil 8 floortex FLOOR1 ceiltex CEIL1
+  vertex 20 10 wall tex WALL1
+  vertex 38 10 wall tex WALL1
+  vertex 38 30 wall tex WALL1
+  vertex 20 30 wall tex WALL1
+  vertex 20 22 neighbor 0
+  vertex 20 18 wall tex WALL1
+end
+
+spawn start 34 20 1

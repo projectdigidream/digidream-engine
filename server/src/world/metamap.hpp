@@ -115,6 +115,17 @@ struct LevelCell {
 // ARE world coordinates.
 fx2 cell_origin(const LevelCell& c, fx pitch_x, fx pitch_y) noexcept;
 
+// WHICH CELL A WORLD COORDINATE FALLS IN.
+//
+// FLOORED, not truncated, and the difference is every cell left of or below the
+// origin: C++ integer division rounds toward zero, so a body one unit into cell
+// -1 would be said to be in cell 0 -- and a player walking west would be handed
+// back to the level they were leaving, on every tick, for ever.
+//
+// A pitch of zero means the cells are not composed in world space, and the
+// answer is cell zero: there is one frame and everything is in it.
+i32 cell_index(fx v, fx pitch) noexcept;
+
 // WHICH LEVELS MUST BE RESIDENT.
 //
 // A level is wanted if somebody is in it, or if it is within `radius` cells of

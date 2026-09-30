@@ -268,6 +268,63 @@ static void test_nobody_anywhere_keeps_nothing() {
     CHECK(count(want) == 0);
 }
 
+// --- which cell a point is in ------------------------------------------------
+
+static void test_a_point_knows_its_cell() {
+    std::printf("metamap: a world coordinate knows which cell it is in\n");
+
+    const fx p = fx::from_int(64);
+    CHECK(cell_index(fx::from_int(0), p) == 0);
+    CHECK(cell_index(fx::from_int(63), p) == 0);
+    CHECK(cell_index(fx::from_int(64), p) == 1);
+    CHECK(cell_index(fx::from_int(200), p) == 3);
+
+    // NEGATIVE, and this is the whole reason it is a function rather than a
+    // division at the call site. C++ rounds toward zero, so a body one unit
+    // west of the origin would be said to be in cell 0 -- and a player walking
+    // west would be handed back to the level they were leaving, every tick,
+    // for ever.
+    CHECK(cell_index(fx::from_frac(-1, 1), p) == -1);
+    CHECK(cell_index(fx::from_int(-63), p) == -1);
+    CHECK(cell_index(fx::from_int(-64), p) == -1);
+    CHECK(cell_index(fx::from_int(-65), p) == -2);
+    // CONTROL: truncation would answer 0 for the first three of those, so the
+    // assertions above are about the floor and not about the arithmetic
+    // happening at all.
+    CHECK(static_cast<i32>(fx::from_frac(-1, 1).raw / p.raw) == 0);
+
+    // A fraction of a unit either side of a boundary lands on the right side.
+    CHECK(cell_index(fx::from_frac(-1, 1000), p) == -1);
+    CHECK(cell_index(fx::from_frac(1, 1000), p) == 0);
+
+    // No pitch is one frame with everything in it.
+    CHECK(cell_index(fx::from_int(-500), fx::zero()) == 0);
+}
+
+// A seam is a change of FRAME and nothing else, which is what makes it
+// invisible: the same world point, said in the next cell's coordinates.
+static void test_a_seam_is_a_change_of_frame() {
+    std::printf("metamap: crossing a seam is the same point in other words\n");
+
+    const fx p = fx::from_int(64);
+    LevelCell a; a.on_grid = true; a.x = 0; a.y = 0;
+    LevelCell b; b.on_grid = true; b.x = 1; b.y = 0;
+
+    // Standing at 63.5 in A's coordinates is half a unit past the boundary.
+    const fx local = fx::from_frac(127, 2);
+    const fx2 oa = cell_origin(a, p, p);
+    const fx2 ob = cell_origin(b, p, p);
+    const fx world = local + oa.x;
+    CHECK(cell_index(world, p) == 0);
+
+    const fx past = fx::from_frac(129, 2) + oa.x;     // 64.5 in A's frame
+    CHECK(cell_index(past, p) == 1);
+    const fx in_b = past - ob.x;
+    CHECK(in_b == fx::from_frac(1, 2));
+    // And it is reversible, or the crossing would drift by a hair per seam.
+    CHECK(in_b + ob.x - oa.x == fx::from_frac(129, 2));
+}
+
 int main() {
     std::printf("== the metamap ==\n");
     test_a_world_is_read();
@@ -279,6 +336,8 @@ int main() {
     test_the_diagonal_counts();
     test_a_level_off_the_grid_still_loads();
     test_nobody_anywhere_keeps_nothing();
+    test_a_point_knows_its_cell();
+    test_a_seam_is_a_change_of_frame();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

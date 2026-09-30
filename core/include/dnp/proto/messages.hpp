@@ -54,6 +54,37 @@ inline constexpr u8 MSG_MUSIC = 0x26;
 // §11.1). For cinematics. Not simulation state -- never hashed, never
 // predicted, and client-local in exactly the sense the camera is.
 inline constexpr u8 MSG_SCREEN_SET = 0x27;
+// THE LEVEL NEXT DOOR, and where it sits relative to this one.
+//
+// A metamap composes levels in world space, and a corridor ending at a cell
+// boundary is the same line as its neighbour's. Without this the observer sees
+// their own cell and nothing else: a passage that leads into black, and then a
+// level change that arrives like a cut. What makes a seam a seam is that the
+// far side was already on screen.
+//
+// Sent immediately BEFORE that neighbour's MAP_DATA chunks, which is what makes
+// this work without a level id on every chunk: the control channel is reliable
+// and ordered, so the stream that follows is unambiguously this one's. The
+// observer's OWN map is still sent with no selector at all, so a server with no
+// metamap emits exactly the bytes it emitted before.
+//
+// The offset is the neighbour's cell origin MINUS this observer's, so a client
+// draws it at a translation and never has to know where in the world it is
+// standing. Purely renderer-side: it is not simulation state, the client does
+// not collide with it, and crossing the seam is still the server's decision.
+inline constexpr u8 MSG_NEIGHBOUR_MAP  = 0x28;
+// That neighbour is no longer resident, or is no longer a neighbour. The client
+// drops its geometry. Not an error to receive for a level never sent.
+inline constexpr u8 MSG_NEIGHBOUR_DROP = 0x29;
+// That neighbour is still a neighbour, and has MOVED relative to this observer.
+//
+// Which is what every crossing does to most of them: walking one cell east
+// changes the offset of all nine and the membership of only three. Re-sending
+// the geometry for a level the client already holds would make a seam the most
+// expensive thing in the game -- nine maps and nine meshes rebuilt to walk
+// through a doorway, which is precisely the loading screen a seam exists to
+// abolish. Twenty bytes instead.
+inline constexpr u8 MSG_NEIGHBOUR_MOVE = 0x2A;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
