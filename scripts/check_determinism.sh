@@ -93,7 +93,9 @@ for arch in arm64 x86_64; do
   if clang++ "${FLAGS[@]}" -arch "$arch" "${SRCS[@]}" -o "$WORK/gt_$arch" 2>/dev/null; then
     assert_lua_free "native-$arch" "$WORK/gt_$arch"
     if "$WORK/gt_$arch" 1 >/dev/null 2>&1; then
-      "$WORK/gt_$arch" "$TICKS" > "$WORK/trace_$arch.txt"
+      # The chunk trace first (maps added and removed from a running world),
+      # then the main one, so the last line is still the main trace's final.
+      { "$WORK/gt_$arch" --chunks; "$WORK/gt_$arch" "$TICKS"; } > "$WORK/trace_$arch.txt"
       emit "native-$arch" "$WORK/trace_$arch.txt"
     else
       echo "  skip native-$arch (builds, but cannot execute here)"
@@ -118,7 +120,7 @@ if command -v em++ >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
     echo "  FAIL wasm32 contains Lua. The browser client must never link it."
     LUA_LEAKED=1
   fi
-  node "$WORK/gt_wasm.js" "$TICKS" > "$WORK/trace_wasm.txt"
+  { node "$WORK/gt_wasm.js" --chunks; node "$WORK/gt_wasm.js" "$TICKS"; } > "$WORK/trace_wasm.txt"
   emit "wasm32" "$WORK/trace_wasm.txt"
 else
   echo "  skip wasm32 (emsdk not installed -- run scripts/setup_emsdk.sh)"

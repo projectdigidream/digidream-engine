@@ -65,6 +65,8 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_props.cpp"        -o "
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_bodies.cpp"       -o "$OUT/test_bodies"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sweep.cpp"        -o "$OUT/test_sweep"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sight.cpp"        -o "$OUT/test_sight"
+# Several maps in one store, joined at their open edges, added and removed live.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_chunks.cpp"       -o "$OUT/test_chunks"
 # The metamap: where each level sits, and what that means has to be resident.
 #
 # Built HERE rather than beside the Lua tests because it needs neither LuaJIT nor

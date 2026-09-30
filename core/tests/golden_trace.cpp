@@ -447,6 +447,102 @@ u64 world_hash(const World& w) {
 
 }  // namespace
 
+// --- --chunks: maps added to and removed from a running world ---------------
+//
+// Two maps joined at their open ends (geom::MapStorage::add_chunk), bodies
+// walking across the join on pseudo-random input, and the second map removed
+// and added back into different slots while they do. Every tick's world hash is
+// printed, and the gate compares the stream across targets exactly as it does
+// the main trace: a join, a removal or a re-add that one target computed
+// differently shows up on the tick it happened.
+namespace chunks {
+
+using namespace dnp::geom;
+constexpr fx F(i64 n) { return fx::from_int(n); }
+
+void build(MapStorage& m, bool east_room) {
+    m.clear();
+    if (!east_room) {
+        const fx2 room[] = {{F(0), F(10)}, {F(20), F(10)}, {F(20), F(18)}, {F(20), F(22)},
+                            {F(20), F(30)}, {F(0), F(30)}};
+        const fx2 hall[] = {{F(20), F(18)}, {F(40), F(18)}, {F(40), F(22)}, {F(20), F(22)}};
+        m.add_sector(room, 6, F(0), F(8), 0);
+        m.add_sector(hall, 4, F(0), F(8), 0);
+        const i32 room_n[] = {NO_SECTOR, NO_SECTOR, 1, NO_SECTOR, NO_SECTOR, NO_SECTOR};
+        for (u16 k = 0; k < 6; ++k) m.add_side(0, k, static_cast<u16>((k + 1) % 6), room_n[k], 0);
+        m.add_side(1, 0, 1, NO_SECTOR, 0);
+        m.add_side(1, 1, 2, NO_SECTOR, side_flag::LEDGE);
+        m.add_side(1, 2, 3, NO_SECTOR, 0);
+        m.add_side(1, 3, 0, 0, 0);
+    } else {
+        const fx2 hall[] = {{F(0), F(18)}, {F(20), F(18)}, {F(20), F(22)}, {F(0), F(22)}};
+        const fx2 room[] = {{F(20), F(10)}, {F(40), F(10)}, {F(40), F(30)}, {F(20), F(30)},
+                            {F(20), F(22)}, {F(20), F(18)}};
+        m.add_sector(hall, 4, F(0), F(8), 0);
+        m.add_sector(room, 6, F(0), F(8), 0);
+        m.add_side(0, 0, 1, NO_SECTOR, 0);
+        m.add_side(0, 1, 2, 1, 0);
+        m.add_side(0, 2, 3, NO_SECTOR, 0);
+        m.add_side(0, 3, 0, NO_SECTOR, side_flag::LEDGE);
+        const i32 room_n[] = {NO_SECTOR, NO_SECTOR, NO_SECTOR, NO_SECTOR, 0, NO_SECTOR};
+        for (u16 k = 0; k < 6; ++k) m.add_side(1, k, static_cast<u16>((k + 1) % 6), room_n[k], 0);
+    }
+    m.rebuild_grid();
+}
+
+MapStorage g_a, g_b, g_store;
+sim::World g_w;
+MapData    g_view;
+
+int run(int ticks) {
+    build(g_a, false);
+    build(g_b, true);
+    g_store.clear();
+    g_store.add_chunk(0, g_a, fx2{F(0), F(0)});
+    g_store.add_chunk(1, g_b, fx2{F(40), F(0)});
+    g_w.reset();
+    g_view = g_store.view();
+    g_w.set_map_storage(&g_store);
+    g_w.set_map(&g_view);
+    u32 bodies[4];
+    for (u32 i = 0; i < 4; ++i) bodies[i] = g_w.spawn(fx3{F(4 + 4 * static_cast<i64>(i)), F(20), F(1)});
+
+    u32 lcg = 12345u;   // integer-only, identical on every target
+    const auto next = [&lcg]() { lcg = lcg * 1664525u + 1013904223u; return lcg >> 8; };
+    for (int t = 0; t < ticks; ++t) {
+        // Mostly east, sometimes back: the bodies cross the join both ways.
+        for (u32 i = 0; i < 4; ++i) {
+            proto::InputFrame f;
+            const u32 r = next();
+            f.move_x = static_cast<i16>((r % 5 == 0) ? -32767 : 32767);
+            f.move_y = static_cast<i16>(static_cast<i32>(next() % 16384) - 8192);
+            g_w.set_input(bodies[i], f);
+        }
+        if (t == ticks / 3) {
+            // B goes, and something else takes its slots before it returns.
+            const Chunk* b = g_store.find_chunk(1);
+            const u32 first = b->sectors.first, count = b->sectors.count;
+            g_store.remove_chunk(1);
+            g_w.motions().forget_sectors(first, count);
+            g_store.add_chunk(7, g_a, fx2{F(400), F(0)});
+            g_view = g_store.view();
+        }
+        if (t == ticks / 2) {
+            g_store.add_chunk(1, g_b, fx2{F(40), F(0)});
+            g_view = g_store.view();
+        }
+        g_w.step();
+        StateHasher h;
+        h.u64v(g_w.hash());
+        h.u32v(g_store.stitch_count());
+        h.u32v(g_store.sector_count());
+        std::printf("chunks %d %016llX\n", t, static_cast<unsigned long long>(h.value()));
+    }
+    return 0;
+}
+
+}  // namespace chunks
+
 int main(int argc, char** argv) {
     int  ticks    = 10000;
     bool summary  = false;
@@ -457,6 +553,8 @@ int main(int argc, char** argv) {
             summary = true;
         } else if (std::strcmp(argv[i], "--coverage") == 0) {
             coverage = true;
+        } else if (std::strcmp(argv[i], "--chunks") == 0) {
+            return chunks::run(i + 1 < argc ? std::atoi(argv[i + 1]) : 900);
         } else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             dump_at = std::atoi(argv[++i]);
         } else {

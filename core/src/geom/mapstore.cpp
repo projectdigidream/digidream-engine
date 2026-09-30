@@ -29,6 +29,8 @@ void MapStorage::clear() noexcept {
     grid_rows_ = 0;
     for (u32 i = 0; i < MAX_MAP_SECTORS; ++i) sector_render_[i] = SectorRender{};
     for (u32 i = 0; i < MAX_MAP_SIDES; ++i) side_render_[i] = SideRender{};
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) chunks_[i] = Chunk{};
+    chunked_ = false;
 }
 
 bool MapStorage::add_hole(u32 sector, const fx2* pts, u32 n) noexcept {
@@ -398,15 +400,24 @@ void MapStorage::rebuild_grid() noexcept {
     grid_rows_ = 0;
     if (sector_count_ == 0 || point_count_ == 0) return;
 
-    // Bounding box of every point in the map.
-    fx2 lo = points_[0];
-    fx2 hi = points_[0];
-    for (u32 i = 1; i < point_count_; ++i) {
-        if (points_[i].x < lo.x) lo.x = points_[i].x;
-        if (points_[i].y < lo.y) lo.y = points_[i].y;
-        if (points_[i].x > hi.x) hi.x = points_[i].x;
-        if (points_[i].y > hi.y) hi.y = points_[i].y;
+    // Bounding box of every sector's outer loop. The same box as every point
+    // in a map read from a file -- a hole lies inside its sector's outer loop
+    // -- and in a store built from chunks it leaves out the slots a removed
+    // chunk left behind, whose contents are whatever it was.
+    bool any = false;
+    fx2 lo{}, hi{};
+    for (u32 s = 0; s < sector_count_; ++s) {
+        const Sector& sec = sectors_[s];
+        for (u16 k = 0; k < sec.point_count; ++k) {
+            const fx2& q = points_[sec.first_point + k];
+            if (!any) { lo = q; hi = q; any = true; continue; }
+            if (q.x < lo.x) lo.x = q.x;
+            if (q.y < lo.y) lo.y = q.y;
+            if (q.x > hi.x) hi.x = q.x;
+            if (q.y > hi.y) hi.y = q.y;
+        }
     }
+    if (!any) return;
 
     // One cell size for both axes, so a cell is square and a query needs one
     // divisor. Rounded UP, so GRID_DIM cells always cover the box -- rounding
@@ -479,6 +490,235 @@ void MapStorage::rebuild_grid() noexcept {
     for (u32 i = cells; i > 0; --i) grid_start_[i] = grid_start_[i - 1];
     grid_start_[0] = 0;
     grid_built_ = true;
+}
+
+// --- chunks -------------------------------------------------------------------
+
+const Chunk* MapStorage::find_chunk(u32 key) const noexcept {
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) {
+        if (chunks_[i].live && chunks_[i].key == key) return &chunks_[i];
+    }
+    return nullptr;
+}
+
+u32 MapStorage::chunk_of_sector(u32 sector) const noexcept {
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) {
+        const Chunk& c = chunks_[i];
+        if (c.live && sector >= c.sectors.first && sector < c.sectors.first + c.sectors.count) return c.key;
+    }
+    return NO_CHUNK;
+}
+
+u32 MapStorage::stitch_count() const noexcept {
+    u32 n = 0;
+    for (u32 i = 0; i < side_count_; ++i) if (sides_[i].flags & side_flag::STITCHED) ++n;
+    return n / 2;
+}
+
+u32 MapStorage::alloc_range(ChunkRange Chunk::*which, u32 need, u32 cap) const noexcept {
+    if (need == 0) return 0;
+    // Candidates: the start of the array and the end of every resident range.
+    // The lowest that fits wins, so the layout depends only on the order chunks
+    // were added and removed -- the same sequence gives the same slots.
+    u32 best = cap + 1;
+    for (u32 ci = 0; ci <= MAX_CHUNKS; ++ci) {
+        u32 p = 0;
+        if (ci < MAX_CHUNKS) {
+            const Chunk& c = chunks_[ci];
+            if (!c.live) continue;
+            p = (c.*which).first + (c.*which).count;
+        }
+        if (p + need > cap || p >= best) continue;
+        bool clear_of_all = true;
+        for (u32 k = 0; k < MAX_CHUNKS && clear_of_all; ++k) {
+            const Chunk& o = chunks_[k];
+            if (!o.live) continue;
+            const ChunkRange& r = o.*which;
+            if (r.count && p < r.first + r.count && r.first < p + need) clear_of_all = false;
+        }
+        if (clear_of_all) best = p;
+    }
+    return best;
+}
+
+void MapStorage::recount() noexcept {
+    u32 np = 0, ns = 0, nd = 0, nt = 0, nh = 0, nr = 0, nw = 0, nl = 0;
+    const auto end = [](const ChunkRange& r) { return r.first + r.count; };
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) {
+        const Chunk& c = chunks_[i];
+        if (!c.live) continue;
+        if (end(c.points) > np) np = end(c.points);
+        if (end(c.sectors) > ns) ns = end(c.sectors);
+        if (end(c.sides) > nd) nd = end(c.sides);
+        if (end(c.tris) > nt) nt = end(c.tris);
+        if (end(c.holes) > nh) nh = end(c.holes);
+        if (end(c.rails) > nr) nr = end(c.rails);
+        if (end(c.waypoints) > nw) nw = end(c.waypoints);
+        if (end(c.rail_links) > nl) nl = end(c.rail_links);
+    }
+    point_count_ = np; sector_count_ = ns; side_count_ = nd; tri_index_count_ = nt;
+    hole_count_ = nh; rail_count_ = nr; waypoint_count_ = nw; rail_link_count_ = nl;
+}
+
+u32 MapStorage::add_chunk(u32 key, const MapStorage& src, fx2 origin) noexcept {
+    if (find_chunk(key)) return NO_CHUNK;
+    // A store is either one map or a set of chunks. Mixing them would leave
+    // the map's own content with no range to free and nothing to stitch by.
+    if (!chunked_ && (sector_count_ != 0 || point_count_ != 0)) return NO_CHUNK;
+    u32 slot = NO_CHUNK;
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) if (!chunks_[i].live) { slot = i; break; }
+    if (slot == NO_CHUNK) return NO_CHUNK;
+
+    Chunk c;
+    c.key = key;
+    c.origin = origin;
+    struct Want { ChunkRange Chunk::*which; u32 need; u32 cap; };
+    const Want wants[] = {
+        {&Chunk::points,     src.point_count_,     MAX_MAP_POINTS},
+        {&Chunk::sectors,    src.sector_count_,    MAX_MAP_SECTORS},
+        {&Chunk::sides,      src.side_count_,      MAX_MAP_SIDES},
+        {&Chunk::tris,       src.tri_index_count_, MAX_MAP_TRI_IDX},
+        {&Chunk::holes,      src.hole_count_,      MAX_MAP_HOLES},
+        {&Chunk::rails,      src.rail_count_,      MAX_MAP_RAILS},
+        {&Chunk::waypoints,  src.waypoint_count_,  MAX_MAP_WAYPOINTS},
+        {&Chunk::rail_links, src.rail_link_count_, MAX_MAP_RAIL_LINKS},
+    };
+    for (const Want& w : wants) {
+        const u32 at = alloc_range(w.which, w.need, w.cap);
+        if (at > w.cap) return NO_CHUNK;
+        c.*(w.which) = ChunkRange{at, w.need};
+    }
+    // Every index a sector, side or rail holds must fit the u16 it is kept in.
+    if (c.points.first + c.points.count > 0x10000u || c.sides.first + c.sides.count > 0x10000u ||
+        c.holes.first + c.holes.count > 0x10000u || c.waypoints.first + c.waypoints.count > 0x10000u) {
+        return NO_CHUNK;
+    }
+
+    const u32 P = c.points.first, S = c.sectors.first, D = c.sides.first, T = c.tris.first;
+    const u32 H = c.holes.first, R = c.rails.first, W = c.waypoints.first, L = c.rail_links.first;
+    const auto sector_ref = [S](i32 s) { return s < 0 ? s : static_cast<i32>(static_cast<u32>(s) + S); };
+
+    for (u32 i = 0; i < src.point_count_; ++i) {
+        points_[P + i] = fx2{src.points_[i].x + origin.x, src.points_[i].y + origin.y};
+        staged_[P + i] = Staged{};
+    }
+    for (u32 i = 0; i < src.sector_count_; ++i) {
+        Sector s = src.sectors_[i];
+        s.first_point = static_cast<u16>(s.first_point + P);
+        s.first_side  = static_cast<u16>(s.first_side + D);
+        s.first_tri   = s.first_tri + T;
+        s.first_hole  = static_cast<u16>(s.first_hole + H);
+        sectors_[S + i] = s;
+        sector_dirty_[S + i] = false;
+        sector_render_[S + i] = SectorRender{};
+    }
+    for (u32 i = 0; i < src.side_count_; ++i) {
+        Side d = src.sides_[i];
+        d.a = static_cast<u16>(d.a + P);
+        d.b = static_cast<u16>(d.b + P);
+        d.neighbor = sector_ref(d.neighbor);
+        d.flags = static_cast<u8>(d.flags & ~side_flag::STITCHED);
+        sides_[D + i] = d;
+        side_render_[D + i] = SideRender{};
+    }
+    for (u32 i = 0; i < src.tri_index_count_; ++i) tris_[T + i] = static_cast<u16>(src.tris_[i] + P);
+    for (u32 i = 0; i < src.hole_count_; ++i) holes_[H + i] = src.holes_[i];   // relative already
+    for (u32 i = 0; i < src.rail_count_; ++i) {
+        Rail r = src.rails_[i];
+        r.first_waypoint = static_cast<u16>(r.first_waypoint + W);
+        rails_[R + i] = r;
+    }
+    for (u32 i = 0; i < src.waypoint_count_; ++i) {
+        RailWaypoint w = src.waypoints_[i];
+        w.anchor = sector_ref(w.anchor);
+        w.base.x = w.base.x + origin.x; w.base.y = w.base.y + origin.y;
+        w.pos.x  = w.pos.x + origin.x;  w.pos.y  = w.pos.y + origin.y;
+        waypoints_[W + i] = w;
+    }
+    for (u32 i = 0; i < src.rail_link_count_; ++i) {
+        RailLink l = src.rail_links_[i];
+        l.rail    = static_cast<u16>(l.rail + R);
+        l.to_rail = static_cast<u16>(l.to_rail + R);
+        rail_links_[L + i] = l;
+    }
+
+    c.live = true;
+    chunks_[slot] = c;
+    chunked_ = true;
+    recount();
+
+    // THE JOIN. Every open edge of the new chunk against every open edge of
+    // the others, by exact endpoints reversed. Load-time work, and open edges
+    // are few: a room has none, and a map's boundary has one per doorway or
+    // ground tile along it.
+    for (u32 si = S; si < S + c.sectors.count; ++si) {
+        const Sector& sec = sectors_[si];
+        for (u32 j = sec.first_side; j < static_cast<u32>(sec.first_side) + sec.side_count; ++j) {
+            Side& mine = sides_[j];
+            if (!(mine.flags & side_flag::LEDGE) || mine.neighbor != NO_SECTOR) continue;
+            const fx2 a = points_[mine.a], b = points_[mine.b];
+            bool joined = false;
+            for (u32 ci = 0; ci < MAX_CHUNKS && !joined; ++ci) {
+                const Chunk& o = chunks_[ci];
+                if (!o.live || ci == slot) continue;
+                for (u32 oi = o.sectors.first; oi < o.sectors.first + o.sectors.count && !joined; ++oi) {
+                    const Sector& os = sectors_[oi];
+                    for (u32 k = os.first_side; k < static_cast<u32>(os.first_side) + os.side_count; ++k) {
+                        Side& theirs = sides_[k];
+                        if (!(theirs.flags & side_flag::LEDGE) || theirs.neighbor != NO_SECTOR) continue;
+                        if (!(points_[theirs.a] == b && points_[theirs.b] == a)) continue;
+                        mine.neighbor = static_cast<i32>(oi);
+                        theirs.neighbor = static_cast<i32>(si);
+                        mine.flags = static_cast<u8>((mine.flags & ~side_flag::LEDGE) | side_flag::STITCHED);
+                        theirs.flags = static_cast<u8>((theirs.flags & ~side_flag::LEDGE) | side_flag::STITCHED);
+                        joined = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    rebuild_grid();
+    return slot;
+}
+
+bool MapStorage::remove_chunk(u32 key) noexcept {
+    Chunk* c = nullptr;
+    for (u32 i = 0; i < MAX_CHUNKS; ++i) if (chunks_[i].live && chunks_[i].key == key) c = &chunks_[i];
+    if (!c) return false;
+
+    // Put back every ledge on the far side of a join. The partner is the side
+    // of the neighbouring sector that names this one across the same edge.
+    for (u32 si = c->sectors.first; si < c->sectors.first + c->sectors.count; ++si) {
+        const Sector& sec = sectors_[si];
+        for (u32 j = sec.first_side; j < static_cast<u32>(sec.first_side) + sec.side_count; ++j) {
+            const Side& mine = sides_[j];
+            if (!(mine.flags & side_flag::STITCHED) || mine.neighbor < 0) continue;
+            const Sector& os = sectors_[static_cast<u32>(mine.neighbor)];
+            for (u32 k = os.first_side; k < static_cast<u32>(os.first_side) + os.side_count; ++k) {
+                Side& theirs = sides_[k];
+                if (!(theirs.flags & side_flag::STITCHED) || theirs.neighbor != static_cast<i32>(si)) continue;
+                if (!(points_[theirs.a] == points_[mine.b] && points_[theirs.b] == points_[mine.a])) continue;
+                theirs.neighbor = NO_SECTOR;
+                theirs.flags = static_cast<u8>((theirs.flags & ~side_flag::STITCHED) | side_flag::LEDGE);
+                break;
+            }
+        }
+    }
+    // Empty, not merely forgotten: a sector with no points is found by no
+    // lookup and skipped by the broadphase, and a rail link naming no rail
+    // matches no query.
+    for (u32 i = c->sectors.first; i < c->sectors.first + c->sectors.count; ++i) sectors_[i] = Sector{};
+    for (u32 i = c->sides.first; i < c->sides.first + c->sides.count; ++i) sides_[i] = Side{};
+    for (u32 i = c->rails.first; i < c->rails.first + c->rails.count; ++i) rails_[i] = Rail{};
+    for (u32 i = c->waypoints.first; i < c->waypoints.first + c->waypoints.count; ++i) waypoints_[i] = RailWaypoint{};
+    for (u32 i = c->rail_links.first; i < c->rail_links.first + c->rail_links.count; ++i) {
+        rail_links_[i] = RailLink{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+    }
+    *c = Chunk{};
+    recount();
+    rebuild_grid();
+    return true;
 }
 
 MapData MapStorage::view() const noexcept {

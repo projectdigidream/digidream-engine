@@ -90,6 +90,38 @@ struct SpawnPoint {
     fx3  pos{};
 };
 
+// SEVERAL MAPS IN ONE STORE, added and removed while the world runs.
+//
+// A metamap lays levels side by side in world space. Rather than a simulation
+// per level and a hand-over at every boundary, a store can hold several of
+// them at once -- each copied in at its cell's origin, into slots that never
+// move while it is resident -- so one World simulates all of them and a body
+// walks from one into the next like walking between two rooms.
+//
+// THE JOIN IS THE MAPS' OWN OPEN EDGES. Where a side marked LEDGE in one chunk
+// is exactly the reverse of a LEDGE in another (same two points, after the
+// origins are applied), the two are joined as neighbours: the one rule the
+// engine already has for "these sectors meet here". Nothing else is inferred,
+// so two maps join only where their authors made them meet.
+//
+// Indices are the store's own. They depend on what else is resident and in
+// what order it arrived, so they mean nothing to anybody holding a different
+// set of chunks; the key given to add_chunk is the identity that travels.
+inline constexpr u32 MAX_CHUNKS = 64;
+inline constexpr u32 NO_CHUNK   = 0xFFFFFFFFu;
+
+struct ChunkRange {
+    u32 first = 0;
+    u32 count = 0;
+};
+
+struct Chunk {
+    bool live = false;
+    u32  key = 0;          // the caller's name for it: a level index
+    fx2  origin{};         // added to every point of the source map
+    ChunkRange points, sectors, sides, tris, holes, rails, waypoints, rail_links;
+};
+
 enum class CommitStatus : u8 {
     Ok = 0,
     NoStagedEdits,
@@ -294,6 +326,30 @@ public:
     // Shape edits go through stage_point/commit_shape.
     fx2& point_mut(u32 i) noexcept { grid_dirty_ = true; return points_[i]; }
 
+    // --- chunks: several maps in one store (see MAX_CHUNKS above) ---
+    //
+    // Copies `src`'s geometry and rails into free slots, moved by `origin`,
+    // and joins its open edges to any resident chunk's that exactly meet them.
+    // Returns the chunk's slot, or NO_CHUNK if the key is already resident,
+    // the store holds a map that was not built from chunks, or there is no
+    // room. On failure nothing changes.
+    //
+    // Rebuilds the broadphase. Callers holding a MapData view must take a
+    // fresh one: the counts it carries have changed.
+    u32 add_chunk(u32 key, const MapStorage& src, fx2 origin) noexcept;
+
+    // Frees the chunk's slots and puts back every ledge that was joined to it.
+    // Its sectors become empty (no points, no sides), so nothing finds them.
+    // False if no chunk has that key.
+    bool remove_chunk(u32 key) noexcept;
+
+    const Chunk* find_chunk(u32 key) const noexcept;
+    const Chunk& chunk_slot(u32 slot) const noexcept { return chunks_[slot]; }
+    // The key of the chunk a sector belongs to, or NO_CHUNK.
+    u32 chunk_of_sector(u32 sector) const noexcept;
+    // How many edge pairs are joined between chunks right now.
+    u32 stitch_count() const noexcept;
+
     // Content hash of the geometry. Part of the world state, so a client whose
     // map has drifted from the server's is detectable rather than mysterious.
     u64 hash() const noexcept;
@@ -362,6 +418,13 @@ private:
     u32          rail_count_ = 0;
     u32          waypoint_count_ = 0;
     u32          rail_link_count_ = 0;
+
+    Chunk     chunks_[MAX_CHUNKS]{};
+    bool      chunked_ = false;
+    // The lowest start at which `need` slots of one array are free of every
+    // resident chunk's range, or `cap` + 1 when there is none.
+    u32 alloc_range(ChunkRange Chunk::*which, u32 need, u32 cap) const noexcept;
+    void recount() noexcept;
 
     Path      paths_[MAX_MAP_PATHS]{};
     PathPoint path_points_[MAX_MAP_PATH_POINTS]{};

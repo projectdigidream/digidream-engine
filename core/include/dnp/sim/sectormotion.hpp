@@ -171,6 +171,12 @@ public:
 
     i32 find(u32 sector) const noexcept;
 
+    // Drop every motion of a sector in [first, first + count): a chunk of the
+    // map was removed (geom::MapStorage::remove_chunk). The rest keep their
+    // order, so what is hashed and applied does not depend on what was removed
+    // beyond the removal itself.
+    void forget_sectors(u32 first, u32 count) noexcept;
+
     // Start a parametric motion. Lua-triggered; from here it runs predictably.
     // `pivot`, `spin_from` and `spin_to` are the turn; all three default to
     // "no turn", so every existing caller is a pure translation and reads

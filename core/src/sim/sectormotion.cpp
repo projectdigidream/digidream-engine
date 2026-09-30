@@ -102,6 +102,19 @@ u32 SectorMotionSet::add(const geom::MapStorage& map, u32 sector) noexcept {
     return count_++;
 }
 
+void SectorMotionSet::forget_sectors(u32 first, u32 count) noexcept {
+    u32 kept = 0;
+    for (u32 i = 0; i < count_; ++i) {
+        const u32 s = motions_[i].sector;
+        if (s >= first && s < first + count) continue;
+        if (kept != i) motions_[kept] = motions_[i];
+        ++kept;
+    }
+    count_ = kept;
+    for (u32 i = 0; i < geom::MAX_MAP_SECTORS; ++i) motion_of_sector_[i] = -1;
+    for (u32 i = 0; i < count_; ++i) motion_of_sector_[motions_[i].sector] = static_cast<i16>(i);
+}
+
 i32 SectorMotionSet::find(u32 sector) const noexcept {
     for (u32 i = 0; i < count_; ++i) {
         if (motions_[i].sector == sector) return static_cast<i32>(i);

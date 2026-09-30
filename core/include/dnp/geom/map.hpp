@@ -63,6 +63,13 @@ inline constexpr u8 TRIGGER   = 1u << 4;
 // the first thing a body could not walk through, which is the wall or closed
 // door in front of you.
 inline constexpr u8 USABLE    = 1u << 5;
+
+// An open edge JOINED to another chunk's open edge (MapStorage::add_chunk).
+//
+// Set only in a store built from chunks, never in a map file: it records that
+// this side was a LEDGE until a neighbouring map was added beside it, so that
+// removing that map can put the ledge back exactly.
+inline constexpr u8 STITCHED  = 1u << 6;
 }  // namespace side_flag
 
 struct Side {
