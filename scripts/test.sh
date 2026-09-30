@@ -45,6 +45,8 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_rail"
 "./build/$HOST_ARCH/test_path"
 "./build/$HOST_ARCH/test_metamap"
+"./build/$HOST_ARCH/test_neighbours"
+"./build/$HOST_ARCH/test_input_ring"
 
 # The map compiler must round-trip the authored map: mapc bakes it, and the
 # loader re-triangulates and compares, so this also proves the compiler and the
@@ -89,6 +91,12 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/mapc" maps/mobvocab.map "build/$HOST_ARCH/mobvocab.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_a.map "build/$HOST_ARCH/level_a.dnpm"
 "./build/$HOST_ARCH/mapc" maps/level_b.map "build/$HOST_ARCH/level_b.dnpm"
+# Two cells of a composed world: a room and a corridor that ends AT the cell
+# boundary, twice, so a body can walk out of one map and into the next.
+"./build/$HOST_ARCH/mapc" maps/seam_a.map  "build/$HOST_ARCH/seam_a.dnpm"
+"./build/$HOST_ARCH/mapc" maps/seam_b.map  "build/$HOST_ARCH/seam_b.dnpm"
+# A third cell diagonal to both, so a crossing has a neighbour to KEEP.
+"./build/$HOST_ARCH/mapc" maps/seam_c.map  "build/$HOST_ARCH/seam_c.dnpm"
 # Floating platforms with open edges -- the only map here that is not a sealed
 # box, and the only one where walking off an edge is a fall rather than a wall.
 "./build/$HOST_ARCH/mapc" maps/void.map   "build/$HOST_ARCH/void.dnpm"
@@ -109,7 +117,25 @@ node tools/mapgen/mapgen.js --cells 16 --seed 1 --out maps/big.map
 # and written back out, bakes to a .dnpm with the same content hash. It needs
 # mapc and nothing else, so it runs here rather than behind the stack's
 # preconditions where a missing certificate would silently skip it.
+# A BROWSER WALKING ACROSS A SEAM, and whether the view changed when it did.
+# Opt-in like the client page test and skipped the same way, because it needs a
+# headless browser. Its header lists the four separate bugs that each presented
+# as "the camera twitches at a crossing" and none of which was visible from a
+# screenshot.
+DNP_CLIENT_PAGE_TEST="${DNP_CLIENT_PAGE_TEST:-}" node client/test/seamcam.test.js | tail -3
+# And back and forth, with every map in several chunks.
+DNP_SEAMCAM_SHUTTLE=1 DNP_CLIENT_PAGE_TEST="${DNP_CLIENT_PAGE_TEST:-}" node client/test/seamcam.test.js | tail -3
 node editor/test/mapfmt.test.js   | tail -2
+# Beside it, for the same reason: tools/compose writes maps with that emitter
+# AND rewrites the Lua that travels with them. Its coordinates and its side
+# indices both move, and one of the two moved silently -- monsters placed in the
+# sea beside the map, where the other announced itself by shutting every door.
+node tools/compose/test.mjs       | tail -2
+# The ground between the levels. Pure arithmetic and no wasm: the two claims it
+# rests on -- that no hill is steeper than a body can climb, and that two cells
+# derive the same height along a boundary they cannot see across -- are numbers,
+# and neither is visible by looking at the world.
+node tools/compose/terrain.test.mjs | tail -2
 node editor/test/entities.test.js | tail -2
 node editor/test/server.test.js   | tail -2
 # Neighbour inference, against the whole corpus. The assertion is a negative
@@ -415,6 +441,7 @@ else
   node client/test/shadows.test.js | grep -E 'FAIL|failures'
   # Static, and about the one client file nothing else loads.
   node client/test/tdz.test.js | grep -E 'FAIL|failures'
+  node client/test/neighbourhood.test.js | grep -E 'FAIL|failures'
   node client/test/props.test.js | grep -E 'FAIL|failures'
   # ThreeSprite sheets: where a trimmed frame sits on its canvas, how that
   # becomes a quad hanging off the feet, and which rectangle of the packed
@@ -564,6 +591,9 @@ else
      `# is in the test: restore index order and four of its seven checks fail.` \
      && node test/snapshot_order.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/levels.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Walking across a seam: two maps composed in world space by a metamap's` \
+     `# pitch, and a crossing that is a change of frame rather than a teleport.` \
+     && node test/seam.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters
@@ -610,6 +640,10 @@ else
   # only one level loaded the exit has nowhere to go and must move nobody.
   (cd server/edge && DNP_ONE_LEVEL=1 DNP_WT_PORT=34497 DNP_LINK_PORT=34571 \
      node test/levels.test.js 2>/dev/null | grep -E "CONTROL|levels:")
+  # A seam is the metamap's doing: without a pitch the cells are not composed in
+  # world space, and the same walk ends off the end of the corridor.
+  (cd server/edge && DNP_NO_METAMAP=1 DNP_WT_PORT=34495 DNP_LINK_PORT=34569 \
+     node test/seam.test.js 2>/dev/null | grep -E "CONTROL|seam:")
   # And the other half of §3.1.2: a client that discards the STREAMED offsets
   # has nothing for anchor-relative prediction to be relative to.
   (cd server/edge && DNP_IGNORE_OFFSETS=1 DNP_WT_PORT=34486 DNP_LINK_PORT=34556 \

@@ -1,50 +1,62 @@
 //
-// SEVERAL MAPS, LAID OUT ON A GRID, IN ONE FILE.
+// A TEST WORLD: SEVERAL MAPS ON A METAMAP'S GRID, JOINED BY GENERATED GROUND.
 //
-// The metamap says where each level sits and the server keeps the neighbours in
-// memory. This takes the same arrangement and produces ONE map out of it, with
-// every cell translated into its place -- so the question "does the geometry fit
-// together" can be answered by walking around the answer rather than reasoned
-// about. Whether the cells are the size the pitch claims, whether a level
-// overlaps the one beside it, how much empty margin each one leaves: all of it
-// is visible the moment it is one map.
+// TEST SCAFFOLDING, NOT A PRODUCT. It exists so the seam -- the client's held
+// levels, the server's residency and crossings -- can be exercised across many
+// real maps at once. Production transitions between levels are authored per
+// pair of maps; nothing in the engine or the protocol may depend on what this
+// generates, and its geometry is not worth polishing unless a test needs it.
 //
-//   node tools/compose/compose.mjs --metamap <f> --maps <dir> --out <f.map>
-//                                  [--pitch N] [--only x0,y0,x1,y1]
+//   node tools/compose/compose.mjs --metamap <f> --maps <dir> --seams <out dir>
+//                                  [--prefix p] [--pitch N] [--only x0,y0,x1,y1]
 //
-// A KNOWN GAP, recorded rather than left to be rediscovered: a map this tool
-// writes does NOT round-trip through the editor's in-memory builder to the same
-// content hash. editor/test/build.test.js compares the two over every map in the
-// repository and agrees on all of them; on a composed one it produced
-// 8A1D4126C98D51D9 against mapc's 867D90CAF937FCF5. Both load and both play; one
-// of the two builders is doing something with this file that the other is not,
-// and finding out which is worth a morning. mapc's answer is the authority.
+// Each map stays its own level and file, is moved into its cell, and the rest
+// of the cell becomes ground tiles whose height is a function of world
+// coordinates (terrain.mjs), so two cells agree at their shared boundary
+// without comparing notes. Each level's own scripts are rewritten to match
+// (rewriteScript), and a metamap is written beside the maps.
 //
 // It MUTATES each map's parsed document and re-emits it with the editor's own
-// emitter rather than writing the format again. editor/src/mapfmt.js is proven
-// byte-for-byte against mapc over every map in the repository, and a second
-// writer of a grammar whose only definition is a C++ file is the largest
-// correctness risk anything here could take on.
+// emitter rather than writing the format again: editor/src/mapfmt.js is proven
+// byte-for-byte against mapc over every map in the repository.
 //
-// WHAT IT DROPS, and says so out loud: scripts. A converted level's Lua
-// addresses its own sectors by INDEX, and every index moves when maps are
-// concatenated -- so a composed map with map01.lua attached would place MAP01's
-// monsters in whatever sectors now hold those numbers. Geometry, spawns, lights
-// and textures survive; doors, switches and monsters do not. That is the right
-// trade for a piece whose whole question is "does it line up".
-//
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { parseMap, emitMap, numFrom, attr, setAttr, setInt, setNum } from '../../editor/src/mapfmt.js'
+import { heightAt, waterAt, TILE } from './terrain.mjs'
 
 // A body steps up half a unit and no more (sim::constants STEP_HEIGHT), so a
 // corridor that meets a room's floor at the wrong height is a wall from one
 // side and a pit from the other -- and the nav graph agrees, which is how this
 // announced itself: eight corridors built, and not one of them changed how much
 // of the world was reachable.
+const W = 2.5                 // how wide a doorway cut into a level is
+const EDGE_TOL = 60           // how far inside the map an opening may sit
 const STEP = 0.5
-const HEADROOM = 6
-const CORRIDOR_TEX = 'METAL1'
+// HOW TALL A CORRIDOR IS: ONE NUMBER FOR THE WHOLE COMPOSED WORLD.
+//
+// Two separate mistakes meet here, and the fix has to answer both.
+//
+// The engine's default is 6, which is right for a level drawn in engine units
+// and four times too tall for a converted Doom level, where the body is 1.1667
+// and a room clears 1.67. Built to the default, the first nine maps had slot
+// canyons for corridors. So the height has to follow the SCALE OF THE CONTENT.
+//
+// But it cannot follow the scale of one ROOM. The two halves of a seam are cut
+// by two runs that never compare notes, and a height taken from each side's own
+// room made six of eight seams meet at two different ceilings -- one pair 3.5
+// against 1.5, which from inside the taller corridor is a wall with a letterbox
+// in it. That is the same problem SEAM_Z already solves for the floor, and it
+// has the same shape of answer: a number both sides arrive at without talking.
+//
+// So: derived from the tallest body any map in the world declares, and then
+// constant for all of them. The floor at a boundary is SEAM_Z on both sides and
+// the height is this on both sides, so the two openings are the same rectangle
+// by construction rather than by coincidence.
+const HEAD_RATIO = 2.3        // 1.1667 * 2.3 = 2.68, which is Doom's own 128 units
+const HEAD_FALLBACK = 6       // a map that declares no body: the engine's default
+const WALL_TEX = 'METAL1'      // the walls of anything this adds
+const DU = 48                 // Doom units to the engine's one; what the scripts count in
 
 const DIAG = process.env.COMPOSE_DIAG === '1'
 const diag = []
@@ -56,10 +68,15 @@ const arg = (name, dflt = null) => {
 
 const metamapPath = arg('--metamap')
 const mapsDir = arg('--maps')
-const outPath = arg('--out')
-if (!metamapPath || !mapsDir || !outPath) {
-  console.error('usage: compose.mjs --metamap <f> --maps <dir> --out <f.map> ' +
-                '[--pitch N] [--only x0,y0,x1,y1]')
+const seamsOut = arg('--seams')
+// A NAME OF ITS OWN for every map written. The sources keep theirs, and two
+// files called map01.map in one repository is ambiguous to everything that
+// resolves a map by its basename -- which the editor's round-trip test does,
+// over every map there is, and it said so.
+const prefix = arg('--prefix', '')
+if (!metamapPath || !mapsDir || !seamsOut) {
+  console.error('usage: compose.mjs --metamap <f> --maps <dir> --seams <dir> ' +
+                '[--prefix p] [--pitch N] [--only x0,y0,x1,y1]')
   process.exit(2)
 }
 
@@ -74,7 +91,12 @@ for (const raw of readFileSync(metamapPath, 'utf8').split('\n')) {
   else if (t[0] === 'pitch' && t.length >= 3) declaredPitch = +t[1]
 }
 
-const noDoors = argv.includes('--keep-doors-shut')
+const GROUND_TEX = 'GRASS1'
+const WATER_TEX = 'FWATER1'
+const SKY_TEX = 'F_SKY1'
+// One ceiling for the whole outdoors, well clear of the highest ground, so the
+// sky is a sky rather than a lid that follows the hills.
+const SKY_Z = 12
 const only = arg('--only')
 const win = only ? only.split(',').map(Number) : null
 const chosen = win
@@ -109,6 +131,21 @@ for (const c of chosen) {
                 w: maxx - minx, h: maxy - miny, sectors: doc.sectors.length })
 }
 
+// ONE HEIGHT FOR THE WHOLE WORLD, from the tallest body any of its maps
+// declares. Read off the maps rather than passed in, because a map that says
+// `body height 1.1667` has already answered "what scale is this drawn at" and
+// asking the operator again is the second place for one number to live.
+const bodyHeights = loaded.map((m) => {
+  const it = m.doc.items.find((i) => i.kind === 'body')
+  const h = it ? attr(it, 'height') : null
+  return h ? h.v.value : 0
+}).filter((h) => h > 0)
+const headroom = bodyHeights.length
+  ? round4(Math.max(...bodyHeights) * HEAD_RATIO)
+  : HEAD_FALLBACK
+if (DIAG) console.log(`compose: added sectors ${headroom} tall ` +
+  `(tallest body ${bodyHeights.length ? Math.max(...bodyHeights) : 'none declared'})`)
+
 function walkVertices (item, fn) {
   for (const ch of item.children ?? []) {
     if (ch.kind === 'vertex') fn(ch)
@@ -121,7 +158,13 @@ const tallest = Math.max(...loaded.map((m) => m.h))
 // A tenth of the largest cell as margin on each side, so neighbouring maps never
 // touch and the gap between them is where a corridor would go.
 const autoPitch = Math.ceil(Math.max(widest, tallest) * 1.2)
-const pitch = Number(arg('--pitch', declaredPitch ?? autoPitch))
+let pitch = Number(arg('--pitch', declaredPitch ?? autoPitch))
+// A WHOLE NUMBER OF TILES. Two cells agree about the ground because they
+// evaluate the same function at the same world points -- which they only do if
+// their tile grids are the same grid. A pitch that is not a multiple of the
+// tile size offsets every cell's lattice from its neighbour's and the argument
+// collapses into a seam of cliffs.
+pitch = Math.ceil(pitch / TILE) * TILE
 
 console.log(`compose: ${loaded.length} map(s)`)
 for (const m of loaded) {
@@ -135,160 +178,514 @@ if (pitch < Math.max(widest, tallest)) {
   process.exit(1)
 }
 
-// --- compose -----------------------------------------------------------------
-//
-// Each map is translated so its bounding box is CENTRED in its cell. Centring
-// rather than corner-aligning because the maps are wildly different sizes --
-// MAP07 is a third the width of MAP15 -- and corner-aligned cells read as a
-// ragged staircase rather than as a grid.
-// --- doors, opened in the geometry -------------------------------------------
-//
-// Doom stores a shut door as a sector whose ceiling rests on its floor, and a
-// composed map has no scripts to open one -- so without this every door in
-// every level is shut for ever and the spawn room is the whole world. The
-// server says so out loud: "35 of 1759 sectors reachable on foot".
-//
-// Opened the way the trigger vocabulary opens one, statically: the lowest
-// neighbouring ceiling, less Doom's four map units. A sector with no neighbour
-// is left alone, because there is nothing for it to open onto.
-function openDoors (m) {
-  const sectors = m.doc.sectors
-  const ceilOf = (s) => {
-    const a = attr(s, 'ceil')
-    return a ? a.v.value : 32
-  }
-  const floorOf = (s) => {
-    const a = attr(s, 'floor')
-    return a ? a.v.value : 0
-  }
-  let opened = 0
-  for (const s of sectors) {
-    if (ceilOf(s) > floorOf(s)) continue
-    let lowest = Infinity
-    walkVertices(s, (v) => {
-      const nb = attr(v, 'neighbor')
-      if (!nb) return
-      const other = sectors[nb.v]
-      if (other) lowest = Math.min(lowest, ceilOf(other))
-    })
-    if (!Number.isFinite(lowest)) continue
-    const open = lowest - 0.0834
-    if (open <= floorOf(s)) continue
-    setNum(s, 'ceil', open)
-    ++opened
-  }
-  return opened
-}
-
-const cellX0 = Math.min(...loaded.map((m) => m.x))
-const cellY0 = Math.min(...loaded.map((m) => m.y))
-
-const out = []
-out.push('# GENERATED by tools/compose/compose.mjs -- do not edit.')
-out.push('#')
-out.push(`# ${loaded.length} map(s) from ${mapsDir}, on a ${pitch}-unit grid.`)
-out.push('#')
-out.push('# Scripts are deliberately absent: a converted level addresses its own')
-out.push('# sectors by index, and every index moves when maps are concatenated. This')
-out.push('# is geometry, spawns, lights and textures -- no doors, no monsters.')
-out.push('')
-
-// THE SECTOR EACH MAP STARTS AT, decided before anything is written: a corridor
-// has to name sectors in two different maps, and it cannot do that while the
-// numbering is still being discovered one map at a time.
-let base = 0
-for (const m of loaded) { m.base = base; base += m.sectors }
-let nextSector = base
-
-const spawnTags = new Set()
-let totalSectors = 0, totalPoints = 0
-
-for (const m of loaded) {
-  const ox = (m.x - cellX0) * pitch + (pitch - m.w) / 2 - m.minx
-  const oy = (m.y - cellY0) * pitch + (pitch - m.h) / 2 - m.miny
-  // The bounding box moves with the map. The corridors are placed against it.
-  m.minx += ox; m.maxx += ox; m.miny += oy; m.maxy += oy
-
-  // Doors first, while this map's sector indices are still its own -- and the
-  // flood fill with them, for the same reason and it is the sharper one: the
-  // renumbering below turns every `neighbor` into a GLOBAL index, and a fill
-  // that reads one as a local index walks out of the array on its first step.
-  // Every map but the first reported exactly one reachable sector.
-  const opened = noDoors ? 0 : openDoors(m)
-  m.reachable = reachable(m)
-  if (DIAG) console.log(`  diag ${m.map}: ${m.reachable.size} of ${m.sectors} reachable`)
-
-  // Every vertex moves, and every neighbour reference shifts by however many
-  // sectors came before this map.
-  for (const v of m.verts) {
-    v.x = numFrom(v.x.value + ox)
-    v.y = numFrom(v.y.value + oy)
-    const nb = attr(v, 'neighbor')
-    if (nb) setInt(v, 'neighbor', nb.v + m.base)
-  }
-
-  const keep = []
-  for (const it of m.doc.items) {
-    if (it.kind === 'script') continue                 // see the header
-    if (it.kind === 'rail' || it.kind === 'path') continue
-    // One texscale and one body for the whole file, from the first map. Two
-    // maps at different scales cannot be composed anyway, and mapc would take
-    // the last one it read.
-    if ((it.kind === 'texscale' || it.kind === 'body') && m !== loaded[0]) continue
-    if (it.kind === 'spawn') {
-      // Every map's spawns survive, named after the map, so you can start
-      // anywhere in the composed world. The FIRST map's `start` keeps its name
-      // because that is the tag a server asks for by default.
-      const tag = (m === loaded[0] && it.tag === 'start') ? 'start' : `${m.map}_${it.tag}`
-      if (spawnTags.has(tag)) continue
-      spawnTags.add(tag)
-      it.tag = tag
-      it.x = numFrom(it.x.value + ox)
-      it.y = numFrom(it.y.value + oy)
-    }
-    if (it.kind === 'light') {
-      it.x = numFrom(it.x.value + ox)
-      it.y = numFrom(it.y.value + oy)
-    }
-    keep.push(it)
-  }
-  m.doc.items = keep
-
-  m.header = `# --- ${m.map}  cell (${m.x},${m.y})  ${m.w.toFixed(1)} x ${m.h.toFixed(1)}` +
-             `  ${opened} door(s) opened ---`
-  totalSectors += m.sectors
-  totalPoints += m.verts.length
-}
-
-// --- corridors ---------------------------------------------------------------
-//
-// A LINK IS A HOLE IN EACH MAP'S OUTER WALL AND A RECTANGLE BETWEEN THEM.
-//
-// The opening has to be on the map's OUTER EDGE, not merely on a sector facing
-// the right way: a corridor leaving an inner wall would run through the rest of
-// the level on its way out, and two sectors covering the same ground is a world
-// where "which sector is this point in" has two answers. Everything between the
-// maps is empty margin, which is the only place a generated corridor can safely
-// be.
-//
-// Doom's levels are drawn on a grid, so there is nearly always an axis-aligned
-// wall at the extreme; a link with no candidate on either side is REPORTED and
-// skipped rather than forced, because a corridor placed anyway is a corridor
-// through somebody's bedroom.
-const W = 2.5                 // how wide a corridor is
-const EDGE_TOL = 60           // how far inside the map an opening may sit
-
 const byCell = new Map()
 for (const m of loaded) byCell.set(`${m.x},${m.y}`, m)
 
+// --- each map in its own cell ------------------------------------------------
+//
+// Every map stays its own level and its own file; its coordinates are moved so
+// it sits inside [0, pitch) on both axes. The engine adds the cell origin. The
+// cell boundary is `open` ground on both sides, at the same height because it
+// is the same function of the same world coordinates, so a body walks off one
+// level's last tile onto the next level's first, and the server's seam check
+// hands it across at the same world point.
+const SEAM_Z = 0
+
+// A MAP'S OWN SCRIPT, MOVED WITH THE MAP.
+//
+// Two things in it stopped being true the moment the map was recentred and cut:
+//
+//   * every coordinate. mobs.place, doom.load's `props` and its `teleports` all
+//     carry absolute positions in Doom units, and the map moved by (sx, sy).
+//   * every side index. doom.load's `lines` table is keyed by side, and a cut
+//     doorway splices two sides into the middle of the file.
+//
+// Both are mechanical, and NEITHER is optional: leaving the coordinates puts
+// MAP01's monsters in the sea beside it, and leaving the side keys makes
+// doom.lua refuse the whole table -- "10 of 13 lines do not match the loaded
+// map; actions disabled" -- which is every door in the level, shut for ever.
+//
+// Regex rather than a Lua parser because these files are GENERATED by
+// tools/wad/convert.js and their shape is one line per record. The two patterns
+// are asserted against a count, so a convert.js that changes shape fails here
+// rather than silently rewriting nothing.
+function rewriteScript (src, m, remap, path) {
+  const dx = Math.round(m.sx * DU), dy = Math.round(m.sy * DU)
+  // AND UP OR DOWN, in the terrain world: a level is lifted to meet the ground
+  // outside it, and everything the level's script places is placed relative to
+  // its floors. Left behind, every monster in the world would stand at the
+  // height the level used to be -- sunk into the ground or hanging over it.
+  const dz = Math.round((m.dz ?? 0) * DU)
+  let moved = 0, keyed = 0
+  // ONE PASS, with z optional.
+  //
+  // Two passes and a negative lookahead is the obvious way and it is wrong: the
+  // digit group backtracks to make the lookahead succeed, so `y=1248, z=8`
+  // matches with y=124 and the placement lands a thousand units away. Caught by
+  // tools/compose/test.mjs, which is exactly what it is for.
+  let out = src.replace(/\bx=(-?\d+), y=(-?\d+)(, z=(-?\d+))?/g, (_, a, b, zPart, c) => {
+    ++moved
+    return `x=${Number(a) + dx}, y=${Number(b) + dy}` +
+           (zPart ? `, z=${Number(c) + dz}` : '')
+  })
+  // Only entries that carry a check_neighbor: that is what makes a record a
+  // LINE rather than a teleport destination, which is keyed by sector tag and
+  // must not be touched.
+  const at = (k) => {
+    const v = remap.get(Number(k))
+    if (v === undefined) {
+      console.error(`compose: ${path}: side ${k} is not in ${m.map}`)
+      process.exit(1)
+    }
+    return v
+  }
+  out = out.replace(/\[(\d+)\] = \{([^\n]*check_neighbor=-?\d+[^\n]*)\}/g,
+    (_, k, body) => {
+      ++keyed
+      return `[${at(k)}] = {${body.replace(/\bpair=(\d+)/g, (_2, q) => `pair=${at(q)}`)}}`
+    })
+  if (/\bdoom\.load\s*\{/.test(src) && /check_neighbor=/.test(src) && keyed === 0) {
+    console.error(`compose: ${path} has line actions and none were re-keyed`)
+    process.exit(1)
+  }
+  if (DIAG) diag.push(`${m.map}: ${path} ${moved} coord(s) +(${dx},${dy}), ${keyed} line(s) re-keyed`)
+  return out
+}
+
+if (seamsOut) {
+
+  for (const m of loaded) {
+    // Centred in its own cell, in its OWN coordinates: the engine adds the cell
+    // origin. A map whose numbers already sat outside [0, pitch) would be in
+    // its neighbour's cell before anybody moved.
+    //
+    // SNAPPED TO A WHOLE DOOM UNIT, and that is not tidiness. The scripts that
+    // travel with the map place monsters, props and teleport destinations in
+    // Doom's integer units, and they are shifted by this same offset below. A
+    // fractional offset would make those coordinates fractional, and doom.lua
+    // turns them into fixed point with fx.frac(n, 48) -- a rational, whose
+    // numerator is an integer or is not a number at all.
+    m.sx = Math.round(((pitch - m.w) / 2 - m.minx) * DU) / DU
+    m.sy = Math.round(((pitch - m.h) / 2 - m.miny) * DU) / DU
+  }
+
+  for (const m of loaded) {
+    // NO DOORS ARE OPENED HERE, unlike the merge. A map that stays its own file
+    // keeps its own scripts, its own sector numbering and therefore its own
+    // doors -- corridor sectors are APPENDED, and appending cannot move a
+    // sector index anything already refers to. Reachability counts a shut door
+    // as passable for the same reason: it opens when somebody presses it.
+    //
+    // SIDE indices are a different matter, and believing otherwise is what
+    // disabled every door in the first nine maps this wrote. Cutting a doorway
+    // SPLICES two vertices into an existing sector's loop, so every side after
+    // it moves -- and map01.lua's line table is keyed by side index. Hence the
+    // identity recorded here and the remap built at write time.
+    m.reachable = reachable(m)
+
+    m.sideAt = new Map()
+    { let i = 0; for (const s of m.doc.sectors) walkVertices(s, (v) => m.sideAt.set(v, i++)) }
+
+    // The measurements have to be made in the frame the map will be written in.
+    for (const v of m.verts) { v.x = numFrom(v.x.value + m.sx); v.y = numFrom(v.y.value + m.sy) }
+    for (const it of m.doc.items) {
+      if (it.kind === 'spawn' || it.kind === 'light') {
+        it.x = numFrom(it.x.value + m.sx)
+        it.y = numFrom(it.y.value + m.sy)
+      }
+    }
+    m.minx += m.sx; m.maxx += m.sx; m.miny += m.sy; m.maxy += m.sy
+    m.boxes = boxesOf(m)
+    m.extra = []
+    m.base = 0
+    m.next = m.sectors
+  }
+
+
+  // --- GROUND, instead of a thread across the void ------------------------
+  //
+  // Every tile of the cell that the level does not occupy becomes a sector, at
+  // the height the world-space field says. Two things fall out of that which a
+  // corridor had to work for:
+  //
+  //   the WHOLE cell boundary is seam, not a 2.5-unit doorway, and the tiles on
+  //   either side of it are the same height because they are the same function
+  //   of the same coordinates -- so a body walks across anywhere along it;
+  //
+  //   a level is joined by opening ANY outward wall onto the ground beside it,
+  //   so there is nothing to route and nothing for the two sides to agree on.
+  //   The four levels that could take no corridor at all are not special here.
+  {
+    let tiles = 0, mouths = 0, skies = 0, outdoors = 0, sealed = []
+    for (const m of loaded) {
+      const N = Math.round(pitch / TILE)
+      const ox = m.x * pitch, oy = m.y * pitch
+      const idx = new Map()
+      const free = []
+      for (let j = 0; j < N; j++) {
+        for (let i = 0; i < N; i++) {
+          const x0 = i * TILE, y0 = j * TILE
+          // clearOf over the level's sector boxes: a tile that overlaps the
+          // level is the level's ground, not ours. Bounding boxes over-reject,
+          // which leaves a little unclaimed apron around a level and is the
+          // right direction to be wrong in -- ground INSIDE a room would be two
+          // floors in one place.
+          // A hair larger than the tile: mapc counts a level corner sitting
+          // exactly on a tile's boundary as inside it, so ground stops just
+          // short of touching a level's own floor.
+          if (hitsLevel(m, x0 - 0.1, y0 - 0.1, x0 + TILE + 0.1, y0 + TILE + 0.1)) continue
+          idx.set(`${i},${j}`, m.next + m.base + free.length)
+          free.push({ i, j, x0, y0,
+                      h: heightAt(ox + x0 + TILE / 2, oy + y0 + TILE / 2),
+                      wet: waterAt(ox + x0 + TILE / 2, oy + y0 + TILE / 2) })
+        }
+      }
+      m.next += free.length
+
+      // WHERE THE LEVEL OPENS ONTO IT.
+      //
+      // THE LEVEL MOVES, NOT THE GROUND. A converted Doom level's floors are
+      // wherever Doom put them -- tens of units up or down -- and the ground is
+      // a gentle field a unit or two either side of zero. Insisting they meet
+      // by accident opened eighteen walls in twenty-eight levels and sealed
+      // seventeen of them.
+      //
+      // Bending the ground to reach each level instead would need a ramp longer
+      // than the margin it has to fit in, and would break the one property this
+      // whole design rests on: that the ground is a function of world position
+      // and of nothing else. So the LEVEL is lifted or dropped as a whole until
+      // its chosen doorway is level with the ground outside it, which is a
+      // translation and changes nothing about the level except where it sits --
+      // exactly as it is already translated in x and y.
+      const NB = [[1, 0, 0], [-1, 0, 1], [0, 1, 2], [0, -1, 3]]
+      const BACK = ['west', 'east', 'south', 'north']
+      const tileFor = (o, dx, dy) => {
+        const mx = (o.a.x.value + o.b.x.value) / 2 + dx * TILE * 0.5
+        const my = (o.a.y.value + o.b.y.value) / 2 + dy * TILE * 0.5
+        const ti = Math.floor(mx / TILE), tj = Math.floor(my / TILE)
+        return { ti, tj, sector: idx.get(`${ti},${tj}`),
+                 ground: free.find((f) => f.i === ti && f.j === tj) }
+      }
+      // WALLS YOU CAN ACTUALLY WALK TO, FIRST.
+      //
+      // opening() ranks by a reachability that counts a shut door as passable,
+      // because a door opens when somebody presses it. That is right for asking
+      // whether a level is connected and wrong for asking where to let somebody
+      // OUT of it: every way out of MAP01 landed in a room behind a door, and
+      // from the spawn seven of its seven hundred and seventy-six sectors were
+      // walkable. There was an outdoors and no way to reach it.
+      //
+      // So candidates that can be walked to with nothing opened are taken
+      // first, and the rest are kept as a fallback -- a level whose only outward
+      // wall is behind a door is still better joined than sealed.
+      const atOnce = reachable(m, false)
+      // THE ROOM YOU ARRIVE IN, above all.
+      //
+      // "Reachable with nothing opened" was still not enough: MAP01's ways out
+      // landed in the rooms NEXT to the spawn, and seven of its seven hundred
+      // and seventy-six sectors were walkable from where the player stands. A
+      // world you can see and cannot step into is worse than no world.
+      //
+      // So the sector holding the spawn is ranked first, and -- below -- the
+      // level's lift is chosen from ITS wall, which makes that one doorway
+      // match the ground by construction rather than by luck.
+      const spawnPt = m.doc.items.find((it) => it.kind === 'spawn')
+      let spawnSector = -1
+      if (spawnPt) {
+        m.doc.sectors.forEach((sec, si) => {
+          const vs = []
+          walkVertices(sec, (v) => vs.push(v))
+          let inside = false
+          for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+            const xi = vs[i].x.value, yi = vs[i].y.value
+            const xj = vs[j].x.value, yj = vs[j].y.value
+            if ((yi > spawnPt.y.value) !== (yj > spawnPt.y.value) &&
+                spawnPt.x.value < (xj - xi) * (spawnPt.y.value - yi) / (yj - yi) + xi) {
+              inside = !inside
+            }
+          }
+          if (inside) spawnSector = si
+        })
+      }
+      const candidates = []
+      for (const [dx, dy, dir] of NB) {
+        for (const o of opening(m, dir)) {
+          const t = tileFor(o, dx, dy)
+          if (t.sector === undefined || !t.ground) continue
+          const si = m.doc.sectors.indexOf(o.sector)
+          candidates.push({ o, dir, ...t, si,
+                            home: si === spawnSector,
+                            open: atOnce.has(si) })
+        }
+      }
+      candidates.sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0))
+      // The lift that suits the most doorways, not merely the first: a level
+      // whose walls sit at three different heights should be entered at
+      // whichever of them the ground agrees with oftenest.
+      // Weighted toward the reachable ones: a lift that suits six doorways
+      // nobody can walk to is worth less than one that suits a single doorway
+      // in the room you arrive in.
+      // THE LIFT COMES FROM THE ROOM YOU ARRIVE IN, when there is a wall
+      // there: that doorway then matches the ground exactly and the way out is
+      // a step, not a hope. Failing that, whichever lift suits the most
+      // doorways, weighted heavily toward ones that can be walked to.
+      let dz = 0, bestFit = -1
+      for (const c of candidates) {
+        const lift = Math.round((c.ground.h - floorOf(c.o.sector)) / STEP) * STEP
+        let fit = 0
+        for (const d of candidates) {
+          if (Math.abs(d.ground.h - (floorOf(d.o.sector) + lift)) <= STEP) fit += d.open ? 10 : 1
+        }
+        if (fit > bestFit) { bestFit = fit; dz = lift }
+      }
+      m.dz = dz
+      if (dz) for (const sec of m.doc.sectors) {
+        for (const k of ['floor', 'ceil']) {
+          const a = attr(sec, k)
+          if (a) setNum(sec, k, round4(a.v.value + dz))
+        }
+      }
+
+      // ONE SKY OVER THE WHOLE WORLD.
+      //
+      // A Doom level's open air is a sector with F_SKY1 on its ceiling, and the
+      // engine that drew it treated that as "no ceiling". Here it is a ceiling
+      // like any other, at whatever height the level put it -- so standing on
+      // the ground outside, the level's own sky is a slab a few units up with a
+      // wall holding it, and that wall is the enormous white cliff that made
+      // the levels look like they were standing in a quarry.
+      //
+      // Given the same ceiling as the ground outside, there is no step between
+      // them and so no wall face to draw: the level's open air becomes the
+      // world's open air. Sectors that are not open to the sky keep their own
+      // roofs, which is what makes a building still a building.
+      let opened = 0
+      for (const sec of m.doc.sectors) {
+        const ct = attr(sec, 'ceiltex')
+        if (!ct || String(ct.v).toUpperCase() !== SKY_TEX) continue
+        // Never below its own floor, and never LOWERED: a sky sector already
+        // taller than the world's is a tower, and squashing it would put its
+        // roof under its own walls.
+        if (floorOf(sec) + STEP >= SKY_Z || ceilOf(sec) >= SKY_Z) continue
+        setNum(sec, 'ceil', round4(SKY_Z))
+        ++opened
+      }
+      skies += opened
+
+      // EVERY WALL THAT QUALIFIES, not a handful. The point of putting ground
+      // outside is that a level stops being a box with a door in it: where its
+      // edge meets ground at a height a body can step, that edge opens.
+      const link = new Map()
+      let cutHere = 0
+      for (const c of candidates) {
+        if (Math.abs(c.ground.h - floorOf(c.o.sector)) > STEP) continue
+        if (link.has(`${c.ti},${c.tj}`)) continue
+        cut(m, c.o, c.sector)
+        link.set(`${c.ti},${c.tj}`, { side: BACK[c.dir], sector: c.o.sector.index + m.base })
+        ++cutHere
+        ++mouths
+      }
+      if (!cutHere) sealed.push(m.map)
+
+      // AND YOU ARRIVE OUTDOORS.
+      //
+      // A Doom level starts you inside a building, because a Doom level IS the
+      // building. Here it is one landmark in a landscape, and starting sealed
+      // inside it means the whole world is on the other side of whichever door
+      // that level opens with: MAP01 puts seven of its seven hundred and
+      // seventy-six sectors within reach of the spawn, and every way out is in
+      // one of the other seven hundred and sixty-nine.
+      //
+      // Tried the other way first -- open a wall of the room you arrive in --
+      // and it fails on the same fact that causes the problem: a spawn room is
+      // an interior, so it has no outward wall to open. Twenty of twenty-eight
+      // levels got worse.
+      //
+      // So the player arrives on the ground beside the level's own doorway,
+      // facing it. The level is still there to be gone into; it is just no
+      // longer the only place you can be.
+      if (cutHere && spawnPt) {
+        const first = candidates.find((c) => link.has(`${c.ti},${c.tj}`))
+        if (first) {
+          spawnPt.x = numFrom(round4(first.ti * TILE + TILE / 2))
+          spawnPt.y = numFrom(round4(first.tj * TILE + TILE / 2))
+          // A hair above the ground: a spawn exactly on the floor is a spawn
+          // the mover has to resolve out of it.
+          if (spawnPt.z !== undefined) spawnPt.z = numFrom(round4(first.ground.h + 0.2))
+          ++outdoors
+        }
+      }
+
+      const style = { light: 192, floortex: GROUND_TEX, ceiltex: SKY_TEX }
+      for (const t of free) {
+        const at = (di, dj) => {
+          const i = t.i + di, j = t.j + dj
+          // OFF THE EDGE OF THE CELL IS THE SEAM, everywhere along it.
+          if (i < 0 || j < 0 || i >= N || j >= N) return 'open'
+          return idx.get(`${i},${j}`) ?? null      // null: the level's own wall
+        }
+        const sides = { west: at(-1, 0), east: at(1, 0), south: at(0, -1), north: at(0, 1) }
+        const l = link.get(`${t.i},${t.j}`)
+        if (l) sides[l.side] = l.sector
+        m.extra.push(box(t.x0, t.x0 + TILE, t.y0, t.y0 + TILE, sides, t.h,
+                         { ...style, floortex: t.wet ? WATER_TEX : GROUND_TEX,
+                           head: SKY_Z - t.h }))
+        ++tiles
+      }
+    }
+    console.log(`compose: ${tiles} ground tiles, ${mouths} way(s) out of the levels` +
+                `, ${skies} sky sector(s) opened to the world's` +
+                `, ${outdoors} spawn(s) moved outdoors` +
+                (sealed.length ? `, ${sealed.length} sealed: ${sealed.join(' ')}` : ''))
+  }
+
+  // THE TOOL CHECKS ITS OWN OUTPUT, and refuses to write a world it has broken.
+  //
+  // This engine joins two sectors only across a WHOLE SHARED EDGE: each names
+  // the other, and the two edges are the same segment reversed. Every corridor
+  // here is five or more rectangles laid end to end by arithmetic, and getting
+  // one bound wrong produces two sectors over the same ground whose "shared"
+  // edges are a corridor's width apart. The engine then joins neither, which
+  // from inside is a passage blocked by a wall -- drawn where the stray edge
+  // carried a texture and invisible where it did not, which is exactly how it
+  // was reported.
+  //
+  // Cheap, total, and the thing that was missing: a corridor whose pieces do
+  // not meet is a corridor nobody can walk down, and no amount of looking at
+  // the map from above shows it.
+  {
+    let broken = 0
+    for (const m of loaded) {
+      const sectors = m.doc.items.filter((i) => i.kind === 'sector').concat(m.extra)
+      const at = new Map()
+      sectors.forEach((sec, si) => {
+        const vs = []
+        walkVertices(sec, (v) => vs.push(v))
+        vs.forEach((v, i) => {
+          const w = vs[(i + 1) % vs.length]
+          at.set(`${si}#${v.x.value},${v.y.value}|${w.x.value},${w.y.value}`, v)
+        })
+      })
+      // ONLY THE RECTANGLES THIS TOOL LAID OUT.
+      //
+      // A converted Doom level names neighbours across edges the far side
+      // covers with two or three shorter ones, and mapc subdivides when it
+      // bakes -- 360 of them in MAP17 alone, every one of them fine. What has
+      // no excuse is two rectangles this file placed by arithmetic failing to
+      // meet, and the doorway cut into the level is excluded for the same
+      // reason: it splits an existing wall and is a T-junction by design.
+      const mine = (i) => i >= m.doc.items.filter((x) => x.kind === 'sector').length
+      sectors.forEach((sec, si) => {
+        if (!mine(si)) return
+        const vs = []
+        walkVertices(sec, (v) => vs.push(v))
+        vs.forEach((v, i) => {
+          const nb = attr(v, 'neighbor')
+          if (!nb || !mine(Number(nb.v))) return
+          const w = vs[(i + 1) % vs.length]
+          const back = at.get(`${nb.v}#${w.x.value},${w.y.value}|${v.x.value},${v.y.value}`)
+          if (back && Number(attr(back, 'neighbor')?.v) === si) return
+          ++broken
+          if (broken <= 8) {
+            console.error(`compose: ${m.map}: sector ${si} names ${nb.v} across ` +
+              `(${v.x.value},${v.y.value})-(${w.x.value},${w.y.value}), ` +
+              (back ? `but that edge names ${attr(back, 'neighbor')?.v ?? 'nothing'}`
+                    : 'which is not an edge of it'))
+          }
+        })
+      })
+    }
+    if (broken > 0) {
+      console.error(`compose: ${broken} sector link(s) are not a whole shared edge; ` +
+                    'nothing written')
+      process.exit(1)
+    }
+  }
+
+  mkdirSync(seamsOut, { recursive: true })
+  for (const m of loaded) {
+    // The map's own scripts travel with it. A bare name is a file beside the
+    // .dnpm, so it is copied; a path with directories in it is relative to the
+    // map, and works unchanged as long as the output sits at the same depth --
+    // which is why this writes into a module's `maps/` and not anywhere.
+    // THE SIDE REMAP, built the same way the side indices themselves are: by
+    // walking the sectors in file order and counting vertices. The walk is
+    // proven against mapc -- every check_neighbor in every converted map01.lua
+    // agrees with the neighbour found at that index. The corridor sectors are
+    // appended after all of these, so they take indices beyond the last one
+    // here and shift nothing.
+    const remap = new Map()
+    { let i = 0; for (const s of m.doc.sectors) walkVertices(s, (v) => {
+        const was = m.sideAt.get(v)
+        if (was !== undefined) remap.set(was, i)
+        i++
+      }) }
+
+    for (const it of m.doc.items) {
+      if (it.kind !== 'script') continue
+      if (it.path.includes('/')) continue
+      const src = readFileSync(join(mapsDir, it.path), 'utf8')
+      // A MAP'S OWN SCRIPT is rewritten; a shared one is copied. The two are
+      // told apart by what they DO rather than by name: a file that calls
+      // doom.load or mobs.place is talking about this map's sides and this
+      // map's coordinates, and both of those moved.
+      if (/\b(?:doom\.load|mobs\.place)\s*\{/.test(src)) {
+        writeFileSync(join(seamsOut, it.path), rewriteScript(src, m, remap, it.path))
+      } else {
+        copyFileSync(join(mapsDir, it.path), join(seamsOut, it.path))
+      }
+    }
+    m.doc.items = m.doc.items.concat(m.extra)
+    writeFileSync(join(seamsOut, `${prefix}${m.map}.map`),
+      `# GENERATED by tools/compose/compose.mjs --seams -- do not edit.\n` +
+      `# ${m.map} moved into cell (${m.x},${m.y}) of a ${pitch}-unit grid, with\n` +
+      `# generated ground around it. Test scaffolding: see the top of compose.mjs.\n\n` +
+      emitMap(m.doc) + '\n')
+  }
+  const meta = ['# GENERATED by tools/compose/compose.mjs --seams -- do not edit.',
+                '#', '# The pitch is what composes these maps in world space: a cell at (2,-1)',
+                '# starts at (2*pitch, -1*pitch), and a stub that ends at local x = pitch is',
+                '# the same line as its neighbour\'s stub beginning at local x = 0.',
+                `pitch ${pitch} ${pitch}`, 'radius 1', '']
+  for (const m of loaded) meta.push(`cell ${m.x} ${m.y} ${prefix}${m.map}`)
+  writeFileSync(join(seamsOut, 'metamap.txt'), meta.join('\n') + '\n')
+  console.log(`compose: wrote ${loaded.length} map(s) and a metamap to ${seamsOut}`)
+  process.exit(0)
+}
+
 // Every vertex of a map, as loops, in world coordinates -- with the item so the
 // split can be written back into the document it came from.
-const round4 = (v) => Math.round(v * 10000) / 10000
+function round4 (v) { return Math.round(v * 10000) / 10000 }
 
 // The floor a sector sits at, as the file states it.
 function floorOf (s) {
   const a = attr(s, 'floor')
   return a ? a.v.value : 0
+}
+
+// And the ceiling. 32 for a sector that names none, which is the engine's own
+// answer and is only ever a fallback in a map nothing converted.
+function ceilOf (s) {
+  const a = attr(s, 'ceil')
+  return a ? a.v.value : 32
+}
+
+// How tall, how bright and what the flats are, for a corridor leaving `sector`.
+//
+// Clamped hard on the height. A Doom sector's ceiling is sometimes the sky and
+// sometimes 512 units up a lift shaft, and a corridor that inherited either
+// would be the trench this replaced.
+// How bright a corridor is and what it is made of, taken from the room it
+// leaves. NOT how tall -- see HEAD_RATIO. Light and flats may differ across a
+// seam and nothing breaks: that is two rooms lit differently. A height that
+// differs is a wall.
+function styleOf (sector) {
+  const light = attr(sector, 'light')
+  return {
+    light: light ? Number(light.v) : 128,
+    floortex: attr(sector, 'floortex')?.v ?? null,
+    ceiltex: attr(sector, 'ceiltex')?.v ?? null
+  }
 }
 
 // How many steps it takes to climb from one floor to another without any single
@@ -317,7 +714,9 @@ function loopsOf (m) {
 // The same flood fill the server prints at load, done here so the answer can
 // steer where the hole goes: from the sector the spawn is in, through every
 // doorway whose floors are within a body's step of each other.
-function reachable (m) {
+// `throughDoors` false asks the stricter question: what can be walked to with
+// nothing opened yet -- which is what a player has when they arrive.
+function reachable (m, throughDoors = true) {
   const sectors = m.doc.sectors
   const loops = loopsOf(m)
   const spawn = m.doc.items.find((it) => it.kind === 'spawn')
@@ -355,9 +754,16 @@ function reachable (m) {
       // distance. Treating the two the same reported three of MAP01's sixty
       // sectors as reachable, because every drop counted as a wall.
       if (floorOf(other) - floorOf(entry.sector) > STEP) continue
-      const a = attr(other, 'ceil'), b = attr(entry.sector, 'ceil')
+      const a = attr(other, 'ceil')
       const ceilOther = a ? a.v.value : 32
-      if (ceilOther - floorOf(other) < 1.2) continue      // no headroom
+      const gap = ceilOther - floorOf(other)
+      // A SHUT DOOR IS A DOOR. Doom stores one as a sector with no gap at all,
+      // and in a map that keeps its scripts it opens the first time somebody
+      // presses it -- so counting it as a wall would rule out every room behind
+      // every door in the level. A genuinely low gap is still a crawlspace
+      // nobody gets through.
+      if (gap > 0 && gap < 1.2) continue
+      if (!throughDoors && gap <= 0) continue
       seen.add(nb.v)
       queue.push(nb.v)
     }
@@ -429,6 +835,53 @@ function clearOf (m, x0, y0, x1, y1, exceptIndex) {
   return true
 }
 
+// DOES THIS RECTANGLE TOUCH THE LEVEL ITSELF, rather than merely its bounding
+// box?
+//
+// The box version over-rejects, and around a converted Doom level it
+// over-rejects by about the area of the level: its sectors are full of
+// diagonals, and a diagonal's box is mostly not the diagonal. Ground refused on
+// that evidence left a ring of void around every level -- 4.4% of the cell,
+// all of it in the one place a player walks through, and a hole you fall into
+// rather than a patch of missing scenery.
+//
+// Three ways a rectangle and a polygon can meet, and all three have to be
+// asked: a corner of one inside the other, either way round, or two edges
+// crossing with no corner inside anything.
+function hitsLevel (m, x0, y0, x1, y1) {
+  const inRect = (x, y) => x > x0 && x < x1 && y > y0 && y < y1
+  const cross = (ax, ay, bx, by, cx, cy, dx, dy) => {
+    const d = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx)
+    if (Math.abs(d) < 1e-12) return false
+    const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / d
+    const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / d
+    return t > 0 && t < 1 && u > 0 && u < 1
+  }
+  for (const { loop } of loopsOf(m)) {
+    let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity
+    for (const v of loop) {
+      bx0 = Math.min(bx0, v.x.value); bx1 = Math.max(bx1, v.x.value)
+      by0 = Math.min(by0, v.y.value); by1 = Math.max(by1, v.y.value)
+    }
+    if (bx1 <= x0 || bx0 >= x1 || by1 <= y0 || by0 >= y1) continue
+
+    let inside = false           // is the rectangle's corner inside this sector
+    for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+      const xi = loop[i].x.value, yi = loop[i].y.value
+      const xj = loop[j].x.value, yj = loop[j].y.value
+      if (inRect(xi, yi)) return true
+      if (cross(xj, yj, xi, yi, x0, y0, x1, y0)) return true
+      if (cross(xj, yj, xi, yi, x1, y0, x1, y1)) return true
+      if (cross(xj, yj, xi, yi, x1, y1, x0, y1)) return true
+      if (cross(xj, yj, xi, yi, x0, y1, x0, y0)) return true
+      if ((yi > y0) !== (yj > y0) &&
+          x0 < (xj - xi) * (y0 - yi) / (yj - yi) + xi) inside = !inside
+    }
+    if (inside) return true
+  }
+  return false
+}
+
 // Every sector's bounding box, in world coordinates, measured once.
 function boxesOf (m) {
   const out = []
@@ -445,10 +898,23 @@ function boxesOf (m) {
 
 // Cut the hole: two new vertices in the middle of the chosen edge, and the
 // segment between them made a doorway onto `intoSector`.
-function cut (m, o, intoSector) {
+function cut (m, o, intoSector, at = null) {
   const ux = o.ex / o.len, uy = o.ey / o.len
-  const mx = (o.a.x.value + o.b.x.value) / 2
-  const my = (o.a.y.value + o.b.y.value) / 2
+  // WHERE ALONG THE EDGE. The middle unless somebody asks for a place, and the
+  // one caller that asks wants the gate -- the middle of the cell boundary,
+  // which is the only point the two sides of a seam agree on without talking.
+  // An opening cut there needs no dog-leg to reach it, and a corridor with no
+  // dog-leg has no junctions to get wrong.
+  let mx = (o.a.x.value + o.b.x.value) / 2
+  let my = (o.a.y.value + o.b.y.value) / 2
+  if (at !== null) {
+    // Clamped so the hole stays inside the edge with a whole wall either side.
+    const lo = Math.min(o.a.x.value * Math.abs(ux) + o.a.y.value * Math.abs(uy),
+                        o.b.x.value * Math.abs(ux) + o.b.y.value * Math.abs(uy))
+    const hi = lo + o.len
+    const c = Math.min(hi - W / 2, Math.max(lo + W / 2, at))
+    if (Math.abs(ux) > 0.5) { mx = c } else { my = c }
+  }
   const p1 = { x: mx - ux * W / 2, y: my - uy * W / 2 }
   const p2 = { x: mx + ux * W / 2, y: my + uy * W / 2 }
 
@@ -466,8 +932,8 @@ function cut (m, o, intoSector) {
   // The first new vertex OPENS the doorway (its edge runs to the second); the
   // second closes it and carries on as wall.
   const kids = o.sector.children
-  const at = kids.indexOf(o.a)
-  kids.splice(at + 1, 0, mk(p1, intoSector), mk(p2, null))
+  const afterA = kids.indexOf(o.a)
+  kids.splice(afterA + 1, 0, mk(p1, intoSector), mk(p2, null))
   return { p1, p2 }
 }
 
@@ -478,17 +944,37 @@ function cut (m, o, intoSector) {
 // side rather than per vertex index. A vertex's `neighbor` applies to the edge
 // that STARTS at it, which is the same rule the openings above are cut by.
 function box (x0, x1, ylo, yhi, { west = null, south = null, east = null, north = null } = {},
-              floor = 0) {
+              floor = 0, style = null) {
   const s = { kind: 'sector', line: 0, trail: '', attrs: [], children: [], endTrail: '', index: 0 }
   setNum(s, 'floor', round4(floor))
-  setNum(s, 'ceil', round4(floor + HEADROOM))
+  // `head` lets a caller state the ceiling itself. The outdoors uses it to put
+  // one sky over ground of every height, where a corridor wants a ceiling that
+  // follows its floor.
+  setNum(s, 'ceil', round4(floor + (style?.head ?? headroom)))
+  // LIGHT AND FLATS, INHERITED. A sector that names neither is drawn black and
+  // untextured, which beside a lit Doom level does not read as "a corridor the
+  // tool added" -- it reads as the renderer having failed. There is no
+  // brightness a generated corridor could pick for itself that would be right
+  // in both a floodlit courtyard and a dark maintenance shaft; the room it
+  // leaves already answered that question.
+  if (style) {
+    setInt(s, 'light', style.light)
+    if (style.floortex) setAttr(s, { n: 'floortex', kind: 'name', v: style.floortex })
+    if (style.ceiltex) setAttr(s, { n: 'ceiltex', kind: 'name', v: style.ceiltex })
+  }
   const pts = [[x0, yhi], [x0, ylo], [x1, ylo], [x1, yhi]]
   const nbs = [west, south, east, north]
   pts.forEach(([x, y], i) => {
     const v = { kind: 'vertex', line: 0, trail: '', x: numFrom(x), y: numFrom(y), attrs: [] }
     if (nbs[i] === null) {
       setAttr(v, { n: 'wall', kind: 'flag' })
-      setAttr(v, { n: 'tex', kind: 'name', v: CORRIDOR_TEX })
+      setAttr(v, { n: 'tex', kind: 'name', v: WALL_TEX })
+    } else if (nbs[i] === 'open') {
+      // THE SEAM. The sector simply ends here -- `open` rather than `wall`,
+      // because a wall is a barrier and this is the edge of the cell. A body
+      // walks off it and the server hands it to the next level on the same
+      // tick.
+      setAttr(v, { n: 'open', kind: 'flag' })
     } else {
       setInt(v, 'neighbor', nbs[i])
     }
@@ -497,161 +983,5 @@ function box (x0, x1, ylo, yhi, { west = null, south = null, east = null, north 
   return s
 }
 
-// --- join the cells ----------------------------------------------------------
-//
-// Five rectangles per link: out of A, a turn, the run between the cells, a
-// second turn, and into B. Every junction is a WHOLE shared edge because the
-// turns are square and exactly as wide as the corridor -- two sectors that
-// overlap along part of an edge are not neighbours in this engine, they are two
-// sectors in the same place.
-const corridors = []
-let joined = 0, refused = 0
-for (const m of loaded) m.boxes = boxesOf(m)
+// --- the pieces the ground is made of ------------------------------------
 
-// Can a corridor actually leave this opening towards the gate without crossing
-// the level it is leaving?
-function leaves (m, o, dir, gate) {
-  const half = W / 2
-  const mx = (o.a.x.value + o.b.x.value) / 2
-  const my = (o.a.y.value + o.b.y.value) / 2
-  const si = m.doc.sectors.indexOf(o.sector)
-  if (dir === 0) return gate > mx + 1 && clearOf(m, mx, my - half, gate, my + half, si)
-  if (dir === 1) return gate < mx - 1 && clearOf(m, gate, my - half, mx, my + half, si)
-  if (dir === 2) return gate > my + 1 && clearOf(m, mx - half, my, mx + half, gate, si)
-  return gate < my - 1 && clearOf(m, mx - half, gate, mx + half, my, si)
-}
-
-for (const a of loaded) {
-  for (const [dx, dy, dir, back] of [[1, 0, 0, 1], [0, 1, 2, 3]]) {
-    const b = byCell.get(`${a.x + dx},${a.y + dy}`)
-    if (!b) continue
-    // Best first on both sides, and the first pair whose corridor crosses
-    // nothing wins. A wall facing the right way with half its own level in
-    // front of it is no use, and only the rectangle knows that.
-    const gate = dx === 1 ? (a.maxx + b.minx) / 2 : (a.maxy + b.miny) / 2
-    const pickA = opening(a, dir).find((o) => leaves(a, o, dir, gate))
-    const pickB = opening(b, back).find((o) => leaves(b, o, back, gate))
-    if (!pickA || !pickB) {
-      ++refused
-      console.log(`  no corridor ${a.map} -> ${b.map}: ` +
-                  `${pickA ? '' : a.map + ' has no clear way out'}` +
-                  `${(!pickA && !pickB) ? ', ' : ''}` +
-                  `${pickB ? '' : b.map + ' has no clear way out'}`)
-      continue
-    }
-    const oa = pickA, ob = pickB
-
-    const fa = floorOf(oa.sector), fb = floorOf(ob.sector)
-    const n = stepsBetween(fa, fb)
-
-    // Reserved before anything is built, because a corridor names sectors in
-    // two maps and in itself, and every one of those numbers has to be known
-    // before the first vertex is written.
-    const iQ1 = nextSector++, iT1 = nextSector++
-    const run = []
-    for (let i = 0; i < n; i++) run.push(nextSector++)
-    const iT2 = nextSector++, iQ3 = nextSector++
-
-    // THE RUN IS A STAIRCASE. The two rooms it joins are at whatever heights
-    // their own levels put them, and a body climbs half a unit at a time -- so
-    // the height is spent over the length of the run rather than at one end,
-    // where it would be a wall from one side and a pit from the other.
-    const treads = []
-    for (let i = 0; i < n; i++) treads.push(fa + ((fb - fa) * (i + 1)) / n)
-
-    const ca = cut(a, oa, iQ1)
-    const cb = cut(b, ob, iQ3)
-    const nbA = oa.sector.index + a.base
-    const nbB = ob.sector.index + b.base
-
-    if (dx === 1) {
-      const gx = (a.maxx + b.minx) / 2
-      const gx0 = gx - W / 2, gx1 = gx + W / 2
-      const ay0 = Math.min(ca.p1.y, ca.p2.y), ay1 = Math.max(ca.p1.y, ca.p2.y)
-      const by0 = Math.min(cb.p1.y, cb.p2.y), by1 = Math.max(cb.p1.y, cb.p2.y)
-      if (gx0 - ca.p1.x < 1 || cb.p1.x - gx1 < 1) { ++refused; continue }
-
-      corridors.push(box(ca.p1.x, gx0, ay0, ay1, { west: nbA, east: iT1 }, fa))
-      const up = by0 >= ay1
-      const lo = up ? ay1 : by1
-      const hi = up ? by0 : ay0
-      if (hi - lo < n * 0.6) {
-        console.log(`  no corridor ${a.map} -> ${b.map}: ${(hi - lo).toFixed(1)} units of run ` +
-                    `for ${n} step(s) of height`)
-        ++refused
-        continue
-      }
-      corridors.push(box(gx0, gx1, ay0, ay1, { west: iQ1, [up ? 'north' : 'south']: run[up ? 0 : n - 1] }, fa))
-      const seg = (hi - lo) / n
-      for (let i = 0; i < n; i++) {
-        const y0 = lo + i * seg, y1 = y0 + seg
-        // Ordered from T1 towards T2 when the run goes north, and the other way
-        // when it goes south -- so `treads` is always read from A's end.
-        const k = up ? i : n - 1 - i
-        const south = up ? (i === 0 ? iT1 : run[i - 1]) : (i === 0 ? iT2 : run[i - 1])
-        const north = up ? (i === n - 1 ? iT2 : run[i + 1]) : (i === n - 1 ? iT1 : run[i + 1])
-        corridors.push(box(gx0, gx1, y0, y1, { south, north }, treads[k]))
-      }
-      corridors.push(box(gx0, gx1, by0, by1, { east: iQ3, [up ? 'south' : 'north']: run[up ? n - 1 : 0] }, fb))
-      corridors.push(box(gx1, cb.p1.x, by0, by1, { west: iT2, east: nbB }, fb))
-    } else {
-      const gy = (a.maxy + b.miny) / 2
-      const gy0 = gy - W / 2, gy1 = gy + W / 2
-      const ax0 = Math.min(ca.p1.x, ca.p2.x), ax1 = Math.max(ca.p1.x, ca.p2.x)
-      const bx0 = Math.min(cb.p1.x, cb.p2.x), bx1 = Math.max(cb.p1.x, cb.p2.x)
-      if (gy0 - ca.p1.y < 1 || cb.p1.y - gy1 < 1) { ++refused; continue }
-
-      corridors.push(box(ax0, ax1, ca.p1.y, gy0, { south: nbA, north: iT1 }, fa))
-      const east = bx0 >= ax1
-      const lo = east ? ax1 : bx1
-      const hi = east ? bx0 : ax0
-      if (hi - lo < n * 0.6) {
-        console.log(`  no corridor ${a.map} -> ${b.map}: ${(hi - lo).toFixed(1)} units of run ` +
-                    `for ${n} step(s) of height`)
-        ++refused
-        continue
-      }
-      corridors.push(box(ax0, ax1, gy0, gy1, { south: iQ1, [east ? 'east' : 'west']: run[east ? 0 : n - 1] }, fa))
-      const seg = (hi - lo) / n
-      for (let i = 0; i < n; i++) {
-        const x0 = lo + i * seg, x1 = x0 + seg
-        const k = east ? i : n - 1 - i
-        const west = east ? (i === 0 ? iT1 : run[i - 1]) : (i === 0 ? iT2 : run[i - 1])
-        const eastNb = east ? (i === n - 1 ? iT2 : run[i + 1]) : (i === n - 1 ? iT1 : run[i + 1])
-        corridors.push(box(x0, x1, gy0, gy1, { west, east: eastNb }, treads[k]))
-      }
-      corridors.push(box(bx0, bx1, gy0, gy1, { north: iQ3, [east ? 'west' : 'east']: run[east ? n - 1 : 0] }, fb))
-      corridors.push(box(bx0, bx1, gy1, cb.p1.y, { south: iT2, north: nbB }, fb))
-    }
-    ++joined
-  }
-}
-
-// --- write it out ------------------------------------------------------------
-for (const m of loaded) {
-  out.push(m.header)
-  out.push(emitMap(m.doc))
-  out.push('')
-}
-if (corridors.length) {
-  out.push(`# --- ${joined} corridor(s), ${corridors.length} sectors ---`)
-  out.push(emitMap({ items: corridors }))
-  out.push('')
-}
-
-mkdirSync(dirname(outPath), { recursive: true })
-writeFileSync(outPath, out.join('\n'))
-if (DIAG) {
-  const best = new Map()
-  for (const d of diag) {
-    const k = `${d.map} dir${d.dir}`
-    if (!best.has(k) || d.away < best.get(k).away) best.set(k, d)
-  }
-  for (const [k, d] of [...best].sort()) {
-    console.log(`  diag ${k}: nearest reachable outward wall is ${d.away.toFixed(1)} ` +
-                `from the edge, ${d.len.toFixed(1)} long`)
-  }
-}
-console.log(`compose: ${joined} corridor(s), ${refused} refused`)
-console.log(`compose: wrote ${outPath} -- ${totalSectors + corridors.length} sectors, ` +
-            `${totalPoints} points`)
