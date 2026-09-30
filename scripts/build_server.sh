@@ -69,6 +69,7 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
   "$ROOT/server/src/mobs/mob_eval.cpp" \
   "$ROOT/server/src/mobs/mob_runtime.cpp" \
   "$ROOT/server/src/mobs/mob_binding.cpp" \
+  "$ROOT/server/src/world/metamap.cpp" \
   "$ROOT/server/src/main.cpp" \
   "$ROOT/third_party/luajit/src/libluajit.a" \
   -lm $LUA_EXTRA_LIBS \

@@ -31,6 +31,7 @@
 #include "lua/vm.hpp"
 #include "props.hpp"
 #include "lua/world_binding.hpp"
+#include "world/metamap.hpp"
 
 // For the event dispatch below, which pushes plain Lua values (a side index, a
 // crush kind) alongside the userdata the binding layer builds.
@@ -78,7 +79,6 @@ constexpr size_t MAP_CHUNK_BYTES = 8192;
 inline constexpr u32 NAV_REBUILD_TICKS = 15;
 
 struct Level {
-    std::string      path;
     // Side textures a script has changed, in the order it changed them.
     //
     // Remembered rather than merely broadcast: a client joining later must see
@@ -90,10 +90,6 @@ struct Level {
     // joins. Not simulation state; one CAMERA_SET per joining client.
     proto::CameraSet camera;
     bool             has_camera = false;
-    // Cached basename, filled by Server::level_name. Mutable state on a const
-    // accessor is a smell; the alternative is either a std::string returned by
-    // value across a C API boundary or a second copy of the parsing.
-    mutable std::string short_name;
     // Health per agent slot. Server state: see WorldContext::hp.
     i32              hp[sim::MAX_AGENTS];
     sim::World       world;
@@ -178,7 +174,58 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // The levels this server hosts, in the order they were given on the command
     // line -- which IS the progression order. `--map a --map b --map c` means an
     // exit in a takes you to b.
-    std::vector<std::unique_ptr<Level>> levels;
+    // A LEVEL THE SERVER KNOWS ABOUT, loaded or not.
+    //
+    // The split is the whole of dynamic loading. What a level IS -- its path,
+    // its name, where the metamap put it -- is small and permanent; what a
+    // level HOLDS is four megabytes and exists only while somebody is near it.
+    //
+    // TOMBSTONED RATHER THAN ERASED, and that is not squeamishness: a session's
+    // `level`, a script's `ctx.level`, `entity:change_map(i)` and `dnp.levels()`
+    // are all indices into this vector, so erasing one renumbers every level
+    // after it and every one of those starts naming a different map. A slot
+    // whose payload is null costs a pointer.
+    struct LevelSlot {
+        std::string path;
+        mutable std::string short_name;
+
+        // Where the metamap put it. Off the grid is not an error: an unplaced
+        // level is loaded when it is entered and dropped when it is left, with
+        // no neighbours. See server/src/world/metamap.hpp.
+        server::world::LevelCell cell;
+
+        // Null when the level is not resident.
+        std::unique_ptr<Level> live;
+    };
+    std::vector<LevelSlot> levels;
+
+    // THE TICK EVERY LEVEL COUNTS IN.
+    //
+    // Not a convenience: levels are on ONE clock and always have been. Every
+    // level used to be loaded at startup and stepped from tick zero together,
+    // and Server::tick goes out of its way to keep an empty one counting rather
+    // than letting it stop -- in a comment that records what happened when it
+    // did. A client crossing into a level thousands of ticks behind jumps its
+    // own clock backwards far enough that the server's input ring seeds itself
+    // from a straggler and discards everything real after it, which was
+    // reported as "player inputs stop working after transitioning to a map".
+    //
+    // An unloaded level cannot count, so a level being loaded is set to this
+    // rather than to zero or to whatever it read when it was dropped. A level
+    // that has never been loaded and one that was away for an hour arrive at
+    // the same answer, which is the right one: the clock counts TICKS OF THIS
+    // SERVER, not time spent in a level.
+    u32 clock_ = 0;
+
+    // Where the levels sit, if anything said. An empty metamap is the old
+    // behaviour exactly: no level has a cell, so no level has a neighbour, and
+    // residency is "whoever is being played".
+    server::world::MetaMap meta;
+
+    // Scratch for the residency pass, kept so a level change does not allocate.
+    std::vector<server::world::LevelCell> meta_cells;
+    std::vector<bool> meta_occupied;
+    std::vector<bool> meta_want;
 
     // Scripts loaded into every level, before that level's own. The shared
     // action library lives here; the map's own data file is found beside its
@@ -193,7 +240,17 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // different things depending on where you were standing.
     PropCatalogue props;
 
-    Level& level(u32 i) { return *levels[i]; }
+    // UNCHECKED, and it always was. Every caller either holds a session that is
+    // in this level -- which cannot be unloaded while they are -- or has just
+    // tested is_live. The bounds comment on ingest() below says the same thing
+    // about the range.
+    Level& level(u32 i) { return *levels[i].live; }
+
+    // Is this level's payload in memory? False for a level that exists, is
+    // playable, and nobody is near.
+    bool is_live(u32 i) const {
+        return i < levels.size() && levels[i].live != nullptr;
+    }
     // Also LevelListSink's, so a script can ask what maps this server loaded.
     u32 level_count() const override { return static_cast<u32>(levels.size()); }
 
@@ -414,16 +471,19 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // Agents, not entity slots: the question is how many BODIES the tick
         // resolved, and MAX_AGENTS says nothing about that.
         u32 agents = 0;
+        u32 resident = 0;
         for (u32 li = 0; li < level_count(); ++li) {
+            if (!is_live(li)) continue;
+            ++resident;
             for (u32 i = 0; i < sim::MAX_AGENTS; ++i) {
                 if (level(li).world.agent(i).active) ++agents;
             }
         }
         const double n = static_cast<double>(perf.ticks);
         std::fprintf(stderr,
-                     "[perf] %u ticks  agents %u  lua %.0f us  step %.0f us  snap %.0f us"
-                     "  total %.0f us of %u  worst %llu us%s\n",
-                     perf.ticks, agents,
+                     "[perf] %u ticks  agents %u  levels %u/%u  lua %.0f us  step %.0f us"
+                     "  snap %.0f us  total %.0f us of %u  worst %llu us%s\n",
+                     perf.ticks, agents, resident, level_count(),
                      perf.lua_us / n, perf.step_us / n, perf.snap_us / n,
                      total / n, 1000000u / sim::TICK_RATE_HZ,
                      static_cast<unsigned long long>(perf.worst_total_us),
@@ -471,10 +531,79 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // Each level owns its MapData view, which used to be a function-local
     // `static` -- fine when there was exactly one map and a silent aliasing bug
     // the moment there were two.
-    bool add_level(const char* path) {
+    // A level this server will host. No file is opened: a declaration is a
+    // name and a place, and the four megabytes are the loader's business.
+    void declare_level(const char* path) {
+        LevelSlot slot;
+        slot.path = path;
+        levels.push_back(std::move(slot));
+    }
+
+    // READ THE WORLD'S LAYOUT and bind it to the levels already declared.
+    //
+    // Bound by NAME -- the basename the level list shows -- because that is
+    // what an author has in front of them. A cell naming a map this server did
+    // not load is refused rather than ignored: it is almost always a typo, and
+    // the alternative is a neighbour that silently never loads.
+    bool load_metamap(const char* path) {
+        std::FILE* f = std::fopen(path, "rb");
+        if (f == nullptr) {
+            std::fprintf(stderr, "[srv] cannot open metamap %s\n", path);
+            return false;
+        }
+        std::string text;
+        char chunk[4096];
+        size_t got = 0;
+        while ((got = std::fread(chunk, 1, sizeof(chunk), f)) > 0) text.append(chunk, got);
+        std::fclose(f);
+
+        meta = server::world::parse_metamap(text.data(), text.size());
+        for (const std::string& problem : meta.problems) {
+            std::fprintf(stderr, "[srv] %s: %s\n", path, problem.c_str());
+        }
+
+        u32 placed = 0;
+        for (const server::world::MetaCell& c : meta.cells) {
+            i32 found = -1;
+            for (u32 i = 0; i < level_count(); ++i) {
+                if (c.map == level_name(i)) { found = static_cast<i32>(i); break; }
+            }
+            if (found < 0) {
+                std::fprintf(stderr, "[srv] %s places '%s', which is not a level here\n",
+                             path, c.map.c_str());
+                meta.problems.push_back("'" + c.map + "' is not a level here");
+                continue;
+            }
+            LevelSlot& slot = levels[static_cast<u32>(found)];
+            slot.cell.on_grid = true;
+            slot.cell.x = c.x;
+            slot.cell.y = c.y;
+            ++placed;
+        }
+        if (!meta.ok()) {
+            std::fprintf(stderr, "[srv] refusing to start on a metamap it could not read\n");
+            return false;
+        }
+        std::fprintf(stderr,
+                     "[srv] metamap %s: %u of %u level(s) placed, radius %u\n",
+                     path, placed, level_count(), meta.radius);
+        return true;
+    }
+
+    // Bring a declared level's payload into memory.
+    //
+    // Everything that used to happen once at startup for every map happens here
+    // for one map, when somebody is near it: the file, the nav graph, the Lua
+    // VM and the map's own scripts. Idempotent, so a caller may ask without
+    // checking.
+    bool load_level(u32 li) {
+        if (li >= levels.size()) return false;
+        if (levels[li].live) return true;
+
+        LevelSlot& slot = levels[li];
+        const char* path = slot.path.c_str();
         auto lp = std::make_unique<Level>();
         Level& L = *lp;
-        L.path = path;
 
         std::FILE* f = std::fopen(path, "rb");
         if (!f) { std::fprintf(stderr, "[srv] cannot open map %s\n", path); return false; }
@@ -501,7 +630,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         L.map_hash = L.map_store.hash();
 
         std::fprintf(stderr, "[srv] level %u  %s: %u sectors, %u sides, hash %016llX\n",
-                     level_count(), path, L.view.sector_count, L.view.side_count,
+                     li, path, L.view.sector_count, L.view.side_count,
                      static_cast<unsigned long long>(L.map_hash));
 
         // THE BROADPHASE, reported because its absence is invisible and
@@ -542,8 +671,92 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
         report_reachability(L);
 
-        levels.push_back(std::move(lp));
+        // ON THE SERVER'S CLOCK, before anything can read it. See clock_.
+        L.world.set_tick(clock_);
+
+        slot.live = std::move(lp);
+
+        // Its scripts, which used to be a second pass over every level at
+        // startup. A level whose scripts fail is refused outright rather than
+        // hosted without them: a map without its actions is a building with no
+        // doors, and the loader that reported that at startup must go on
+        // reporting it now that the load has moved.
+        // A VM only where there is something to run in it. `scripts_enabled` is
+        // the operator's veto; what decides otherwise is whether anybody named
+        // a script -- the operator for every level, or this map for itself.
+        const bool wants_scripts =
+            scripts_enabled &&
+            (!shared_scripts.empty() || L.map_store.script_count() > 0);
+        if (wants_scripts &&
+            !start_scripts(li, shared_scripts.data(),
+                           static_cast<u32>(shared_scripts.size()))) {
+            slot.live.reset();
+            return false;
+        }
         return true;
+    }
+
+    // Drop a level's payload, keeping everything a declaration is.
+    //
+    // THE STATE IS LOST, and that is the accepted answer for now: the doors it
+    // had opened are shut again, its switches are unthrown, and the monsters it
+    // had lost are back. A player who leaves and returns finds it as the map
+    // author wrote it, which is what Doom does when you re-enter a level and is
+    // not what a Metroid does.
+    //
+    // THE SEAM FOR THE OTHER ANSWER IS HERE, and deliberately in one place: a
+    // level's persistent state would be serialised out of `slot.live` on this
+    // line and read back in load_level, and nothing else in the server would
+    // have to know. The clock is already treated that way -- it is the one
+    // piece of state that has to survive, because the wire is built on it.
+    void unload_level(u32 li) {
+        if (li >= levels.size() || !levels[li].live) return;
+        LevelSlot& slot = levels[li];
+        std::fprintf(stderr, "[srv] level %u (%s) unloaded at tick %u\n",
+                     li, slot.path.c_str(), slot.live->world.tick());
+        slot.live.reset();
+    }
+
+    // WHICH LEVELS MUST BE IN MEMORY, and making it so.
+    //
+    // Run when the answer can have changed -- somebody joined, left, or walked
+    // through an exit -- and not per tick: the set is a function of who is
+    // where, and that does not change sixty times a second.
+    void refresh_residency() {
+        const u32 n = static_cast<u32>(levels.size());
+        meta_cells.assign(n, server::world::LevelCell{});
+        meta_occupied.assign(n, false);
+        for (u32 i = 0; i < n; ++i) meta_cells[i] = levels[i].cell;
+        for (u32 i = 0; i < n; ++i) meta_occupied[i] = level_occupied(i);
+
+        // THE ENTRY LEVEL IS ALWAYS OCCUPIED, whether or not anybody is
+        // standing in it.
+        //
+        // Every session is placed in level 0 by the join, so "nobody is there"
+        // is never true for long -- and a policy that took it literally
+        // unloaded the map every arriving player is about to be put into, then
+        // loaded it again inside their handshake. On an empty server it went
+        // further: the entry map was dropped the moment it finished loading,
+        // and the first join had to build it from scratch before it could
+        // answer HELLO.
+        //
+        // Costs one level plus its neighbours, permanently, which is the price
+        // of a join that does not stall.
+        if (n > 0) meta_occupied[0] = true;
+
+        server::world::residency(meta_cells, meta_occupied, meta.radius, meta_want);
+
+        for (u32 i = 0; i < n; ++i) {
+            if (meta_want[i] && !levels[i].live) {
+                if (!load_level(i)) {
+                    std::fprintf(stderr,
+                        "[srv] level %u (%s) could not be loaded; it stays out of "
+                        "reach until it can\n", i, levels[i].path.c_str());
+                }
+            } else if (!meta_want[i] && levels[i].live) {
+                unload_level(i);
+            }
+        }
     }
 
     // How much of the map a standard body can walk to from the spawn.
@@ -640,7 +853,24 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     //
     // Returns false only when the target level is full.
     bool place_in_level(Session& s, u32 id, u32 li) {
-        if (li >= level_count()) return false;
+        if (li >= level_count()) {
+            std::fprintf(stderr, "[srv] session %u: level %u does not exist\n", id, li);
+            return false;
+        }
+        // ON DEMAND. The two callers are the join and a map change, which is
+        // every way a session enters a level -- so this is the one place a
+        // level has to be in memory by, and asking here is what lets every
+        // other level stay out of it.
+        //
+        // REPORTED when it fails, because a level that will not load is now a
+        // runtime event rather than a startup one: before levels were loaded on
+        // demand a bad map refused the server, and the failure a player sees
+        // instead has to name itself somewhere.
+        if (!load_level(li)) {
+            std::fprintf(stderr, "[srv] session %u: level %u (%s) would not load\n",
+                         id, li, levels[li].path.c_str());
+            return false;
+        }
         Level& L = level(li);
 
         // Leave the old one first. A player who has moved on must stop
@@ -673,7 +903,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             ? fx3{fx::from_int(10), fx::from_int(10), fx::from_int(2)}
             : L.map_store.spawn_for_tag(spawn_tag, spawn_tag_len);
         const u32 agent = L.world.spawn(spawn_pos);
-        if (agent >= sim::MAX_AGENTS) return false;
+        if (agent >= sim::MAX_AGENTS) {
+            std::fprintf(stderr, "[srv] session %u: level %u has no free body slot\n", id, li);
+            return false;
+        }
 
         // Full health on arrival, including on a map change: a slot is reused
         // as players come and go, and inheriting the last occupant's health
@@ -758,7 +991,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         Level& L = level(li);
         if (!L.vm.open(vm_config)) {
             std::fprintf(stderr, "[srv] cannot start Lua for %s: %s\n",
-                         L.path.c_str(), L.vm.last_error());
+                         levels[li].path.c_str(), L.vm.last_error());
             return false;
         }
         L.ctx.world       = &L.world;
@@ -800,15 +1033,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // script that is missing or fails is fatal for that level: a map whose
         // actions did not load is a building with no doors, and starting it
         // anyway would hide that behind "the switches don't work".
-        const size_t slash = L.path.find_last_of("/\\");
+        const size_t slash = levels[li].path.find_last_of("/\\");
         const std::string dir = slash == std::string::npos ? std::string(".")
-                                                           : L.path.substr(0, slash);
+                                                           : levels[li].path.substr(0, slash);
         for (u32 i = 0; i < L.map_store.script_count(); ++i) {
             const geom::ScriptName& sn = L.map_store.script(i);
             const std::string path = dir + "/" + std::string(sn.name, sn.len);
             if (!L.vm.run_file(path.c_str(), path.c_str())) {
                 std::fprintf(stderr, "[srv] %s asked for %s and it failed: %s\n",
-                             L.path.c_str(), path.c_str(), L.vm.last_error());
+                             levels[li].path.c_str(), path.c_str(), L.vm.last_error());
                 return false;
             }
             std::fprintf(stderr, "[srv] level %u: %s (declared by the map)\n", li, path.c_str());
@@ -845,6 +1078,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                      avg,
                      static_cast<unsigned long long>(c.entities_omitted));
         sessions.erase(it);
+        // The last player in a level leaving is the commonest reason a level
+        // stops being wanted, and the one that gives the memory back.
+        refresh_residency();
     }
 
     // Send a panel to one client (docs/protocol.md §11.1). Reliable channel.
@@ -986,6 +1222,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             }
             s.hello_done = true;
             std::fprintf(stderr, "[srv] session %u -> level 0 agent %u\n", id, s.agent);
+            // The first arrival is what pulls level 0's neighbours in. Their
+            // own level is already loaded -- place_in_level did that -- so this
+            // is about what they can walk to next.
+            refresh_residency();
         }
     }
 
@@ -1233,7 +1473,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
      * the two ends. At this interval a monster notices an opened door within a
      * quarter of a second, which is faster than it can walk to one.
      */
-    void refresh_nav_if_stale(Level& L) {
+    void refresh_nav_if_stale(u32 li) {
+        Level& L = level(li);
         const sim::SectorMotionSet& ms = L.world.motions();
         if (ms.count() == 0) return;
 
@@ -1264,7 +1505,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // time it silently never was.
         if (L.nav_heights == 0) {
             std::fprintf(stderr, "[srv] %s: nav rebuilt -- geometry moved (tick %u)\n",
-                         L.path.c_str(), now);
+                         levels[li].path.c_str(), now);
         }
         L.nav_heights = fp;
         L.nav_built_tick = now;
@@ -1355,7 +1596,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             }
         }
 
-        refresh_nav_if_stale(L);
+        refresh_nav_if_stale(li);
         report_crushes(L);
         dispatch_events(L);
 
@@ -1402,14 +1643,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // rather than stored, because it is asked for once when a panel is built.
     const char* level_name(u32 i) const override {
         if (i >= levels.size()) return "";
-        const std::string& p = levels[i]->path;
+        const std::string& p = levels[i].path;
         const size_t slash = p.find_last_of("/\\");
         const size_t start = slash == std::string::npos ? 0 : slash + 1;
         const size_t dot = p.find_last_of('.');
         const size_t len = (dot == std::string::npos || dot < start) ? std::string::npos
                                                                     : dot - start;
-        levels[i]->short_name = p.substr(start, len);
-        return levels[i]->short_name.c_str();
+        levels[i].short_name = p.substr(start, len);
+        return levels[i].short_name.c_str();
     }
 
     // --- UiSink (docs/protocol.md section 11) --------------------------------
@@ -1618,7 +1859,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             target = from_level + 1;
             if (target >= level_count()) {
                 std::fprintf(stderr, "[srv] agent %u finished the last level (%s)\n",
-                             agent, level(from_level).path.c_str());
+                             agent, levels[from_level].path.c_str());
                 return;
             }
         } else {
@@ -1644,18 +1885,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         for (const MapChange& c : pending_changes) {
             for (auto& [id, s] : sessions) {
                 if (!s.has_agent || s.level != c.from_level || s.agent != c.agent) continue;
-                const std::string from = level(c.from_level).path;
+                const std::string from = levels[c.from_level].path;
                 if (!place_in_level(s, id, c.to_level)) {
                     std::fprintf(stderr, "[srv] session %u cannot enter level %u (full)\n",
                                  id, c.to_level);
                     break;
                 }
                 std::fprintf(stderr, "[srv] session %u: %s -> %s (agent %u)\n",
-                             id, from.c_str(), level(c.to_level).path.c_str(), s.agent);
+                             id, from.c_str(), levels[c.to_level].path.c_str(), s.agent);
                 break;
             }
         }
         pending_changes.clear();
+        // A player walked through an exit, so the neighbourhood moved with
+        // them: what they left may now be droppable and what they walked
+        // towards is already in memory, because it was a neighbour before it
+        // was a destination. Here rather than per tick -- the answer is a
+        // function of who is where, and that does not change sixty times a
+        // second.
+        refresh_residency();
     }
 
     /**
@@ -1687,6 +1935,12 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     }
 
     void tick() {
+        // ONE COUNT FOR THE WHOLE SERVER, advanced exactly where a level's own
+        // world advances: World::step and World::step_idle each add one, and
+        // every resident level runs one of the two below. A level loaded later
+        // is set to this, which is what keeps them all saying the same number.
+        ++clock_;
+
         // EMPTY LEVELS DO NOT TICK.
         //
         // This reverses what the comment on tick_level argued for, and the
@@ -1714,6 +1968,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // the next tick asks who is where.
         u32 ran = 0;
         for (u32 li = 0; li < level_count(); ++li) {
+            // NOT LOADED IS NOT IDLE. An idle level keeps its clock because a
+            // client walking into a stopped one jumps its own backwards; an
+            // UNLOADED level has no clock to keep, and its slot holds the tick
+            // it stopped at until somebody comes near enough to want it back.
+            if (!is_live(li)) continue;
             if (!level_occupied(li)) {
                 // The clock and the map, and nothing else. NOT a skipped tick:
                 // every level keeps the same count, because a level whose clock
@@ -1735,10 +1994,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // what the server is doing and it should not be folklore.
         if (!idle_skip_reported_ && ran < level_count()) {
             idle_skip_reported_ = true;
+            u32 live = 0;
+            for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) ++live;
             std::fprintf(stderr,
                 "[srv] %u of %u levels are empty and are not being ticked; "
-                "their clocks resume when somebody arrives\n",
-                level_count() - ran, level_count());
+                "%u of %u are in memory at all. An empty level's clock keeps "
+                "count; an unloaded one keeps the tick it stopped at\n",
+                level_count() - ran, level_count(), live, level_count());
         }
         // AFTER every level has stepped, never during one.
         //
@@ -1761,7 +2023,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     void send_snapshots() {
         // Once per level, not once per session: the offsets are a property of
         // the world, and every observer of a moving sector sees the same one.
-        for (u32 li = 0; li < level_count(); ++li) collect_discrete_offsets(level(li));
+        for (u32 li = 0; li < level_count(); ++li) {
+            if (is_live(li)) collect_discrete_offsets(level(li));
+        }
 
         for (auto& [id, s] : sessions) {
             if (!s.has_agent) continue;
@@ -2139,7 +2403,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
     
         // Sent; the queue may go.
-        for (u32 li = 0; li < level_count(); ++li) level(li).world.clear_vfx();
+        for (u32 li = 0; li < level_count(); ++li) {
+            if (is_live(li)) level(li).world.clear_vfx();
+        }
 }
 };
 
@@ -2188,6 +2454,7 @@ int main(int argc, char** argv) {
     // exit in a takes you to b.
     constexpr u32 MAX_LEVELS = 64;
     const char* map_paths[MAX_LEVELS]{};
+    const char* metamap_path = nullptr;
     u32 map_count = 0;
     const char* spawn_tag_arg = nullptr;
     bool want_param_test = false;
@@ -2222,6 +2489,8 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
             if (map_count < MAX_LEVELS) map_paths[map_count++] = argv[++i];
             else { std::fprintf(stderr, "[srv] too many --map arguments\n"); return 2; }
+        } else if (std::strcmp(argv[i], "--metamap") == 0 && i + 1 < argc) {
+            metamap_path = argv[++i];
         } else if (std::strcmp(argv[i], "--spawn") == 0 && i + 1 < argc) {
             spawn_tag_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--param-test") == 0) {
@@ -2356,13 +2625,30 @@ int main(int argc, char** argv) {
                              "nothing to host\n");
         return 1;
     }
-    for (u32 k = 0; k < map_count; ++k) {
-        if (!srv.add_level(map_paths[k])) {
-            std::fprintf(stderr, "[srv] refusing to start without the requested map\n");
-            return 1;
+    for (u32 k = 0; k < map_count; ++k) srv.declare_level(map_paths[k]);
+
+    // THE WORLD'S LAYOUT, if anything says. Named outright, or found beside the
+    // maps of the first module that has one -- discovered the same way the maps
+    // themselves are, so a module that lays its levels out ships the file and
+    // one that does not is unchanged in every respect.
+    //
+    // A metamap that will not parse is FATAL rather than ignored: a world whose
+    // layout was half read is a world where some neighbours load and some do
+    // not, which is the kind of fault that presents as an occasional stall.
+    {
+        std::string mm = metamap_path ? metamap_path : std::string();
+        if (mm.empty()) {
+            for (u32 mi = 0; mi < module_count; ++mi) {
+                const std::string candidate =
+                    std::string(module_dirs[mi]) + "/maps/metamap.txt";
+                std::FILE* probe = std::fopen(candidate.c_str(), "rb");
+                if (probe) { std::fclose(probe); mm = candidate; break; }
+            }
         }
+        if (!mm.empty() && !srv.load_metamap(mm.c_str())) return 1;
     }
-    std::fprintf(stderr, "[srv] %u level(s); an exit advances to the next\n", srv.level_count());
+    std::fprintf(stderr, "[srv] %u level(s) declared; an exit advances to the next\n",
+                 srv.level_count());
 
     // The prop catalogue.
     //
@@ -2403,11 +2689,13 @@ int main(int argc, char** argv) {
     // any of its own. That is the point of the map declaring them: a converted
     // Doom level works when you load it, not when you remember which files to
     // pass. --no-scripts is the operator's veto over both.
-    bool any_map_scripts = false;
-    for (u32 li = 0; li < srv.level_count(); ++li) {
-        if (srv.level(li).map_store.script_count() > 0) any_map_scripts = true;
-    }
-    if (!no_scripts && (script_count > 0 || any_map_scripts)) {
+    //
+    // ASKED PER LEVEL, AT LOAD, and it has to be: the question is "does this
+    // map declare scripts", the answer is in the map, and with levels loaded on
+    // demand there is no map here to ask. This used to be a scan over every
+    // level's map_store at startup, which after the split read a payload that
+    // does not exist yet -- a null dereference before the first tick.
+    if (!no_scripts) {
         srv.vm_config.trust = strict_scripts ? lua::Trust::Strict : lua::Trust::Full;
         if (lua_stall_us > 0) srv.vm_config.stall_warn_us = lua_stall_us;
         srv.hash_trace = hash_trace_every;
@@ -2425,10 +2713,32 @@ int main(int argc, char** argv) {
                      srv.vm_config.budget_per_call, srv.vm_config.budget_per_tick,
                      srv.vm_config.memory_cap / (1024u * 1024u));
 
-        for (u32 li = 0; li < srv.level_count(); ++li) {
-            if (!srv.start_scripts(li, script_args, script_count)) return 1;
-        }
+        // KEPT, not applied. Every level's scripts are loaded when its payload
+        // is, which is when somebody comes near it -- so the list the operator
+        // gave has to outlive this block rather than be spent in it.
+        srv.shared_scripts.assign(script_args, script_args + script_count);
     }
+
+    // LEVEL 0 EAGERLY, and only level 0.
+    //
+    // Two reasons, both about the moment a mistake is noticed. A map that does
+    // not load is a fatal startup error and always has been -- discovering it
+    // when the first player walks in would turn "the server refuses to start"
+    // into "the game broke forty minutes later" -- and the entry map is the one
+    // every session is placed in, so loading it here is the difference between
+    // a join that is instant and a join that waits for a nav build.
+    //
+    // The other thirty-one wait. That is the whole change: they are declared,
+    // they are listed, an exit still advances to them, and they cost a path
+    // and a tick counter until somebody is near enough to want one.
+    if (srv.level_count() > 0 && !srv.load_level(0)) {
+        std::fprintf(stderr, "[srv] refusing to start without the entry map\n");
+        return 1;
+    }
+    // AND THE ENTRY MAP'S NEIGHBOURS, before anybody arrives. The first player
+    // would otherwise pay for them inside their own handshake, which is the one
+    // moment a load is least welcome.
+    srv.refresh_residency();
 
     // The stand-in body, spawned before the first tick so both runs of a
     // scenario start from the same state at the same tick.

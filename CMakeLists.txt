@@ -64,6 +64,7 @@ if(NOT EMSCRIPTEN)
   add_executable(dnp-server
     server/src/main.cpp
     server/src/net/link.cpp
+    server/src/world/metamap.cpp
   )
   target_include_directories(dnp-server PRIVATE server/src)
   target_link_libraries(dnp-server PRIVATE dnp_core)
