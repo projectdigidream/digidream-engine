@@ -65,6 +65,14 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_props.cpp"        -o "
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_bodies.cpp"       -o "$OUT/test_bodies"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sweep.cpp"        -o "$OUT/test_sweep"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sight.cpp"        -o "$OUT/test_sight"
+# The metamap: where each level sits, and what that means has to be resident.
+#
+# Built HERE rather than beside the Lua tests because it needs neither LuaJIT nor
+# a world -- the parse takes text and the policy takes numbers -- so it runs in
+# the same dependency-free stage the determinism gate does.
+clang++ "${FLAGS[@]}" -I"$ROOT/server/src" \
+        "$ROOT/server/src/world/metamap.cpp" "$ROOT/server/tests/test_metamap.cpp" \
+        -o "$OUT/test_metamap"
 # A fixture generator, not a test: it prints wire bytes for the JS decoder.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tools/ui_fixture.cpp"        -o "$OUT/ui_fixture"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_turning.cpp"      -o "$OUT/test_turning"

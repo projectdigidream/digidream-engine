@@ -44,6 +44,7 @@ HOST_ARCH="$(uname -m)"
 "./build/$HOST_ARCH/test_nav"
 "./build/$HOST_ARCH/test_rail"
 "./build/$HOST_ARCH/test_path"
+"./build/$HOST_ARCH/test_metamap"
 
 # The map compiler must round-trip the authored map: mapc bakes it, and the
 # loader re-triangulates and compares, so this also proves the compiler and the
@@ -466,6 +467,16 @@ else
   # Camera paths: what the studio draws is what mapc bakes, and the curve
   # length it shows is the one a cutscene is timed against.
   node studio/test/paths.test.js | tail -2
+  # The arsenal the studio writes, loaded by the real weapon runtime, and the
+  # particle kinds and player art read back by the client's own parsers.
+  node studio/test/weapons.test.js | tail -2
+  # How a flat is painted and what you can see through, against mapc and the
+  # runtime's own loader -- including that a map saying nothing still bakes to
+  # the bytes it always did, which is what keeps an older module's soundtrack.
+  node studio/test/surfaces.test.js | tail -2
+  # The player: the parameter names held against the engine's own header, and
+  # the merged module file chaining hooks two of its parts both define.
+  node studio/test/player.test.js | tail -2
   # A map's music is filed under the hash the client computes for it, and a
   # cue that names a missing track is said, not silently dropped.
   node studio/test/music.test.js | tail -2
