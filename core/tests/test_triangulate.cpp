@@ -335,7 +335,9 @@ static void test_holes() {
 static void test_staged_commit() {
     std::printf("mapstore: staged edits are atomic and rebuild the mesh\n");
 
-    MapStorage store;
+    static MapStorage store;
+
+    store.clear();
     const fx2 sq[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
     const u32 s = store.add_sector(sq, 4, F(0), F(20), 7);
     CHECK(s == 0);
@@ -367,7 +369,9 @@ static void test_staged_commit() {
 static void test_rejected_commit_is_inert() {
     std::printf("mapstore: a rejected shape leaves the world untouched\n");
 
-    MapStorage store;
+    static MapStorage store;
+
+    store.clear();
     const fx2 sq[] = {{F(0), F(0)}, {F(10), F(0)}, {F(10), F(10)}, {F(0), F(10)}};
     store.add_sector(sq, 4, F(0), F(20), 1);
     const u64 h0 = store.hash();

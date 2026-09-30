@@ -9,6 +9,7 @@
 // world moves rather than baked when the map loaded.
 //
 #include <cstdio>
+#include <memory>
 
 #include "dnp/nav/navgraph.hpp"
 
@@ -95,7 +96,8 @@ static void test_the_graph_is_the_map() {
     std::printf("nav: the graph is derived from the map, not authored beside it\n");
 
     static Grid grid;
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     CHECK(g.build(grid.view));
     CHECK(g.node_count() == 4);
     // Eight directed edges: four shared boundaries, each seen from both sides.
@@ -125,7 +127,8 @@ static void test_walkability_is_the_movers_walkability() {
     std::printf("nav: an edge is open exactly when the mover would let a body cross it\n");
 
     static Grid grid;
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     g.build(grid.view);
     const NavBody body;
 
@@ -171,7 +174,8 @@ static void test_routes_and_tie_breaking() {
     std::printf("nav: A* routes, and breaks ties the same way every time\n");
 
     static Grid grid;
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     g.build(grid.view);
     const NavBody body;
 
@@ -195,7 +199,8 @@ static void test_routes_and_tie_breaking() {
     // servers running the same map would disagree about a route for no reason
     // a player could ever see.
     static Grid reordered(true);
-    NavGraph g2;
+    const auto g2_owned = std::make_unique<NavGraph>();
+    NavGraph& g2 = *g2_owned;
     g2.build(reordered.view);
     u32 other[MAX_NAV_NODES];
     const PathResult r_other =
@@ -233,7 +238,8 @@ static void test_a_lift_changes_the_route_without_rebuilding() {
     std::printf("nav: a moving floor changes reachability at query time, not at build time\n");
 
     static Grid grid;
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     g.build(grid.view);
     const NavBody body;
     const u64 built = g.hash();
@@ -293,7 +299,9 @@ static void test_a_narrow_door_excludes_a_wide_body() {
     store.add_side(1, 3, 0, 0, 0);
     const MapData view = store.view();
 
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+
+    NavGraph& g = *g_owned;
     CHECK(g.build(view));
 
     NavBody slim;
@@ -307,7 +315,8 @@ static void test_a_narrow_door_excludes_a_wide_body() {
     // the same way the mover does.
     store.side_mut(2).flags |= side_flag::BLOCKING;
     const MapData blocked = store.view();
-    NavGraph gb;
+    const auto gb_owned = std::make_unique<NavGraph>();
+    NavGraph& gb = *gb_owned;
     gb.build(blocked);
     CHECK(find_path(blocked, gb, g_query, 0, 1, slim, g_path, MAX_NAV_NODES).status
           == PathStatus::Unreachable);
@@ -324,7 +333,8 @@ static void test_portals_are_edges() {
     std::printf("nav: an in-map portal is an edge like any other\n");
 
     static Grid grid;
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     g.build(grid.view);
     const NavBody body;
 
@@ -370,7 +380,9 @@ static void test_a_portal_pointing_away_from_the_goal() {
     }
     const MapData view = store.view();
 
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+
+    NavGraph& g = *g_owned;
     g.build(view);
     const NavBody body;
 
@@ -436,7 +448,9 @@ static void test_a_node_is_expanded_once_even_when_re_discovered() {
     store.add_side(3, 3, 0, NO_SECTOR, 0);
     const MapData view = store.view();
 
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+
+    NavGraph& g = *g_owned;
     g.build(view);
     const NavBody body;
 
@@ -467,8 +481,10 @@ static void test_a_local_rebuild_matches_a_full_one() {
 
     static Grid a;
     static Grid b;
-    NavGraph local;
-    NavGraph full;
+    const auto local_owned = std::make_unique<NavGraph>();
+    NavGraph& local = *local_owned;
+    const auto full_owned = std::make_unique<NavGraph>();
+    NavGraph& full = *full_owned;
     local.build(a.view);
 
     // Move an outer corner of sector 3, through the staged-commit path the
@@ -515,7 +531,8 @@ static void test_a_local_rebuild_refuses_a_changed_topology() {
     std::printf("nav: a local rebuild refuses a map whose topology moved under it\n");
 
     static Grid grid;
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     g.build(grid.view);
 
     // Sever a boundary. The edge is still in the array, so a rebuild that
@@ -573,7 +590,8 @@ static void test_open_sides_are_adjacency() {
     std::printf("nav: `open` sides connect, though nothing names a neighbour\n");
 
     static OpenPair flat(fx::zero());
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     CHECK(g.build(flat.view));
     CHECK(g.edge_count() > 0);
     CHECK(has_edge(g, 0, 1));
@@ -605,7 +623,8 @@ static void test_open_sides_are_adjacency() {
                 walled.add_side(s, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
     }
     MapData wv = walled.view();
-    NavGraph gw;
+    const auto gw_owned = std::make_unique<NavGraph>();
+    NavGraph& gw = *gw_owned;
     CHECK(gw.build(wv));
     CHECK(!has_edge(gw, 0, 1));
     CHECK(gw.edge_count() == 0);
@@ -619,7 +638,8 @@ static void test_a_derived_drop_is_one_way() {
 
     // The east room's floor is three units up: far more than a step.
     static OpenPair step_up(F(3));
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     CHECK(g.build(step_up.view));
     // BOTH edges exist -- adjacency is not the same question as walkability.
     CHECK(has_edge(g, 0, 1));
@@ -642,7 +662,8 @@ static void test_a_derived_drop_is_one_way() {
     // the refusal above is about the rise and not about derived edges being
     // unusable in general.
     static OpenPair flat(fx::zero());
-    NavGraph g2;
+    const auto g2_owned = std::make_unique<NavGraph>();
+    NavGraph& g2 = *g2_owned;
     g2.build(flat.view);
     bool a = false, b = false;
     for (u32 k = 0; k < g2.node(0).edge_count; ++k) {
@@ -663,7 +684,8 @@ static void test_derived_edges_are_deduplicated() {
     std::printf("nav: one edge per neighbour, not one per probe\n");
 
     static OpenPair flat(fx::zero());
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     g.build(flat.view);
 
     u32 to_one = 0;
@@ -686,7 +708,8 @@ static void test_a_settable_jump_opens_a_ledge() {
 
     // Three units up: six times STEP_HEIGHT, so nothing walks it.
     static OpenPair ledge(F(3));
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     CHECK(g.build(ledge.view));
 
     const NavEdge* up = nullptr;
@@ -716,7 +739,8 @@ static void test_a_settable_jump_opens_a_ledge() {
     // crosses is reported as needing none, or a runtime would jump its way
     // across a flat room.
     static OpenPair flat(fx::zero());
-    NavGraph g2;
+    const auto g2_owned = std::make_unique<NavGraph>();
+    NavGraph& g2 = *g2_owned;
     g2.build(flat.view);
     for (u32 k = 0; k < g2.node(0).edge_count; ++k) {
         const NavEdge& e = g2.edge(g2.node(0).first_edge + k);
@@ -746,7 +770,8 @@ static void test_a_jump_does_not_open_a_crawlspace() {
                                side_flag::LEDGE);
     }
     MapData view = store.view();
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
     CHECK(g.build(view));
 
     NavBody hopper;
@@ -761,7 +786,8 @@ static void test_a_jump_does_not_open_a_crawlspace() {
     // refusal is about the headroom and not about the sector being unreachable.
     store.sector_mut(1).ceil_z = F(20);
     view = store.view();
-    NavGraph g2;
+    const auto g2_owned = std::make_unique<NavGraph>();
+    NavGraph& g2 = *g2_owned;
     g2.build(view);
     bool crossed = false;
     for (u32 k = 0; k < g2.node(0).edge_count; ++k) {
@@ -781,7 +807,9 @@ static void test_the_route_says_where_to_jump() {
     u32 path[MAX_NAV_NODES];
     bool jump[MAX_NAV_NODES];
 
-    NavGraph g;
+    const auto g_owned = std::make_unique<NavGraph>();
+
+    NavGraph& g = *g_owned;
     g.build(ledge.view);
 
     NavBody hopper;
@@ -806,7 +834,8 @@ static void test_the_route_says_where_to_jump() {
     // And on ground both can walk, the jumper's route is flagged as needing
     // none -- otherwise a runtime would hop across a flat room.
     static OpenPair flat(fx::zero());
-    NavGraph g2;
+    const auto g2_owned = std::make_unique<NavGraph>();
+    NavGraph& g2 = *g2_owned;
     g2.build(flat.view);
     const PathResult r3 = find_path(flat.view, g2, q, 0, 1, hopper, path,
                                     MAX_NAV_NODES, jump);

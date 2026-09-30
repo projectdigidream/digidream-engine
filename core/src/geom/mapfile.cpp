@@ -274,13 +274,24 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         u16 hole_count;
         // The FILE OFFSET of this sector's hole table, not the table itself.
         //
-        // pend[] is a local array of MAX_MAP_SECTORS entries, so every byte
-        // here is multiplied by 512. Inlining 64 hole ranges would make it
-        // 130 KB of stack -- twice the whole wasm stack -- to hold data the
-        // rebuild pass re-reads by seeking anyway.
+        // pend[] has one entry per sector, so every byte here is multiplied by
+        // MAX_MAP_SECTORS. Inlining 64 hole ranges would make it megabytes to
+        // hold data the rebuild pass re-reads by seeking anyway.
         size_t holes_at;
     };
-    PendingSector pend[MAX_MAP_SECTORS];
+    // STATIC, and it has to be at this size.
+    //
+    // A PendingSector is about fifty bytes and there are MAX_MAP_SECTORS of
+    // them, which since the capacity was raised is over a hundred kilobytes --
+    // and the wasm stack is sixty-four. On the stack this overflows the client
+    // before it has finished reading the header, which is a crash with no
+    // message in the one place a map is loaded.
+    //
+    // Non-reentrant as a result, which is true of every caller: the server
+    // loads maps on its own thread, the client loads them on the only thread it
+    // has, and a second load while one is in progress would already be reading
+    // into the same MapStorage.
+    static PendingSector pend[MAX_MAP_SECTORS];
     for (u32 i = 0; i < sector_count; ++i) {
         PendingSector& s = pend[i];
         s.first_point = r.u16v();

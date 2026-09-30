@@ -116,7 +116,7 @@ static void test_parametric_is_a_pure_function() {
 static void test_riding_a_lift() {
     std::printf("motion: an anchored agent rides its sector\n");
 
-    Stage stage;
+    static Stage stage;
 // A World is very nearly a megabyte -- MAX_AGENTS agents, MAX_PROPS props and
 // the per-tick scratch for both -- so it is built on the HEAP here rather than
 // in the frame. It used to be a plain local, which was fine when MAX_AGENTS was
@@ -168,7 +168,13 @@ static void test_detach_inherits_momentum() {
     fx peak_rel_static = fx::zero();
 
     for (int variant = 0; variant < 2; ++variant) {
-        Stage stage;
+        // ON THE HEAP AND FRESH EACH TIME, not static like the fixtures in the
+        // one-shot tests around it. This loop runs twice and the first pass
+        // RAISES the platform, which is stored in the map -- so a fixture that
+        // survived into the second pass would start the control with the lift
+        // already at the top, and the control is the whole point of it.
+        const auto sp = std::make_unique<Stage>();
+        Stage& stage = *sp;
         const auto wp = std::make_unique<World>();
         World& w = *wp;
         stage.attach(w);
@@ -223,7 +229,7 @@ static void test_detach_inherits_momentum() {
 static void test_discrete_motion() {
     std::printf("motion: scripted-discrete moves the sector without a path\n");
 
-    Stage stage;
+    static Stage stage;
     const auto wp = std::make_unique<World>();
     World& w = *wp;
     stage.attach(w);
@@ -311,7 +317,7 @@ static void test_no_drift_over_a_long_run() {
     // tick N-1 -- checked explicitly rather than assumed, since getting that
     // off by one would put every moving sector one tick out of step with the
     // agents riding it.
-    Stage stage;
+    static Stage stage;
     const auto wp = std::make_unique<World>();
     World& w = *wp;
     stage.attach(w);
@@ -764,7 +770,7 @@ static void test_detaching_inherits_horizontal_momentum() {
 static void test_a_platform_moving_into_its_neighbour_stays_coherent() {
     std::printf("motion: a platform overrunning its neighbour leaves a sane world\n");
 
-    Stage stage;                       // two sectors, sharing x = 20
+    static Stage stage;                       // two sectors, sharing x = 20
     const auto wp = std::make_unique<World>();
     World& w = *wp;
     stage.attach(w);

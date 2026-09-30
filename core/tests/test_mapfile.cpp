@@ -218,7 +218,9 @@ static void test_a_map_written_before_styles_still_loads() {
 static void test_roundtrip() {
     std::printf("mapfile: save/load round-trips exactly\n");
 
-    MapStorage src;
+    static MapStorage src;
+
+    src.clear();
     build_reference(src);
 
     u8 buf[8192];
@@ -226,7 +228,9 @@ static void test_roundtrip() {
     CHECK(save_map(src, w));
     CHECK(w.size() > 0);
 
-    MapStorage dst;
+    static MapStorage dst;
+
+    dst.clear();
     ByteReader r(buf, w.size());
     const MapLoadStatus st = load_map(r, dst);
     if (st != MapLoadStatus::Ok) {
@@ -311,13 +315,16 @@ static void test_roundtrip() {
 // identical except for every rendering attribute must collide identically.
 // If this ever fails, something has reached across the separation.
 static void test_render_does_not_affect_physics() {
-    MapStorage plain;
+    static MapStorage plain;
+    plain.clear();
     build_reference(plain);
     // Strip every rendering attribute back to its default.
     for (u32 i = 0; i < plain.view().sector_count; ++i) plain.sector_render_mut(i) = SectorRender{};
     for (u32 i = 0; i < plain.view().side_count; ++i) plain.side_render_mut(i) = SideRender{};
 
-    MapStorage painted;
+    static MapStorage painted;
+
+    painted.clear();
     build_reference(painted);
 
     const MapData a = plain.view();
@@ -360,7 +367,9 @@ static void test_matches_hardcoded_map() {
     // switched over.
     std::printf("mapfile: the built map matches the hardcoded one\n");
 
-    MapStorage built;
+    static MapStorage built;
+
+    built.clear();
     build_reference(built);
 
     const MapData a = built.view();
@@ -396,7 +405,9 @@ static void test_matches_hardcoded_map() {
 static void test_holes_round_trip() {
     std::printf("mapfile: a sector's holes survive save and load\n");
 
-    MapStorage src;
+    static MapStorage src;
+
+    src.clear();
     src.clear();
     const fx2 room[] = {{F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}};
     const u32 s0 = src.add_sector(room, 4, F(10), F(60), 7);
@@ -415,7 +426,9 @@ static void test_holes_round_trip() {
     ByteWriter w(buf, sizeof(buf));
     CHECK(save_map(src, w));
 
-    MapStorage dst;
+    static MapStorage dst;
+
+    dst.clear();
     ByteReader r(buf, w.size());
     CHECK(load_map(r, dst) == MapLoadStatus::Ok);
     CHECK(dst.hash() == src.hash());
@@ -443,14 +456,18 @@ static void test_holes_round_trip() {
 static void test_rejects_bad_input() {
     std::printf("mapfile: malformed input is rejected, never partially loaded\n");
 
-    MapStorage src;
+    static MapStorage src;
+
+    src.clear();
     build_reference(src);
     u8 buf[8192];
     ByteWriter w(buf, sizeof(buf));
     save_map(src, w);
     const size_t n = w.size();
 
-    MapStorage dst;
+    static MapStorage dst;
+
+    dst.clear();
 
     // Every truncation must be refused, and must leave the store empty rather
     // than half-populated -- a partly-loaded map is worse than none because it
@@ -523,7 +540,8 @@ static void test_rejects_bad_input() {
 static void test_fuzz() {
     std::printf("mapfile: arbitrary bytes never misbehave\n");
     Rng rng(0xBEEF);
-    MapStorage dst;
+    static MapStorage dst;
+    dst.clear();
     u8 buf[2048];
 
     for (int trial = 0; trial < 20000; ++trial) {
@@ -564,7 +582,9 @@ static void test_fuzz() {
 static void test_body_round_trips_and_is_hashed() {
     std::printf("mapfile: a map's body proportions survive the file and enter its hash\n");
 
-    MapStorage src;
+    static MapStorage src;
+
+    src.clear();
     build_reference(src);
     const u64 default_hash = src.hash();
 
@@ -576,7 +596,9 @@ static void test_body_round_trips_and_is_hashed() {
     ByteWriter w(buf, sizeof(buf));
     CHECK(save_map(src, w));
 
-    MapStorage dst;
+    static MapStorage dst;
+
+    dst.clear();
     ByteReader r(buf, w.size());
     CHECK(load_map(r, dst) == MapLoadStatus::Ok);
     CHECK(dst.body_radius() == fx::from_frac(1, 3));
@@ -585,12 +607,14 @@ static void test_body_round_trips_and_is_hashed() {
 
     // CONTROL: a map that says nothing keeps the engine's defaults, so every
     // map authored before this field existed means what it always meant.
-    MapStorage plain;
+    static MapStorage plain;
+    plain.clear();
     build_reference(plain);
     u8 buf2[8192];
     ByteWriter w2(buf2, sizeof(buf2));
     CHECK(save_map(plain, w2));
-    MapStorage dst2;
+    static MapStorage dst2;
+    dst2.clear();
     ByteReader r2(buf2, w2.size());
     CHECK(load_map(r2, dst2) == MapLoadStatus::Ok);
     CHECK(dst2.body_radius() == fx::from_frac(1, 2));

@@ -22,10 +22,35 @@
 
 namespace dnp::geom {
 
-inline constexpr u32 MAX_MAP_POINTS  = 4096;
-inline constexpr u32 MAX_MAP_SECTORS = 512;
-inline constexpr u32 MAX_MAP_SIDES   = 4096;
-inline constexpr u32 MAX_MAP_TRI_IDX = 12288;   // 3 per triangle
+// THE SIZE OF ONE MAP, raised fourfold for worlds sewn out of several.
+//
+// The numbers below were sized for a converted Doom level, and they are not
+// generous for one: MAP15 is 307 sectors and 2361 points against 512 and 4096.
+// A seamless world composed of cells wants each cell to be a place rather than
+// a room, and a cell that cannot hold one and a half of Doom's larger levels is
+// not a place.
+//
+// THEY SCALE TOGETHER, and have to. A sector needs at least three points and in
+// practice takes about eight, so a sector budget the point budget cannot feed
+// is a number that can never be reached -- 2048 sectors at MAP15's ratio is
+// about 15,700 points, which is what 16384 is for. Triangle indices follow the
+// points at three apiece.
+//
+// WHAT THIS COSTS. A MapStorage is a fixed arena, so the whole increase is paid
+// at once, resident, per loaded map -- which is what makes loading levels on
+// demand a requirement rather than an optimisation: thirty-two of these is no
+// longer sixty megabytes.
+//
+// WHAT IT DOES NOT CHANGE. Every index into these arrays is already wide
+// enough: a side's point indices are u16 and 16384 is well inside one, the
+// triangle list is u16 over points, the broadphase holds u16 sector indices,
+// and a sector's own point count is capped by MAX_POLY_POINTS long before any
+// of this. Nothing in the file format, the wire or either hash mentions a
+// capacity, so a map baked before this reads back identically.
+inline constexpr u32 MAX_MAP_POINTS  = 16384;
+inline constexpr u32 MAX_MAP_SECTORS = 2048;
+inline constexpr u32 MAX_MAP_SIDES   = 16384;
+inline constexpr u32 MAX_MAP_TRI_IDX = 49152;   // 3 per triangle
 inline constexpr u32 MAX_MAP_SPAWNS  = 64;
 inline constexpr u32 MAX_MAP_RAILS      = 64;
 inline constexpr u32 MAX_MAP_WAYPOINTS  = 512;
@@ -37,7 +62,7 @@ inline constexpr u32 MAX_MAP_PATH_POINTS = 256;
 inline constexpr u32 MAX_SPAWN_TAG   = 32;
 inline constexpr u32 MAX_MAP_TEXTURES   = 256;
 inline constexpr u32 MAX_MAP_LIGHTS     = 128;
-inline constexpr u32 MAX_MAP_HOLES      = 512;
+inline constexpr u32 MAX_MAP_HOLES      = 2048;
 
 // The broadphase grid. 48x48 cells over the map's bounding box, and a cap on
 // total membership: a sector belongs to every cell its bounding box touches, so
@@ -46,7 +71,7 @@ inline constexpr u32 MAX_MAP_HOLES      = 512;
 // the linear scan -- slower, and still exactly right.
 inline constexpr u32 GRID_DIM       = 48;
 inline constexpr u32 GRID_CELLS     = GRID_DIM * GRID_DIM;
-inline constexpr u32 MAX_GRID_ITEMS = 24576;
+inline constexpr u32 MAX_GRID_ITEMS = 98304;
 
 // A named landing point. Portals name one of these in the join handshake
 // (design §3.3), so each portal can deliver its arrivals somewhere specific
