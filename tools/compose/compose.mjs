@@ -24,6 +24,7 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { parseMap, emitMap, numFrom, attr, setAttr, setInt, setNum } from '../../editor/src/mapfmt.js'
 import { heightAt, waterAt, TILE } from './terrain.mjs'
+import { outerOutlines, apronPieces, edgeKey, key as ptKey, polygonArea } from './apron.mjs'
 
 // A body steps up half a unit and no more (sim::constants STEP_HEIGHT), so a
 // corridor that meets a room's floor at the wrong height is a wall from one
@@ -92,6 +93,9 @@ for (const raw of readFileSync(metamapPath, 'utf8').split('\n')) {
 }
 
 const GROUND_TEX = 'GRASS1'
+// The face of a step in the ground. Every step between two pieces of ground at
+// different heights draws one, and with no picture it is a black line.
+const EARTH_TEX = 'ROCK2'
 const WATER_TEX = 'FWATER1'
 const SKY_TEX = 'F_SKY1'
 // One ceiling for the whole outdoors, well clear of the highest ground, so the
@@ -316,10 +320,15 @@ if (seamsOut) {
   //   so there is nothing to route and nothing for the two sides to agree on.
   //   The four levels that could take no corridor at all are not special here.
   {
-    let tiles = 0, mouths = 0, skies = 0, outdoors = 0, sealed = []
+    let tiles = 0, mouths = 0, skies = 0, outdoors = 0, sealed = [], aproned = 0, joined = 0
+    const fallback = []
     for (const m of loaded) {
       const N = Math.round(pitch / TILE)
       const ox = m.x * pitch, oy = m.y * pitch
+      // THE GROUND RIGHT UP TO THE LEVEL (apron.mjs), when its outline traces
+      // cleanly. Otherwise the old way: tiles stop short, doorways are cut.
+      const ap = apronPlan(m, pitch)
+      if (!ap) fallback.push(`${m.map} (${m.apronWhy})`)
       const idx = new Map()
       const free = []
       for (let j = 0; j < N; j++) {
@@ -333,7 +342,8 @@ if (seamsOut) {
           // A hair larger than the tile: mapc counts a level corner sitting
           // exactly on a tile's boundary as inside it, so ground stops just
           // short of touching a level's own floor.
-          if (hitsLevel(m, x0 - 0.1, y0 - 0.1, x0 + TILE + 0.1, y0 + TILE + 0.1)) continue
+          if (ap ? (x0 < ap.rect.x1 && x0 + TILE > ap.rect.x0 && y0 < ap.rect.y1 && y0 + TILE > ap.rect.y0)
+                 : hitsLevel(m, x0 - 0.1, y0 - 0.1, x0 + TILE + 0.1, y0 + TILE + 0.1)) continue
           idx.set(`${i},${j}`, m.next + m.base + free.length)
           free.push({ i, j, x0, y0,
                       h: heightAt(ox + x0 + TILE / 2, oy + y0 + TILE / 2),
@@ -341,6 +351,7 @@ if (seamsOut) {
         }
       }
       m.next += free.length
+      m.tileIndex = idx
 
       // WHERE THE LEVEL OPENS ONTO IT.
       //
@@ -430,7 +441,10 @@ if (seamsOut) {
       // a step, not a hope. Failing that, whichever lift suits the most
       // doorways, weighted heavily toward ones that can be walked to.
       let dz = 0, bestFit = -1
-      for (const c of candidates) {
+      // With an apron the whole outline meets the ground, so the level is lifted
+      // to the ground's height on average rather than to one doorway's.
+      if (ap) dz = ap.lift(ox, oy)
+      else for (const c of candidates) {
         const lift = Math.round((c.ground.h - floorOf(c.o.sector)) / STEP) * STEP
         let fit = 0
         for (const d of candidates) {
@@ -477,7 +491,7 @@ if (seamsOut) {
       // edge meets ground at a height a body can step, that edge opens.
       const link = new Map()
       let cutHere = 0
-      for (const c of candidates) {
+      for (const c of (ap ? [] : candidates)) {
         if (Math.abs(c.ground.h - floorOf(c.o.sector)) > STEP) continue
         if (link.has(`${c.ti},${c.tj}`)) continue
         cut(m, c.o, c.sector)
@@ -485,7 +499,7 @@ if (seamsOut) {
         ++cutHere
         ++mouths
       }
-      if (!cutHere) sealed.push(m.map)
+      if (!cutHere && !ap) sealed.push(m.map)
 
       // AND YOU ARRIVE OUTDOORS.
       //
@@ -517,6 +531,25 @@ if (seamsOut) {
       }
 
       const style = { light: 192, floortex: GROUND_TEX, ceiltex: SKY_TEX }
+
+      // THE APRON'S SECTORS, numbered after the tiles, and its links.
+      const pieceBase = m.next + m.base
+      const pieceAt = new Map()           // piece edge key -> piece sector index
+      if (ap) {
+        ap.pieces.forEach((p, k) => {
+          for (let i = 0; i < p.length; i++) pieceAt.set(edgeKey(p[i], p[(i + 1) % p.length]), pieceBase + k)
+        })
+        m.next += ap.pieces.length
+      }
+      // A tile side facing the apron: the piece whose edge is that side reversed.
+      const tileEdge = { west: (t) => [t.x0, t.y0 + TILE, t.x0, t.y0],
+                         south: (t) => [t.x0, t.y0, t.x0 + TILE, t.y0],
+                         east: (t) => [t.x0 + TILE, t.y0, t.x0 + TILE, t.y0 + TILE],
+                         north: (t) => [t.x0 + TILE, t.y0 + TILE, t.x0, t.y0 + TILE] }
+      const apronFor = (t, side) => {
+        const [ax, ay, bx, by] = tileEdge[side](t)
+        return pieceAt.get(edgeKey({ x: bx, y: by }, { x: ax, y: ay })) ?? null
+      }
       for (const t of free) {
         const at = (di, dj) => {
           const i = t.i + di, j = t.j + dj
@@ -525,14 +558,23 @@ if (seamsOut) {
           return idx.get(`${i},${j}`) ?? null      // null: the level's own wall
         }
         const sides = { west: at(-1, 0), east: at(1, 0), south: at(0, -1), north: at(0, 1) }
+        if (ap) for (const k of ['west', 'east', 'south', 'north']) if (sides[k] === null) sides[k] = apronFor(t, k)
         const l = link.get(`${t.i},${t.j}`)
         if (l) sides[l.side] = l.sector
         m.extra.push(box(t.x0, t.x0 + TILE, t.y0, t.y0 + TILE, sides, t.h,
                          { ...style, floortex: t.wet ? WATER_TEX : GROUND_TEX,
-                           head: SKY_Z - t.h }))
+                           head: SKY_Z - t.h, stepTex: EARTH_TEX }))
         ++tiles
       }
+      if (ap) {
+        const r = ap.build(m, pieceAt, pieceBase, ox, oy, style, spawnPt)
+        joined += r.joined
+        outdoors += r.outdoors
+        ++aproned
+      }
     }
+    console.log(`compose: ${aproned} level(s) met by the ground all round, ${joined} outer wall(s) ` +
+                `joined to it` + (fallback.length ? `; the old way for ${fallback.join(' ')}` : ''))
     console.log(`compose: ${tiles} ground tiles, ${mouths} way(s) out of the levels` +
                 `, ${skies} sky sector(s) opened to the world's` +
                 `, ${outdoors} spawn(s) moved outdoors` +
@@ -977,6 +1019,7 @@ function box (x0, x1, ylo, yhi, { west = null, south = null, east = null, north 
       setAttr(v, { n: 'open', kind: 'flag' })
     } else {
       setInt(v, 'neighbor', nbs[i])
+      if (style?.stepTex) setAttr(v, { n: 'lower', kind: 'name', v: style.stepTex })
     }
     s.children.push(v)
   })
@@ -985,3 +1028,223 @@ function box (x0, x1, ylo, yhi, { west = null, south = null, east = null, north 
 
 // --- the pieces the ground is made of ------------------------------------
 
+
+// --- the apron: the ground right up to a level's walls -------------------
+//
+// See apron.mjs for the geometry. This is the level's side of it: which walls
+// are its outline, which of them may be opened, how high the ground beside
+// each should be, and the sectors and links that result.
+//
+// NOT EVERY OUTER WALL IS OPENED. A wall a script names (doom.lua keys its
+// doors and switches by side, and refuses its whole table if one no longer
+// matches) or one marked usable stays a wall, and the ground meets it as one.
+function apronPlan (m, pitch) {
+  // Sides a script depends on, by their original index.
+  const scripted = new Set()
+  for (const it of m.doc.items) {
+    if (it.kind !== 'script' || it.path.includes('/')) continue
+    let src = ''
+    try { src = readFileSync(join(mapsDir, it.path), 'utf8') } catch { continue }
+    for (const mm of src.matchAll(/\[(\d+)\] = \{[^\n]*check_neighbor=/g)) scripted.add(Number(mm[1]))
+  }
+  // Every wall with nothing beyond it, from every loop of every sector --
+  // holes included, because a void inside the level is bounded partly by one
+  // sector's hole and partly by the sectors in it, and a chain missing either
+  // half never closes. Each is oriented with its sector on the LEFT (outer
+  // loops counter-clockwise, holes clockwise), so the outline closes
+  // counter-clockwise and a void inside the level closes the other way.
+  const edges = []
+  m.doc.sectors.forEach((sec, si) => {
+    const loops = [{ vs: sec.children.filter((c) => c.kind === 'vertex'), hole: false },
+                   ...sec.children.filter((c) => c.kind === 'hole')
+                     .map((h) => ({ vs: h.children.filter((c) => c.kind === 'vertex'), hole: true }))]
+    for (const { vs, hole } of loops) {
+      const pts = vs.map((v) => ({ x: v.x.value, y: v.y.value }))
+      const flip = hole ? polygonArea(pts) > 0 : polygonArea(pts) < 0
+      for (let i = 0; i < vs.length; i++) {
+        const v = vs[i], w = vs[(i + 1) % vs.length]
+        if (!attr(v, 'wall') || attr(v, 'neighbor') || attr(v, 'open')) continue
+        const a = { x: v.x.value, y: v.y.value }, b = { x: w.x.value, y: w.y.value }
+        edges.push(flip ? { a: b, b: a, ref: { sec, si, v } } : { a, b, ref: { sec, si, v } })
+      }
+    }
+  })
+  const loops = outerOutlines(edges)
+  if (!loops || loops.length === 0) { m.apronWhy = loops ? 'no outline' : 'its walls do not close into loops'; return null }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  for (const l of loops) for (const p of l.pts) {
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y)
+  }
+  // One tile of ground beyond the level on every side, on the tile grid, inside
+  // the cell.
+  const rect = {
+    x0: Math.max(0, Math.floor(x0 / TILE) * TILE - TILE),
+    y0: Math.max(0, Math.floor(y0 / TILE) * TILE - TILE),
+    x1: Math.min(pitch, Math.ceil(x1 / TILE) * TILE + TILE),
+    y1: Math.min(pitch, Math.ceil(y1 / TILE) * TILE + TILE)
+  }
+  const boundary = []
+  for (const l of loops) boundary.push(...l.pts)
+  for (let x = rect.x0; x <= rect.x1; x += TILE) boundary.push({ x, y: rect.y0 }, { x, y: rect.y1 })
+  for (let y = rect.y0; y <= rect.y1; y += TILE) boundary.push({ x: rect.x0, y }, { x: rect.x1, y })
+  const pieces = apronPieces(rect, loops.map((l) => l.pts), boundary)
+  if (!pieces) { m.apronWhy = `the ground round its ${loops.length} outline(s) would not triangulate`; return null }
+  // Every outer wall must be met by exactly one piece, or the plan is wrong.
+  const covered = new Set()
+  for (const p of pieces) for (let i = 0; i < p.length; i++) covered.add(edgeKey(p[(i + 1) % p.length], p[i]))
+  const outline = loops.flatMap((l) => l.edges)
+  if (!outline.every((e) => covered.has(edgeKey(e.a, e.b)))) { m.apronWhy = 'some outer wall was not met'; return null }
+  if (!pieces.every((p) => polygonArea(p) > 0)) { m.apronWhy = 'a piece came out inside out'; return null }
+
+  const wallAt = new Map()                // outline edge key -> its ref
+  for (const e of outline) wallAt.set(edgeKey(e.a, e.b), e.ref)
+  const opens = (ref) => !attr(ref.v, 'usable') && !attr(ref.v, 'trigger') &&
+                         !scripted.has(m.sideAt.get(ref.v))
+
+  return {
+    rect,
+    pieces,
+    // The lift that puts the level's outer floors, on average along their
+    // length, at the ground's height round the apron.
+    lift (ox, oy) {
+      let wf = 0, wl = 0
+      for (const e of outline) {
+        const len = Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y)
+        wf += floorOf(e.ref.sec) * len
+        wl += len
+      }
+      let g = 0, n = 0
+      for (let x = rect.x0; x <= rect.x1; x += TILE) { g += heightAt(ox + x, oy + rect.y0) + heightAt(ox + x, oy + rect.y1); n += 2 }
+      for (let y = rect.y0; y <= rect.y1; y += TILE) { g += heightAt(ox + rect.x0, oy + y) + heightAt(ox + rect.x1, oy + y); n += 2 }
+      return wl > 0 ? Math.round((g / n - wf / wl) / STEP) * STEP : 0
+    },
+    // Write the pieces, open the walls. Called after the level has been lifted.
+    build (m, pieceAt, pieceBase, ox, oy, style, spawnPt) {
+      // How high the ground is at a point of a piece: the floor of the level
+      // sector whose wall starts there, or the terrain's own height.
+      // A RAMP FROM THE LEVEL TO THE GROUND. Each piece takes, at its middle, a
+      // blend of the floor of the nearest wall of the level and the terrain's
+      // own height there, weighted by how far it is from each edge of the
+      // apron. Averaging a piece's own corners instead made long thin
+      // triangles next to each other disagree by several steps.
+      const segDist = (p, a, b) => {
+        const dx = b.x - a.x, dy = b.y - a.y
+        const L = dx * dx + dy * dy || 1
+        const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L))
+        return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+      }
+      const hAt = (c) => {
+        let dOut = Infinity, hLevel = 0
+        for (const e of outline) {
+          const d = segDist(c, e.a, e.b)
+          if (d < dOut) { dOut = d; hLevel = floorOf(e.ref.sec) }
+        }
+        const dRect = Math.min(c.x - rect.x0, rect.x1 - c.x, c.y - rect.y0, rect.y1 - c.y)
+        const w = dOut / Math.max(1e-6, dOut + Math.max(0, dRect))
+        return hLevel * (1 - w) + heightAt(ox + c.x, oy + c.y) * w
+      }
+      let joined = 0
+      const floors = []
+      ap_pieces: for (let k = 0; k < pieces.length; k++) {
+        const p = pieces[k]
+        const c = { x: p.reduce((s, q) => s + q.x, 0) / p.length, y: p.reduce((s, q) => s + q.y, 0) / p.length }
+        const h = Math.round(hAt(c) / STEP) * STEP
+        floors.push(h)
+        const s = { kind: 'sector', line: 0, trail: '', attrs: [], children: [], endTrail: '', index: 0 }
+        setNum(s, 'floor', round4(h))
+        setNum(s, 'ceil', round4(SKY_Z))
+        setInt(s, 'light', style.light)
+        setAttr(s, { n: 'floortex', kind: 'name', v: GROUND_TEX })
+        setAttr(s, { n: 'ceiltex', kind: 'name', v: SKY_TEX })
+        for (let i = 0; i < p.length; i++) {
+          const a = p[i], b = p[(i + 1) % p.length]
+          const v = { kind: 'vertex', line: 0, trail: '', x: numFrom(a.x), y: numFrom(a.y), attrs: [] }
+          const other = pieceAt.get(edgeKey(b, a))
+          const wall = wallAt.get(edgeKey(b, a))
+          const onRect = (a.x === b.x && (a.x === rect.x0 || a.x === rect.x1)) ||
+                         (a.y === b.y && (a.y === rect.y0 || a.y === rect.y1))
+          if (other !== undefined) {
+            setInt(v, 'neighbor', other)
+            setAttr(v, { n: 'lower', kind: 'name', v: EARTH_TEX })
+          } else if (wall && opens(wall)) {
+            setInt(v, 'neighbor', wall.si + m.base)
+            setAttr(v, { n: 'lower', kind: 'name', v: EARTH_TEX })
+          }
+          else if (onRect) {
+            // A tile beyond, or the edge of the cell -- the seam.
+            const atCell = (a.x === b.x && (a.x === 0 || a.x === pitch)) ||
+                           (a.y === b.y && (a.y === 0 || a.y === pitch))
+            if (atCell) setAttr(v, { n: 'open', kind: 'flag' })
+            else {
+              const tx = Math.min(a.x, b.x), ty = Math.min(a.y, b.y)
+              // The tile across: its side is this edge reversed, and its index
+              // is found the same way it found ours.
+              const t = tileIndexAt(m, a, b)
+              if (t !== null) { setInt(v, 'neighbor', t); setAttr(v, { n: 'lower', kind: 'name', v: EARTH_TEX }) }
+              else { setAttr(v, { n: 'wall', kind: 'flag' }); setAttr(v, { n: 'tex', kind: 'name', v: WALL_TEX }) }
+              void tx; void ty
+            }
+          } else {
+            setAttr(v, { n: 'wall', kind: 'flag' })
+            setAttr(v, { n: 'tex', kind: 'name', v: wall ? String(attr(wall.v, 'tex')?.v ?? WALL_TEX) : WALL_TEX })
+          }
+          s.children.push(v)
+        }
+        m.extra.push(s)
+        continue ap_pieces
+      }
+      // THE LEVEL'S OUTER WALLS, OPENED onto the pieces beside them. The wall's
+      // own picture stays, as the face of whatever step is left.
+      for (const e of outline) {
+        if (!opens(e.ref)) continue
+        const piece = pieceAt.get(edgeKey(e.b, e.a))
+        if (piece === undefined) continue
+        const v = e.ref.v
+        const tex = attr(v, 'tex')?.v
+        v.attrs = v.attrs.filter((x) => x.n !== 'wall' && x.n !== 'tex')
+        setInt(v, 'neighbor', piece)
+        if (tex) {
+          setAttr(v, { n: 'upper', kind: 'name', v: tex })
+          setAttr(v, { n: 'lower', kind: 'name', v: tex })
+        }
+        ++joined
+      }
+      // AND YOU ARRIVE OUTSIDE, on the ground beside the wall nearest to where
+      // the level would have put you.
+      let outdoors = 0
+      if (spawnPt) {
+        let best = null, bestD = Infinity
+        for (const e of outline) {
+          if (!opens(e.ref)) continue
+          const mx = (e.a.x + e.b.x) / 2, my = (e.a.y + e.b.y) / 2
+          const d = Math.hypot(mx - spawnPt.x.value, my - spawnPt.y.value)
+          if (d < bestD) { bestD = d; best = e }
+        }
+        if (best) {
+          const k = pieceAt.get(edgeKey(best.b, best.a)) - pieceBase
+          const p = pieces[k]
+          const cx = p.reduce((s, q) => s + q.x, 0) / p.length
+          const cy = p.reduce((s, q) => s + q.y, 0) / p.length
+          spawnPt.x = numFrom(round4(cx))
+          spawnPt.y = numFrom(round4(cy))
+          if (spawnPt.z !== undefined) spawnPt.z = numFrom(round4(floors[k] + 0.2))
+          outdoors = 1
+        }
+      }
+      return { joined, outdoors }
+    }
+  }
+}
+
+// The tile sector across a piece edge a -> b on the apron's rectangle: the grid
+// cell on the far side of it. Tiles are numbered in the order the terrain pass
+// laid them, which it recorded on the level (m.tileIndex).
+function tileIndexAt (m, a, b) {
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+  // The far side is to the right of a -> b (pieces wind counter-clockwise).
+  const nx = (b.y - a.y), ny = -(b.x - a.x)
+  const len = Math.hypot(nx, ny) || 1
+  const px = mx + nx / len * (TILE / 2), py = my + ny / len * (TILE / 2)
+  const i = Math.floor(px / TILE), j = Math.floor(py / TILE)
+  return m.tileIndex?.get(`${i},${j}`) ?? null
+}

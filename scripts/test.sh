@@ -137,6 +137,9 @@ node tools/compose/test.mjs       | tail -2
 # derive the same height along a boundary they cannot see across -- are numbers,
 # and neither is visible by looking at the world.
 node tools/compose/terrain.test.mjs | tail -2
+# The ground cut to meet a level's edge: pieces that tile the ring exactly, each
+# edge exactly one thing (another piece, one tile edge, one wall of the level).
+node tools/compose/apron.test.mjs | tail -1
 node editor/test/entities.test.js | tail -2
 node editor/test/server.test.js   | tail -2
 # Neighbour inference, against the whole corpus. The assertion is a negative

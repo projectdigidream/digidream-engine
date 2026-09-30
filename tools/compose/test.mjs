@@ -84,10 +84,23 @@ for (const [map, lua] of [['map01', 'map01.lua'], ['map12', 'map12.lua']]) {
         `${map}: the same ${lo.length} line action(s) survive`)
   check(disagreements(composed.sides, lr) === 0,
         `${map}: every re-keyed line finds its own neighbour`)
-  // CONTROL. The original keys against the composed map: if this passed, the
-  // indices never moved and the remap above is proving nothing.
-  check(disagreements(composed.sides, lo) > 0,
-        `${map}: CONTROL -- the original keys do NOT fit the composed map`)
+  // WHETHER THE INDICES MOVED AT ALL. They used to on every level, because
+  // doorways were cut into its walls; now the ground meets a level all round
+  // and nothing is spliced into it, so for such a level the original keys
+  // simply still fit -- and the rewrite must have left them alone. A level the
+  // ground could not meet still gets doorways cut, and then they must not fit.
+  // Sides of the level's OWN sectors: the ground added after them has sides too.
+  const own = sidesOf(readFileSync(join(SRC, `${map}.map`), 'utf8'))
+  let ownSides = 0
+  for (const sec of composed.doc.sectors.slice(0, own.doc.sectors.length)) walk(sec, () => { ++ownSides })
+  const shifted = ownSides !== own.sides.length
+  if (shifted) {
+    check(disagreements(composed.sides, lo) > 0,
+          `${map}: CONTROL -- the original keys do NOT fit the composed map`)
+  } else {
+    check(lr.every((l, i) => l.side === lo[i].side),
+          `${map}: no side moved, so no key was changed`)
+  }
   // ... and the reverse, so "the keys moved" is not just "the keys are wrong".
   const plain = sidesOf(readFileSync(join(SRC, `${map}.map`), 'utf8'))
   check(disagreements(plain.sides, lo) === 0,
@@ -120,7 +133,9 @@ for (const [map, lua] of [['map01', 'map01.lua'], ['map12', 'map12.lua']]) {
 
   // THE GROUND IS THERE, and lit and textured like anything else.
   const added = composed.doc.sectors.slice(plain.doc.sectors.length)
-  check(added.length > 10, `${map}: ${added.length} ground sector(s) were added`)
+  // At least the ring round the level. (MAP12 is walled by one rectangle, and
+  // in a two-cell layout the ground round it is eight triangles.)
+  check(added.length >= 4, `${map}: ${added.length} ground sector(s) were added`)
   check(added.every((sec) => attr(sec, 'light') && attr(sec, 'floortex') && attr(sec, 'ceiltex')),
         `${map}: every added sector names a light level and both flats`)
 
