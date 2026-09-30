@@ -82,59 +82,24 @@ static size_t MAP_CHUNK_BYTES = 8192;
 // noticed, and a twentieth of the rebuilds that doing it every tick would cost.
 inline constexpr u32 NAV_REBUILD_TICKS = 15;
 
-struct Level {
-    // Side textures a script has changed, in the order it changed them.
-    //
-    // Remembered rather than merely broadcast: a client joining later must see
-    // the switches that have already been thrown, and one that had to witness
-    // the event to know the state would show every returning player a different
-    // wall. Same reasoning as the sector motions re-sent on join.
-    std::vector<proto::SideTexture> side_textures;
-    // The level's camera defaults (dnp.level_camera), sent to everyone who
-    // joins. Not simulation state; one CAMERA_SET per joining client.
-    proto::CameraSet camera;
-    bool             has_camera = false;
+// WHERE A LEVEL'S BODIES ARE SIMULATED, and everything kept per body.
+//
+// A level used to own its World outright. Now a World can hold several levels
+// at once (geom::MapStorage::add_chunk), so what is per body -- health, avatar,
+// what each client has been told about motion and props -- belongs to the
+// World the body is in, not to whichever level's script happens to own it.
+//
+// A level off the metamap's grid has a Host of its own, reading that level's
+// map directly, exactly as before. Levels on the grid share one (the region).
+struct Host {
+    sim::World       world;
+    // The geometry `world` collides against: the owning level's own store for
+    // a host of its own, or the region's store of chunks.
+    geom::MapStorage* store = nullptr;
+    geom::MapData*    view = nullptr;
+
     // Health per agent slot. Server state: see WorldContext::hp.
     i32              hp[sim::MAX_AGENTS];
-    sim::World       world;
-    geom::MapStorage map_store;
-    nav::NavGraph    nav_graph;
-    std::vector<u8>  map_bytes;   // exactly what clients receive
-    u64              map_hash = 0;
-
-    // THE NAV GRAPH GOES STALE THE MOMENT A DOOR MOVES.
-    //
-    // It is built once from the geometry at load, when every door in a Doom map
-    // is shut -- and a shut door is a sector whose ceiling rests on its floor,
-    // which nav correctly reads as impassable. So the graph describes a map
-    // that is mostly disconnected, and it kept describing that after the doors
-    // opened: monsters could never path through one, for the rest of the
-    // session.
-    //
-    // Rebuilt when the moving sectors' heights actually change. `nav_heights`
-    // is a fingerprint over exactly those sectors -- there are at most
-    // MAX_MOVING_SECTORS of them, so checking costs nothing against a nav
-    // rebuild -- and `nav_built_tick` throttles it, because a lift travelling
-    // for a second would otherwise rebuild sixty times on its way.
-    u64              nav_heights = 0;
-    u32              nav_built_tick = 0;
-
-    // The view the world reads geometry through. A member, not a
-    // function-local static: one static was correct while there was exactly one
-    // map and would have made every level after the first alias the last one
-    // loaded -- a bug that presents as "the map renders right and collides
-    // wrong".
-    geom::MapData    view{};
-
-    // One VM per level, which is not merely convenient: a converted map's
-    // script is written against its own side indices and sector tags, and two
-    // of them sharing a global `on_interact` would have the second silently
-    // replace the first.
-    lua::Vm            vm;
-    lua::CommandQueue  commands;
-    lua::EffectStack   effects;
-    lua::WorldContext  ctx;
-    bool               scripted = false;
 
     // The tick at which a script last changed each agent. Compared against the
     // tick of the last snapshot sent to a session, so LUA_APPLIED is set for
@@ -150,7 +115,21 @@ struct Level {
     // A costume is not physics.
     u16  avatar[sim::MAX_AGENTS]{};
 
-    // The motion descriptors every client in THIS level has been told about.
+    // Parameter effects, per agent: they are computed from an agent's base, and
+    // an agent is in exactly one world.
+    lua::EffectStack   effects;
+
+    // Navigation over the whole of `view`, in this world's sector indices. For
+    // a region that is every resident level at once, so a monster can path
+    // from one level into the next like between two rooms.
+    nav::NavGraph    nav_graph;
+    // THE NAV GRAPH GOES STALE THE MOMENT A DOOR MOVES (see refresh_nav_if_stale):
+    // a fingerprint over the moving sectors' heights, and the tick of the last
+    // rebuild, which throttles it.
+    u64              nav_heights = 0;
+    u32              nav_built_tick = 0;
+
+    // The motion descriptors every client of this world has been told about.
     sim::SectorMotion sent_motions[sim::MAX_MOVING_SECTORS]{};
     u32 sent_motion_count = 0;
     u32 motion_changed_tick = 0;
@@ -165,6 +144,87 @@ struct Level {
     // snapshot encoder does not rescan.
     proto::SectorOffset discrete_offsets[proto::MAX_SECTOR_OFFSETS];
     u16                 discrete_count = 0;
+};
+
+struct Level {
+    // A Host of its own unless given one to share. The references below are
+    // bound to whichever it is, so everything written against a level's world
+    // and its per-body arrays reads exactly as it did when the level owned
+    // them.
+    explicit Level(Host* shared = nullptr)
+        : own(shared ? nullptr : std::make_unique<Host>()),
+          host(shared ? shared : own.get()),
+          hp(host->hp), world(host->world),
+          effects(host->effects),
+          nav_graph(host->nav_graph), nav_heights(host->nav_heights),
+          nav_built_tick(host->nav_built_tick),
+          lua_touched_tick(host->lua_touched_tick),
+          crush_reported_tick(host->crush_reported_tick), crush_seen(host->crush_seen),
+          param_epoch(host->param_epoch), avatar(host->avatar),
+          sent_motions(host->sent_motions), sent_motion_count(host->sent_motion_count),
+          motion_changed_tick(host->motion_changed_tick),
+          prop_epoch_seen(host->prop_epoch_seen), props_changed_tick(host->props_changed_tick),
+          discrete_offsets(host->discrete_offsets), discrete_count(host->discrete_count) {
+        if (own) { own->store = &map_store; own->view = &view; }
+    }
+    Level(const Level&) = delete;
+    Level& operator=(const Level&) = delete;
+
+    std::unique_ptr<Host> own;
+    Host*                 host;
+
+    // Side textures a script has changed, in the order it changed them.
+    //
+    // Remembered rather than merely broadcast: a client joining later must see
+    // the switches that have already been thrown, and one that had to witness
+    // the event to know the state would show every returning player a different
+    // wall. Same reasoning as the sector motions re-sent on join.
+    std::vector<proto::SideTexture> side_textures;
+    // The level's camera defaults (dnp.level_camera), sent to everyone who
+    // joins. Not simulation state; one CAMERA_SET per joining client.
+    proto::CameraSet camera;
+    bool             has_camera = false;
+
+    // THE LEVEL'S OWN MAP: its bytes and its parse. Local coordinates, whatever
+    // host simulates it. (Navigation is the host's: see Host::nav_graph.)
+    geom::MapStorage map_store;
+    std::vector<u8>  map_bytes;   // exactly what clients receive
+    u64              map_hash = 0;
+
+    // The view of the level's own map. A member, not a function-local static:
+    // one static was correct while there was exactly one map and would have
+    // made every level after the first alias the last one loaded -- a bug that
+    // presents as "the map renders right and collides wrong".
+    geom::MapData    view{};
+
+    // One VM per level, which is not merely convenient: a converted map's
+    // script is written against its own side indices and sector tags, and two
+    // of them sharing a global `on_interact` would have the second silently
+    // replace the first.
+    lua::Vm            vm;
+    lua::CommandQueue  commands;
+    lua::WorldContext  ctx;
+    bool               scripted = false;
+
+    // The host's, by reference (see the constructor).
+    i32 (&hp)[sim::MAX_AGENTS];
+    sim::World&        world;
+    lua::EffectStack&  effects;
+    nav::NavGraph&     nav_graph;
+    u64&               nav_heights;
+    u32&               nav_built_tick;
+    u32  (&lua_touched_tick)[sim::MAX_AGENTS];
+    u32  (&crush_reported_tick)[sim::MAX_AGENTS];
+    bool (&crush_seen)[sim::MAX_AGENTS];
+    u8   (&param_epoch)[sim::MAX_AGENTS];
+    u16  (&avatar)[sim::MAX_AGENTS];
+    sim::SectorMotion (&sent_motions)[sim::MAX_MOVING_SECTORS];
+    u32& sent_motion_count;
+    u32& motion_changed_tick;
+    u32& prop_epoch_seen;
+    u32& props_changed_tick;
+    proto::SectorOffset (&discrete_offsets)[proto::MAX_SECTOR_OFFSETS];
+    u16& discrete_count;
 };
 
 struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
@@ -673,7 +733,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // a map-authoring signal, not a runtime one: "17 of 40 sectors are
         // reachable" is something the author wants to hear at load, and is
         // otherwise only discovered by watching an enemy fail to path.
-        if (!L.nav_graph.build(L.view)) {
+        if (!L.nav_graph.build(*L.host->view)) {
             std::fprintf(stderr, "[srv] map has more sectors than the nav graph holds\n");
             return false;
         }
@@ -783,7 +843,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // would actually find rather than what the topology suggests. Sectors are
     // counted once; the queue is the caller's stack-free scratch.
     void report_reachability(Level& L) {
-        const geom::MapData& map = L.view;
+        const geom::MapData& map = *L.host->view;
         static u8  seen[nav::MAX_NAV_NODES];
         static u32 queue[nav::MAX_NAV_NODES];
         for (u32 i = 0; i < L.nav_graph.node_count(); ++i) seen[i] = 0;
@@ -1666,9 +1726,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         };
         for (u32 i = 0; i < ms.count(); ++i) {
             const u32 si = ms.at(i).sector;
-            if (si >= L.view.sector_count) continue;
-            mix(L.view.sector(si).floor_z.raw);
-            mix(L.view.sector(si).ceil_z.raw);
+            if (si >= L.host->view->sector_count) continue;
+            mix(L.host->view->sector(si).floor_z.raw);
+            mix(L.host->view->sector(si).ceil_z.raw);
         }
 
         if (fp == L.nav_heights) return;
@@ -1689,7 +1749,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // A failure here leaves the previous graph in place, which is the older
         // answer rather than no answer -- and nav already reports at load when a
         // map has more sectors than it holds.
-        L.nav_graph.build(L.view);
+        L.nav_graph.build(*L.host->view);
     }
 
     // One level's tick. Every level runs every tick, in load order.
