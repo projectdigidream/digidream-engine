@@ -193,6 +193,38 @@ export class Camera {
   }
 
   /**
+   * THE WORLD DID NOT MOVE; ITS COORDINATES DID.
+   *
+   * A seam is a change of frame and nothing else: the body is at the same world
+   * point, said in the next level's words, so its local coordinates jump by one
+   * cell and nothing about the view should change at all. Left alone, the
+   * smoothing sees a subject that has moved a whole pitch and spends a second
+   * gliding after it -- which is the one thing a seam exists not to do.
+   *
+   * So the camera is re-stated in the new words too. `delta` is how far the
+   * SUBJECT moved in three-space, and everything the camera remembers about
+   * where it is moves with it.
+   *
+   * Velocity and lead are deliberately untouched: they are rates, and a rate
+   * means the same thing in either frame. Zeroing them would stop the camera
+   * dead at the boundary, which is a twitch of a different shape.
+   *
+   * NOT snapTo. A snap is for a subject that genuinely teleported and it throws
+   * away the path and the easing state; here nothing teleported, and the
+   * smoothing should carry on mid-stride.
+   */
+  rebase (delta) {
+    this.position.x += delta.x; this.position.y += delta.y; this.position.z += delta.z
+    this.target.x += delta.x; this.target.y += delta.y; this.target.z += delta.z
+    if (this._pathEye) {
+      this._pathEye.x += delta.x; this._pathEye.y += delta.y; this._pathEye.z += delta.z
+    }
+    if (this._pathLook) {
+      this._pathLook.x += delta.x; this._pathLook.y += delta.y; this._pathLook.z += delta.z
+    }
+  }
+
+  /**
    * Advance one rendered frame.
    *
    * `subject` is the predicted position in three-space; `dt` is the real
@@ -261,6 +293,33 @@ export class Camera {
       // same number means roughly the same feel either side of the switch.
       const w = this.cfg.smoothing
       const damp = 2 * w
+
+      // SUB-STEPPED, and this is not a refinement.
+      //
+      // A critically damped spring integrated with semi-implicit Euler is
+      // stable only while w*dt stays under about two. Above it the correction
+      // applied in one step overshoots the target by more than the error it was
+      // correcting, and the next step overshoots further: it does not smooth,
+      // it rings.
+      //
+      // Which is fine at 60 Hz and catastrophic on a frame that took a quarter
+      // of a second -- and a seam crossing is exactly that frame, because the
+      // map is loaded, read, spawned into, and the whole neighbourhood is
+      // re-placed inside it. Measured: a crossing put the camera 183 units
+      // across correctly and the spring threw it 120 units back in the same
+      // frame, then spent thirty frames crawling home. It reads as the camera
+      // lurching at the boundary and it is really the integrator exploding on a
+      // long frame -- so a GC pause or a texture upload does it too, and only
+      // the crossing made it reliable enough to notice.
+      //
+      // Splitting a long frame into steps the spring is stable over makes it
+      // behave exactly as the same elapsed time would at 60 Hz, which is what
+      // "frame-rate independent" is supposed to mean. Short frames take one
+      // step and are bit-for-bit what they were.
+      const maxStep = 1 / Math.max(1e-6, w * 4)
+      const steps = Math.max(1, Math.ceil(dt / maxStep))
+      const h = dt / steps
+      for (let step = 0; step < steps; step++) {
       let ax = (want.x - this.position.x) * w * w - this.velocity.x * damp
       let ay = (want.y - this.position.y) * w * w - this.velocity.y * damp
       let az = (want.z - this.position.z) * w * w - this.velocity.z * damp
@@ -269,9 +328,9 @@ export class Camera {
         const s = this.cfg.maxAccel / mag
         ax *= s; ay *= s; az *= s
       }
-      this.velocity.x += ax * dt
-      this.velocity.y += ay * dt
-      this.velocity.z += az * dt
+      this.velocity.x += ax * h
+      this.velocity.y += ay * h
+      this.velocity.z += az * h
 
       // NEVER GOING FASTER THAN IT CAN STOP FROM.
       //
@@ -298,9 +357,10 @@ export class Camera {
         this.velocity.z *= s
       }
 
-      this.position.x += this.velocity.x * dt
-      this.position.y += this.velocity.y * dt
-      this.position.z += this.velocity.z * dt
+      this.position.x += this.velocity.x * h
+      this.position.y += this.velocity.y * h
+      this.position.z += this.velocity.z * h
+      }
     } else {
       this.position.x += (want.x - this.position.x) * k
       this.position.y += (want.y - this.position.y) * k

@@ -793,5 +793,131 @@ console.log('\n--- the yaw the camera is actually looking along ---')
   check(viewYaw(overhead, 1.1, 1) === 1.1, 'a camera looking straight down keeps the orbit yaw')
 }
 
+// --- rebase: a change of frame is not a movement ---------------------------
+//
+// A seam moves the body a whole cell in LOCAL coordinates and leaves it exactly
+// where it was in the world. The smoothing cannot tell that from a subject that
+// bolted, so it is told: everything the camera remembers moves by the same
+// delta, and the view does not change at all.
+{
+  const PITCH = 40
+  const a = new Camera()
+  a.snapTo({ x: 39, y: 2, z: 5 })
+  // Two frames of ordinary following, so the camera is mid-stride rather than
+  // exactly on its target -- which is the state a crossing actually interrupts.
+  a.update({ x: 39.2, y: 2, z: 5 }, 1 / 60)
+  a.update({ x: 39.4, y: 2, z: 5 }, 1 / 60)
+  const before = a.eye()
+
+  // The crossing: local x drops by a pitch, and so does everything the camera
+  // holds. The subject is the same world point said in the next cell's words.
+  a.rebase({ x: -PITCH, y: 0, z: 0 })
+  const after = a.eye()
+  check(near(after.x, before.x - PITCH, 1e-9) &&
+        near(after.y, before.y, 1e-9) && near(after.z, before.z, 1e-9),
+        `rebase moves the eye by exactly the delta (${(before.x - after.x).toFixed(3)})`)
+
+  // THE CLAIM, and it is the one that matters: the next frame after a crossing
+  // looks like the next frame without one. Two cameras, one crossing a seam and
+  // one walking on in a world with no boundary in it, must agree.
+  const b = new Camera()
+  b.snapTo({ x: 39, y: 2, z: 5 })
+  b.update({ x: 39.2, y: 2, z: 5 }, 1 / 60)
+  b.update({ x: 39.4, y: 2, z: 5 }, 1 / 60)
+  const crossed = a.update({ x: 39.6 - PITCH, y: 2, z: 5 }, 1 / 60)
+  const walked = b.update({ x: 39.6, y: 2, z: 5 }, 1 / 60)
+  check(near(crossed.x + PITCH, walked.x, 1e-9) &&
+        near(crossed.y, walked.y, 1e-9) && near(crossed.z, walked.z, 1e-9),
+        'and the frame after a crossing is the frame that would have happened anyway')
+
+  // CONTROL: without the rebase the same camera is a pitch behind and CHASING,
+  // which is the glide this removes. Without this, "they agree" is satisfied by
+  // a camera that snaps to its subject every frame and smooths nothing.
+  const c = new Camera()
+  c.snapTo({ x: 39, y: 2, z: 5 })
+  c.update({ x: 39.2, y: 2, z: 5 }, 1 / 60)
+  c.update({ x: 39.4, y: 2, z: 5 }, 1 / 60)
+  const lurched = c.update({ x: 39.6 - PITCH, y: 2, z: 5 }, 1 / 60)
+  check(Math.abs(lurched.x - crossed.x) > 1,
+        `CONTROL: un-rebased it is ${Math.abs(lurched.x - crossed.x).toFixed(1)} units adrift`)
+
+  // And a rate is a rate in either frame. What rebase promises is that it does
+  // not TOUCH the velocity: zeroing it would stop the camera dead at the
+  // boundary, which is a twitch of its own shape.
+  const d = new Camera()
+  d.snapTo({ x: 0, y: 2, z: 0 })
+  for (let i = 1; i <= 6; i++) d.update({ x: i * 2, y: 2, z: 0 }, 1 / 60)
+  const v = { ...d.velocity }
+  d.rebase({ x: -PITCH, y: 0, z: 0 })
+  check(d.velocity.x === v.x && d.velocity.y === v.y && d.velocity.z === v.z,
+        `rebase leaves the velocity alone (${v.x.toFixed(3)})`)
+  // CONTROL: there was a velocity to leave alone. A camera that had settled
+  // would satisfy the check above with two zeroes.
+  check(Math.abs(v.x) > 1e-6, `CONTROL: and it was moving (${v.x.toFixed(3)})`)
+}
+
+// --- a long frame is not a different simulation ----------------------------
+//
+// The spring is critically damped and integrated with semi-implicit Euler,
+// which is stable only while w*dt stays under about two. Past that one step
+// overshoots by more than the error it was correcting and the next overshoots
+// further -- it rings instead of settling. Fine at 60 Hz; a quarter-second
+// frame is not fine, and a seam crossing is exactly that frame because the map
+// is loaded, read and spawned into inside it.
+//
+// Measured before the fix: a crossing placed the camera correctly and the
+// spring threw it 120 units back in the same frame, then took thirty frames to
+// crawl home.
+{
+  const far = { x: 200, y: 2, z: 0 }
+  // maxAccel > 0 SELECTS THE SPRING. Left at its default of 0 every camera here
+  // takes the exponential path, which is unconditionally stable and has nothing
+  // to prove -- these checks passed against the broken integrator until this
+  // argument was added, which is the only reason it is called out.
+  const SPRING = { maxAccel: 400 }
+  // One quarter-second frame, which is the clamp client/src/main.js applies.
+  const slow = new Camera(SPRING)
+  slow.snapTo({ x: 0, y: 2, z: 0 })
+  slow.update(far, 0.25)
+
+  // The same quarter second at 60 Hz.
+  const fast = new Camera(SPRING)
+  fast.snapTo({ x: 0, y: 2, z: 0 })
+  for (let i = 0; i < 15; i++) fast.update(far, 1 / 60)
+
+  const gap = Math.hypot(slow.position.x - fast.position.x,
+                         slow.position.y - fast.position.y,
+                         slow.position.z - fast.position.z)
+  check(gap < 1, `a 0.25s frame lands where 15 frames of 1/60 land (${gap.toFixed(3)} apart)`)
+
+  // CONTROL: it really did move. Two cameras that both stayed put would agree
+  // perfectly and prove nothing.
+  check(slow.position.x > 5, `CONTROL: and it travelled (${slow.position.x.toFixed(1)})`)
+
+  // AND IT NEVER GOES BACKWARDS. The failure was not imprecision -- it was the
+  // camera moving AWAY from a target it was already approaching, which no
+  // amount of smoothing should ever do.
+  const back = new Camera(SPRING)
+  back.snapTo({ x: 0, y: 2, z: 0 })
+  let worst = 0
+  for (let i = 0; i < 40; i++) {
+    const before = back.position.x
+    back.update(far, 0.25)
+    worst = Math.min(worst, back.position.x - before)
+  }
+  // A quarter of a unit on a two-hundred-unit move is the acceleration clamp
+  // and the speed ceiling trading places, not the failure this catches: the
+  // single-step integrator goes backwards by seventeen.
+  check(worst >= -1, `and never lurches away from its target (worst step ${worst.toFixed(3)})`)
+  // And it has SETTLED, rather than still oscillating around it. A ringing
+  // integrator eventually passes near the right answer too; what it never does
+  // is stop.
+  const settled = back.position.x
+  back.update(far, 0.25)
+  back.update(far, 0.25)
+  check(Math.abs(back.position.x - settled) < 0.01,
+        `and comes to rest (moved ${Math.abs(back.position.x - settled).toFixed(4)} in two more frames)`)
+}
+
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

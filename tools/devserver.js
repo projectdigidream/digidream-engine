@@ -193,6 +193,33 @@ createServer(async (req, res) => {
       return
     }
 
+    // A LINE THE PAGE WANTED SOMEBODY TO SEE.
+    //
+    // The browser's console is where the client says things and it is exactly
+    // where nobody debugging the server can read them -- three rounds of "the
+    // camera twitches at a crossing" were three different causes, and telling
+    // them apart meant asking a person to copy a line out of devtools every
+    // time. This puts it in the stack log beside everything else.
+    //
+    // Dev server only, which is the one that is never deployed. Nothing reads
+    // it back and nothing is stored: it is printed and dropped.
+    if (req.url.startsWith('/dev-log')) {
+      // A POST carries a whole trace; a query string carries one line. Both end
+      // up in the same log, one `[page]` line each, so a multi-line body stays
+      // greppable rather than becoming one enormous line.
+      let text
+      if (req.method === 'POST') {
+        const chunks = []
+        for await (const c of req) chunks.push(c)
+        text = Buffer.concat(chunks).toString('utf8').slice(0, 64 << 10)
+      } else {
+        text = decodeURIComponent(req.url.slice(req.url.indexOf('?') + 1))
+      }
+      for (const line of text.split('\n')) console.log(`[page] ${line}`)
+      res.writeHead(204, { 'cache-control': 'no-store' }).end()
+      return
+    }
+
     // The prop catalogue, whole. A named route rather than a mount, because a
     // mount is a directory prefix and MOUNTS entries are matched with
     // startsWith -- '/props.txt' would have resolved to 'props.txt/index.html'.

@@ -49,6 +49,9 @@ import { parseAnimations, TextureAnimator } from './render/animtex.js'
 // which is proto's INTERACT bit, so pressing C sent "use".
 import { BUTTON } from './proto.js'
 import { MapAccumulator } from './maploader.js'
+import { Neighbourhood } from './seam/neighbourhood.js'
+import { buildCell } from './seam/buildcell.js'
+import { report, CrossingProbe, BodyWatch } from './seam/diag.js'
 import { Music } from './audio/music.js'
 import { MSG, encodeUiEvent, CAMERA_FIELD } from './proto.js'
 
@@ -56,6 +59,9 @@ const TICK_HZ = 60
 const DT = 1 / TICK_HZ
 
 const params = new URLSearchParams(location.search)
+const AUTOWALK = params.has('autowalk')
+// +1 east, -1 west. Flipped by enterLevel under ?autowalk=shuttle.
+let autowalkDir = 1
 
 // Live if a server is named; solo otherwise.
 //
@@ -253,6 +259,35 @@ stage('core', 1)
 // copy, and not two parsers that are believed to match.
 
 let mapBytes
+// --- the levels this client holds (docs/protocol.md §8.5) --------------------
+//
+// Level changes and the cells next door, IN THE ORDER THE SERVER SENT THEM.
+//
+// One queue, not one per kind of message. The server's messages mean what they
+// mean relative to each other -- a move after a welcome is an offset from the
+// new home, the same move before it is an offset from the old one -- and
+// separate queues drained in a fixed order threw exactly that away.
+//
+// A welcome whose map follows is queued when its map is complete, not when it
+// arrives; everything after it on the channel is after it here too.
+//
+// Drained at the top of the frame, because that is where the scene exists: this
+// callback runs during the join, long before.
+const seamEvents = []
+// The map stream in progress, if any: a welcome's or a neighbour's. The channel
+// is ordered, so there is at most one, and MAP_DATA belongs to it.
+let stream = null
+// The bytes the level underfoot was built from. When it is left they become a
+// held level like any other (client/src/seam/neighbourhood.js).
+let liveMapBytes = null
+// Switches thrown, waiting for a frame. See the SIDE_TEXTURE case in onControl:
+// that callback runs during the join, before the renderer exists.
+const sideTextures = []
+// Music cues, for the same reason. See the MUSIC case in onControl.
+const musicCues = []
+// The last input sampled, for the body watch (client/src/seam/diag.js).
+let lastSampled = null
+
 let conn = null
 let welcome = null
 // Panels the server has opened on us. Not simulation state: never hashed, never
@@ -281,16 +316,13 @@ const remoteCondition = (ent) => {
   return deriveRemote(a, b, ticks * DT, {})
 }
 
-// A map change in flight: the new WELCOME, and the map arriving behind it.
-let pendingWelcome = null
 // The cutscene overlay's three elements. Looked up once: SCREEN_SET can arrive
 // on join, and querying the DOM per message would be the same hazard the
 // camera's own settings are staged for.
 const curtainEl = document.getElementById('curtain')
 const lbTopEl = document.getElementById('lbtop')
 const lbBotEl = document.getElementById('lbbot')
-// The camera state CAMERA_SET writes, declared HERE for the reason
-// pendingWelcome is: the local transport hands over the messages a join already
+// The camera state CAMERA_SET writes, declared HERE, above the connection: the local transport hands over the messages a join already
 // produced the moment the handler is registered, which is before this module
 // has reached the camera code below. A `let` further down is in its dead zone
 // then, and one assignment threw away the whole message. The Camera object
@@ -320,7 +352,6 @@ let camPathSpline = null
 let camPathIndex = -1
 const camCfgPending = {}
 let cameraReady = false
-let movingMap = null
 const motionSets = []
 const pendingSnapshots = []
 // Declared BEFORE the connection opens. Messages start arriving during the
@@ -357,14 +388,45 @@ if (LIVE) {
     certHash,
     onControl (m) {
       if (m.type === MSG.WELCOME) {
-        // A SECOND welcome is the server saying "you are in a different map
-        // now". The join sequence is re-sent in full -- welcome, map, motions,
-        // parameters -- because that is exactly what arriving somewhere needs,
-        // and one code path on each side beats two that drift.
-        if (welcome) { pendingWelcome = m; movingMap = new MapAccumulator() }
-        else welcome = m
+        if (!welcome) {
+          // The join. The handshake below waits for this map in `acc`.
+          welcome = m
+          stream = { welcome: m, acc }
+        } else {
+          // A SECOND welcome is the server saying "you are in a different level
+          // now". Whatever is still queued for the renderer is about the level
+          // being left; everything from here on is about the one entered.
+          motionSets.length = 0
+          sideTextures.length = 0
+          if (m.mapFollows) stream = { welcome: m, acc: new MapAccumulator() }
+          else seamEvents.push({ welcome: m, bytes: null })
+        }
       }
-      else if (m.type === MSG.MAP_DATA) (movingMap ?? acc).push(m)
+      // THE CELL NEXT DOOR. A selector, then that level's own MAP_DATA stream.
+      else if (m.type === MSG.NEIGHBOUR_MAP) stream = { neighbour: m, acc: new MapAccumulator(), chunks: 0 }
+      else if (m.type === MSG.NEIGHBOUR_DROP) seamEvents.push({ drop: m.level })
+      // Still held, somewhere else. No geometry follows.
+      else if (m.type === MSG.NEIGHBOUR_MOVE) seamEvents.push({ move: m })
+      else if (m.type === MSG.MAP_DATA) {
+        if (!stream) {
+          report('[seam] VIOLATION: map data with no map announced', 'error')
+        } else {
+          stream.acc.push(m)
+          stream.chunks = (stream.chunks ?? 0) + 1
+          if (stream.acc.failed) {
+            report(`[seam] map transfer failed: ${stream.acc.failed}`, 'error')
+            stream = null
+          } else if (stream.acc.complete) {
+            const bytes = stream.acc.bytes()
+            if (stream.neighbour) {
+              report(`[seam] level ${stream.neighbour.level}: ${bytes.length} bytes in ${stream.chunks} chunk(s)`)
+              seamEvents.push({ map: stream.neighbour, bytes })
+            }
+            else if (stream.welcome !== welcome) seamEvents.push({ welcome: stream.welcome, bytes })
+            stream = null
+          }
+        }
+      }
       else if (m.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
       else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
       // Panels (docs/protocol.md §11). Reliable channel, like everything that
@@ -376,18 +438,22 @@ if (LIVE) {
       // The map's music changes cue. The name is resolved here, from the
       // manifest playMapMusic already loaded for this map (docs/protocol.md
       // §11.1); a cue the map did not ship is said by music.cue, not fatal.
-      else if (m.type === MSG.MUSIC) {
-        music.cue(m.cue, { fadeMs: m.fadeMs, at: m.at }).catch((e) => console.warn(`[music] ${e.message}`))
-      }
-      else if (m.type === MSG.SIDE_TEXTURE) {
-        const sector = view.setSideTexture(m.side, m.field, m.name.toUpperCase(),
-                                           { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
-        if (sector >= 0) {
-          mapData.sides[m.side] = view.map.sides[m.side]
-          view.setDynamicSectors([...new Set([...movers, sector])])
-          view.rebuildDynamic()
-        }
-      }
+      // QUEUED for the same reason SIDE_TEXTURE is: `const music` is two
+      // thousand lines below this callback, and this callback runs during the
+      // join. A cue arriving then would have thrown the same ReferenceError.
+      else if (m.type === MSG.MUSIC) musicCues.push(m)
+      // QUEUED, like every other message that needs the renderer.
+      //
+      // This used to reach `view` directly from here -- and this callback runs
+      // during the JOIN, two hundred lines before `let view` exists. A level
+      // with no switch ever thrown sends none of these and the bug never fired;
+      // a level somebody has played sends one per switch, on join, and the page
+      // died with "can't access lexical declaration 'view' before
+      // initialization" before it drew anything.
+      //
+      // Every neighbour of it was already a queue drained in the frame loop --
+      // motion sets, parameter updates, welcomes. This was the one that was not.
+      else if (m.type === MSG.SIDE_TEXTURE) sideTextures.push(m)
       else if (m.type === MSG.UI_SET) ui.set(m.uiId, m.widgetId, m.value)
       // How the camera should follow (design §4.1). The server never says where
       // the camera IS -- only how it behaves -- so this is applied to the
@@ -519,6 +585,7 @@ if (LIVE) {
   }
   if (!acc.complete) throw new Error('map transfer did not complete')
   mapBytes = acc.bytes()
+  liveMapBytes = mapBytes
 } else {
   say(`fetching ${MAP_URL}...`)
   mapBytes = new Uint8Array(await (await fetch(MAP_URL)).arrayBuffer())
@@ -774,6 +841,136 @@ async function loadMapTextures () {
   if (animator.count > 0) console.log(`[anim] ${animator.count} animated textures`)
   return res
 }
+
+// --- drawing the cells next door ---------------------------------------------
+//
+// A neighbour is built exactly the way this level was -- loadMap, readMap,
+// MapView -- and then MOVED. That is the whole of it, and it is the reason the
+// offset is carried on the wire instead of the cell coordinates: the client
+// never learns where in the world it is standing, only how far away the thing
+// next to it is.
+//
+// `core.loadMap` allocates its own MapStorage (client/wasm/bindings.cpp), so
+// several maps coexist in one core with no second module and no second world.
+// There is exactly one simulation and it is this level's.
+// ITS OWN SCALE, not this map's. A level converted at 1/48 wants 48 and the
+// engine's default is 32, and a neighbour drawn at its observer's scale would
+// have every texture half again the wrong size -- which reads as textures being
+// placed wrong rather than as a scale error, which is why the map declares it.
+// Every map in a composed world happens to agree today; nothing makes them.
+function neighbourTextureOpts (scale) {
+  return {
+    pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (scale ?? 32),
+    extra: animCatalogue.groups.flatMap((g) => g.frames)
+  }
+}
+
+// THE LEVELS HELD BESIDES THIS ONE (client/src/seam/neighbourhood.js), and the
+// four things it asks of the scene.
+//
+// A neighbour is drawn and nothing else: not simulated, not collided with. The
+// view is built from the worker's groups at the neighbour's own texture scale.
+function makeNeighbourView (built) {
+  const slim = { textures: built.textures, lights: built.lights, sectors: [],
+                 textureScale: built.textureScale }
+  const v = new MapView(slim, { prebuilt: built.groups })
+  // Whether its pictures have arrived: a cell walked into soon after it
+  // appears can be promoted with placeholders still on it.
+  v.texturesLoaded = false
+  v.loadTextures(neighbourTextureOpts(built.textureScale))
+    .then(() => { v.texturesLoaded = true })
+    .catch((e) => console.warn(`[seam] neighbour textures: ${e.message}`))
+  return v
+}
+
+// THE WORKER THAT BUILDS THEM, started on the first neighbour and never if
+// there is no metamap. Null if one could not be started; buildCell then runs
+// here, which is the same code on the main thread -- slower, and correct.
+let seamWorker
+let seamWorkerTried = false
+function getSeamWorker () {
+  if (seamWorkerTried) return seamWorker
+  seamWorkerTried = true
+  try {
+    seamWorker = new Worker(new URL('./seamworker.js', import.meta.url), { type: 'module' })
+    seamWorker.onmessage = (e) => { neighbourBuilt.push(e.data) }
+    seamWorker.onerror = (e) => {
+      console.warn(`[seam] worker failed (${e.message}); building on the main thread`)
+      seamWorker = null
+    }
+  } catch (e) {
+    console.warn(`[seam] no worker (${e.message}); building on the main thread`)
+    seamWorker = null
+  }
+  return seamWorker
+}
+
+/** Builds finished, waiting for a frame to upload them: one per frame. */
+const neighbourBuilt = []
+
+const hood = new Neighbourhood({
+  build (level, token, bytes) {
+    const w = getSeamWorker()
+    // A COPY, not a transfer: the bytes are kept here, because walking into
+    // this level builds the world from them.
+    if (w) { w.postMessage({ level, token, bytes: bytes.buffer.slice(0) }); return }
+    const r = buildCell(core, bytes)
+    neighbourBuilt.push(r.error ? { level, token, error: r.error } : { level, token, ...r.built })
+  },
+  make: makeNeighbourView,
+  // Engine z-up (x, y) -> Three y-up (x, ., -y), as every vertex in mapgeom.js.
+  show (v, dx, dy) {
+    v.root.position.set(dx, 0, -dy)
+    if (!v.root.parent) scene.add(v.root)
+  },
+  hide (v) { scene.remove(v.root) },
+  // The geometry, NOT the materials or textures: those are shared
+  // (render/textures.js), and disposing them would take the level underfoot
+  // with it.
+  dispose (v) {
+    scene.remove(v.root)
+    v.root.traverse((o) => o.geometry?.dispose?.())
+  },
+  warn: (line) => report(line.replace('[seam] ', '[seam] VIOLATION: '), 'error')
+})
+if (LIVE && welcome) hood.enter(welcome.homeLevel, null)
+
+/** Everything the server said about levels, in the order it said it. */
+function drainSeam () {
+  while (seamEvents.length) {
+    const e = seamEvents.shift()
+    if (e.welcome) {
+      if (enterLevel(e.welcome, e.bytes)) welcome = e.welcome
+    } else if (e.map) {
+      const m = e.map
+      hood.map(m.level, m.dx, m.dy, m.dxRaw, m.dyRaw, e.bytes)
+    } else if (e.move) {
+      const m = e.move
+      hood.move(m.level, m.dx, m.dy, m.dxRaw, m.dyRaw)
+    } else if (e.drop !== undefined) hood.drop(e.drop)
+  }
+  // ONE UPLOAD PER FRAME. A cell you cannot reach yet appearing over the next
+  // eight frames is invisible; eight in one frame is a stutter you feel.
+  if (neighbourBuilt.length) {
+    const b = neighbourBuilt.shift()
+    if (b.error) console.warn(`[seam] neighbour ${b.level}: ${b.error}`)
+    else hood.built(b.level, b.token, b)
+  }
+}
+
+/**
+ * Has this body walked out of the cell its own map occupies? Only then is a
+ * step into no sector a seam rather than a pit. A hair outside the boundary,
+ * so a body exactly on the line is not held back from a step it is allowed.
+ */
+function leftTheCell (a) {
+  const pitch = hood.pitch()
+  if (!Number.isFinite(pitch)) return false
+  const x = fxToFloat(a.pos.x), y = fxToFloat(a.pos.y)
+  const slack = 0.01
+  return x < -slack || x > pitch + slack || y < -slack || y > pitch + slack
+}
+
 // KEPT, and awaited before play begins.
 //
 // This used to be fired and forgotten, deliberately: the map was already on
@@ -1120,39 +1317,116 @@ const others = new EntityView({
 })
 
 /**
- * Take up residence in a new map, mid-session.
+ * Take up residence in a new level, mid-session.
  *
- * The server hosts one simulation per map and moves a session between them, so
- * a second WELCOME means "you are somewhere else now". Everything downstream of
- * the geometry is rebuilt: the world, the agent, the predictor, the meshes, the
- * shadow's body size, and the set of sectors known to move.
+ * The server hosts one simulation per level and moves a session between them,
+ * so a second WELCOME means "you are somewhere else now". Everything
+ * downstream of the geometry is rebuilt: the world, the agent, the predictor,
+ * the body, the set of sectors known to move.
  *
- * Everything NOT downstream of the geometry is deliberately kept -- the
- * renderer, the scene, the camera and its yaw, the held keys. Rebuilding those
- * would flash the canvas and snap the view for no reason: the player is the
- * same player, looking the same way, and only the world under them changed.
+ * Everything NOT downstream of the geometry is kept -- the renderer, the scene,
+ * the camera and its yaw, the held keys. The player is the same player,
+ * looking the same way, and only the world under them changed.
+ *
+ * `streamed` is the map that followed the welcome, or null when it did not:
+ * then the client holds it (docs/protocol.md §8.5) and the neighbourhood hands
+ * it back, with its view if one was built.
  */
-function adoptMap (bytes, w) {
+const crossing = new CrossingProbe()
+const bodyWatch = new BodyWatch()
+
+function enterLevel (w, streamed) {
+  const t0 = performance.now()
+  // The level left becomes held, with the bytes and view it was using; the
+  // level entered stops being held, and every other cell is re-stated relative
+  // to it. From here `view` belongs to the neighbourhood unless it comes back.
+  const got = hood.enter(w.homeLevel, { bytes: liveMapBytes, view })
+  if (streamed && got && got.view !== view) {
+    report(`[seam] VIOLATION: the map of level ${w.homeLevel} was sent, and it was held`, 'error')
+  }
+  const bytes = streamed ?? got?.bytes
+  if (!bytes) {
+    // The server said this client holds a level it does not. By the rule
+    // nothing can make that happen, so it is a bug on one side or the other,
+    // and nothing is coming that could repair it.
+    report(`[seam] VIOLATION: level ${w.homeLevel} was said to be held here and is not`, 'error')
+    say(`map change failed: level ${w.homeLevel} is not held`)
+    return false
+  }
   const loaded = core.loadMap(bytes)
   if (!loaded.ok) {
     say(`new map rejected: ${LOAD_STATUS[loaded.status] ?? loaded.status}`)
     return false
   }
+  // Held bytes are identified by level, and the hash is the proof. A mismatch
+  // is the wrong thing held, not a cache miss.
+  if (loaded.map.hash !== w.mapHash) {
+    report(`[seam] VIOLATION: level ${w.homeLevel} holds map ${loaded.map.hash.toString(16)}` +
+           `, the server says ${w.mapHash.toString(16)}`, 'error')
+    say('map hash mismatch after a level change')
+    return false
+  }
   map = loaded.map
   mapData = readMap(map)
   // A new map's paths are different paths, and the tag the camera holds may not
-  // exist in it. Dropping the resolved index forces the lookup to run again and
-  // to warn if it does not.
+  // exist in it. Dropping the resolved index forces the lookup to run again.
   camPaths = readPaths(map)
   camPathIndex = -1
   camPathSpline = null
 
+  // WHERE THE BODY GOES, and a seam is not a spawn.
+  //
+  // Across a seam the server carries the body over at the same world point, in
+  // the other level's words: the departure minus the offset that level was
+  // drawn at a moment ago. The client does the same, in exact fixed point --
+  // a fraction of a unit out here is a misprediction on the first tick -- with
+  // the three fields the server carries: position, velocity, facing.
+  //
+  // The server says which it did (WELCOME.exact_arrival). An exit into a level
+  // that happens to be next door is still an exit.
+  const leaving = (w.exactArrival && got?.placed) ? world.readAgent(agent) : null
   world = core.createWorld({ map })
   spawn = map.spawnForTag(SPAWN)
-  agent = world.spawn(spawn)
-  // A new map is a new entity index -- change_map re-seats the client, and
-  // keeping the old one would mirror a body on top of us and mirror us onto
-  // somebody else.
+  agent = world.spawn(leaving
+    ? { x: leaving.pos.x - got.dxRaw, y: leaving.pos.y - got.dyRaw, z: leaving.pos.z }
+    : spawn)
+  // AND ONLY IF IT LANDS SOMEWHERE. World::spawn always returns an index, and
+  // a body in no sector is a body the controller does not move. Only the core
+  // knows whether a point is in a sector (height matters as well as the
+  // footprint), so the body is placed and then asked. A fresh world rather
+  // than a second spawn, because there is no despawn on this side.
+  let atSeam = leaving !== null
+  // How far the body was put from where the client's own prediction said.
+  let correction = 0
+  if (atSeam) {
+    // THE CLIENT'S OWN CONTINUATION, FIRST. It is ahead of the server by its
+    // lead, so taking it keeps the view where it was. But at a turn-round it
+    // can be short of the boundary the server crossed -- 39.92 of a 40-unit
+    // cell -- and then it lands just outside the level entered. The server's
+    // own arrival (WELCOME.arrival) is exact and always inside; the spawn
+    // point was the old fallback and was a teleport across the level.
+    let placed = world.readAgent(agent)
+    if (placed.sector < 0) {
+      const guess = placed.pos
+      world = core.createWorld({ map })
+      agent = world.spawn(w.arrival)
+      placed = world.readAgent(agent)
+      correction = Math.hypot(fxToFloat(placed.pos.x - guess.x), fxToFloat(placed.pos.y - guess.y))
+      report(`[seam] the predicted arrival was in no sector; using the server's` +
+             ` (${fxToFloat(placed.pos.x).toFixed(3)},${fxToFloat(placed.pos.y).toFixed(3)})`)
+    }
+    if (placed.sector < 0) {
+      report('[seam] the server\'s arrival is in no sector either; using the spawn point', 'warn')
+      world = core.createWorld({ map })
+      agent = world.spawn(spawn)
+      atSeam = false
+    } else {
+      world.writeAgent(agent, { ...placed, vel: leaving.vel, facing: leaving.facing })
+    }
+  }
+
+  // A new level is a new entity index: keeping the old one would mirror a body
+  // on top of us and us onto somebody else.
   myAgentIndex = (w.selfHandle & 0x00ffffff) - 1
   world.tick = w.serverTick
   predictor = new Predictor(world, agent)
@@ -1163,61 +1437,81 @@ function adoptMap (bytes, w) {
   lowestFloor = Math.min(...mapData.sectors.map((s) => s.floorZ - (s.thickness ?? 0)))
   VOID_FLOOR = lowestFloor - 40
 
-  // The old geometry leaves the scene explicitly. Dropping the reference would
-  // leak every buffer in it -- a map change is not a page load, and nothing
-  // else is going to collect a GPU allocation.
-  for (const m of view.meshes) { view.root.remove(m); m.geometry.dispose() }
-  scene.remove(view.root)
-  view = new MapView(mapData)
-  scene.add(view.root)
-  // A MAP CHANGE IS A LOAD, and it has to end the way the first one does.
-  //
-  // stageDone() ran once at startup and nothing closed the bar afterwards, so
-  // walking through an exit reopened it -- loadMapTextures calls stage() -- and
-  // left it on screen for the rest of the session. Reported exactly that way.
-  //
-  // Only the phases a map change actually redoes are reset: the core and the
-  // connection are not reloaded, and resetting them would show the bar
-  // rewinding through work nobody is waiting for.
-  // A NEW MAP IS A NEW TRACK, crossfaded rather than cut: an exit should not
-  // punch a hole in the soundtrack, and the synth can hold both songs long
-  // enough to blend them. music.play() is a no-op when the track is the same,
-  // so two maps sharing one song do not restart it at the door.
+  // THE VIEW. A level already drawn next door is promoted: its textures are
+  // loaded and its materials compiled, and building a second MapView over the
+  // same geometry is what put the loading bar back at every doorway. Its
+  // texture set came from the same map's list, in the same order, so every
+  // material index still means what it meant; the full map replaces the slim
+  // one the worker sent, so setDynamicSectors works as for a view built here.
+  const promoted = got?.view ?? null
+  if (promoted) {
+    view = promoted
+    view.map = mapData
+    view.root.position.set(0, 0, 0)
+    if (!view.root.parent) scene.add(view.root)
+  } else {
+    view = new MapView(mapData)
+    scene.add(view.root)
+  }
+
+  // THE CAMERA. At a seam the body is at the same world point in different
+  // words, so the camera is re-stated in them too and the view does not move.
+  // Otherwise the body really did go somewhere else, which is what snapTo is
+  // for. Three-space: the body's engine delta (-dx, -dy) is (-dx, 0, +dy).
+  if (atSeam) camera.rebase({ x: -got.dx, y: 0, z: got.dy })
+  else {
+    camera.snapTo({
+      x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y))
+    })
+  }
+  crossing.mark(correction)
+  if (params.get('autowalk') === 'shuttle') autowalkDir = -autowalkDir
+
+  // A NEW MAP IS A NEW TRACK, crossfaded rather than cut. music.play() is a
+  // no-op when the track is the same, so two maps sharing a song do not
+  // restart it at the door.
   playMapMusic(map.hash, 1200)
 
-  stageReset(['map', 'geometry', 'textures'])
-  stage('map', 1)
-  stage('geometry', 1)
-  loadMapTextures()
-    .catch((e) => say(`textures failed to load: ${e.message}`))
-    .finally(() => stageDone())
+  if (promoted) {
+    // Nothing to load: the pictures are on the GPU. Only the animator is
+    // rebuilt, because it holds the materials it swaps.
+    animator = new TextureAnimator({
+      groups: animCatalogue.groups,
+      names: mapData.textures,
+      materials: view.materials,
+      frameTexture: (n) => view.frameTextures?.get(n) ?? null
+    })
+  } else {
+    // A MAP CHANGE IS A LOAD, and it ends the way the first one does. Only the
+    // phases a map change redoes are reset.
+    stageReset(['map', 'geometry', 'textures'])
+    stage('map', 1)
+    stage('geometry', 1)
+    loadMapTextures()
+      .catch((e) => say(`textures failed to load: ${e.message}`))
+      .finally(() => stageDone())
+  }
 
   movers = []
-
-  // A new map may ship a different avatar, so the body is rebuilt rather than
-  // kept -- and bodyAvatar is cleared so buildBody does not think it already has
-  // the right one.
+  // A new map may ship a different avatar, so the body is rebuilt.
   bodyAvatar = -1
   buildBody()
   shadows.setBody(bodyRadius, bodyHeight)
 
-  // Other players in the map just left are not other players here: the indices
-  // in the next snapshot address a different set of people.
+  // Other players in the level just left are not other players here, and the
+  // snapshots still queued describe the old world.
   others.clear()
-
-  // The snapshot stream is about the new world from the next one onward;
-  // anything still queued describes the old one.
   pendingSnapshots.length = 0
-  motionSets.length = 0
   inputHistory = []
   newestServerTick = w.serverTick
+  liveMapBytes = bytes
 
-  camera.snapTo({
-    x: toThreeX(fxToFloat(spawn.x)), y: toThreeY(fxToFloat(spawn.z)), z: toThreeZ(fxToFloat(spawn.y))
-  })
-  // No banner. A map change is the game doing what you asked it to; the
-  // geometry in front of you says it happened, and a line of text over the
-  // view says it twice.
+  const here = world.readAgent(agent)
+  report(`[seam] entered level ${w.homeLevel}: ${streamed ? 'streamed' : 'held'}` +
+         `, ${promoted ? 'view promoted' : 'view built'}` +
+         `, arrived ${atSeam ? 'at the seam' : 'at the spawn'}` +
+         ` (${fxToFloat(here.pos.x).toFixed(2)},${fxToFloat(here.pos.y).toFixed(2)} sector ${here.sector})` +
+         `, took ${(performance.now() - t0).toFixed(1)}ms; holding ${hood.describe()}`)
   return true
 }
 
@@ -1231,7 +1525,7 @@ cameraReady = true
 // Under perspective, zooming MOVES the camera; under orthographic it reshapes
 // the frustum and the position is irrelevant to framing. One number drives
 // both.
-// camOverrideDistance and camOverridePitch (declared beside pendingWelcome, see
+// camOverrideDistance and camOverridePitch (declared above the connection, see
 // there) are kept apart from camera.cfg because distance and pitch describe
 // where the camera sits rather than how it follows, and the offset is
 // recomputed from them every frame as yaw and zoom change.
@@ -1303,7 +1597,12 @@ function currentInput () {
   // and deriving them separately is how they invert -- and on a camera path
   // they are not the same number at all, so a stick mapped through the orbit
   // angle pushes the player somewhere unrelated to what is on screen.
-  const { x: wx, y: wy } = screenRelativeMove(mx, my, camViewYaw)
+  let { x: wx, y: wy } = screenRelativeMove(mx, my, camViewYaw)
+  // DEV ONLY: ?autowalk=east walks due east in WORLD terms, whatever the camera
+  // is doing. A headless browser has no hands, and every measurement of a seam
+  // crossing so far has needed a person to walk through one. ?autowalk=shuttle
+  // turns round at every level change: east, back west, east again.
+  if (AUTOWALK) { wx = autowalkDir; wy = 0 }
 
   let buttons = 0
   if (held.has('Space')) buttons |= BUTTON.JUMP
@@ -1321,7 +1620,8 @@ function currentInput () {
   // Held across a stop, so letting go of the keys leaves the agent facing where
   // it was walking rather than snapping east. See aimFor.
   lastAim = aimFor(wx, wy, lastAim)
-  return { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim }
+  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim }
+  return lastSampled
 }
 
 // --- loop ------------------------------------------------------------------
@@ -1393,6 +1693,15 @@ function drainSnapshots () {
     if (s.self?.animationState !== undefined) selfAnimation = s.self.animationState
     if (s.self?.avatar !== undefined) selfAvatar = s.self.avatar
     newestServerTick = Math.max(newestServerTick, s.serverTick)
+    // The newest input the SERVER says it has applied, AS IT LAST SAID IT --
+    // not the highest it has ever said.
+    //
+    // A maximum was the wrong instrument and produced a wrong answer: the
+    // server's counter is reset on a level change and on its starve-recovery
+    // path, so a value that resets and climbs again reads as frozen at its old
+    // peak. That is what "applied up to 1823" was, and it is a fact about this
+    // line rather than about the server.
+    bodyWatch.server(s)
 
     // Transient effects, drawn once and forgotten. The event carries where the
     // shot STARTED, which way it went and how long it was -- so the tracer ends
@@ -1442,24 +1751,11 @@ function frame (now) {
   const dt = Math.min(0.25, (now - last) / 1000)
   last = now
 
-  // A map change lands FIRST, before any input is sampled or any tick is
-  // simulated. Stepping the old world for even one frame after the server has
-  // moved us would send inputs addressed to a room we are no longer in.
-  //
-  // And only once the whole map has arrived: a MapAccumulator that is still
-  // filling is not a map, and adopting a partial one would fail the load and
-  // leave the session with no geometry at all.
-  if (pendingWelcome && movingMap?.complete) {
-    const w = pendingWelcome
-    const bytes = movingMap.bytes()
-    pendingWelcome = null
-    movingMap = null
-    if (adoptMap(bytes, w)) welcome = w
-  } else if (movingMap?.failed) {
-    say(`map change failed: ${movingMap.failed}`)
-    pendingWelcome = null
-    movingMap = null
-  }
+  // A level change lands FIRST, before any input is sampled or any tick is
+  // simulated: stepping the old world for even one frame after the server has
+  // moved us would send inputs addressed to a room we are no longer in. And
+  // with it every other word about which levels are held, in the order said.
+  if (LIVE) drainSeam()
 
   if (!camLockYaw && held.has('KeyQ')) yaw -= 1.5 * dt
   if (!camLockYaw && held.has('KeyR')) yaw += 1.5 * dt
@@ -1488,7 +1784,47 @@ function frame (now) {
   while (acc >= DT && budget-- > 0) {
     const f = currentInput()
     if (LIVE) {
+      // HOLD AT THE EDGE RATHER THAN STEP OFF IT.
+      //
+      // This client predicts ahead of the server, so at a seam it reaches the
+      // boundary first and walks out of its own cell -- into no sector, because
+      // the next cell is a different map and the simulation only knows this
+      // one. A body with no sector is one the server has not crossed yet and
+      // will not agree with for another few hundred milliseconds, and every
+      // snapshot drags it back while the prediction pushes it out again.
+      //
+      // What that oscillation feels like is not a stutter, it is the controls
+      // going dead: NOTHING responds, not even backing away from the edge.
+      //
+      // So a step that lands in no sector is refused, and the body keeps the
+      // last position that was in one. The boundary becomes a wall for as long
+      // as the server takes to say otherwise -- which it then does, and the
+      // body carries on. Everything OTHER than walking further out still works,
+      // which is the whole difference between "it hitched" and "it jammed".
+      //
+      // Client-side only, and deliberately not in the shared controller: the
+      // server is right to let the body through, and this is a prediction
+      // declining to guess at something only the server can know.
+      // ONLY AT A CELL BOUNDARY. A pit inside the level is a fall and must
+      // stay one; this is about leaving the map the simulation is holding.
+      const before = world.readAgent(agent)
       predictor.step(f)
+      const after = world.readAgent(agent)
+      if (before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
+        // AND STOPPED, not merely put back.
+        //
+        // Restoring the position and keeping the velocity that carried it out
+        // means the body tries again next tick and is put back again: it runs
+        // on the spot, animating, in the direction it was going when the
+        // boundary arrived. Reported as exactly that -- "the character keeps
+        // moving on himself in the direction before the map load" -- and it is
+        // a worse jam than the one it replaced, because it looks like input
+        // being ignored rather than like a wall.
+        //
+        // The vertical component survives: the ground is still under it and
+        // gravity is not the thing being refused.
+        world.writeAgent(agent, { ...before, vel: { x: 0n, y: 0n, z: before.vel.z } })
+      }
       inputHistory = [f, ...inputHistory].slice(0, 8)   // redundancy, protocol §4.1
       conn.send(predictor.tick, predictor.lastSnapshot?.serverTick ?? 0, inputHistory)
     } else {
@@ -1505,6 +1841,23 @@ function frame (now) {
   if (LIVE) {
     // Motions declared since the last frame -- a door someone just opened.
     while (motionSets.length) fresh = takeMotion(motionSets.shift()) || fresh
+    // And switches thrown, here or before we arrived. Purely visual: what the
+    // switch DID travels as sector motion, exactly as it did before.
+    while (musicCues.length) {
+      const m = musicCues.shift()
+      music.cue(m.cue, { fadeMs: m.fadeMs, at: m.at })
+        .catch((e) => console.warn(`[music] ${e.message}`))
+    }
+    while (sideTextures.length) {
+      const m = sideTextures.shift()
+      const sector = view.setSideTexture(m.side, m.field, m.name.toUpperCase(),
+        { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
+      if (sector >= 0) {
+        mapData.sides[m.side] = view.map.sides[m.side]
+        view.setDynamicSectors([...new Set([...movers, sector])])
+        view.rebuildDynamic()
+      }
+    }
     drainSnapshots()
   }
 
@@ -1531,6 +1884,12 @@ function frame (now) {
   blend('mesh', performance.now() - tMesh)
 
   let a = world.readAgent(agent)
+  // Stuck, and which kind (client/src/seam/diag.js).
+  if (LIVE) {
+    bodyWatch.frame({ x: fxToFloat(a.pos.x), y: fxToFloat(a.pos.y), sector: a.sector },
+                    !!lastSampled && (lastSampled.moveX !== 0 || lastSampled.moveY !== 0),
+                    world.tick)
+  }
   if (!LIVE && fxToFloat(a.pos.z) < VOID_FLOOR) {
     falls++
     world.writeAgent(agent, { ...a, pos: spawn, vel: { x: 0n, y: 0n, z: 0n }, grounded: false })
@@ -1792,6 +2151,10 @@ function frame (now) {
   // against. Written here because only now is it known: the path crossfade is
   // resolved inside camera.update.
   camViewYaw = viewYaw(eye, yaw, camera.pathMix)
+
+  // Did the view move with the body across the last crossing?
+  // client/test/seamcam.test.js reads this.
+  crossing.frame(eye, subject)
 
   // The prop clock, OUT of `if (LIVE)`.
   //

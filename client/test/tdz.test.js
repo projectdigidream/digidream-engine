@@ -229,6 +229,85 @@ function scan (src) {
 const files = readdirSync(SRC, { recursive: true })
   .filter((f) => typeof f === 'string' && f.endsWith('.js'))
 
+// --- and the one the scan above structurally cannot see -------------------
+//
+// A CONNECTION CALLBACK RUNS DURING THE JOIN, which is a top-level await, so it
+// is module-scope code in every way that matters -- and it is not a named
+// function called by name, so `topLevelCalls` never hears about it.
+//
+// It cost a crash on a level somebody had played: the SIDE_TEXTURE handler read
+// `view` two hundred lines above `let view`, and a map with a switch already
+// thrown sends one of those on join. A map with no switch ever thrown sends
+// none, so the bug was invisible until a level had some history in it, and what
+// it produced was a black page reading "can't access lexical declaration 'view'
+// before initialization".
+//
+// Narrow ON PURPOSE, in the same spirit as the one-level limit above: this
+// checks the handler object passed to the transport, by name, rather than
+// guessing which of a file's callbacks might run early. A check with a stated
+// limit beats one that guesses.
+function scanCallback (src, opener) {
+  const text = blank(src)
+  const at = text.indexOf(opener)
+  if (at < 0) return null
+  let i = text.indexOf('{', at)
+  if (i < 0) return null
+  let depth = 0
+  const start = i
+  for (; i < text.length; i++) {
+    if (text[i] === '{') depth++
+    else if (text[i] === '}' && --depth === 0) { i++; break }
+  }
+  const body = text.slice(start, i)
+  const bodyLine = src.slice(0, start).split('\n').length
+
+  const lines = text.split('\n')
+  // SHADOWED NAMES ARE NOT THE SAME NAME. A `const acc` in the function that
+  // encloses this callback is what `acc` means inside it, whatever an unrelated
+  // module-level `let acc` two thousand lines down is called. Anything declared
+  // at any depth ABOVE the callback is already bound by the time it runs.
+  const above = new Set()
+  for (let n = 0; n < bodyLine; n++) {
+    const m = /\b(?:let|const|var)\s+([A-Za-z_$][\w$]*)/.exec(lines[n])
+    if (m) above.add(m[1])
+  }
+  // Module-scope declarations AFTER the callback: those are the dangerous ones.
+  const later = new Map()
+  for (let n = bodyLine; n < lines.length; n++) {
+    const m = /^(?:let|const|var)\s+([A-Za-z_$][\w$]*)/.exec(lines[n])
+    if (m && !later.has(m[1]) && !above.has(m[1])) later.set(m[1], n + 1)
+  }
+  const bad = []
+  for (const m of body.matchAll(/(^|[^.\w$])([A-Za-z_$][\w$]*)/g)) {
+    const decl = later.get(m[2])
+    if (decl !== undefined) bad.push({ name: m[2], at: decl })
+  }
+  return bad
+}
+
+{
+  const src = readFileSync(join(SRC, 'main.js'), 'utf8')
+  const bad = scanCallback(src, 'onControl (m)')
+  check(bad !== null, 'the connection handler is where it is expected to be')
+  // `camera` is read here and declared far below, and that is DELIBERATE: every
+  // use of it is behind `cameraReady`, a flag that exists for precisely this.
+  // Named rather than silently tolerated, and the guard is asserted separately
+  // below -- an exemption whose reason has quietly gone away is worse than no
+  // exemption at all.
+  const GUARDED = ['camera']
+  const names = [...new Set((bad ?? []).map((b) => b.name))].filter((n) => !GUARDED.includes(n))
+  check(names.length === 0,
+        `a connection callback reads nothing declared below it (${names.join(', ') || 'none'})`)
+  check(/let cameraReady = false/.test(src) && /cameraReady\s*\)/.test(src),
+        'and the one exemption still has the guard its exemption rests on')
+  // CONTROL: the detector can fail. A reference to a binding that really is
+  // declared later must be reported, or the check above passes on anything.
+  const injected = src.replace('onControl (m) {', 'onControl (m) {\n        void view')
+  const caught = scanCallback(injected, 'onControl (m)')
+  check((caught ?? []).some((b) => b.name === 'view'),
+        'CONTROL: and an injected one is caught')
+}
+
 console.log('tdz: module-scope bindings are declared before they are used')
 let total = 0
 for (const f of files) {

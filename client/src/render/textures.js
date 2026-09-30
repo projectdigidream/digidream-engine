@@ -121,6 +121,9 @@ export function configureTexture (THREE, tex) {
   return tex
 }
 
+// Every picture this session has loaded, by URL. See fetchTexture below.
+const SHARED_TEXTURES = new Map()
+
 export async function loadRealTextures (THREE, names, materials, {
   baseUrl = '/textures', pxPerUnit = 32, extra = [],
   // Called as each picture arrives, with (done, total). Optional, and a
@@ -143,6 +146,36 @@ export async function loadRealTextures (THREE, names, materials, {
 
   const configure = (tex) => configureTexture(THREE, tex)
 
+  // ONE TEXTURE PER PICTURE, FOR THE WHOLE SESSION.
+  //
+  // A MapView used to load its own copy of everything it names. With one map on
+  // screen that is one copy; with a metamap it is one per CELL -- your own level
+  // and up to eight neighbours, so fifty pictures became four hundred and fifty
+  // decodes and four hundred and fifty uploads of the same pixels, resident at
+  // once. That is the shape of thing that starts evicting textures under memory
+  // pressure, and an evicted texture is a surface that changes what it is
+  // wearing for a frame.
+  //
+  // Keyed by URL and holding the PROMISE, so two views asking at the same
+  // moment -- which is exactly what happens when a neighbourhood is built --
+  // share one request rather than racing to start two.
+  //
+  // NOTHING DISPOSES THESE, and that is what makes sharing safe: dropping a
+  // neighbour releases its geometries and leaves its pictures alone (see
+  // dropNeighbour in main.js). A texture freed by one cell while another was
+  // still drawing with it would be the very flicker this removes.
+  const fetchTexture = (name) => {
+    const url = `${baseUrl}/${name}.png`
+    let p = SHARED_TEXTURES.get(url)
+    if (!p) {
+      p = new Promise((resolve) => {
+        loader.load(url, (tex) => resolve(configure(tex)), undefined, () => resolve(null))
+      })
+      SHARED_TEXTURES.set(url, p)
+    }
+    return p
+  }
+
   // ANIMATION FRAMES the map never names.
   //
   // A map says NUKAGE1; the sequence also needs NUKAGE2 and NUKAGE3, which
@@ -156,33 +189,32 @@ export async function loadRealTextures (THREE, names, materials, {
   let done = 0
   const tick = () => { if (onProgress) onProgress(++done, totalRequests) }
 
-  await Promise.all(extra.map((name) => new Promise((resolve) => {
-    if (!sizes[name] || names.includes(name)) { tick(); resolve(); return }
-    loader.load(`${baseUrl}/${name}.png`, (tex) => {
-      frames.set(name, configure(tex))
-      tick()
-      resolve()
-    }, undefined, () => { tick(); resolve() })
-  })))
-  await Promise.all(names.map((name, i) => new Promise((resolve) => {
+  await Promise.all(extra.map(async (name) => {
+    if (!sizes[name] || names.includes(name)) { tick(); return }
+    const tex = await fetchTexture(name)
+    if (tex) frames.set(name, tex)
+    tick()
+  }))
+  await Promise.all(names.map(async (name, i) => {
     const dim = sizes[name]
-    if (!dim || !materials[i]) { tick(); resolve(); return }
-    loader.load(`${baseUrl}/${name}.png`, (tex) => {
-      configure(tex)
-      frames.set(name, tex)
-      materials[i].uniforms.map.value = tex
-      // Each texture covers its own amount of world, so the divisor is
-      // per-material rather than one shared constant.
-      materials[i].uniforms.repeat.value.set(pxPerUnit / dim[0], pxPerUnit / dim[1])
-      // Only a texture with a transparent pixel gets the discard, and with it
-      // the loss of early-z rejection for its whole material.
-      if (cutout[name]) materials[i].defines = { ...(materials[i].defines ?? {}), CUTOUT: '' }
-      materials[i].needsUpdate = true
-      loaded++
-      tick()
-      resolve()
-    }, undefined, () => { tick(); resolve() })
-  })))
+    if (!dim || !materials[i]) { tick(); return }
+    const tex = await fetchTexture(name)
+    if (!tex) { tick(); return }
+    frames.set(name, tex)
+    // The TEXTURE is shared; the material is not. Every view keeps its own
+    // materials because they carry its own lights, and this is the one line
+    // that has to happen per view rather than per picture.
+    materials[i].uniforms.map.value = tex
+    // Each texture covers its own amount of world, so the divisor is
+    // per-material rather than one shared constant.
+    materials[i].uniforms.repeat.value.set(pxPerUnit / dim[0], pxPerUnit / dim[1])
+    // Only a texture with a transparent pixel gets the discard, and with it
+    // the loss of early-z rejection for its whole material.
+    if (cutout[name]) materials[i].defines = { ...(materials[i].defines ?? {}), CUTOUT: '' }
+    materials[i].needsUpdate = true
+    loaded++
+    tick()
+  }))
   return { loaded, total: names.length, frames }
 }
 

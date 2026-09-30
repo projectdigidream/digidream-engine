@@ -27,7 +27,18 @@ function geometryFromGroup (g) {
 }
 
 export class MapView {
-  constructor (map) {
+  /**
+   * `opts.prebuilt` is geometry somebody else already derived -- the seam
+   * worker, which runs this file's own mapgeom pipeline off the main thread and
+   * posts back the same groups #build would have made, as typed arrays.
+   *
+   * It exists so a NEIGHBOUR costs the frame only its upload. The map handed in
+   * alongside it may be a slim one -- textures and lights and nothing else --
+   * because with the geometry already derived there is nothing left to derive
+   * it from, and shipping a whole readMap across a postMessage would put back
+   * most of what the worker was for.
+   */
+  constructor (map, opts = {}) {
     this.map = map
     this.root = new THREE.Group()
     this.textures = makeTextureSet(THREE, map.textures)
@@ -70,7 +81,39 @@ export class MapView {
     this.dynamicOrder = []
     // How many times geometry has been derived, for the HUD. See #build.
     this.builds = 0
-    this.rebuildStatic()
+    if (opts.prebuilt) this.#upload(opts.prebuilt, this.staticMeshes)
+    else this.rebuildStatic()
+  }
+
+  /**
+   * Groups to meshes, with nothing derived. The half of #build that has to be
+   * on this thread, split out so the two callers cannot drift: a neighbour's
+   * triangles become a mesh exactly the way this level's do.
+   *
+   * Groups name their texture rather than indexing it, because they come from
+   * a different map whose texture order is its own business.
+   */
+  #upload (groups, into) {
+    for (const m of into) { this.root.remove(m); m.geometry.dispose() }
+    into.length = 0
+    for (const g of groups) {
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3))
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3))
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvs, 2))
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(g.colors, 3))
+      geo.setIndex(new THREE.BufferAttribute(g.indices, 1))
+      // A name this view's own texture list does not carry gets the missing
+      // material, which draws as a magenta wireframe. Visible rather than
+      // invisible, for the reason `missing` exists: a texture that is not there
+      // should look like one, not like a hole in the wall.
+      const found = g.texture === null ? -1 : this.map.textures.indexOf(g.texture)
+      const idx = found < 0 ? NO_TEXTURE : found
+      const mesh = new THREE.Mesh(geo, this.materialFor(idx, g.alpha))
+      mesh.frustumCulled = false
+      this.root.add(mesh)
+      into.push(mesh)
+    }
   }
 
 
