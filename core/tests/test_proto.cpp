@@ -1017,7 +1017,82 @@ static void test_ui_truncation_at_every_length() {
     CHECK(got.count == 2);
 }
 
+// THE TEMPLATE (docs/UI_LAYOUT.md 5): trailing and optional. Without one a
+// panel's bytes must be what they were before templates existed, or every
+// client in the field draws garbage; with one, every cut is still refused
+// except the single one a trailing field cannot tell apart -- the end of the
+// widgets, which reads as the panel without its template.
+__attribute__((noinline)) static void test_ui_template() {
+    std::printf("ui: a template is trailing, optional, and checked\n");
+    // STATIC and never reassigned from a temporary: a UiPanel is ~137 KB of
+    // fixed arrays, main's frame was already near the 8 MB stack under
+    // AddressSanitizer, and every `= UiPanel{}` is one more on it. (Each
+    // decode below overwrites `got` whole on success; a refusal leaves it be.)
+    static UiPanel p;
+    static UiPanel got;
+    p.ui_id = 5;
+    set_text(p.title, "Shop");
+    p.count = 1;
+    p.widgets[0].kind = UiWidgetKind::Button;
+    p.widgets[0].id = 1;
+    set_text(p.widgets[0].label, "Buy");
+
+    u8 plain[512];
+    ByteWriter w0(plain, sizeof(plain));
+    encode_ui_open(w0, p);
+    const size_t plain_n = w0.size();
+
+    const char* name = "shop_2";
+    p.template_len = 6;
+    for (int i = 0; i < 6; ++i) p.template_name[i] = name[i];
+    u8 buf[512];
+    ByteWriter w(buf, sizeof(buf));
+    encode_ui_open(w, p);
+    const size_t full = w.size();
+    CHECK(full == plain_n + 2 + 6);
+    bool prefix_same = true;
+    for (size_t i = 0; i < plain_n; ++i) prefix_same = prefix_same && buf[i] == plain[i];
+    CHECK(prefix_same);   // the template only ever APPENDS
+
+    {
+        ByteReader r(buf, full);
+        CHECK(decode_ui_open(r, got));
+        CHECK(got.template_len == 6 && std::memcmp(got.template_name, "shop_2", 6) == 0);
+        CHECK(got.count == 1);
+    }
+    {
+        ByteReader r(plain, plain_n);
+        CHECK(decode_ui_open(r, got));
+        CHECK(got.template_len == 0);   // CONTROL: no template, none decoded
+    }
+    // Every cut inside the template is refused.
+    for (size_t n = plain_n + 1; n < full; ++n) {
+        ByteReader r(buf, n);
+        CHECK(!decode_ui_open(r, got));
+        if (g_fails) break;
+    }
+    // A name the client could not look up in a JSON object is refused.
+    {
+        u8 bad[512];
+        std::memcpy(bad, buf, full);
+        bad[plain_n + 2] = 'S';         // upper case
+        ByteReader r(bad, full);
+        CHECK(!decode_ui_open(r, got));
+    }
+    {
+        u8 bad[512];
+        std::memcpy(bad, plain, plain_n);
+        bad[plain_n] = static_cast<u8>(UI_MAX_TEMPLATE + 1);
+        bad[plain_n + 1] = 0;
+        for (u32 i = 0; i <= UI_MAX_TEMPLATE; ++i) bad[plain_n + 2 + i] = 'a';
+        ByteReader r(bad, plain_n + 2 + UI_MAX_TEMPLATE + 1);
+        CHECK(!decode_ui_open(r, got));   // 25 bytes: one over
+    }
+    CHECK(valid_template_name("a", 1) && !valid_template_name("", 0) && !valid_template_name("a-b", 3));
+}
+
 int main() {
+    test_ui_template();
     test_ui_panel_round_trip();
     test_ui_event_round_trip();
     test_music_cue_round_trip();

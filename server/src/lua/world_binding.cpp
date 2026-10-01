@@ -1565,7 +1565,11 @@ int l_dnp_levels(lua_State* L) {
     return 1;
 }
 
-// dnp.ui_open(entity, { title = "...", widgets = { {...}, ... } }) -> ui_id
+// dnp.ui_open(entity, { title = "...", template = "shop", widgets = { {...}, ... } }) -> ui_id
+//
+// `template` names one of the module's layout panels (docs/UI_LAYOUT.md 5):
+// where the panel goes and how it looks. Presentation only -- a client without
+// the template draws the default panel with the same widgets.
 //
 // A widget is a table: kind, id, label, and whichever of value/lo/hi/options
 // its kind uses. `id` is the script's own number and comes back untouched in
@@ -1579,6 +1583,19 @@ int l_dnp_ui_open(lua_State* L) {
     proto::UiPanel panel;
     lua_getfield(L, 2, "title");
     ui_text(L, -1, panel.title, "title");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "template");
+    if (!lua_isnil(L, -1)) {
+        size_t tn = 0;
+        const char* tp = lua_tolstring(L, -1, &tn);
+        if (tp == nullptr || !proto::valid_template_name(tp, tn)) {
+            return luaL_error(L, "ui: template '%s' must be 1..%d of [a-z0-9_]",
+                              tp ? tp : "?", static_cast<int>(proto::UI_MAX_TEMPLATE));
+        }
+        panel.template_len = static_cast<u8>(tn);
+        for (size_t i = 0; i < tn; ++i) panel.template_name[i] = tp[i];
+    }
     lua_pop(L, 1);
 
     lua_getfield(L, 2, "widgets");

@@ -94,6 +94,8 @@ export const UI_KIND = {
 export const UI_MAX_TEXT = 128
 export const UI_MAX_WIDGETS = 32
 export const UI_MAX_OPTIONS = 32
+// A panel template's name (docs/UI_LAYOUT.md 5): [a-z0-9_], at most this.
+export const UI_MAX_TEMPLATE = 24
 
 export const ENT_FIELD = {
   POS: 1 << 0,
@@ -315,7 +317,20 @@ export function decodeControlMessage (buf) {
       }
       widgets.push({ kind, id, label, value, lo, hi, options })
     }
-    return r.ok ? { type, uiId, title, widgets } : null
+    if (!r.ok) return null
+    // The TEMPLATE, trailing and optional: present when the message goes on.
+    // Anything there that is not a whole valid name is a message cut short or
+    // corrupted, and refused like any other.
+    let template = null
+    if (r.pos < Math.min(r.buf.length, 4 + len)) {
+      const tn = r.u16()
+      if (!r.ok || tn === 0 || tn > UI_MAX_TEMPLATE) return null
+      const b = r.bytes(tn)
+      if (b === null) return null
+      template = new TextDecoder().decode(b)
+      if (!/^[a-z0-9_]+$/.test(template)) return null
+    }
+    return { type, uiId, title, widgets, template }
   }
 
   if (type === MSG.UI_CLOSE) {

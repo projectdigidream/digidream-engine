@@ -444,6 +444,23 @@ void encode_ui_open(ByteWriter& w, const UiPanel& p) noexcept {
         w.u16v(opts);
         for (u16 k = 0; k < opts; ++k) encode_text(w, g.options[k]);
     }
+    // TRAILING and optional, so a panel without one is byte-for-byte what it
+    // was, and a reader from before templates stops at the widgets and draws
+    // the default panel.
+    if (p.template_len > 0) {
+        const u16 n = p.template_len > UI_MAX_TEMPLATE ? static_cast<u16>(UI_MAX_TEMPLATE) : p.template_len;
+        w.u16v(n);
+        w.bytes(reinterpret_cast<const u8*>(p.template_name), n);
+    }
+}
+
+bool valid_template_name(const char* s, size_t n) noexcept {
+    if (n == 0 || n > UI_MAX_TEMPLATE) return false;
+    for (size_t i = 0; i < n; ++i) {
+        const char ch = s[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) return false;
+    }
+    return true;
 }
 
 bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept {
@@ -470,6 +487,16 @@ bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept {
         for (u16 k = 0; k < opts; ++k) if (!decode_text(r, g.options[k])) return false;
     }
     if (!r.ok()) return false;
+    // The template, when the message goes on. A byte or two that is not a whole
+    // name is a message cut short, not "no template", and is refused.
+    if (r.remaining() > 0) {
+        const u16 tn = r.u16v();
+        if (!r.ok() || tn > UI_MAX_TEMPLATE) return false;
+        const u8* tp = r.bytes(tn);
+        if (tp == nullptr || !valid_template_name(reinterpret_cast<const char*>(tp), tn)) return false;
+        p.template_len = static_cast<u8>(tn);
+        for (u16 i = 0; i < tn; ++i) p.template_name[i] = static_cast<char>(tp[i]);
+    }
     p.count = n;
     out = p;
     return true;

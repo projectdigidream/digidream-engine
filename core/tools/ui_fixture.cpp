@@ -12,7 +12,8 @@
 using namespace dnp;
 using namespace dnp::proto;
 static void t(UiText& d, const char* s){ u16 n=0; while(s[n]&&n<UI_MAX_TEXT){d.text[n]=s[n];++n;} d.len=n; }
-int main(){
+#include <cstring>
+int main(int argc, char** argv){
     UiPanel p; p.ui_id=9; t(p.title,"Debug panel"); p.count=4;
     p.widgets[0].kind=UiWidgetKind::Label;  p.widgets[0].id=1; t(p.widgets[0].label,"Player");
     p.widgets[1].kind=UiWidgetKind::Slider; p.widgets[1].id=2; t(p.widgets[1].label,"Speed");
@@ -22,6 +23,9 @@ int main(){
     p.widgets[3].kind=UiWidgetKind::Select; p.widgets[3].id=4; t(p.widgets[3].label,"Map");
     p.widgets[3].option_count=3;
     t(p.widgets[3].options[0],"MAP01"); t(p.widgets[3].options[1],"MAP02"); t(p.widgets[3].options[2],"MAP03");
+    // `ui_fixture template` names one (docs/UI_LAYOUT.md 5): the same panel with
+    // the trailing field, so the JS decoder is held to the C++ encoder's bytes.
+    if(argc>1 && std::strcmp(argv[1],"template")==0){ std::memcpy(p.template_name,"shop",4); p.template_len=4; }
     u8 buf[8192]; ByteWriter w(buf,sizeof(buf));
     const size_t lp=w.mark(); w.u32v(0); w.u8v(MSG_UI_OPEN); encode_ui_open(w,p);
     const size_t end=w.size(); const u32 body=(u32)(end-lp-4);

@@ -163,6 +163,11 @@ function fakeDoc () {
   hud.setLayout(parseLayout({ hud: [{ id: 'ammo', type: 'text', text: '{hud.ammo} shells', anchor: 'br' }] }).layout)
   hud.update({ 'hud.ammo': 12 })
   check(hud.nodes.length === 1 && hud.nodes[0].dom.textContent === '12 shells', 'a module\'s own element, bound to a HUD name')
+  hud.setLayout(parseLayout({ hud: [{ id: 'key', type: 'text', text: 'KEY', visible: { bind: 'hud.key', op: 'set' } }] }).layout)
+  hud.update({ 'hud.key': 1 })
+  const shown = hud.nodes[0].dom.style.display
+  hud.update({ 'hud.key': undefined })
+  check(shown === 'block' && hud.nodes[0].dom.style.display === 'none', 'a value the server clears is gone from the HUD (HUD_SET kind 2)')
   hud.destroy()
   check(host.children.length === 0, 'destroy takes it all away')
 }

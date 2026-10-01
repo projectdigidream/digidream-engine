@@ -35,7 +35,11 @@ function on_tick()
     if s == nil then s = { ticks = 0 }; seen[p] = s end
     s.ticks = s.ticks + 1
     if s.panel == nil then
-      s.panel = dnp.ui_open(e, { title = "Game",
+      -- A TEMPLATE name (docs/UI_LAYOUT.md 5) rides along to the client; one
+      -- the wire could not carry is refused here, in the script, by name.
+      local ok, err = pcall(dnp.ui_open, e, { title = "x", template = "Not-A-Name" })
+      print(("[game_test] a bad template refused: %s (%s)"):format(tostring(not ok), tostring(err)))
+      s.panel = dnp.ui_open(e, { title = "Game", template = "game_hud",
         widgets = { { kind = "label", id = 0, label = "follows you" } } })
       print(("[game_test] opened panel %d for player %s"):format(s.panel, tostring(p)))
     end

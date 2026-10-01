@@ -321,6 +321,7 @@ async function loadLayout (levelName) {
     }
     uiLayout = layout
     hudView.setLayout(layout)
+    ui?.setLayout(layout)
     touch?.setLayout(layout, isFps() ? 'fps' : 'platformer')
   } catch (e) {
     console.warn(`[ui] layout: ${e.message}`)
@@ -369,6 +370,16 @@ let welcome = null
 // Panels the server has opened on us. Not simulation state: never hashed, never
 // predicted, and it survives nothing -- a reconnect starts with none.
 let ui = null
+// A MODAL panel (a layout template's `modal`) has the screen: the touch
+// controls step aside and a first-person player gets the mouse back.
+let uiModal = false
+function panelsChanged () {
+  const now = ui?.modal ?? false
+  if (now === uiModal) return
+  uiModal = now
+  touch?.setBlocked(now)
+  if (now && document.pointerLockElement) document.exitPointerLock?.()
+}
 // Why the transport closed, if it has. Read by the handshake loop, which must
 // stop waiting for a reply that a closed connection can never deliver.
 let closedWhy = null
@@ -542,7 +553,10 @@ if (LIVE) {
       else if (m.type === MSG.SOUND_PREDICT) ownSounds.set(m.group, m.entries)
       else if (m.type === MSG.HUD_SET) {
         for (const f of m.fields) {
-          if (f.kind === 2) hudValues.delete(`hud.${f.name}`)
+          // A clear reaches the HUD too: the frame loop only ever passes the
+          // names still set, so a value it was never told was dropped would
+          // stay on screen for good.
+          if (f.kind === 2) { hudValues.delete(`hud.${f.name}`); hudView.update({ [`hud.${f.name}`]: undefined }) }
           else hudValues.set(`hud.${f.name}`, f.value)
         }
       }
@@ -644,6 +658,8 @@ if (LIVE) {
   // click that arrived late still bought the thing, and one that arrived never
   // is a player pressing a button that does nothing.
   ui = new UiView({
+    layout: uiLayout,
+    onChange: () => panelsChanged(),
     onEvent: (uiId, widgetId, value) => {
       uiSound('ui.select')
       conn.sendControl(encodeUiEvent(uiId, widgetId, value))
@@ -1837,6 +1853,7 @@ const camDistance = () =>
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight)
   resizeCamera(cam3, innerWidth / innerHeight, viewHeight)
+  ui?.relayout()
 })
 /**
  * Zoom by a factor, clamped.
@@ -1890,6 +1907,11 @@ addEventListener('blur', () => held.clear())
 const mouseHeld = new Set()
 addEventListener('mousedown', (e) => {
   if (!isFps()) return
+  // A click on a script's panel is the panel's: it must not take the pointer
+  // (which would hide the very cursor clicking it), and while a modal panel is
+  // open the game has no pointer to take.
+  if (document.pointerLockElement !== renderer.domElement &&
+      (uiModal || e.target?.closest?.('.dnp-ui'))) return
   if (document.pointerLockElement !== renderer.domElement) {
     renderer.domElement.requestPointerLock?.()
     return

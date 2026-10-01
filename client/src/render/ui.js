@@ -16,6 +16,7 @@
 // for those and is corrected exactly as they are.
 //
 import { UI_KIND } from '../proto.js'
+import { place, sizeOf, uiScale, HudView, DEFAULT_LAYOUT } from './layout.js'
 
 const STYLE = `
 .dnp-ui-layer{position:fixed;inset:0;pointer-events:none;z-index:50;
@@ -39,7 +40,25 @@ const STYLE = `
 .dnp-ui select{background:#2a2a34;color:#e8e8ea;border:1px solid #45454f;
   border-radius:4px;padding:3px 6px;font:inherit;flex:1 1 auto}
 .dnp-ui-label{opacity:.65}
+/* A TEMPLATED panel (docs/UI_LAYOUT.md 5): placed by the layout, not stacked
+   top-right, and as wide as it says. */
+.dnp-ui.dnp-ui-t{top:auto;right:auto;max-width:none;min-width:0}
+.dnp-ui-stage{position:relative}
+.dnp-ui-slot{position:absolute;z-index:1;box-sizing:border-box}
+.dnp-ui-x.dnp-ui-x-free{position:absolute;top:4px;right:6px;z-index:2}
+.dnp-ui-dim{position:absolute;inset:0;background:rgba(0,0,0,.45);pointer-events:auto}
 `
+// The slot's own look, from the template. Colours and sizes only: a template
+// is presentation, so nothing here can change what a widget does.
+const SLOT_STYLE = { bg: 'background', color: 'color', border: 'border' }
+function styleSlot (el, st, scale) {
+  if (!st) return
+  for (const [k, css] of Object.entries(SLOT_STYLE)) if (typeof st[k] === 'string') el.style[css] = st[k]
+  if (typeof st.radius === 'number') el.style.borderRadius = `${st.radius * scale}px`
+  if (typeof st.size === 'number') el.style.fontSize = `${st.size * scale}px`
+  if (typeof st.weight === 'number') el.style.fontWeight = String(st.weight)
+  if (typeof st.opacity === 'number') el.style.opacity = String(st.opacity)
+}
 
 /**
  * Clamp a widget's value to what it declared.
@@ -70,10 +89,23 @@ export class UiView {
    * injectable so this can be tested without a browser -- the DOM it needs is
    * small and entirely standard.
    */
-  constructor ({ onEvent, doc = globalThis.document }) {
+  /**
+   * TEMPLATES are the layout's `panels` (docs/UI_LAYOUT.md 5): `layout` gives
+   * them and the scale, `host` and `size` let the studio draw a panel inside a
+   * device frame rather than the window.
+   */
+  constructor ({ onEvent, onChange = null, doc = globalThis.document, host = null, layout = null, size = null, insets = null }) {
     this.onEvent = onEvent
+    // Called after any panel opens or closes, however it closed (the script,
+    // or the player's ×) -- what main.js needs to know whether one is modal.
+    this.onChange = onChange
     this.doc = doc
-    this.panels = new Map()          // uiId -> { root, inputs }
+    this.host = host
+    this.size = size
+    this.insets = insets
+    this.layout = layout ?? DEFAULT_LAYOUT
+    this.warned = new Set()
+    this.panels = new Map()          // uiId -> { root, inputs, msg, dim, decor }
     this.layer = null
     // Widgets of the panel currently being built, and the control the player
     // has hold of. See set().
@@ -88,8 +120,46 @@ export class UiView {
     this.doc.head.appendChild(style)
     this.layer = this.doc.createElement('div')
     this.layer.className = 'dnp-ui-layer'
-    this.doc.body.appendChild(this.layer)
+    // In a host (the studio's device frame) the layer fills THAT, not the window.
+    if (this.host) this.layer.style.position = 'absolute'
+    ;(this.host ?? this.doc.body).appendChild(this.layer)
     return this.layer
+  }
+
+  /** A new layout: its templates and scale. Open panels are drawn again. */
+  setLayout (layout) {
+    this.layout = layout ?? DEFAULT_LAYOUT
+    for (const p of [...this.panels.values()]) this.open(p.msg)
+  }
+
+  /** Is a modal panel open? Then the game's touch input is the panel's. */
+  get modal () {
+    for (const p of this.panels.values()) if (p.dim) return true
+    return false
+  }
+
+  /** The window changed size: templated panels placed again. */
+  relayout () {
+    for (const p of this.panels.values()) if (p.place) p.place()
+  }
+
+  #area () {
+    if (this.size) return this.size
+    const r = this.host?.getBoundingClientRect?.()
+    if (r && r.width) return { width: r.width, height: r.height }
+    return { width: globalThis.innerWidth ?? 0, height: globalThis.innerHeight ?? 0 }
+  }
+
+  #template (name) {
+    if (!name) return null
+    const t = this.layout?.panels?.[name]
+    // An unknown name draws the DEFAULT panel: a template is presentation, and
+    // a server that names one this client does not have must still be usable.
+    if (!t && !this.warned.has(name)) {
+      this.warned.add(name)
+      console.warn(`[ui] no panel template '${name}' in this layout; drawing the default panel`)
+    }
+    return t ?? null
   }
 
   /**
@@ -99,6 +169,8 @@ export class UiView {
    */
   open (msg) {
     this.close(msg.uiId)
+    const tpl = this.#template(msg.template)
+    if (tpl) { this.#openTemplated(msg, tpl); this.onChange?.(); return }
     const doc = this.doc
     const root = doc.createElement('div')
     root.className = 'dnp-ui'
@@ -126,7 +198,110 @@ export class UiView {
 
     root.append(title, body)
     this.#layer().appendChild(root)
-    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs })
+    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, msg })
+    this.pendingInputs = new Map()
+    this.onChange?.()
+  }
+
+  // THE TEMPLATED PANEL. The same widgets, built by the same #widget -- so every
+  // control a script sent is here and behaves as it always did -- placed into
+  // the template's slots by script id. A widget the template does not place is
+  // stacked in the body below the slots, as in a default panel: a template can
+  // never lose a control. Slot coordinates are inside the panel's content area,
+  // below the title bar.
+  #openTemplated (msg, tpl) {
+    const doc = this.doc
+    const area = this.#area()
+    const s = uiScale(this.layout, area.width, area.height)
+    const root = doc.createElement('div')
+    root.className = 'dnp-ui dnp-ui-t'
+    root.dataset.uiId = String(msg.uiId)
+    root.dataset.template = msg.template
+    const pw = sizeOf(tpl.w ?? 320, s, area.width, area.height)
+    root.style.width = `${pw}px`
+    styleSlot(root, tpl.style, s)
+
+    const closeable = tpl.closeable !== false
+    const x = doc.createElement('span')
+    x.className = 'dnp-ui-x'
+    x.textContent = '×'
+    x.onclick = () => this.close(msg.uiId)
+    if (tpl.title?.show !== false) {
+      const title = doc.createElement('div')
+      title.className = 'dnp-ui-title'
+      const t = doc.createElement('span')
+      t.textContent = msg.title
+      title.append(t)
+      if (closeable) title.append(x)
+      root.append(title)
+    } else if (closeable) {
+      x.className = 'dnp-ui-x dnp-ui-x-free'
+      root.append(x)
+    }
+
+    this.pendingInputs = new Map()
+    const byId = new Map(msg.widgets.map((w) => [w.id, w]))
+    // A slot for a widget the script did not send is empty space; a second slot
+    // for the same widget is ignored (one control, one place).
+    const slotted = new Set()
+    const slots = []
+    for (const sl of tpl.slots ?? []) {
+      if (!byId.has(sl.widget) || slotted.has(sl.widget)) continue
+      slotted.add(sl.widget)
+      slots.push(sl)
+    }
+    // The slot area's height: the template's, or enough for the slots placed
+    // from the top (32 units a slot unless it says).
+    const sh = tpl.h !== undefined
+      ? sizeOf(tpl.h, s, area.width, area.height)
+      : Math.max(0, ...slots.map((sl) => ((sl.y ?? 0) + (sl.h ?? 32) + 8) * s))
+    const stage = doc.createElement('div')
+    stage.className = 'dnp-ui-stage'
+    stage.style.height = `${sh}px`
+    let decor = null
+    if ((tpl.decor ?? []).length) {
+      // Decor is HUD elements, drawn by the HUD's own code, behind the widgets.
+      decor = new HudView({ host: stage, doc, size: { width: pw, height: sh } })
+      decor.root.style.zIndex = '0'
+      decor.setLayout({ ...this.layout, hud: tpl.decor })
+    }
+    for (const sl of slots) {
+      const el = this.#widget(msg.uiId, byId.get(sl.widget))
+      el.className = `${el.className} dnp-ui-slot`
+      const r = place({ anchor: 'tl', ...sl, h: sl.h ?? 32 }, this.layout, pw, sh, {}, { w: pw, h: 32 * s })
+      Object.assign(el.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
+      styleSlot(el, sl.style, s)
+      stage.appendChild(el)
+    }
+    if (slots.length || decor) root.append(stage)
+    const rest = msg.widgets.filter((w) => !slotted.has(w.id))
+    if (rest.length) {
+      const body = doc.createElement('div')
+      body.className = 'dnp-ui-body'
+      for (const wgt of rest) body.appendChild(this.#widget(msg.uiId, wgt))
+      root.append(body)
+    }
+
+    const layer = this.#layer()
+    // MODAL: the world dimmed behind it, and (main.js, via `modal`) the game's
+    // touch input held off while it is open.
+    let dim = null
+    if (tpl.modal) {
+      dim = doc.createElement('div')
+      dim.className = 'dnp-ui-dim'
+      layer.appendChild(dim)
+    }
+    layer.appendChild(root)
+    const placeIt = () => {
+      const a = this.#area()
+      const r = place({ anchor: 'c', ...tpl, w: undefined, h: undefined }, this.layout, a.width, a.height,
+                      this.insets ?? {}, { w: root.offsetWidth || pw, h: root.offsetHeight || 0 })
+      Object.assign(root.style, { left: `${r.left}px`, top: `${r.top}px` })
+      // Now attached, text has a size: decor anchored right or bottom needs it.
+      decor?.refresh()
+    }
+    placeIt()
+    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, msg, dim, decor, place: placeIt })
     this.pendingInputs = new Map()
   }
 
@@ -223,6 +398,9 @@ export class UiView {
     if (el.type === 'checkbox') el.checked = value !== 0
     else el.value = String(value)
     if (el.dnpOut) el.dnpOut.textContent = String(value)
+    // Remembered, so a panel drawn again (a new layout) shows it.
+    const w = p.msg?.widgets.find((x) => x.id === widgetId)
+    if (w) w.value = value
     return true
   }
 
@@ -230,7 +408,10 @@ export class UiView {
     const p = this.panels.get(uiId)
     if (!p) return false
     p.root.remove()
+    p.dim?.remove()
+    p.decor?.destroy()
     this.panels.delete(uiId)
+    this.onChange?.()
     return true
   }
 

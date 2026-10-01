@@ -382,6 +382,9 @@ struct ParamField {
 inline constexpr u32 UI_MAX_TEXT    = 128;   // bytes, per string
 inline constexpr u32 UI_MAX_WIDGETS = 32;
 inline constexpr u32 UI_MAX_OPTIONS = 32;
+// A panel's template: the name of one of the layout's `panels`
+// (docs/UI_LAYOUT.md 5), [a-z0-9_], like a HUD name.
+inline constexpr u32 UI_MAX_TEMPLATE = 24;
 
 enum class UiWidgetKind : u8 {
     Label  = 0,   // static text; sends nothing
@@ -417,7 +420,15 @@ struct UiPanel {
     UiText   title{};
     u16      count = 0;
     UiWidget widgets[UI_MAX_WIDGETS]{};
+    // Presentation only: where and how the client draws it. Empty is "the
+    // default panel", and encodes to exactly the bytes a panel had before
+    // templates existed.
+    u8       template_len = 0;
+    char     template_name[UI_MAX_TEMPLATE]{};
 };
+
+/** [a-z0-9_], 1..UI_MAX_TEMPLATE -- the one rule for a template name, both ends. */
+bool valid_template_name(const char* s, size_t n) noexcept;
 
 // Camera settings. Values are THOUSANDTHS of their unit -- see the table in
 // docs/protocol.md §11.1. Not fx: a camera is never hashed and never predicted,

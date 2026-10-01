@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { decodeControlMessage, MSG, UI_KIND } from '../src/proto.js'
 import { UiView, clampValue } from '../src/render/ui.js'
+import { parseLayout } from '../src/render/layout.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -154,6 +155,100 @@ const all = (el, out = []) => {
 
   check(view.close(msg.uiId) === true && view.count === 0, 'closing removes it')
   check(view.close(msg.uiId) === false, 'and closing it twice is a no-op')
+}
+
+// --- templates (docs/UI_LAYOUT.md 5) ----------------------------------------------
+//
+// On the wire: the same panel from the C++ encoder with a template, and the one
+// cut a trailing field cannot tell apart.
+{
+  const tb = execFileSync(gen, ['template'], { maxBuffer: 1 << 20 })
+  const tm = decodeControlMessage(tb)
+  check(tm?.template === 'shop' && tm?.widgets.length === 4, `a template survives the wire (${tm?.template})`)
+  check(msg.template === null, 'CONTROL: and a panel without one decodes with none')
+  check(tb.length === bytes.length + 2 + 4 && tb.subarray(4, bytes.length).equals(bytes.subarray(4)),
+        'the template only APPENDS: the rest is the old panel byte for byte')
+  const accepted = []
+  for (let n = 5; n < tb.length; n++) if (decodeControlMessage(tb.subarray(0, n)) !== null) accepted.push(n)
+  check(accepted.length === 1 && accepted[0] === bytes.length,
+        `every cut is refused but the end of the widgets, which is the panel without it (${accepted.join(',')})`)
+  const bad = Buffer.from(tb)
+  bad[bad.length - 1] = 'P'.charCodeAt(0)
+  check(decodeControlMessage(bad) === null, 'a name outside [a-z0-9_] is refused')
+}
+
+const TEMPLATES = parseLayout({
+  scale: { reference: 390, min: 1, max: 1 },
+  panels: {
+    shop: {
+      anchor: 'c', w: 300, h: 120, modal: true,
+      slots: [
+        { widget: 2, anchor: 'tl', x: 12, y: 10, w: 140, style: { bg: '#2a4' } },
+        { widget: 4, anchor: 'tr', x: -12, y: 10, w: 120 },
+        { widget: 99, x: 0, y: 0 }
+      ],
+      decor: [{ id: 'coin', type: 'text', text: 'gold', anchor: 'br', x: -8, y: -8 }]
+    },
+    bare: { anchor: 'tl', x: 20, y: 30, w: 200, closeable: false, title: { show: false } }
+  }
+})
+check(TEMPLATES.ok, `a layout with two templates parses (${TEMPLATES.errors.join('; ')})`)
+const shape = (el) => `${el.tag}.${el.className}[${el.textContent ?? ''}](${el.children.map(shape).join(',')})`
+const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.className)).at(-1)
+
+{
+  // Without a template, a layout with templates in it changes NOTHING.
+  const d0 = makeDom()
+  new UiView({ onEvent: () => {}, doc: d0 }).open(msg)
+  const d1 = makeDom()
+  new UiView({ onEvent: () => {}, doc: d1, layout: TEMPLATES.layout, size: { width: 800, height: 600 } }).open(msg)
+  check(shape(d0.body) === shape(d1.body), 'a panel naming no template draws exactly as before')
+  const d2 = makeDom()
+  const warn = console.warn
+  let warned = ''
+  console.warn = (s) => { warned += s }
+  new UiView({ onEvent: () => {}, doc: d2, layout: TEMPLATES.layout }).open({ ...msg, template: 'nope' })
+  console.warn = warn
+  check(shape(d0.body) === shape(d2.body) && /nope/.test(warned), 'and one naming a template this layout lacks draws the default, said once')
+}
+{
+  const doc = makeDom()
+  let changes = 0
+  const view = new UiView({ onEvent: () => {}, onChange: () => changes++, doc, layout: TEMPLATES.layout, size: { width: 800, height: 600 } })
+  view.open({ ...msg, template: 'shop' })
+  const root = rootOf(doc)
+  check(/dnp-ui-t/.test(root.className) && root.style.width === '300px', `the template's panel, as wide as it says (${root.style.width})`)
+  check(root.style.left === '250px', `centred: the c anchor (${root.style.left})`)
+  const slots = all(root).filter((e) => /dnp-ui-slot/.test(e.className))
+  check(slots.length === 2, `the two widgets it names are slotted; a slot for one never sent is not (${slots.length})`)
+  const slider = slots.find((e) => e.children.some((c) => c.type === 'range'))
+  check(slider && slider.style.left === '12px' && slider.style.top === '10px' && slider.style.width === '140px',
+        `widget 2 at its slot (${slider?.style.left}, ${slider?.style.top})`)
+  check(slider?.style.background === '#2a4', 'with the slot\'s style')
+  const sel = slots.find((e) => e.children.some((c) => c.tag === 'select'))
+  check(sel && sel.style.left === `${300 - 12 - 120}px`, `widget 4 from the right edge (${sel?.style.left})`)
+  const body = all(root).find((e) => e.className === 'dnp-ui-body')
+  check(body && body.children.length === 2, `the two it does not place are stacked in the body: none lost (${body?.children.length})`)
+  check(all(root).some((e) => e.textContent === 'gold'), 'decor is drawn, by the HUD\'s own code')
+  check(view.modal && all(doc.body).some((e) => e.className === 'dnp-ui-dim'), 'a modal template dims the world and says so')
+  check(changes >= 1, 'and the change is reported')
+  view.set(msg.uiId, 2, 33)
+  view.setLayout(TEMPLATES.layout)
+  const again = all(rootOf(doc)).find((e) => e.type === 'range')
+  check(again?.value === '33', `drawn again, a value the server set since is kept (${again?.value})`)
+  const x = all(rootOf(doc)).find((e) => /dnp-ui-x/.test(e.className))
+  x.onclick()
+  check(!view.modal && !all(doc.body).some((e) => e.className === 'dnp-ui-dim'), 'closed by its ×, the dim goes and modal is over')
+
+  view.open({ ...msg, uiId: 2, template: 'bare' })
+  const bare = rootOf(doc)
+  check(!all(bare).some((e) => /dnp-ui-x|dnp-ui-title/.test(e.className)), 'no title and not closeable: neither is drawn')
+  check(bare.style.left === '20px' && bare.style.top === '30px' && !view.modal, 'placed tl, and not modal')
+}
+{
+  const bad = parseLayout({ panels: { Shop: {}, ok: { anchor: 'middle' }, s2: { slots: [{ anchor: 'tl' }] } } })
+  check(!bad.ok && bad.errors.length === 3 && Object.keys(bad.layout.panels).length === 0,
+        `CONTROL: a bad name, anchor or slot is an error and the template is dropped (${bad.errors.length})`)
 }
 
 console.log(`\nui: ${checks} checks, ${fails} failures`)

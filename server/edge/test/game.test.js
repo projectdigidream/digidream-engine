@@ -123,7 +123,7 @@ async function start (extra, maps = [A, B]) {
           buf = buf.subarray(4 + len)
           if (m?.type === MSG.WELCOME) { run.welcomes++; run.names.push(m.levelName) }
           else if (m?.type === MSG.HOME) { run.homes.push(m.level); run.names.push(m.levelName) }
-          else if (m?.type === MSG.UI_OPEN) run.opened.push({ id: m.uiId, title: m.title })
+          else if (m?.type === MSG.UI_OPEN) run.opened.push({ id: m.uiId, title: m.title, template: m.template })
           else if (m?.type === MSG.UI_CLOSE) run.closed.push(m.uiId)
           else if (m?.type === MSG.GAME_RESULT) run.results.push(m)
         }
@@ -190,8 +190,13 @@ try {
     const game = titled(run, 'Game')
     check(game.length === 1, `the game's panel was opened once, for both levels (${game.length})`)
     check(game.length === 1 && !run.closed.includes(game[0].id), 'and the level change did not close it')
+    // docs/UI_LAYOUT.md 5: the template a script names reaches the client --
+    // and a panel that names none arrives with none (the level's).
+    check(game[0]?.template === 'game_hud', `the panel's template crossed the wire (${game[0]?.template})`)
+    check(/a bad template refused: true \(.*Not-A-Name/.test(run.log), 'and a name the wire cannot carry raised in the script, by name')
     const l0 = titled(run, 'Level 0')
     check(l0.length === 1 && run.closed.includes(l0[0].id), 'the first level\'s own panel closed when the player left it')
+    check(l0[0]?.template === null, 'CONTROL: a panel naming no template arrives with none')
     const l1 = titled(run, 'Level 1')
     check(l1.length === 1 && !run.closed.includes(l1[0].id), 'and the second level opened its own')
     const as = answers(run.log)

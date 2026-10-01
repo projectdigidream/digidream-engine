@@ -83,7 +83,7 @@ for (let i = 0; i < 100; i++) {
 // --- one Chrome, driven over its debugging protocol ---------------------------
 const profile = mkdtempSync(join(tmpdir(), 'dnp-clientleak-'))
 const chrome = spawn(chromeBin, [
-  '--headless=new', '--no-sandbox', '--enable-unsafe-swiftshader',
+  '--headless=new', '--mute-audio', '--no-sandbox', '--enable-unsafe-swiftshader',
   '--autoplay-policy=no-user-gesture-required',
   `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`, '--window-size=1100,800', 'about:blank'
 ], { stdio: 'ignore' })

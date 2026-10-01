@@ -108,7 +108,7 @@ await sleep(500)
 
 const profile = mkdtempSync(join(tmpdir(), 'dnp-seamcam-'))
 const browser = spawn(chrome, [
-  '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+  '--headless=new', '--mute-audio', '--no-sandbox', '--disable-dev-shm-usage',
   `--user-data-dir=${profile}`,
   '--enable-unsafe-swiftshader', '--window-size=1200,800',
   // KEEPS IT ALIVE. --dump-dom and --screenshot both exit as soon as the page

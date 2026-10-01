@@ -79,7 +79,7 @@ function dump (url) {
   const profile = mkdtempSync(join(tmpdir(), 'dnp-client-'))
   try {
     const r = spawnSync(chrome, [
-      '--headless=new', '--no-sandbox', '--disable-dev-shm-usage',
+      '--headless=new', '--mute-audio', '--no-sandbox', '--disable-dev-shm-usage',
       `--user-data-dir=${profile}`,
       // SwiftShader, because there is no GPU here and the client makes a WebGL
       // context before it does anything else. Without this the page throws at

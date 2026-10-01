@@ -135,7 +135,16 @@ export function parseLayout (json) {
     hud: src.hud === undefined ? DEFAULT_LAYOUT.hud : [],
     touch: src.touch === undefined ? DEFAULT_LAYOUT.touch : touchOf(src.touch, 'touch', DEFAULT_LAYOUT.touch, errors, warnings),
     touch_fps: src.touch_fps === undefined ? DEFAULT_LAYOUT.touch_fps : touchOf(src.touch_fps, 'touch_fps', DEFAULT_LAYOUT.touch_fps, errors, warnings),
-    panels: src.panels && typeof src.panels === 'object' ? src.panels : {}
+    panels: {}
+  }
+  if (src.panels !== undefined) {
+    if (!src.panels || typeof src.panels !== 'object' || Array.isArray(src.panels)) errors.push('`panels` must be an object of templates')
+    else {
+      for (const [name, t] of Object.entries(src.panels)) {
+        const p = panelOf(name, t, errors, warnings)
+        if (p) layout.panels[name] = p
+      }
+    }
   }
   if (src.hud !== undefined) {
     if (!Array.isArray(src.hud)) errors.push('`hud` must be a list of elements')
@@ -175,6 +184,39 @@ function elementOf (el, where, errors, warnings, ids) {
       const ce = elementOf(c, `${at} child`, errors, warnings, ids)
       if (ce) out.children.push(ce)
     }
+  }
+  return out
+}
+
+// A PANEL TEMPLATE (docs/UI_LAYOUT.md 5). Its name is what UI_OPEN carries, so
+// it has the wire's rule; anything that would put the panel or a widget
+// somewhere nobody can draw is an error, and the template is dropped -- the
+// panel then draws as the default one, never misplaced.
+const PANEL_KEYS = ['anchor', 'x', 'y', 'w', 'h', 'modal', 'closeable', 'title', 'slots', 'decor', 'style', '_about']
+const SLOT_KEYS = ['widget', 'anchor', 'x', 'y', 'w', 'h', 'style']
+function panelOf (name, t, errors, warnings) {
+  const at = `panel '${name}'`
+  if (!/^[a-z0-9_]{1,24}$/.test(name)) { errors.push(`${at}: a template name is 1..24 of [a-z0-9_]`); return null }
+  if (!t || typeof t !== 'object') { errors.push(`${at}: must be an object`); return null }
+  for (const k of Object.keys(t)) if (!PANEL_KEYS.includes(k)) warnings.push(`${at}: unknown key '${k}', ignored`)
+  if (t.anchor !== undefined && !ANCHORS.includes(t.anchor)) { errors.push(`${at}: anchor '${t.anchor}' is not one of ${ANCHORS.join(' ')}`); return null }
+  const out = { ...t, slots: [], decor: [] }
+  if (t.slots !== undefined && !Array.isArray(t.slots)) { errors.push(`${at}: slots must be a list`); return null }
+  const seen = new Set()
+  for (const sl of t.slots ?? []) {
+    if (!sl || !Number.isInteger(sl.widget) || sl.widget < 0 || sl.widget > 0xffff) {
+      errors.push(`${at}: a slot needs \`widget\`, the script's widget id (0..65535)`); return null
+    }
+    if (sl.anchor !== undefined && !ANCHORS.includes(sl.anchor)) { errors.push(`${at} slot ${sl.widget}: anchor '${sl.anchor}'`); return null }
+    for (const k of Object.keys(sl)) if (!SLOT_KEYS.includes(k)) warnings.push(`${at} slot ${sl.widget}: unknown key '${k}', ignored`)
+    if (seen.has(sl.widget)) warnings.push(`${at}: widget ${sl.widget} has two slots; the first is used`)
+    seen.add(sl.widget)
+    out.slots.push({ ...sl })
+  }
+  const ids = new Set()
+  for (const el of t.decor ?? []) {
+    const e = elementOf(el, `${at} decor`, errors, warnings, ids)
+    if (e) out.decor.push(e)
   }
   return out
 }
@@ -310,6 +352,10 @@ export class HudView {
     this.lastArea = area
     if (changed) this.#paint()
   }
+
+  /** Measure and place again -- after the host is attached, when an element's
+   *  natural size can first be read (a panel's decor is built before it is). */
+  refresh () { this.#paint() }
 
   destroy () { this.root.remove() }
 

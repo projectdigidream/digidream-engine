@@ -185,7 +185,11 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
   // and from anything else the page grows later. What this needs is to SEE
   // every pointer and to claim it by where it landed, which is exactly what
   // a window-level listener with a region table does.
+  // BLOCKED while a modal panel is open (docs/UI_LAYOUT.md 5): a thumb on the
+  // panel is the panel's, not the stick's.
+  let blocked = false
   const onDown = (e) => {
+    if (blocked) return
     measure()
     state.down(e.pointerId, e.clientX, e.clientY, regions)
     // Only once it is ours. A pointer landing on a script's panel is that
@@ -231,6 +235,13 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
     state,
     layout: measure,
     paint,
+    /** Hold off the game's touch input (a modal panel); what was held is let go. */
+    setBlocked (on) {
+      if (on === blocked) return
+      blocked = on
+      if (on) onLost()
+      layer.style.visibility = on ? 'hidden' : ''
+    },
     /** A new layout or scheme: the buttons rebuilt and placed again. */
     setLayout (next = layout, nextScheme = scheme) {
       layout = next ?? DEFAULT_LAYOUT
