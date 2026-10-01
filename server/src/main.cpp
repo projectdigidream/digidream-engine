@@ -133,6 +133,10 @@ struct Host {
     // state -- like hp: not hashed, not in the determinism gate, not predicted.
     // A costume is not physics.
     u16  avatar[sim::MAX_AGENTS]{};
+    // Which player each body is: its session's id plus one, or 0 for a body
+    // nobody plays. What e:player() answers, so the game VM can key a player's
+    // state by something that survives walking into another world.
+    u32  player[sim::MAX_AGENTS]{};
 
     // Parameter effects, per agent: they are computed from an agent's base, and
     // an agent is in exactly one world.
@@ -246,7 +250,7 @@ struct Level {
     u16& discrete_count;
 };
 
-struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
+struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossSink {
     net::LinkServer      link;
 
     // Which named spawn arriving players land on. Portals supply this per
@@ -760,6 +764,208 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
     bool restores_levels() const { return persist_levels || persist_server; }
 
+    // --- THE GAME VM (lua::CrossSink; docs/MODULES.md, "Game scripts") -----
+    //
+    // Scripts a module declares with `game <file>` in its module.txt run ONCE
+    // for the whole game instead of once per level: weapons, inventory, a HUD.
+    // Every level's VM used to load its own copy, so each level had its own
+    // inventory and opened its own weapon panel -- walking into the next level
+    // put the panel up again and handed the player a fresh pistol.
+    //
+    // One VM, bound per call to the world of the player it is dealing with
+    // (bind_game). A level that declares one of these scripts too skips it:
+    // the game runs it, and the level asks the game (dnp.call_game) or is
+    // asked by it (dnp.call_level).
+    std::vector<std::string> game_scripts;
+    lua::Vm            game_vm;
+    lua::WorldContext  game_ctx;
+    // What the game VM is bound to when it is dealing with nobody -- while its
+    // scripts load, and between calls. An empty world, so a binding that
+    // reads it finds nothing rather than a level that has since unloaded.
+    std::unique_ptr<Host> game_idle_;
+    lua::CommandQueue     game_idle_commands_;
+    // The game state kept on disk (persist server), read at start.
+    std::string game_save_;
+    bool        has_game_save_ = false;
+    // WHICH VM IS RUNNING ON THE SERVER'S BEHALF, innermost last: a level
+    // index, or VM_GAME. It decides whose a panel opened now is.
+    static constexpr u32 VM_GAME = 0xFFFFFFFEu;
+    std::vector<u32> vm_stack_;
+    // The level whose world the game VM is bound to, and the bindings to go
+    // back to as nested calls return.
+    u32 game_bound_ = NO_OWNER;
+    std::vector<u32> game_bound_stack_;
+
+    static std::string base_name(const std::string& p) {
+        const size_t slash = p.find_last_of("/\\");
+        return slash == std::string::npos ? p : p.substr(slash + 1);
+    }
+    bool runs_game_wide(const std::string& path) const {
+        const std::string b = base_name(path);
+        for (const auto& g : game_scripts) if (base_name(g) == b) return true;
+        return false;
+    }
+
+    void bind_game_to(Host& H, u32 li, lua::CommandQueue* commands) {
+        game_ctx.world     = &H.world;
+        game_ctx.map_store = H.store;
+        game_ctx.nav       = &H.nav_graph;
+        game_ctx.hp        = H.hp;
+        game_ctx.avatar    = H.avatar;
+        game_ctx.effects   = &H.effects;
+        game_ctx.player    = H.player;
+        game_ctx.commands  = commands;
+        game_ctx.level     = li;
+        // The WORLD's frame, whatever the level: nothing a game script does is
+        // about one map's coordinates, and a player walking between two levels
+        // of the region must not see their own position jump.
+        game_ctx.chunk     = nullptr;
+        game_ctx.origin    = fx2{};
+        // Not an owner of anything it spawns: events about it go to whoever's
+        // ground it is on, as for a player.
+        game_ctx.owner     = nullptr;
+        game_bound_ = li;
+    }
+    void bind_game_idle() {
+        if (!game_idle_) game_idle_ = std::make_unique<Host>();
+        bind_game_to(*game_idle_, 0, &game_idle_commands_);
+        game_bound_ = NO_OWNER;
+        game_idle_commands_.clear();
+    }
+    void bind_game(u32 li) {
+        Level& L = level(li);
+        bind_game_to(*L.host, li, &L.commands);
+    }
+
+    // Into the game VM, bound to level li's world (NO_OWNER: as it is).
+    bool game_enter(u32 li) {
+        if (!game_vm.is_open()) return false;
+        game_bound_stack_.push_back(game_bound_);
+        if (li < levels.size() && levels[li].live) bind_game(li);
+        vm_stack_.push_back(VM_GAME);
+        return true;
+    }
+    void game_leave() {
+        vm_stack_.pop_back();
+        // What the game did to anybody's parameters is recomputed with the
+        // level's: the refresh looks at its levels' contexts.
+        if (game_ctx.effects_dirty && game_bound_ < levels.size() && levels[game_bound_].live) {
+            level(game_bound_).ctx.effects_dirty = true;
+        }
+        game_ctx.effects_dirty = false;
+        const u32 prev = game_bound_stack_.back();
+        game_bound_stack_.pop_back();
+        // Outermost: back to nothing, so no level that unloads later is left
+        // under the game's feet.
+        if (game_bound_stack_.empty() || prev >= levels.size() || !levels[prev].live) bind_game_idle();
+        else if (prev != game_bound_) bind_game(prev);
+    }
+
+    // Run the game VM's handlers for `hook`, bound to level li's world.
+    template <class Push>
+    void game_hook(u32 li, const char* hook, int nargs, Push push) {
+        if (!game_vm.is_open() || game_vm.hook_count(hook) == 0) return;
+        game_enter(li);
+        for (u32 h = 0; h < game_vm.hook_count(hook); ++h) {
+            if (!game_vm.begin_hook_at(hook, h)) continue;
+            push(game_vm.state());
+            game_vm.end_hook(hook, game_ctx.world->tick(), nargs);
+        }
+        game_leave();
+    }
+    void game_tick_hook(u32 li) {
+        game_hook(li, "on_tick", 0, [](lua_State*) {});
+    }
+
+    // lua::CrossSink.
+    lua_State* enter_game(const lua::WorldContext& caller) override {
+        if (!game_vm.is_open()) return nullptr;
+        game_enter(caller.game ? game_bound_ : caller.level);
+        return game_vm.state();
+    }
+    lua_State* enter_level_of(const lua::WorldContext& caller, u32 agent) override {
+        for (auto& [id, s] : sessions) {
+            if (!s.has_agent || s.agent != agent || !is_live(s.level)) continue;
+            Level& L = level(s.level);
+            if (&L.world != caller.world) continue;
+            if (!L.vm.is_open()) return nullptr;
+            vm_stack_.push_back(s.level);
+            return L.vm.state();
+        }
+        return nullptr;
+    }
+    lua_State* enter_level(const lua::WorldContext& caller, u32 li) override {
+        if (li >= levels.size() || !levels[li].live) return nullptr;
+        Level& L = level(li);
+        if (&L.world != caller.world || !L.vm.is_open()) return nullptr;
+        vm_stack_.push_back(li);
+        return L.vm.state();
+    }
+    void leave(lua_State* target) override {
+        if (target == game_vm.state()) game_leave();
+        else vm_stack_.pop_back();
+    }
+
+    // Bring the game VM up and load the module's game scripts; then, if there
+    // is a kept game state, put it back. False only when a script failed.
+    bool start_game(const std::string* restore) {
+        if (game_scripts.empty() || !scripts_enabled) return true;
+        if (!game_vm.open(vm_config)) {
+            std::fprintf(stderr, "[srv] cannot start the game's Lua: %s\n", game_vm.last_error());
+            return false;
+        }
+        game_ctx = lua::WorldContext{};
+        game_ctx.game        = true;
+        game_ctx.map_changes = this;
+        game_ctx.ui          = this;
+        game_ctx.levels      = this;
+        game_ctx.props       = &props;
+        game_ctx.cross       = this;
+        game_ctx.rng         = Rng(0x47414D45ull, 13);
+        game_bound_stack_.clear();
+        vm_stack_.clear();
+        bind_game_idle();
+        game_ctx.restoring = restore != nullptr;
+        lua::open_world(game_vm.state(), &game_ctx);
+        for (const auto& p : game_scripts) {
+            if (!game_vm.run_file(p.c_str(), p.c_str())) {
+                std::fprintf(stderr, "[srv] game script %s failed: %s\n", p.c_str(), game_vm.last_error());
+                game_vm.close();
+                return false;
+            }
+            std::fprintf(stderr, "[srv] game: %s (runs once for the whole game)\n", p.c_str());
+        }
+        game_ctx.restoring = false;
+        if (restore != nullptr) restore_game(*restore);
+        return true;
+    }
+    void stop_game() {
+        if (game_vm.is_open()) game_vm.close();
+        vm_stack_.clear();
+        game_bound_stack_.clear();
+        game_bound_ = NO_OWNER;
+    }
+
+    // THE GAME'S OWN STATE (docs/SAVING.md): what its scripts registered with
+    // dnp.persist -- a quest flag, a score, anything that is the game's rather
+    // than one level's or one player's. Saved in a save game, and on disk when
+    // the server persists, in the same encoding a level's parts use.
+    std::string capture_game() {
+        std::string parts, err;
+        if (!game_vm.is_open()) return parts;
+        lua::persist_capture(game_vm.state(), parts, err);
+        if (!err.empty()) std::fprintf(stderr, "[srv] game: some saved state was left out: %s\n", err.c_str());
+        return parts;
+    }
+    void restore_game(const std::string& parts) {
+        if (!game_vm.is_open() || parts.empty()) return;
+        std::string err;
+        lua::persist_restore(game_vm.state(), parts, err);
+        if (!err.empty()) std::fprintf(stderr, "[srv] game: restoring: %s\n", err.c_str());
+        std::fprintf(stderr, "[srv] game state restored\n");
+    }
+    std::string game_state_file() const { return state_dir + "/game.save"; }
+
     static bool make_dirs(const std::string& path) {
         std::string at;
         for (size_t i = 0; i <= path.size(); ++i) {
@@ -938,6 +1144,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // At start, when the server persists: every level state it wrote.
     void read_state_dir() {
         if (!persist_server) return;
+        has_game_save_ = read_file(game_state_file(), game_save_);
+        if (has_game_save_) std::fprintf(stderr, "[srv] saved game state read from %s\n", game_state_file().c_str());
         const std::string dir = state_dir + "/levels";
         DIR* d = opendir(dir.c_str());
         if (!d) return;
@@ -959,6 +1167,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         autosave_tick_ = 0;
         u32 n = 0;
         for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) { keep_level(li); ++n; }
+        if (game_vm.is_open() && (!make_dirs(state_dir) || !write_file(game_state_file(), capture_game()))) {
+            std::fprintf(stderr, "[srv] could not write %s\n", game_state_file().c_str());
+        }
         if (now) std::fprintf(stderr, "[srv] %u level state(s) written to %s\n", n, state_dir.c_str());
     }
 
@@ -1009,6 +1220,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         std::string parts, err;
         if (L.vm.is_open()) lua::persist_player_capture(L.vm.state(), L.ctx, s.agent, parts, err);
         out += "playerparts " + std::to_string(parts.size()) + "\n" + parts + "\n";
+        // What the GAME's scripts keep about this player (weapons, inventory),
+        // and the game's own state.
+        if (game_enter(s.level)) {
+            std::string gparts, gerr;
+            lua::persist_player_capture(game_vm.state(), game_ctx, s.agent, gparts, gerr);
+            game_leave();
+            out += "gameplayerparts " + std::to_string(gparts.size()) + "\n" + gparts + "\n";
+            const std::string g = capture_game();
+            out += "game " + std::to_string(g.size()) + "\n" + g + "\n";
+        }
         // Every level: the ones in memory as they are now, the rest as kept.
         std::map<std::string, std::string> all = level_saves_;
         for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) all[level_name(li)] = capture_level(li);
@@ -1026,12 +1247,18 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // level in memory is dropped WITHOUT being kept (it is the game being
     // replaced), and the kept states become exactly `kept`. Each level's VM
     // goes with its level, so every script starts again from its own source.
-    void replace_world(Session& s, u32 id, const std::map<std::string, std::string>& kept) {
-        detach_session(s, id);
+    //
+    // The game VM too: a new game's weapons are the module's starting ones, and
+    // a loaded game's are what the save says (`game`, null for none).
+    bool replace_world(Session& s, u32 id, const std::map<std::string, std::string>& kept,
+                       const std::string* game) {
+        detach_session(s, id, true);
         discarding_levels_ = true;
         for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) unload_level(li);
         discarding_levels_ = false;
         level_saves_ = kept;
+        stop_game();
+        return start_game(game);
     }
 
     // A NEW GAME: the world from scratch, as the module ships it. Every kept
@@ -1043,9 +1270,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // because starting again is not saving.
     void new_game(Session& s, u32 id) {
         if (sessions.size() != 1) { send_game_result(id, 2, 0, false, "a new game is for a single player"); return; }
-        replace_world(s, id, {});
+        if (!replace_world(s, id, {}, nullptr)) {
+            send_game_result(id, 2, 0, false, "the game's scripts would not start");
+            return;
+        }
         u32 removed = 0;
         if (persist_server) {
+            if (std::remove(game_state_file().c_str()) == 0) ++removed;
             const std::string dir = state_dir + "/levels";
             if (DIR* d = opendir(dir.c_str())) {
                 while (dirent* e = readdir(d)) {
@@ -1059,7 +1290,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         if (!place_in_level(s, id, 0)) { send_game_result(id, 2, 0, false, "the first level would not load"); return; }
         refresh_residency();
         send_game_result(id, 2, 0, true, removed ? "a new game; " + std::to_string(removed) +
-                                                       " kept level state(s) deleted" : "a new game");
+                                                       " kept state file(s) deleted" : "a new game");
     }
 
     void load_game(Session& s, u32 id, u8 slot) {
@@ -1069,7 +1300,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         if (!read_file(game_file(slot), text)) { send_game_result(id, 1, slot, false, "no save in that slot"); return; }
         // Parse first, change nothing until it reads.
         std::map<std::string, std::string> levels_in;
-        std::string pname, pparts;
+        std::string pname, pparts, gpparts, gstate;
+        bool has_gstate = false;
         long long px = 0, py = 0, pz = 0;
         unsigned pfacing = 0;
         int php = 100;
@@ -1092,6 +1324,17 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                 if (at + n > text.size()) break;
                 pparts = text.substr(at, n);
                 at += n + 1;
+            } else if (ln.compare(0, 16, "gameplayerparts ") == 0) {
+                const size_t n = static_cast<size_t>(std::strtoull(ln.c_str() + 16, nullptr, 10));
+                if (at + n > text.size()) break;
+                gpparts = text.substr(at, n);
+                at += n + 1;
+            } else if (ln.compare(0, 5, "game ") == 0) {
+                const size_t n = static_cast<size_t>(std::strtoull(ln.c_str() + 5, nullptr, 10));
+                if (at + n > text.size()) break;
+                gstate = text.substr(at, n);
+                has_gstate = true;
+                at += n + 1;
             } else if (ln.compare(0, 6, "level ") == 0) {
                 char name[128] = {0};
                 unsigned long long n = 0;
@@ -1106,7 +1349,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
         // THE GAME BEING REPLACED goes, without being kept: it is not the one
         // the player wants back.
-        replace_world(s, id, levels_in);
+        if (!replace_world(s, id, levels_in, has_gstate ? &gstate : nullptr)) {
+            send_game_result(id, 1, slot, false, "the game's scripts would not start");
+            return;
+        }
 
         const u32 li = static_cast<u32>(target);
         if (!load_level(li)) { send_game_result(id, 1, slot, false, "the saved level would not load"); return; }
@@ -1120,6 +1366,12 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             std::string err;
             lua::persist_player_restore(L.vm.state(), L.ctx, s.agent, pparts, err);
             if (!err.empty()) std::fprintf(stderr, "[srv] restoring the player: %s\n", err.c_str());
+        }
+        if (!gpparts.empty() && game_enter(li)) {
+            std::string err;
+            lua::persist_player_restore(game_vm.state(), game_ctx, s.agent, gpparts, err);
+            game_leave();
+            if (!err.empty()) std::fprintf(stderr, "[srv] restoring the player's game state: %s\n", err.c_str());
         }
         refresh_residency();
         send_game_result(id, 1, slot, true, "loaded " + std::to_string(levels_in.size()) + " level(s)");
@@ -1555,17 +1807,24 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // a placement at all (update_region_homes); this is the join, and exits.
     // Take a session's body out of the world it is in: what leaving a level
     // has always done, for a map change and for loading a save.
-    void detach_session(Session& s, u32 id) {
+    // `all_panels`: the game's panels close too, which is for the game itself
+    // being replaced (a new game, a save loaded).
+    void detach_session(Session& s, u32 id, bool all_panels = false) {
         (void)id;
         if (!s.has_agent) return;
         Level& old = level(s.level);
         old.effects.clear_agent(s.agent);
+        old.host->player[s.agent] = 0;
         old.world.despawn(s.agent);
         s.has_agent = false;
-        // Panels do not travel between levels: the old level's VM holds their
-        // handlers and will never see another event from them.
-        for (const auto& p : s.open_ui) send_ui_close(s, p.ui_id);
-        s.open_ui.clear();
+        // A LEVEL's panels do not travel between levels: the old level's VM
+        // holds their handlers and will never see another event from them. The
+        // GAME's do -- the game VM goes wherever the player goes.
+        for (size_t i = s.open_ui.size(); i-- > 0;) {
+            if (!all_panels && s.open_ui_owner[i] == Session::UI_GAME) continue;
+            send_ui_close(s, s.open_ui[i].ui_id);
+            s.remove_ui_at(i);
+        }
         // And the input buffer, or the last thing they did before touching the
         // exit is repeated forever in the new level. See Session::reset_input.
         s.reset_input();
@@ -1612,6 +1871,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // would be a bug that only shows up on a busy server. (Walking between
         // two levels of the region is not an arrival and heals nobody.)
         L.hp[agent] = 100;
+        L.host->player[agent] = id + 1;
 
         // The body the MAP is built for, before anything captures this agent's
         // parameters as its base.
@@ -1718,6 +1978,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // first snapshot so it is never predicting with rules it has not been
         // told.
         send_param_update(L, id, agent, true);
+        // And the game's scripts, which follow the player: a body in a new
+        // world has none of the parameters they had set on the last one.
+        game_hook(li, "on_player_enter", 1, [&](lua_State* T) { lua::push_entity(T, game_ctx, agent); });
         return true;
     }
 
@@ -1751,6 +2014,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         L.ctx.hp = L.hp;
         L.ctx.avatar = L.avatar;
         L.ctx.levels = this;
+        L.ctx.player = L.host->player;
+        L.ctx.cross  = this;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
         // to a client but replayable by the server. Per level, or two maps
@@ -1762,6 +2027,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         lua::open_world(L.vm.state(), &L.ctx);
 
         for (u32 k = 0; k < shared_count; ++k) {
+            if (runs_game_wide(shared[k])) continue;
             if (!L.vm.run_file(shared[k], shared[k])) {
                 std::fprintf(stderr, "[srv] script failed: %s\n", L.vm.last_error());
                 return false;
@@ -1783,6 +2049,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         for (u32 i = 0; i < L.map_store.script_count(); ++i) {
             const geom::ScriptName& sn = L.map_store.script(i);
             const std::string path = dir + "/" + std::string(sn.name, sn.len);
+            // THE GAME RUNS IT. A map lists weapons.lua because a level needs
+            // weapons; when the module runs them game-wide, a second copy here
+            // would be a second inventory and a second panel.
+            if (runs_game_wide(path)) {
+                std::fprintf(stderr, "[srv] level %u: %s runs game-wide, not per level\n", li, path.c_str());
+                continue;
+            }
             if (!L.vm.run_file(path.c_str(), path.c_str())) {
                 std::fprintf(stderr, "[srv] %s asked for %s and it failed: %s\n",
                              levels[li].path.c_str(), path.c_str(), L.vm.last_error());
@@ -1809,7 +2082,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         if (it->second.has_agent) {
             Level& L = level(it->second.level);
             L.effects.clear_agent(it->second.agent);
+            L.host->player[it->second.agent] = 0;
             L.world.despawn(it->second.agent);
+        }
+        // The game's scripts keep a player's state by player, not by body, so
+        // nothing else tells them the player is gone for good.
+        {
+            const u32 li = is_live(it->second.level) ? it->second.level : NO_OWNER;
+            game_hook(li, "on_player_leave", 1,
+                      [&](lua_State* T) { lua_pushnumber(T, static_cast<double>(id + 1)); });
         }
         const Session& c = it->second;
         const double avg = c.snapshots_sent ? static_cast<double>(c.bytes_sent) / c.snapshots_sent : 0.0;
@@ -1908,6 +2189,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
 
         if (!s.has_agent) return;
+        // The GAME's panel: its handlers are in the game VM.
+        if (s.ui_owner(ev.ui_id) == Session::UI_GAME) {
+            game_hook(s.level, "on_ui_event", 4, [&](lua_State* T) {
+                lua::push_entity(T, game_ctx, s.agent);
+                lua_pushnumber(T, static_cast<double>(ev.ui_id));
+                lua_pushnumber(T, static_cast<double>(ev.widget_id));
+                lua_pushnumber(T, static_cast<double>(value));
+            });
+            return;
+        }
         Level& L = level(s.level);
         if (!L.vm.is_open()) return;
         for (u32 h = 0; h < L.vm.hook_count("on_ui_event"); ++h) {
@@ -2083,6 +2374,35 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // Nobody's (a player): whoever's ground it stands on.
         if (sim::World::is_prop(e)) return false;
         return owns_sector(L, li, L.world.agent(e).mv.sector);
+    }
+
+    // A level of the region somebody is in, or NO_OWNER.
+    u32 region_player_level() const {
+        for (const auto& [id, s] : sessions) {
+            if (s.has_agent && in_region(s.level) && levels[s.level].live) return s.level;
+        }
+        return NO_OWNER;
+    }
+
+    // What the GAME's scripts hear about: a player touching or using a prop,
+    // once per world -- whichever level owns the prop hears it as before.
+    void dispatch_game_events(u32 li) {
+        if (!game_vm.is_open()) return;
+        const bool touch = game_vm.hook_count("on_touch") > 0;
+        const bool use = game_vm.hook_count("on_prop_use") > 0;
+        if (!touch && !use) return;
+        Level& L = level(li);
+        const sim::PropEventLog& pe = L.world.prop_events();
+        if (pe.count() == 0) return;
+        for (u32 i = 0; i < pe.count(); ++i) {
+            const sim::PropEvent& e = pe.at(i);
+            if (e.agent >= sim::MAX_AGENTS || L.host->player[e.agent] == 0) continue;
+            const char* hook = e.kind == sim::PropEventKind::Use ? "on_prop_use" : "on_touch";
+            game_hook(li, hook, 2, [&](lua_State* T) {
+                lua::push_entity(T, game_ctx, e.agent);
+                lua::push_prop(T, game_ctx, e.prop);
+            });
+        }
     }
 
     void dispatch_events(Level& L, u32 li) {
@@ -2333,6 +2653,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             // what a snapshot reports must be what the tick actually ran with.
             L.vm.call_hook("on_tick", L.world.tick());
         }
+        // The game's scripts, for the players in this world. Their commands
+        // land in this level's queue and are flushed with its own.
+        game_tick_hook(li);
         if (perf.every) perf.lua_us += now_us() - t_lua0;
         // After the callbacks, before the step: what the tick runs with is what
         // the snapshot will report.
@@ -2392,6 +2715,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         refresh_nav_if_stale(li);
         report_crushes(L);
         dispatch_events(L, li);
+        dispatch_game_events(li);
 
         const u64 t_lua1 = perf.every ? now_us() : 0;
         if (L.vm.is_open()) {
@@ -2464,7 +2788,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
         proto::UiPanel p = panel;
         p.ui_id = s->next_ui_id++;
-        s->open_ui.push_back(p);
+        s->add_ui(p, !vm_stack_.empty() && vm_stack_.back() == VM_GAME ? Session::UI_GAME : level_index);
         send_ui_open(*s, p);
         return p.ui_id;
     }
@@ -2628,7 +2952,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         if (s == nullptr) return;
         for (size_t i = 0; i < s->open_ui.size(); ++i) {
             if (s->open_ui[i].ui_id != ui_id) continue;
-            s->open_ui.erase(s->open_ui.begin() + static_cast<long>(i));
+            s->remove_ui_at(i);
             send_ui_close(*s, ui_id);
             return;
         }
@@ -2717,6 +3041,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
                 send_map(level(now), id);
             }
             send_home(id, now);
+            // The level left takes its own panels with it, as a level change
+            // does; the game's stay.
+            for (size_t i = s.open_ui.size(); i-- > 0;) {
+                if (s.open_ui_owner[i] != was) continue;
+                send_ui_close(s, s.open_ui[i].ui_id);
+                s.remove_ui_at(i);
+            }
             sync_neighbours(s, id);
             Level& L = level(now);
             if (L.has_camera) send_camera(s, L.camera);
@@ -2799,6 +3130,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // every resident level runs one of the two below. A level loaded later
         // is set to this, which is what keeps them all saying the same number.
         ++clock_;
+        if (game_vm.is_open()) game_vm.begin_tick();
 
         // EMPTY LEVELS DO NOT TICK.
         //
@@ -2873,6 +3205,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         autosave(false);
         apply_map_changes();
         update_region_homes();
+        if (game_vm.is_open()) {
+            game_vm.end_tick(clock_);
+            game_vm.gc_step();
+        }
     }
 
     // WHICH OF THE REGION'S LEVELS ARE AWAKE this tick: one a player is in, or
@@ -2924,6 +3260,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         for (auto& [id, s] : sessions) {
             if (s.has_agent && in_region(s.level)) H.world.set_input(s.agent, s.take());
         }
+        // The game's scripts, once for everybody in the region, bound to a
+        // level somebody is in -- its queue is flushed in the loop below.
+        const u32 game_li = region_player_level();
+        if (game_li != NO_OWNER) game_tick_hook(game_li);
 
         bool any = false;
         for (u32 li = 0; li < levels.size(); ++li) {
@@ -2955,6 +3295,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         }
         refresh_nav_if_stale(first);
         report_crushes(level(first));
+        if (game_li != NO_OWNER) dispatch_game_events(game_li);
         for (u32 li = 0; li < levels.size(); ++li) {
             if (!in_region(li) || !levels[li].live || !region_awake_[li]) continue;
             Level& L = level(li);
@@ -3468,6 +3809,7 @@ int main(int argc, char** argv) {
     u32  perf_every = env_perf ? static_cast<u32>(std::atoi(env_perf)) : 0;
     u32  lua_stall_us = env_stall ? static_cast<u32>(std::atoi(env_stall)) : 0;
     const char* props_path = nullptr;      // --props wins over any module
+    std::vector<std::string> game_script_args;
     constexpr u32 MAX_MODULES = 16;
     const char* module_dirs[MAX_MODULES]{};
     u32 module_count = 0;
@@ -3497,6 +3839,10 @@ int main(int argc, char** argv) {
             // trust) or a copy of the library inlined into all 32 of them.
             if (script_count < MAX_SCRIPTS) script_args[script_count++] = argv[++i];
             else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
+        } else if (std::strcmp(argv[i], "--game-script") == 0 && i + 1 < argc) {
+            // A script for the GAME VM, as a module's `game` line declares one:
+            // run once for the whole game, not once per level. Repeatable.
+            game_script_args.emplace_back(argv[++i]);
         } else if (std::strcmp(argv[i], "--props") == 0 && i + 1 < argc) {
             props_path = argv[++i];
         } else if (std::strcmp(argv[i], "--module") == 0 && i + 1 < argc) {
@@ -3593,6 +3939,17 @@ int main(int argc, char** argv) {
         char line[256];
         while (std::fgets(line, sizeof(line), f)) {
             char what[64] = {0};
+            // `game <file>`: a script the game runs ONCE, found in the module's
+            // maps directory beside the copies its levels run. The first module
+            // to name a file wins; a second naming the same one is the same
+            // weapons, not a second set.
+            char gfile[200] = {0};
+            if (std::sscanf(line, "game %199s", gfile) == 1) {
+                bool dup = false;
+                for (const auto& g : srv.game_scripts) dup = dup || Server::base_name(g) == Server::base_name(gfile);
+                if (!dup) srv.game_scripts.push_back(std::string(module_dirs[mi]) + "/maps/" + gfile);
+                continue;
+            }
             if (std::sscanf(line, "persist %63s", what) != 1) continue;
             if (std::strcmp(what, "levels") == 0) srv.persist_levels = true;
             else if (std::strcmp(what, "saves") == 0) srv.persist_saves = true;
@@ -3609,6 +3966,7 @@ int main(int argc, char** argv) {
         srv.persist_server = all || a.find("server") != std::string::npos;
     }
     if (state_dir_arg) srv.state_dir = state_dir_arg;
+    for (const auto& g : game_script_args) srv.game_scripts.push_back(g);
     std::fprintf(stderr, "[srv] persistence: levels %s, saves %s, server %s%s%s\n",
                  srv.persist_levels ? "on" : "off", srv.persist_saves ? "on" : "off",
                  srv.persist_server ? "on" : "off",
@@ -3759,6 +4117,12 @@ int main(int argc, char** argv) {
     // and a tick counter until somebody is near enough to want one.
     // What the server kept last time, before the first level loads.
     srv.read_state_dir();
+    // The game's scripts before any level's: a level may ask the game a
+    // question from the moment its own scripts load.
+    if (!srv.start_game(srv.has_game_save_ ? &srv.game_save_ : nullptr)) {
+        std::fprintf(stderr, "[srv] refusing to start without the game's scripts\n");
+        return 1;
+    }
     if (srv.level_count() > 0 && !srv.load_level(0)) {
         std::fprintf(stderr, "[srv] refusing to start without the entry map\n");
         return 1;

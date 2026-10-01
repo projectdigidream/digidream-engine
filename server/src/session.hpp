@@ -113,6 +113,26 @@ public:
         return nullptr;
     }
 
+    // WHOSE EACH PANEL IS, beside open_ui and in step with it: the index of
+    // the level whose script opened it, or UI_GAME for one the module's game
+    // scripts opened. A level's panel closes when the player leaves that
+    // level -- its VM holds the handlers -- and a game panel stays open
+    // across every level, because the game VM goes where the player goes.
+    static constexpr u32 UI_GAME = 0xFFFFFFFFu;
+    std::vector<u32> open_ui_owner;
+    void add_ui(const proto::UiPanel& p, u32 owner) {
+        open_ui.push_back(p);
+        open_ui_owner.push_back(owner);
+    }
+    void remove_ui_at(size_t i) {
+        open_ui.erase(open_ui.begin() + static_cast<long>(i));
+        open_ui_owner.erase(open_ui_owner.begin() + static_cast<long>(i));
+    }
+    u32 ui_owner(u32 ui_id) const {
+        for (size_t i = 0; i < open_ui.size(); ++i) if (open_ui[i].ui_id == ui_id) return open_ui_owner[i];
+        return 0;
+    }
+
     // WHICH LEVELS THIS CLIENT HOLDS THE MAP OF, besides the one it is in.
     //
     // By the rule in world/neighbours.hpp: from the moment a map starts

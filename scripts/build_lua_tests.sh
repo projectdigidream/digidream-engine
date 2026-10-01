@@ -107,6 +107,12 @@ clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
 clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
         "$ROOT/server/tests/test_lua_weapons.cpp" "${LINK[@]}" \
         -o "$OUT/test_lua_weapons"
+# Game scripts (docs/MODULES.md): the weapons in a game VM and the monsters
+# in a level's, one world under both -- the bridge between two lua_States can
+# only be tested where there are two.
+clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_game.cpp" "${LINK[@]}" \
+        -o "$OUT/test_lua_game"
 
 echo "[lua-tests] $OUT/trigger_vocab_json $OUT/triggercheck"
 

@@ -24,9 +24,19 @@
 -- can see, a weapon's by what button is down, and the conditions have almost
 -- nothing in common.
 --
--- PER-PLAYER STATE, keyed by AGENT INDEX and forgotten when that index is
--- reused. A slot is handed to whoever arrives next, so an inventory that
--- outlived its owner would arm a new player with the last one's shotgun.
+-- PER-PLAYER STATE, keyed by PLAYER (e:player(), the same number from level
+-- to level) where the engine says who a body is, and by agent index where it
+-- does not (a test's world). Forgotten when the player goes: a slot is handed
+-- to whoever arrives next, so an inventory that outlived its owner would arm a
+-- new player with the last one's shotgun.
+--
+-- PER LEVEL OR FOR THE WHOLE GAME. A module may run this file as a GAME script
+-- (`game weapons.lua` in its module.txt, docs/MODULES.md): once, in the game
+-- VM, so the inventory and the panel follow the player into every level
+-- instead of starting again in each. Then the shooting -- which is the mob
+-- runtime's, and the mob runtime is the level's -- is done by the level the
+-- player is in, through dnp.call_level. Loaded by a level instead, it calls the
+-- same function directly. One file, the same behaviour, either way.
 --
 -- WHY THIS IS A SEPARATE SCRIPT. The VM harvests hooks as a LIST of handlers,
 -- one per script, so this file's on_tick and on_touch run alongside doom.lua's
@@ -38,6 +48,28 @@ local W = weapons
 
 local ZERO = fx.int(0)
 local ONE  = fx.int(1)
+
+-- Running game-wide (see above)?
+local GAME = dnp ~= nil and dnp.is_game ~= nil and dnp.is_game() or false
+W.game = GAME
+
+-- Whose state an entity's is. See PER-PLAYER STATE above.
+local function key_of(e)
+  if e == nil then return nil end
+  local p = e.player and e:player()
+  if p ~= nil then return "p" .. p end
+  return e:index()
+end
+W.key_of = key_of
+
+-- WHAT THE WEAPON DOES TO THE WORLD, done by the mob runtime's
+-- M.weapon_runtime: here when this file runs in a level, in the level the
+-- player is in when it runs game-wide.
+local function world(e, op, ...)
+  if GAME then return dnp.call_level(e, "weapon_runtime", op, ...) end
+  if mobs == nil or mobs.weapon_runtime == nil then return nil end
+  return mobs.weapon_runtime(e, op, ...)
+end
 
 -- Degrees to brad. A turn is 2^32, which is why this is a multiplication and
 -- not a call to anything trigonometric.
@@ -189,6 +221,7 @@ W.ammo    = {}      -- name -> { label, max, initial, order }
 W.defs    = {}      -- name -> weapon
 W.pickups = {}      -- catalogue name -> what walking over it does
 W.health  = { max = 100, bonus_max = 200 }
+W.missiles = {}     -- name -> declaration, when running game-wide
 
 -- Declaration order, which several things need and `pairs` does not give: the
 -- panel's read-out list, and the "first phase declared" default.
@@ -238,7 +271,18 @@ function W.load(t)
   -- Missiles, through the mob runtime, because that is what flies them: the
   -- update loop, the impact test and the explosion all live there and a second
   -- copy would be a second set of bugs.
-  if t.missiles then
+  if t.missiles and GAME then
+    -- Game-wide, the missiles fly in whichever level fires them, so the
+    -- declaration goes with each launch (M.weapon_runtime registers it there
+    -- the first time).
+    for name, def in pairs(t.missiles) do
+      if W.missiles[name] ~= nil then
+        complain("missile '%s' is already declared; the later one is ignored", name)
+      else
+        W.missiles[name] = def
+      end
+    end
+  elseif t.missiles then
     if mobs == nil or mobs.add_missiles == nil then
       complain("missiles were declared but maps/scripts/mobs.lua is not loaded; " ..
                "it owns the launcher and the flight loop")
@@ -277,8 +321,11 @@ function W.load(t)
     if d.kind == "weapon" then known = W.defs[d.name] ~= nil
     elseif d.kind == "ammo" then known = W.ammo[d.name] ~= nil
     else
-      -- A missile lives in the mob runtime's table, not in one of ours.
-      known = mobs ~= nil and mobs.has_missile ~= nil and mobs.has_missile(d.name)
+      -- A missile lives in the mob runtime's table, not in one of ours. When
+      -- this runs game-wide that table is in each level, out of reach here: a
+      -- missile declared by monster data is checked when it is fired.
+      known = (W.missiles[d.name] ~= nil) or GAME or
+              (mobs ~= nil and mobs.has_missile ~= nil and mobs.has_missile(d.name))
     end
     if type(d.name) ~= "string" or not known then
       complain("%s: `%s` names %s '%s', which nothing declares",
@@ -570,9 +617,38 @@ local SWING_PARAM = {
 }
 local SWING_U8 = { ticks = "attack_ticks", cooldown = "attack_cooldown" }
 
+-- Game-wide, the mob runtime's tagged effects are a level's and a player
+-- walks out of it, so the game keeps its own: by player and tag, the same rule.
+local tagged = {}
+local function tagged_effect(e, tag, param, op, value)
+  if not GAME then return mobs.tagged_effect(e, tag, param, op, value) end
+  local k = key_of(e) .. "/" .. tag
+  if tagged[k] ~= nil then e:remove_effect(tagged[k]) end
+  local eid = e:add_effect(param, op, value)
+  tagged[k] = (eid ~= 0) and eid or nil
+  return eid
+end
+local function clear_tagged(e, tag)
+  if not GAME then return mobs.clear_tagged(e, tag) end
+  local want = key_of(e) .. "/" .. tag
+  for k, eid in pairs(tagged) do
+    if k == want or k:sub(1, #want + 1) == want .. "/" then
+      e:remove_effect(eid)
+      tagged[k] = nil
+    end
+  end
+end
+-- A body gone, and its effects with it: the ids name nothing any more.
+local function forget_tagged(key)
+  local prefix = tostring(key) .. "/"
+  for k in pairs(tagged) do
+    if k:sub(1, #prefix) == prefix then tagged[k] = nil end
+  end
+end
+
 local function apply_weapon_params(e, def)
-  if mobs == nil or mobs.tagged_effect == nil then return end
-  mobs.clear_tagged(e, "weapon")
+  if not GAME and (mobs == nil or mobs.tagged_effect == nil) then return end
+  clear_tagged(e, "weapon")
   local sw = def and def.swing
 
   -- WHETHER THIS WEAPON SWINGS AT ALL, and it is the line that collapses the
@@ -580,20 +656,20 @@ local function apply_weapon_params(e, def)
   -- ALSO started the engine's swept collider -- attack_reach of 0 still
   -- connects at the target's own radius and attack_ticks of 0 is re-read as 1
   -- -- so one press ran two independent damage paths.
-  mobs.tagged_effect(e, "weapon/enabled", "attack_enabled", "set",
-                     sw and ONE or ZERO)
-  mobs.tagged_effect(e, "weapon/aim_snap", "aim_snap", "set",
-                     fx.int(def and def.aim_snap or 0))
+  tagged_effect(e, "weapon/enabled", "attack_enabled", "set",
+                sw and ONE or ZERO)
+  tagged_effect(e, "weapon/aim_snap", "aim_snap", "set",
+                fx.int(def and def.aim_snap or 0))
 
   if sw == nil then return end
   for field, param in pairs(SWING_PARAM) do
     if sw[field] ~= nil then
-      mobs.tagged_effect(e, "weapon/" .. field, param, "set", sw[field])
+      tagged_effect(e, "weapon/" .. field, param, "set", sw[field])
     end
   end
   for field, param in pairs(SWING_U8) do
     if sw[field] ~= nil then
-      mobs.tagged_effect(e, "weapon/" .. field, param, "set", fx.int(sw[field]))
+      tagged_effect(e, "weapon/" .. field, param, "set", fx.int(sw[field]))
     end
   end
 end
@@ -606,7 +682,7 @@ end
 -- a script could overwrite and the damage is not.
 function W.swing_damage(attacker)
   if attacker == nil or attacker.index == nil then return nil end
-  local inv = W.of[attacker:index()]
+  local inv = W.of[key_of(attacker)]
   if inv == nil then return nil end
   local def = W.defs[inv.current]
   if def == nil then return nil end
@@ -616,7 +692,7 @@ function W.swing_damage(attacker)
   -- so the damage has to as well -- otherwise a combo escalates in reach and
   -- arc and every hit costs the weapon's one number, which is the bug this
   -- whole feature exists to remove, surviving in the half nobody replicates.
-  local st = run[attacker:index()]
+  local st = run[key_of(attacker)]
   local ph = st and def.phases and def.phases[st.phase]
   local sw = (ph and ph.swing) or def.swing
   if sw == nil then return nil end
@@ -709,20 +785,13 @@ end
 
 local acts = {}
 
--- The synthetic owner record the shared mob actions read. Built by mobs.lua,
--- which owns the record's shape, and rebuilt per call because `aim` is the
--- player's facing THIS tick.
-local function owner_of(c)
-  return mobs.synthetic_owner(c.e, c.e:facing())
-end
-
 function acts.hitscan(c, a)
   -- Straight into the mob runtime's own implementation. One arithmetic for a
   -- monster's shotgun and a player's, rather than two that agree today: the
   -- spread roll, the tracer geometry and the "a shot that reached nothing is
   -- still a shot" report are all decisions this file should not be making
   -- again differently.
-  mobs.acts.hitscan(owner_of(c), a)
+  world(c.e, "hitscan", a)
 end
 
 function acts.launch(c, a)
@@ -739,7 +808,7 @@ function acts.launch(c, a)
   -- heading, which is what keeps a three-way spread straddling the target
   -- rather than one of its edges.
   local base = c.e:facing()
-  local t, aimed, slope = mobs.autoaim(c.e)
+  local t, aimed, slope = world(c.e, "autoaim")
   if t ~= nil then base = aimed end
   local n = a.count or 1
   for i = 1, n do
@@ -748,7 +817,7 @@ function acts.launch(c, a)
     if n > 1 and a.arc then
       ang = ang + deg((i - 1 - (n - 1) / 2) * a.arc)
     end
-    mobs.launch_from(c.e, a.missile, ang % 4294967296, a.offset, slope)
+    world(c.e, "launch", a.missile, W.missiles[a.missile], ang % 4294967296, a.offset, slope)
   end
 end
 
@@ -760,7 +829,7 @@ function acts.consume(c, a)
 end
 
 function acts.impulse(c, a)
-  mobs.acts.impulse(owner_of(c), a)
+  world(c.e, "impulse", a)
 end
 
 -- A CIRCLE OF DAMAGE, centred where the weapon says rather than on the player.
@@ -771,13 +840,7 @@ end
 -- feet is 0, a shockwave thrown forward is a few units -- and that is the
 -- "chosen point" without a second way of naming one.
 function acts.damage_area(c, a)
-  local m = owner_of(c)
-  if a.offset and a.offset ~= ZERO then
-    local p, d = c.e:pos(), dnp.dir(c.e:facing())
-    m.impact = vec3.new(p.x + d.x * a.offset, p.y + d.y * a.offset,
-                        p.z + (a.height or ZERO))
-  end
-  mobs.acts.damage_area(m, a)
+  world(c.e, "damage_area", a)
 end
 
 -- Announce what is about to happen, so a client can draw a warning. Rides the
@@ -793,14 +856,7 @@ function acts.vfx(c, a)
 end
 
 function acts.telegraph(c, a)
-  local p, origin = c.e:pos(), nil
-  if a.offset and a.offset ~= ZERO then
-    local d = dnp.dir(c.e:facing())
-    origin = vec3.new(p.x + d.x * a.offset, p.y + d.y * a.offset, p.z)
-  else
-    origin = p
-  end
-  mobs.telegraph(c.e, a, origin, c.e:facing())
+  world(c.e, "telegraph", a)
 end
 
 function acts.set_var(c, a) c.state.vars[a.var] = a.value end
@@ -1074,7 +1130,7 @@ function W.pickup(entity, prop)
   -- Doom map of pickups in seconds -- which is exactly what happened to the
   -- keys before doom.lua grew the same guard.
   if entity:kind() ~= 0 then return end
-  local idx = entity:index()
+  local idx = key_of(entity)
   if idx == nil then return end
 
   local name = prop:name()
@@ -1259,7 +1315,7 @@ end
 --- W.pickup is: the VM HARVESTS hooks out of _G after loading, so there is no
 --- global left for a test -- or a trigger, or the editor's preview -- to call.
 function W.ui_event(e, ui_id, widget, value)
-  local idx = e:index()
+  local idx = key_of(e)
   if idx == nil or panel_of[idx] ~= ui_id then return end
   if widget ~= W_SELECT then
     -- An ammunition read-out. Dragging one is a request for more bullets and
@@ -1292,7 +1348,7 @@ end
 --- shows up when an event comes back in, so this routes through the same code
 --- a real message does rather than reaching for W.select.
 function W.choose(e, option)
-  return W.ui_event(e, panel_of[e:index()], W_SELECT, option)
+  return W.ui_event(e, panel_of[key_of(e)], W_SELECT, option)
 end
 
 function on_tick()
@@ -1301,14 +1357,20 @@ function on_tick()
   -- declared as on_tick(tick) gets nil and every comparison against it raises.
   local now = dnp.tick()
 
-  local here = {}
-  for _, e in ipairs(dnp.players()) do here[e:index()] = true end
-  for idx in pairs(W.of) do
-    if not here[idx] then W.forget(idx); panel_of[idx] = nil; shown[idx] = nil end
+  -- A player no longer here has gone -- from this level, which for a level's
+  -- copy of this file is the same as gone. Game-wide, "not in this world" is
+  -- not "gone": this runs once per world, and on_player_leave says when a
+  -- player has left the game.
+  if not GAME then
+    local here = {}
+    for _, e in ipairs(dnp.players()) do here[key_of(e)] = true end
+    for idx in pairs(W.of) do
+      if not here[idx] then W.forget(idx); panel_of[idx] = nil; shown[idx] = nil end
+    end
   end
 
   for _, e in ipairs(dnp.players()) do
-    local idx = e:index()
+    local idx = key_of(e)
     if idx ~= nil then
       refresh_panel(e, idx)
       tick_player(e, idx, now)
@@ -1322,12 +1384,36 @@ end
 -- through the other door.
 if mobs ~= nil then mobs.weapon_swing_damage = W.swing_damage end
 
+if GAME then
+  -- And asked from the level a swing connected in, when the weapons are the
+  -- game's (mobs.lua's on_attack).
+  dnp.export("weapon_swing", function(attacker) return W.swing_damage(attacker) end)
+
+  -- A body in a new world: none of the parameters the weapon wrote are on it,
+  -- so the weapon is drawn again -- the inventory and the panel are untouched.
+  function on_player_enter(e)
+    local k = key_of(e)
+    if k == nil then return end
+    forget_tagged(k)
+    W.rearm_player(k)
+  end
+
+  -- Gone from the game: nothing of theirs is kept for the next arrival.
+  function on_player_leave(player)
+    local k = "p" .. player
+    W.forget(k)
+    forget_tagged(k)
+    panel_of[k] = nil
+    shown[k] = nil
+  end
+end
+
 -- PERSISTENCE (docs/SAVING.md): what a player carries -- weapons held,
 -- ammunition, armour, the one in hand. The phase machine is not saved: a
 -- weapon comes back ready, not mid-swing.
 if dnp ~= nil and dnp.persist_player ~= nil then
   dnp.persist_player("weapons", function(e)
-    local inv = W.of[e:index()]
+    local inv = W.of[key_of(e)]
     if inv == nil then return nil end
     local have = {}
     for k, v in pairs(inv.have or {}) do if v then have[k] = true end end
@@ -1336,7 +1422,7 @@ if dnp ~= nil and dnp.persist_player ~= nil then
     return { have = have, ammo = ammo, armour = inv.armour or 0, current = inv.current }
   end, function(e, t)
     if t == nil then return end
-    local idx = e:index()
+    local idx = key_of(e)
     W.forget(idx)
     W.of[idx] = { have = t.have or {}, ammo = t.ammo or {}, armour = t.armour or 0,
                   current = t.current }

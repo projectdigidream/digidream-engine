@@ -128,6 +128,40 @@ struct UiSink {
     virtual void screen(u32 level, i32 agent, const proto::ScreenSet& s) = 0;
 };
 
+struct WorldContext;
+
+// THE GAME'S SCRIPTS AND THE LEVELS' SCRIPTS, CALLING EACH OTHER.
+//
+// A module may declare scripts that run once for the whole game rather than
+// once per level (docs/MODULES.md, "Game scripts"): weapons, inventory, a
+// HUD -- state that belongs to the player and must not start again in every
+// level they walk into. They run in a VM of their own, the GAME VM, which the
+// server binds to whichever world the player it is dealing with is in.
+//
+// They cannot share Lua values with a level's VM, so they call each other by
+// NAME, through what each side exported with dnp.export(name, fn): the game
+// asks the level the player is in to fire a shot through its monster code
+// (dnp.call_level), and a level asks the game what the weapon in a player's
+// hands costs (dnp.call_game). Arguments and results are copied: plain data,
+// fx, vec3, and entity and prop handles -- the two VMs are looking at the same
+// world while the call runs, so a handle means the same thing on both sides.
+//
+// Not positions in different frames: a level of the region sees its own local
+// coordinates and the game VM sees the world's, so what crosses is offsets and
+// handles, and each side reads positions for itself.
+struct CrossSink {
+    virtual ~CrossSink() = default;
+    // The game VM, bound to the caller's world, or null when there is none.
+    virtual lua_State* enter_game(const WorldContext& caller) = 0;
+    // The VM of the level the player body `agent` of the caller's world is in.
+    virtual lua_State* enter_level_of(const WorldContext& caller, u32 agent) = 0;
+    // The VM of level `level`, which shares the caller's world (a region's
+    // neighbour), or null.
+    virtual lua_State* enter_level(const WorldContext& caller, u32 level) = 0;
+    // After either, once the call is over.
+    virtual void leave(lua_State* target) = 0;
+};
+
 struct WorldContext {
     sim::World*       world = nullptr;
     geom::MapStorage* map_store = nullptr;
@@ -240,6 +274,16 @@ struct WorldContext {
     void own(u32 entity) const noexcept {
         if (owner && entity < sim::MAX_ENTITIES) owner[entity] = level;
     }
+
+    // THE GAME VM's context rather than a level's (see CrossSink). Bound by
+    // the server, per call, to the world of the player concerned, in that
+    // world's own coordinates -- `chunk` stays null.
+    bool              game = false;
+    // Which player each body is, as a number that stays the same from level to
+    // level (a session's id), or 0 for a body nobody plays. Borrowed from the
+    // host. e:player() reads it; null means nobody is anybody (a test).
+    const u32*        player = nullptr;
+    CrossSink*        cross = nullptr;
 
     // Whether the level is being RESTORED from saved state (docs/SAVING.md):
     // a script's own placement of monsters and props stands aside, because the

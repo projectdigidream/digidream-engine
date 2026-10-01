@@ -116,6 +116,18 @@ int l_entity_index_of(lua_State* L) {
     return 1;
 }
 
+// e:player() -> which player this body is, as a number that stays the same
+// from level to level, or nil for a body nobody plays. What the game VM keys a
+// player's state by: an agent index is a slot in ONE world, handed to whoever
+// arrives next, and a player walking into a level off the grid gets another.
+int l_entity_player(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.player == nullptr || ctx.player[a] == 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.player[a]);
+    return 1;
+}
+
 // Writes are deferred. Named as verbs, never as assignments, because a script
 // that reads the value back inside the same callback will see the old one.
 int l_entity_teleport(lua_State* L) {
@@ -567,6 +579,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"grounded", l_entity_grounded},
     {"sector", l_entity_sector},
     {"index", l_entity_index_of},
+    {"player", l_entity_player},
     {"teleport", l_entity_teleport},
     {"set_input", l_entity_set_input},
     {"press", l_entity_press},
@@ -2200,11 +2213,17 @@ namespace {
 
 constexpr int MAX_SAVE_DEPTH = 32;
 
+// `handles`: entity and prop handles are allowed too, by their raw value --
+// for a value copied between two VMs looking at the same world (CrossSink),
+// never for one saved, where a handle would mean nothing when read back.
 bool encode_at(lua_State* L, int idx, std::string& out, std::string& err,
-               int depth, const std::string& path) {
+               int depth, const std::string& path, bool handles = false) {
     // Lua 5.1 (LuaJIT) has no lua_absindex.
     if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
     switch (lua_type(L, idx)) {
+        // Only ever at the top: a table holds no nils. A function returning
+        // `nil, x` across two VMs (CrossSink) is the case it is for.
+        case LUA_TNIL: out += 'N'; return true;
         case LUA_TBOOLEAN: out += lua_toboolean(L, idx) ? 'T' : 'F'; return true;
         case LUA_TNUMBER: {
             const double d = lua_tonumber(L, idx);
@@ -2242,6 +2261,17 @@ bool encode_at(lua_State* L, int idx, std::string& out, std::string& err,
                 }
                 return true;
             }
+            if (handles) {
+                const proto::Handle* h = to_handle(L, idx);
+                const bool prop = h == nullptr;
+                if (prop) h = to_prop(L, idx);
+                if (h != nullptr) {
+                    out += prop ? 'P' : 'E';
+                    out += std::to_string(h->raw);
+                    out += ';';
+                    return true;
+                }
+            }
             err = "cannot save a handle or other userdata at " + path +
                   " -- save what it stands for (a kind, a position) instead";
             return false;
@@ -2267,10 +2297,10 @@ bool encode_at(lua_State* L, int idx, std::string& out, std::string& err,
                 if (kt == LUA_TSTRING) kname = lua_tostring(L, -1);
                 else if (kt == LUA_TNUMBER) { char b[32]; std::snprintf(b, sizeof(b), "%.17g", lua_tonumber(L, -1)); kname = b; }
                 else kname = lua_toboolean(L, -1) ? "true" : "false";
-                const bool kok = encode_at(L, -1, p.k, err, depth + 1, path);
+                const bool kok = encode_at(L, -1, p.k, err, depth + 1, path, handles);
                 lua_pop(L, 1);
                 if (!kok) { lua_pop(L, 2); return false; }
-                if (!encode_at(L, -1, p.v, err, depth + 1, path + "." + kname)) { lua_pop(L, 2); return false; }
+                if (!encode_at(L, -1, p.v, err, depth + 1, path + "." + kname, handles)) { lua_pop(L, 2); return false; }
                 lua_pop(L, 1);
                 pairs.push_back(std::move(p));
             }
@@ -2303,11 +2333,12 @@ bool read_i64(Reader& r, long long& v) {
     return true;
 }
 
-bool decode_at(lua_State* L, Reader& r, std::string& err, int depth) {
+bool decode_at(lua_State* L, Reader& r, std::string& err, int depth, bool handles = false) {
     if (r.at_end()) { err = "save data ends early"; return false; }
     if (depth >= MAX_SAVE_DEPTH) { err = "save data nested too deep"; return false; }
     const char c = r.s[r.i++];
     switch (c) {
+        case 'N': lua_pushnil(L); return true;
         case 'T': lua_pushboolean(L, 1); return true;
         case 'F': lua_pushboolean(L, 0); return true;
         case 'i': {
@@ -2344,11 +2375,21 @@ bool decode_at(lua_State* L, Reader& r, std::string& err, int depth) {
             push_vec3(L, fx3{fx::from_raw(a), fx::from_raw(b), fx::from_raw(d)});
             return true;
         }
+        case 'E':
+        case 'P': {
+            long long v = 0;
+            if (!handles || !read_i64(r, v)) { err = "a handle where none may be"; return false; }
+            *static_cast<proto::Handle*>(lua_newuserdata(L, sizeof(proto::Handle))) =
+                proto::Handle{static_cast<u32>(v)};
+            luaL_getmetatable(L, c == 'E' ? ENTITY_MT : PROP_MT);
+            lua_setmetatable(L, -2);
+            return true;
+        }
         case '{': {
             lua_newtable(L);
             while (!r.at_end() && r.s[r.i] != '}') {
-                if (!decode_at(L, r, err, depth + 1)) { lua_pop(L, 1); return false; }
-                if (!decode_at(L, r, err, depth + 1)) { lua_pop(L, 2); return false; }
+                if (!decode_at(L, r, err, depth + 1, handles)) { lua_pop(L, 1); return false; }
+                if (!decode_at(L, r, err, depth + 1, handles)) { lua_pop(L, 2); return false; }
                 lua_rawset(L, -3);
             }
             if (r.at_end()) { lua_pop(L, 1); err = "a table in the save data is not closed"; return false; }
@@ -2482,10 +2523,184 @@ int l_dnp_restoring(lua_State* L) {
     return 1;
 }
 
+// ------------------------------------------------- the game VM and the levels'
+//
+// See CrossSink in world_binding.hpp for what this is for.
+
+const char* const EXPORTS_KEY = "dnp_exports";
+
+// dnp.export(name, fn): what another VM may call by `name`.
+int l_dnp_export(lua_State* L) {
+    const char* name = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_getfield(L, LUA_REGISTRYINDEX, EXPORTS_KEY);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, EXPORTS_KEY);
+    }
+    lua_pushvalue(L, 2);
+    lua_setfield(L, -2, name);
+    lua_pop(L, 1);
+    return 0;
+}
+
+// Push exports[name], or push nothing and return false.
+bool push_export(lua_State* T, const char* name) {
+    lua_getfield(T, LUA_REGISTRYINDEX, EXPORTS_KEY);
+    if (!lua_istable(T, -1)) { lua_pop(T, 1); return false; }
+    lua_getfield(T, -1, name);
+    lua_remove(T, -2);
+    if (!lua_isfunction(T, -1)) { lua_pop(T, 1); return false; }
+    return true;
+}
+
+// Copy `n` values, from index `first` of F, onto T.
+bool transfer(lua_State* F, int first, int n, lua_State* T, std::string& err) {
+    for (int i = 0; i < n; ++i) {
+        std::string enc;
+        if (!encode_at(F, first + i, enc, err, 0, "value " + std::to_string(i + 1), true)) {
+            lua_pop(T, i);
+            return false;
+        }
+        Reader r{enc};
+        if (!decode_at(T, r, err, 0, true)) { lua_pop(T, i); return false; }
+    }
+    return true;
+}
+
+// Call T's export `name` with L's values [first, first + nargs) and leave its
+// results on L. The number of results, or -1 when there is no such export and
+// -2 when the call failed (said on stderr, by name: a call that quietly did
+// nothing is a weapon that quietly does not fire).
+int call_across(lua_State* L, lua_State* T, const char* name, int first, int nargs) {
+    if (T == L) {
+        // The same VM: no copy, just the call.
+        const int base = lua_gettop(L);
+        if (!push_export(L, name)) return -1;
+        for (int i = 0; i < nargs; ++i) lua_pushvalue(L, first + i);
+        if (lua_pcall(L, nargs, LUA_MULTRET, 0) != 0) {
+            std::fprintf(stderr, "[lua] %s: %s\n", name, lua_tostring(L, -1));
+            lua_settop(L, base);
+            return -2;
+        }
+        return lua_gettop(L) - base;
+    }
+    const int base = lua_gettop(T);
+    if (!push_export(T, name)) return -1;
+    std::string err;
+    if (!transfer(L, first, nargs, T, err)) {
+        std::fprintf(stderr, "[lua] %s: cannot pass the arguments: %s\n", name, err.c_str());
+        lua_settop(T, base);
+        return -2;
+    }
+    if (lua_pcall(T, nargs, LUA_MULTRET, 0) != 0) {
+        std::fprintf(stderr, "[lua] %s: %s\n", name, lua_tostring(T, -1));
+        lua_settop(T, base);
+        return -2;
+    }
+    const int nret = lua_gettop(T) - base;
+    const int top = lua_gettop(L);
+    if (!transfer(T, base + 1, nret, L, err)) {
+        std::fprintf(stderr, "[lua] %s: cannot pass the results back: %s\n", name, err.c_str());
+        lua_settop(T, base);
+        lua_settop(L, top);
+        return -2;
+    }
+    lua_settop(T, base);
+    return nret;
+}
+
+// dnp.call_game(name, ...) -> what the game's export returned, or nothing
+// when there is no game VM or it exports no such name.
+int l_dnp_call_game(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const char* name = luaL_checkstring(L, 1);
+    if (ctx.cross == nullptr) return 0;
+    const int nargs = lua_gettop(L) - 1;
+    lua_State* T = ctx.cross->enter_game(ctx);
+    if (T == nullptr) return 0;
+    const int n = call_across(L, T, name, 2, nargs);
+    ctx.cross->leave(T);
+    return n < 0 ? 0 : n;
+}
+
+// dnp.game_has(name) -> whether the game VM exports `name`. So a level script
+// can tell "the game handles this" from "nobody does" before it decides.
+int l_dnp_game_has(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const char* name = luaL_checkstring(L, 1);
+    bool has = false;
+    if (ctx.cross != nullptr) {
+        if (lua_State* T = ctx.cross->enter_game(ctx)) {
+            has = push_export(T, name);
+            if (has) lua_pop(T, 1);
+            ctx.cross->leave(T);
+        }
+    }
+    lua_pushboolean(L, has ? 1 : 0);
+    return 1;
+}
+
+// dnp.call_level(e, name, ...) -> what the export of the level the player `e`
+// is in returned, or nothing. The export is called with (e, ...): the call is
+// about that player, and it is the one thing the level must not have to guess.
+int l_dnp_call_level(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const std::string name = luaL_checkstring(L, 2);
+    if (a < 0 || ctx.cross == nullptr) return 0;
+    lua_remove(L, 2);
+    const int nargs = lua_gettop(L);
+    lua_State* T = ctx.cross->enter_level_of(ctx, static_cast<u32>(a));
+    if (T == nullptr) return 0;
+    const int n = call_across(L, T, name.c_str(), 1, nargs);
+    ctx.cross->leave(T);
+    return n < 0 ? 0 : n;
+}
+
+// dnp.call_owner(e, name, ...) -> what the export of the level that spawned
+// `e` returned, or nothing -- when `e` is nobody's, or the caller's own. For a
+// region, where a shot fired in one level can reach a monster another level
+// keeps the health of. Called with (e, ...).
+int l_dnp_call_owner(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const std::string name = luaL_checkstring(L, 2);
+    proto::Handle h{};
+    if (proto::Handle* a = to_handle(L, 1)) h = *a;
+    else if (proto::Handle* p = to_prop(L, 1)) h = *p;
+    else return luaL_error(L, "call_owner: expected an entity or a prop");
+    if (ctx.cross == nullptr || ctx.owner == nullptr || !h.valid()) return 0;
+    const u32 entity = h.index() - 1;
+    if (entity >= sim::MAX_ENTITIES || ctx.world->generation(entity) != h.generation()) return 0;
+    const u32 owner = ctx.owner[entity];
+    if (owner == 0xFFFFFFFFu || owner == ctx.level) return 0;
+    lua_remove(L, 2);
+    const int nargs = lua_gettop(L);
+    lua_State* T = ctx.cross->enter_level(ctx, owner);
+    if (T == nullptr) return 0;
+    const int n = call_across(L, T, name.c_str(), 1, nargs);
+    ctx.cross->leave(T);
+    return n < 0 ? 0 : n;
+}
+
+// dnp.is_game() -> whether this script runs in the game VM.
+int l_dnp_is_game(lua_State* L) {
+    lua_pushboolean(L, ctx_of(L).game ? 1 : 0);
+    return 1;
+}
+
 const luaL_Reg DNP_FUNCS[] = {
     {"persist", l_dnp_persist},
     {"persist_player", l_dnp_persist_player},
     {"restoring", l_dnp_restoring},
+    {"export", l_dnp_export},
+    {"call_game", l_dnp_call_game},
+    {"game_has", l_dnp_game_has},
+    {"call_level", l_dnp_call_level},
+    {"call_owner", l_dnp_call_owner},
+    {"is_game", l_dnp_is_game},
     {"tick", l_dnp_tick},
     {"entity", l_dnp_entity},
     {"entities", l_dnp_entities},

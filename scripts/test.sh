@@ -312,6 +312,10 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   # purely to use the parts of the vocabulary Doom does not: charge, combos and
   # alt-fire.
   "./build/lua/test_lua_weapons" .
+  # Game scripts (docs/MODULES.md): the same weapons in a GAME VM with the
+  # monsters in a level's, one world under both. A shot crosses from one VM to
+  # the other and hurts what the level keeps; the control takes the level away.
+  "./build/lua/test_lua_game" .
   # The server hosted on a thread and restarted with a different module, the
   # way the phone shells play-test (docs/IOS.md). Present only once main.cpp
   # exports dnp_server_run; the control is a run whose stop flag is never set.
@@ -602,6 +606,10 @@ else
      `# Persistence: save and load a game, refused without the module's say-so,` \
      `# and a level that survives a server restart (docs/SAVING.md).` \
      && node test/persist.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Game scripts: one panel and one count that follow the player into the` \
+     `# next level, a level's own panel closed when it is left, and the game's` \
+     `# state in a save and across a restart. CONTROL: the same script per level.` \
+     && node test/game.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters

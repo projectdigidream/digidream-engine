@@ -393,6 +393,9 @@ static const char* const HOOK_NAMES[] = {
     "on_touch", "on_prop_use", "on_attack", "on_crush",
     // A player used a panel (docs/protocol.md section 11).
     "on_ui_event",
+    // A player's body arrived in a world, and a player left the game. The game
+    // VM's (CrossSink): its state is per player, not per body.
+    "on_player_enter", "on_player_leave",
 };
 
 // Push the handler list for `fn_name`, creating it if absent. Leaves the table

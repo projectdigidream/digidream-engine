@@ -2144,6 +2144,16 @@ function hurt(target, amount, by)
   if target == nil or not target:valid() then return end
   local m = live[target:index()]
 
+  -- ANOTHER LEVEL'S MONSTER. In a region every level's monsters share one
+  -- world, so a shot fired here -- by a monster of ours, or by a player whose
+  -- weapons this level is firing -- can reach a monster a neighbouring level
+  -- keeps. Its health and its pain are that level's, so the hit is handed
+  -- over; taking it off here would leave a monster that never dies.
+  if m == nil and target.kind ~= nil and target:kind() ~= 0 and dnp.call_owner ~= nil and
+     dnp.call_owner(target, "hurt_mob", amount, by and by.e or nil) then
+    return
+  end
+
   if m == nil then
     -- Not one of ours: a player, or a prop somebody else owns.
     --
@@ -2328,6 +2338,69 @@ function M.launch_from(e, kind, ang, offset, slope)
   local owner = synthetic_owner(e, ang)
   launch(owner, kind, ang, offset, slope)
   return owner
+end
+
+-- WHAT A PLAYER'S WEAPON DOES TO THE WORLD, in one place.
+--
+-- The weapon runtime (weapons.lua) decides WHEN -- which button, which phase,
+-- how much ammunition -- and this does the shooting: the ray, the missile, the
+-- blast, the shove, the warning, all through the actions a monster uses, so a
+-- player's shotgun and a monster's are the same arithmetic.
+--
+-- Called directly when the weapons run in this level's VM, and through
+-- dnp.call_level when they are the GAME's (a module's `game` scripts): then the
+-- weapons follow the player from level to level, and this is the level they are
+-- standing in being asked to fire. Nothing that crosses is a position -- the
+-- game sees the world's coordinates and this level its own -- so offsets come
+-- in and positions are read here.
+function M.weapon_runtime(e, op, a, b, c, d, f)
+  if e == nil or not e:valid() then return nil end
+  if op == "autoaim" then return M.autoaim(e) end
+  if op == "launch" then
+    -- kind, the declaration (when the game owns it), heading, offset, slope.
+    if missiles[a] == nil and b ~= nil then M.add_missiles({ [a] = b }) end
+    if missiles[a] == nil then
+      print(("mobs: a weapon fired missile '%s', which nothing declares"):format(tostring(a)))
+      return nil
+    end
+    M.launch_from(e, a, c, d, f)
+    return nil
+  end
+  local m = synthetic_owner(e, e:facing())
+  if op == "hitscan" then acts.hitscan(m, a)
+  elseif op == "impulse" then acts.impulse(m, a)
+  elseif op == "damage_area" then
+    -- `offset` puts the centre in front of the body and `height` above it.
+    if a.offset and a.offset ~= ZERO then
+      local p, dir = e:pos(), dnp.dir(e:facing())
+      m.impact = vec3.new(p.x + dir.x * a.offset, p.y + dir.y * a.offset,
+                          p.z + (a.height or ZERO))
+    end
+    acts.damage_area(m, a)
+  elseif op == "telegraph" then
+    local p = e:pos()
+    local origin = p
+    if a.offset and a.offset ~= ZERO then
+      local dir = dnp.dir(e:facing())
+      origin = vec3.new(p.x + dir.x * a.offset, p.y + dir.y * a.offset, p.z)
+    end
+    M.telegraph(e, a, origin, e:facing())
+  else
+    print(("mobs: a weapon asked for '%s', which is not something it can do"):format(tostring(op)))
+  end
+  return nil
+end
+if dnp ~= nil and dnp.export ~= nil then
+  dnp.export("weapon_runtime", function(...) return M.weapon_runtime(...) end)
+  -- A hit from a neighbouring level, on one of ours (see hurt). Who dealt it
+  -- comes as an entity; it is somebody else's, so it is nobody's record here.
+  dnp.export("hurt_mob", function(target, amount, attacker)
+    if live[target:index()] == nil then return false end
+    local by = nil
+    if attacker ~= nil and attacker:valid() then by = synthetic_owner(attacker, attacker:facing()) end
+    hurt(target, amount, by)
+    return true
+  end)
 end
 
 --- Is this missile name known? For a loader in another file that wants to
@@ -2738,10 +2811,17 @@ function on_attack(attacker, target)
     return
   end
 
-  if M.weapon_swing_damage ~= nil then
+  -- The weapons may be the GAME's rather than this level's (a module's `game`
+  -- scripts, docs/MODULES.md): then the weapon in the player's hands is in
+  -- the game VM, and it is asked there.
+  local ask = M.weapon_swing_damage
+  if ask == nil and dnp.game_has ~= nil and dnp.game_has("weapon_swing") then
+    ask = function(e) return dnp.call_game("weapon_swing", e) end
+  end
+  if ask ~= nil then
     -- The whole `swing` table, not just its damage: knockback and slow are
     -- properties of the blow and belong with the number it costs.
-    local sw = M.weapon_swing_damage(attacker)
+    local sw = ask(attacker)
     if sw == nil then return end
     if type(sw) == "number" then sw = { damage = sw } end
     hurt(target, sw.damage, nil)
