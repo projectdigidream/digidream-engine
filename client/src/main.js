@@ -58,6 +58,9 @@ import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, encodeGameNew, CAME
 import { SOUND_FOLLOW, SOUND_PREDICTED } from './proto.js'
 import { Sfx } from './audio/sfx.js'
 import { OwnSounds } from './audio/ownsounds.js'
+import { SCHEME, FpsLook, fpsPush, TOUCH_SENSITIVITY } from './controls.js'
+import { ViewModel } from './render/viewmodel.js'
+import { soundHash } from './proto.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -294,7 +297,19 @@ const musicCues = []
 // exists -- what three.js says is still alive on the GPU. Declared up here
 // because the handlers that count are installed before the renderer is made.
 const dnpStats = { welcomes: 0, snapshots: 0, gpu: () => null }
+// THE HUD'S SERVER-KNOWN VALUES (HUD_SET), as `hud.<name>`: the held weapon,
+// its ammunition. What the view model draws from now and the HUD layout will
+// (docs/UI_LAYOUT.md). Kept across level changes -- the server re-sends it.
+const hudValues = new Map()
+// THE CONTROL SCHEME, the module's (WELCOME.controls): a platformer's screen-
+// relative push and turning body, or a first-person view that IS the aim
+// (client/src/controls.js). Up here because the input and camera code below
+// both read it from the first frame.
+let scheme = SCHEME.PLATFORMER
+const fpsLook = new FpsLook()
+const isFps = () => scheme === SCHEME.FPS
 window.__dnpStats = dnpStats
+dnpStats.hud = () => Object.fromEntries(hudValues)
 // The wasm core's whole memory, which only ever grows: a world or a map never
 // destroyed shows up here and nowhere in the JS heap.
 dnpStats.wasmBytes = () => (core.M.HEAPU8 ?? core.M.HEAP8)?.buffer?.byteLength ?? 0
@@ -302,6 +317,16 @@ dnpStats.wasmBytes = () => (core.M.HEAPU8 ?? core.M.HEAP8)?.buffer?.byteLength ?
 // Declared up here because SOUND_PREDICT arrives with the WELCOME, long before
 // the sound engine further down exists.
 const ownSounds = new OwnSounds()
+// THE FIRST-PERSON WEAPON (render/viewmodel.js), drawn only in an FPS scheme.
+// Its frames are the module's (sprites/weapons.json) and its pictures are
+// placed by the sprite index's offsets; both fetched once, and a module without
+// them simply has no gun on screen.
+const viewModel = new ViewModel({ host: document.body })
+const WEAPON_GROUP = soundHash('weapon')
+Promise.all([
+  fetch('/sprites/weapons.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  fetch('/sprites/index.json').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+]).then(([defs, index]) => { if (defs) viewModel.setDefs(defs, index) })
 // Where the listener was last placed, for the sounds that are the CLIENT's own
 // (a panel opening, a widget clicked): heard at the ear, not from anywhere.
 let lastEar = { x: 0, y: 0, z: 0 }
@@ -436,6 +461,12 @@ if (LIVE) {
     onControl (m) {
       if (m.type === MSG.WELCOME) {
         dnpStats.welcomes++
+        scheme = m.controls ?? SCHEME.PLATFORMER
+        // The legend says the controls this scheme has.
+        if (scheme === SCHEME.FPS) {
+          const help = document.getElementById('help')
+          if (help) help.textContent = 'click to look   WASD move   mouse look   LMB/F fire   RMB alt   SPACE jump   E use   Esc release'
+        }
         if (!welcome) {
           // The join. The handshake below waits for this map in `acc`.
           welcome = m
@@ -502,6 +533,12 @@ if (LIVE) {
       else if (m.type === MSG.MUSIC) musicCues.push(m)
       // What to play the moment this client predicts its own jump or shot.
       else if (m.type === MSG.SOUND_PREDICT) ownSounds.set(m.group, m.entries)
+      else if (m.type === MSG.HUD_SET) {
+        for (const f of m.fields) {
+          if (f.kind === 2) hudValues.delete(`hud.${f.name}`)
+          else hudValues.set(`hud.${f.name}`, f.value)
+        }
+      }
       // QUEUED, like every other message that needs the renderer.
       //
       // This used to reach `view` directly from here -- and this callback runs
@@ -1820,6 +1857,28 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => held.delete(e.code))
 addEventListener('blur', () => held.clear())
 
+// FIRST PERSON: the mouse is the view. A click on the game takes the pointer
+// (the browser shows the player how to give it back: Escape), and while it is
+// held every movement turns the view and the mouse buttons are the triggers.
+const mouseHeld = new Set()
+addEventListener('mousedown', (e) => {
+  if (!isFps()) return
+  if (document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock?.()
+    return
+  }
+  mouseHeld.add(e.button)
+})
+addEventListener('mouseup', (e) => mouseHeld.delete(e.button))
+// The right button is the second trigger, not the browser's menu.
+addEventListener('contextmenu', (e) => { if (isFps()) e.preventDefault() })
+addEventListener('mousemove', (e) => {
+  if (isFps() && document.pointerLockElement === renderer.domElement) fpsLook.move(e.movementX, e.movementY)
+})
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement !== renderer.domElement) mouseHeld.clear()
+})
+
 // The last direction the agent was actually pointed. Brad 0 is due east, not
 // "unset", so this starts there and every idle tick repeats whatever came last.
 let lastAim = 0
@@ -1831,7 +1890,37 @@ function axis (v) {
   return core.axisFromFxRaw(BigInt(Math.round(Math.max(-1, Math.min(1, v)) * 4294967296)))
 }
 
+// The FIRST-PERSON input frame: a push relative to the view, the view as the
+// aim, and its pitch. Nothing about the camera turns it -- the simulation turns
+// the push by the body's facing, which in this scheme is the view.
+function fpsInput () {
+  if (touch) {
+    const d = touch.state.takeDrag()
+    if (d.dx || d.dy) fpsLook.move(d.dx, d.dy, TOUCH_SENSITIVITY)
+  }
+  const stick = touch ? touch.state.move2d() : null
+  const push = fpsPush({
+    forward: held.has('KeyW') || held.has('ArrowUp'), back: held.has('KeyS') || held.has('ArrowDown'),
+    right: held.has('KeyD'), left: held.has('KeyA'), stick
+  })
+  // Arrow keys turn, for a player with no mouse.
+  if (held.has('ArrowLeft')) fpsLook.move(-6, 0)
+  if (held.has('ArrowRight')) fpsLook.move(6, 0)
+  let buttons = 0
+  if (held.has('Space')) buttons |= BUTTON.JUMP
+  if (held.has('ShiftLeft') || held.has('ShiftRight')) buttons |= BUTTON.DASH
+  if (held.has('KeyE')) buttons |= BUTTON.INTERACT
+  if (held.has('KeyC')) buttons |= BUTTON.CROUCH
+  if (held.has('KeyF') || mouseHeld.has(0)) buttons |= BUTTON.ATTACK_PRIMARY
+  if (mouseHeld.has(2)) buttons |= BUTTON.ATTACK_SECONDARY
+  if (touch) buttons |= touch.state.buttons(TOUCH_BITS)
+  lastAim = fpsLook.aimBrad()
+  lastSampled = { buttons, moveX: axis(push.x), moveY: axis(push.y), aim: lastAim, pitch: fpsLook.pitchWire() }
+  return lastSampled
+}
+
 function currentInput () {
+  if (isFps()) return fpsInput()
   let mx = 0
   let my = 0
   if (held.has('KeyW') || held.has('ArrowUp')) my += 1
@@ -2195,6 +2284,8 @@ function frame (now) {
     })) {
       sfx.play(h, { x: px, y: py, z: pz }, { seed: Math.imul(world.tick ^ h, 2654435761), key: mySelfHandle })
     }
+    // The gun kicks on the same predicted shot.
+    if (ownSounds.fired.some((f) => f.group === WEAPON_GROUP)) viewModel.fire()
   }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
@@ -2227,11 +2318,13 @@ function frame (now) {
     // attacking at that moment. Which is what "very hard to test for a human"
     // is. The bright collider still appears only while the swing is live,
     // because that one is about WHEN rather than about shape.
-    swingWhole.visible = true
+    // Not in first person: a wedge on the floor drawn from the eyes is a slab
+    // across the view, and the weapon on screen says what the swing does.
+    swingWhole.visible = !isFps()
     swingWhole.position.set(subject.x, at - 0.02, subject.z)
     aimSwing(swingWhole, facingTurns, swingMid, swingPitchMid)
 
-    swing.visible = off !== null
+    swing.visible = off !== null && !isFps()
     if (off !== null) {
       swing.position.set(subject.x, at, subject.z)
       aimSwing(swing, facingTurns, off, pitch)
@@ -2280,14 +2373,19 @@ function frame (now) {
   }
 
   const middle = { x: subject.x, y: subject.y + bodyHeight / 2, z: subject.z }
+  // THE THIRD-PERSON HELPERS stay out of a first-person view: the facing arrow
+  // is drawn from the eyes straight ahead (a disc in the middle of the screen),
+  // and the occlusion window fades the walls between a camera and a body that,
+  // here, are in the same place.
   if (arrow) {
+    arrow.visible = !isFps()
     // From the body's middle, which is roughly where a reach comes from and is
     // where you look when you are judging whether a door is in range.
     aimFacingArrow(arrow, middle, facingDirection(a.facing))
   }
   // Aimed at the body's middle rather than its feet: a window centred on the
   // feet leaves the head behind the wall.
-  view.setOcclusionTarget(middle)
+  view.setOcclusionTarget(isFps() ? null : middle)
   shadows.update(subject, groundUnder(subject.x, subject.z), view.lights, onGround)
 
   // ANIMATED SURFACES ARE NEITHER A LIVE FEATURE NOR A PROP FEATURE, and used
@@ -2443,6 +2541,28 @@ function frame (now) {
   const eye = camera.update(subject, dt, facingDirection(a.facing), camPathSpline)
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
+  // FIRST PERSON: the camera is the player's eyes, looking where the view does,
+  // and the player's own body is not drawn -- it would fill the screen. Over
+  // the third-person camera rather than instead of it, so a cinematic path
+  // still has a camera to blend from when one takes over.
+  body.visible = !isFps()
+  // The weapon in hand, bobbing with the walk.
+  {
+    const held = hudValues.get('hud.weapon')
+    if (held) viewModel.setWeapon(held)
+    const sp = Math.hypot(fxToFloat(a.vel.x), fxToFloat(a.vel.y)) / 8
+    viewModel.update(dt, a.grounded ? sp : 0, isFps() && !camPathSpline,
+                     { width: innerWidth, height: innerHeight })
+  }
+  if (isFps() && !camPathSpline) {
+    const eyeH = (bodyHeight || 1.17) * 0.88
+    const f = fpsLook.forward()
+    // Simulation (x, y, z-up) to three (x, z, -y), as mapgeom.js does.
+    eye.x = subject.x; eye.y = subject.y + eyeH; eye.z = subject.z
+    eye.lookAt = { x: eye.x + f.x, y: eye.y + f.z, z: eye.z - f.y }
+    cam3.position.set(eye.x, eye.y, eye.z)
+    cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
+  }
   // What the next frame's input and this frame's billboards are measured
   // against. Written here because only now is it known: the path crossfade is
   // resolved inside camera.update.

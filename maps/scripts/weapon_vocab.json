@@ -795,6 +795,12 @@
       "type": "table"
     },
     {
+      "doc": "A picture for the HUD's current-weapon slot: a sprite frame key from the module's sheets, or a texture name. Published as `weapon_icon` (docs/UI_LAYOUT.md 4.3).",
+      "name": "icon",
+      "optional": true,
+      "type": "string"
+    },
+    {
       "doc": "What the player's OWN client plays the moment it predicts a shot, so they hear it at once rather than a round trip later: a list of {on = primary | primary_held | secondary | secondary_held | swing, sound = name, every = ticks between two shots}. `_held` repeats while the button is down (a chaingun); `swing` is the swept collider starting, which the client predicts exactly. The client also counts the weapon's shots down. The phase's own `sound` for the same shot should be `predicted`, so that client drops the server's copy.",
       "name": "predict",
       "optional": true,

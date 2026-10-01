@@ -1041,6 +1041,31 @@ local function send_predict(e, inv, def, state)
   dnp.predict_sounds(e, "weapon", list)
 end
 
+-- WHAT THE HUD SHOWS (docs/UI_LAYOUT.md 4.3): the standard names every module
+-- using this runtime gets without a script of its own -- the weapon in hand, the
+-- pool it draws from, and every pool. Said when any of it changes; the server
+-- would drop an unchanged value anyway, but building the table every tick for
+-- nothing is a cost worth skipping.
+local function publish_hud(e, inv, def, state)
+  if dnp.hud == nil then return end
+  local pool = def and def.ammo
+  local parts = { tostring(def and def.name) }
+  for _, a in ipairs(sorted_ammo()) do parts[#parts + 1] = tostring(inv.ammo[a.name] or 0) end
+  local sig = table.concat(parts, ",")
+  if state.hud_sig == sig then return end
+  state.hud_sig = sig
+  local t = {
+    hp_max = W.health.max or 100,
+    weapon = (def and def.name) or "",
+    weapon_icon = (def and def.icon) or "",
+    ammo_type = pool or "",
+    ammo = pool and (inv.ammo[pool] or 0) or 0,
+    ammo_max = pool and W.ammo[pool] and W.ammo[pool].max or 0,
+  }
+  for _, a in ipairs(sorted_ammo()) do t["ammo_" .. a.name] = inv.ammo[a.name] or 0 end
+  dnp.hud(e, t)
+end
+
 local function tick_player(e, idx, now)
   local inv = W.get(idx)
   if inv == nil or inv.current == nil then return end
@@ -1054,6 +1079,7 @@ local function tick_player(e, idx, now)
   local def = W.defs[inv.current]
   if def == nil then return end
   send_predict(e, inv, def, state)
+  publish_hud(e, inv, def, state)
 
   -- Button edges, and how long each has been down. Kept here rather than read
   -- from the engine because the ENGINE has no notion of how long a button has

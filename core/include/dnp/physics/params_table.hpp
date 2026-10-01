@@ -84,18 +84,20 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     // Appended, not inserted beside jump_impulse where the field lives: this
     // table's ORDER is the wire format, and the struct's order is not. Putting
     // it next to its neighbour shifted the id of every parameter after it.
-    DNP_PARAM(turn_speed,           ParamType::Fx),     // 28
+    DNP_PARAM(turn_speed,           ParamType::Fx),     // 36
     // Appended for the same reason turn_speed was, and with the same warning:
     // this table's ORDER is the wire format. input_scale sits beside turn_speed
     // in the struct because that is where it belongs to a reader; it sits last
     // HERE because that is the only place a new id can go.
-    DNP_PARAM(input_scale,          ParamType::Fx),     // 29
+    DNP_PARAM(input_scale,          ParamType::Fx),     // 37
     // Appended, like every one above: this table's ORDER is the wire format.
-    DNP_PARAM(attack_enabled,       ParamType::Bool),   // 30
-    DNP_PARAM(aim_snap,             ParamType::U8),     // 31
-    DNP_PARAM(attack_pitch_from,    ParamType::Fx),     // 32
-    DNP_PARAM(attack_pitch_to,      ParamType::Fx),     // 33
-    DNP_PARAM(attack_half_pitch,    ParamType::Fx),     // 34
+    DNP_PARAM(attack_enabled,       ParamType::Bool),   // 38
+    DNP_PARAM(aim_snap,             ParamType::U8),     // 39
+    DNP_PARAM(attack_pitch_from,    ParamType::Fx),     // 40
+    DNP_PARAM(attack_pitch_to,      ParamType::Fx),     // 41
+    DNP_PARAM(attack_half_pitch,    ParamType::Fx),     // 42
+    // Appended: this table's ORDER is the wire format.
+    DNP_PARAM(move_relative,        ParamType::Bool),   // 43
 };
 
 #undef DNP_PARAM

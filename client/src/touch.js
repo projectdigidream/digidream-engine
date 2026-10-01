@@ -118,6 +118,10 @@ export class TouchState {
     // ever nudges them -- the same shape as a wheel event.
     this.yawDelta = 0
     this.zoomDelta = 0
+    // The same drag as raw PIXELS, both axes: what a first-person scheme turns
+    // into yaw and pitch at its own sensitivity (client/src/controls.js).
+    this.dragDx = 0
+    this.dragDy = 0
     /** Distance between the two camera pointers on the previous move, or null. */
     this.pinch = null
   }
@@ -156,6 +160,7 @@ export class TouchState {
     const p = this.pointers.get(id)
     if (!p) return
     const wasX = p.x
+    const wasY = p.y
     p.x = x
     p.y = y
 
@@ -179,6 +184,8 @@ export class TouchState {
       }
       this.pinch = null
       this.yawDelta += (x - wasX) * this.yawPerPixel
+      this.dragDx += x - wasX
+      this.dragDy += y - wasY
     }
   }
 
@@ -238,6 +245,14 @@ export class TouchState {
    * a chance to forget the second, and forgetting it spins the camera.
    */
   takeYaw () { const y = this.yawDelta; this.yawDelta = 0; return y }
+
+  /** The camera drag since the last call, in pixels ({dx, dy}, DOM axes), and zero it. */
+  takeDrag () {
+    const d = { dx: this.dragDx, dy: this.dragDy }
+    this.dragDx = 0
+    this.dragDy = 0
+    return d
+  }
 
   /** Pinch accumulated since the last call, in pixels, and zero it. */
   takeZoom () { const z = this.zoomDelta; this.zoomDelta = 0; return z }

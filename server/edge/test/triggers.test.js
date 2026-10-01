@@ -47,7 +47,7 @@ import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
 import { parseProps } from '../../../client/src/render/props.js'
-import { mirrorEntities } from './helpers.js'
+import { mirrorEntities, fpsFrame } from './helpers.js'
 import { Core } from '../../../client/src/core.js'
 import { Predictor } from '../../../client/src/predictor.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
@@ -141,6 +141,7 @@ const dw = wt.datagrams.createWritable().getWriter()
 let welcome = null
 const acc = new MapAccumulator()
 const motionSets = []
+const paramUpdates = []
 const pending = []
 
 ;(async () => {
@@ -159,6 +160,9 @@ const pending = []
         if (m?.type === MSG.WELCOME) welcome = m
         else if (m?.type === MSG.MAP_DATA) acc.push(m)
         else if (m?.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
+        // The rules the server sent, as the real client applies them. Ignored,
+        // they passed only because a platformer's rules are the defaults.
+        else if (m?.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
       }
     }
   } catch {}
@@ -185,6 +189,9 @@ check(ok && map.hash === welcome.mapHash, 'map loaded')
 
 const world = core.createWorld({ map })
 const agent = world.spawn(map.spawnForTag('start'))
+for (const m of paramUpdates.splice(0)) world.applyParamUpdate(agent, m)
+// Later ones as they come: pumped from the same place the snapshots are read.
+const applyParams = () => { for (const m of paramUpdates.splice(0)) world.applyParamUpdate(agent, m) }
 const predictor = new Predictor(world, agent)
 
 // The door as the client sees it, read through the same wasm module the client
@@ -275,8 +282,10 @@ const TARGET_LEAD = 6
 const MAX_LEAD = 14
 
 async function tickWith (buttons, moveX) {
-  const f = { buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 }
+  // As this run's scheme sends it (helpers.js): the same intent in either.
+  const f = fpsFrame({ buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 })
   const send = () => {
+    applyParams()
     predictor.step(f)
     history = [f, ...history].slice(0, 12)
     return dw.write(encodeInputBundle({

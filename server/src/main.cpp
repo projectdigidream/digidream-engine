@@ -763,6 +763,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // library's part (dnp.persist). Checkpoint fidelity: who is alive, where,
     // how hurt, what was taken, what was opened. Not what anybody was in the
     // middle of doing.
+    // THE CONTROL SCHEME, the module's to choose (module.txt `controls fps`):
+    // 0 platformer, 1 fps. Sent in WELCOME; an fps player's body turns at once
+    // to the view and walks relative to it (MoveParams::move_relative).
+    u8 controls = 0;
     bool persist_levels = false;
     bool persist_saves = false;
     bool persist_server = false;
@@ -936,6 +940,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.levels      = this;
         game_ctx.props       = &props;
         game_ctx.cross       = this;
+        game_ctx.controls    = controls;
         game_ctx.rng         = Rng(0x47414D45ull, 13);
         game_bound_stack_.clear();
         vm_stack_.clear();
@@ -1900,6 +1905,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         physics::MoveParams& p = L.world.params_mut(agent);
         p.radius = L.map_store.body_radius();
         p.height = L.map_store.body_height();
+        // FIRST PERSON: the view is the aim. The body faces it at once -- a
+        // turn rate that covers a whole turn in a tick is a snap -- and the push
+        // is relative to it. Both replicated, so the client predicts the same.
+        if (controls == 1) {
+            p.turn_speed = fx::from_int(1000);
+            p.move_relative = true;
+        }
 
         // Capture the authored parameters as this agent's base. Everything
         // effects do is computed from here, never from the live value --
@@ -1957,6 +1969,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
         // The level's NAME, which is what its music is found by.
         write_level_name(w, li);
+        // The control scheme (0 platformer, 1 fps), appended.
+        w.u8v(controls);
         const size_t end = w.size();
         const u32 body_len = static_cast<u32>(end - len_pos - 4);
         buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -1995,6 +2009,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // first snapshot so it is never predicting with rules it has not been
         // told.
         send_param_update(L, id, agent, true);
+        resend_hud(s);
         // And the game's scripts, which follow the player: a body in a new
         // world has none of the parameters they had set on the last one.
         game_hook(li, "on_player_enter", 1, [&](lua_State* T) { lua::push_entity(T, game_ctx, agent); });
@@ -2034,6 +2049,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.player = L.host->player;
         L.ctx.cross  = this;
         L.ctx.sounds = &L.host->sounds;
+        L.ctx.controls = controls;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
         // to a client but replayable by the server. Per level, or two maps
@@ -2935,6 +2951,68 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         if (!w.ok()) return;
         finish_frame(buf, len_pos, w.size());
         link.send_control(s->id, buf, w.size());
+    }
+
+    // --- HUD values (dnp.hud; docs/UI_LAYOUT.md 4) --------------------------
+    bool hud(u32 level_index, i32 agent, const std::vector<lua::HudSet>& set) override {
+        if (level_index >= level_count()) return true;
+        bool ok = true;
+        for (auto& [id, s] : sessions) {
+            if (!s.has_agent || !same_world(s, level_index)) continue;
+            if (agent >= 0 && s.agent != static_cast<u32>(agent)) continue;
+            if (agent < 0 && s.level != level_index) continue;
+            std::vector<const lua::HudSet*> changed;
+            for (const lua::HudSet& h : set) {
+                auto it = s.hud.find(h.name);
+                if (h.kind == proto::HUD_CLEAR) {
+                    if (it == s.hud.end()) continue;
+                    s.hud.erase(it);
+                    changed.push_back(&h);
+                    continue;
+                }
+                if (it != s.hud.end() && it->second.kind == h.kind && it->second.i == h.i &&
+                    it->second.s == h.s) continue;
+                if (it == s.hud.end() && s.hud.size() >= proto::HUD_MAX_NAMES) { ok = false; continue; }
+                s.hud[h.name] = Session::HudValue{h.kind, h.i, h.s};
+                changed.push_back(&h);
+            }
+            send_hud(s, changed);
+        }
+        return ok;
+    }
+    void send_hud(Session& s, const std::vector<const lua::HudSet*>& list) {
+        for (size_t at = 0; at < list.size(); at += proto::HUD_MAX_FIELDS) {
+            const size_t n = std::min<size_t>(proto::HUD_MAX_FIELDS, list.size() - at);
+            std::vector<u8> buf(16 + n * (4 + proto::HUD_NAME_MAX + 3 + proto::HUD_STR_MAX + 6));
+            ByteWriter w(buf.data(), buf.size());
+            const size_t len_pos = w.mark();
+            w.u32v(0);
+            w.u8v(proto::MSG_HUD_SET);
+            w.u16v(static_cast<u16>(n));
+            for (size_t k = 0; k < n; ++k) {
+                const lua::HudSet& h = *list[at + k];
+                w.u16v(static_cast<u16>(h.name.size()));
+                w.bytes(reinterpret_cast<const u8*>(h.name.data()), h.name.size());
+                w.u8v(h.kind);
+                if (h.kind == proto::HUD_INT) w.u32v(static_cast<u32>(h.i));
+                else if (h.kind == proto::HUD_STR) {
+                    w.u16v(static_cast<u16>(h.s.size()));
+                    w.bytes(reinterpret_cast<const u8*>(h.s.data()), h.s.size());
+                }
+            }
+            if (!w.ok()) return;
+            finish_frame(buf.data(), len_pos, w.size());
+            link.send_control(s.id, buf.data(), w.size());
+        }
+    }
+    // The whole table again: a client arriving somewhere new has a HUD to draw
+    // before anything changes (a value is state, not a moment).
+    void resend_hud(Session& s) {
+        std::vector<lua::HudSet> all;
+        for (const auto& [name, v] : s.hud) all.push_back(lua::HudSet{name, v.kind, v.i, v.s});
+        std::vector<const lua::HudSet*> list;
+        for (const auto& h : all) list.push_back(&h);
+        send_hud(s, list);
     }
 
     void send_screen(Session& s, const proto::ScreenSet& sc) {
@@ -3906,6 +3984,7 @@ int main(int argc, char** argv) {
     u32  lua_stall_us = env_stall ? static_cast<u32>(std::atoi(env_stall)) : 0;
     const char* props_path = nullptr;      // --props wins over any module
     std::vector<std::string> game_script_args;
+    const char* controls_arg = nullptr;
     constexpr u32 MAX_MODULES = 16;
     const char* module_dirs[MAX_MODULES]{};
     u32 module_count = 0;
@@ -3935,6 +4014,9 @@ int main(int argc, char** argv) {
             // trust) or a copy of the library inlined into all 32 of them.
             if (script_count < MAX_SCRIPTS) script_args[script_count++] = argv[++i];
             else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
+        } else if (std::strcmp(argv[i], "--controls") == 0 && i + 1 < argc) {
+            // The control scheme, overriding the modules': fps or platformer.
+            controls_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--game-script") == 0 && i + 1 < argc) {
             // A script for the GAME VM, as a module's `game` line declares one:
             // run once for the whole game, not once per level. Repeatable.
@@ -4017,7 +4099,16 @@ int main(int argc, char** argv) {
     static std::vector<std::string> module_resolved;
     for (u32 mi = 0; mi < module_count; ++mi) {
         std::string given = module_dirs[mi];
-        if (!has_dir(given + "/maps") && has_dir("modules/" + given + "/maps")) {
+        // A module is a directory with maps, or with only a module.txt -- a
+        // FLAVOUR of another, like doom2fps, which borrows doom2's levels and
+        // changes how they are played.
+        const auto is_module = [&](const std::string& p) {
+            if (has_dir(p + "/maps")) return true;
+            std::FILE* f = std::fopen((p + "/module.txt").c_str(), "rb");
+            if (f) std::fclose(f);
+            return f != nullptr;
+        };
+        if (!is_module(given) && is_module("modules/" + given)) {
             given = "modules/" + given;
         }
         module_resolved.push_back(given);
@@ -4025,6 +4116,11 @@ int main(int argc, char** argv) {
     for (u32 mi = 0; mi < module_count; ++mi) {
         module_dirs[mi] = module_resolved[mi].c_str();
     }
+
+    // THE CONTROL SCHEME's lowest default: DNP_CONTROLS, so a test suite can
+    // run every test as a first-person game without each one saying so. A
+    // module's `controls` line overrides it, and --controls overrides both.
+    if (const char* env = std::getenv("DNP_CONTROLS")) srv.controls = std::strcmp(env, "fps") == 0 ? 1 : 0;
 
     // PERSISTENCE, per module: `persist levels`, `persist saves`, `persist
     // server` in its module.txt. Any module that asks turns it on; --persist
@@ -4046,6 +4142,13 @@ int main(int argc, char** argv) {
                 if (!dup) srv.game_scripts.push_back(std::string(module_dirs[mi]) + "/maps/" + gfile);
                 continue;
             }
+            char scheme[32] = {0};
+            if (std::sscanf(line, "controls %31s", scheme) == 1) {
+                if (std::strcmp(scheme, "fps") == 0) srv.controls = 1;
+                else if (std::strcmp(scheme, "platformer") == 0) srv.controls = 0;
+                else std::fprintf(stderr, "[srv] %s/module.txt: unknown controls '%s'\n", module_dirs[mi], scheme);
+                continue;
+            }
             if (std::sscanf(line, "persist %63s", what) != 1) continue;
             if (std::strcmp(what, "levels") == 0) srv.persist_levels = true;
             else if (std::strcmp(what, "saves") == 0) srv.persist_saves = true;
@@ -4063,6 +4166,8 @@ int main(int argc, char** argv) {
     }
     if (state_dir_arg) srv.state_dir = state_dir_arg;
     for (const auto& g : game_script_args) srv.game_scripts.push_back(g);
+    if (controls_arg) srv.controls = std::strcmp(controls_arg, "fps") == 0 ? 1 : 0;
+    std::fprintf(stderr, "[srv] controls: %s\n", srv.controls == 1 ? "fps" : "platformer");
     std::fprintf(stderr, "[srv] persistence: levels %s, saves %s, server %s%s%s\n",
                  srv.persist_levels ? "on" : "off", srv.persist_saves ? "on" : "off",
                  srv.persist_server ? "on" : "off",

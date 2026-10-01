@@ -78,7 +78,7 @@ async function life (ms, { newGame = false } = {}) {
   await wt.ready
   const control = await wt.createBidirectionalStream()
   const cw = control.writable.getWriter()
-  const got = { welcome: false, welcomes: 0, panels: 0, results: 0 }
+  const got = { welcome: false, welcomes: 0, panels: 0, results: 0, hud: {} }
   ;(async () => {
     const r = control.readable.getReader()
     let buf = Buffer.alloc(0)
@@ -95,6 +95,7 @@ async function life (ms, { newGame = false } = {}) {
           if (m?.type === MSG.WELCOME) { got.welcome = true; got.welcomes++ }
           else if (m?.type === MSG.UI_OPEN) got.panels++
           else if (m?.type === MSG.GAME_RESULT) got.results++
+          else if (m?.type === MSG.HUD_SET) for (const f of m.fields) got.hud[f.name] = f.value
         }
       }
     } catch {}
@@ -136,7 +137,7 @@ async function life (ms, { newGame = false } = {}) {
   }
   try { await cw.close() } catch {}
   try { wt.close() } catch {}
-  return { panels: got.panels, sounds, welcomes: got.welcomes }
+  return { panels: got.panels, sounds, welcomes: got.welcomes, hud: got.hud }
 }
 
 
@@ -233,6 +234,12 @@ async function phase (name, args, rounds, play, describe) {
   const panels = lives.reduce((a, r) => a + r.panels, 0)
   const sounds = lives.reduce((a, r) => a + r.sounds, 0)
   check(panels >= lives.length && sounds > 0, `every life was a real one: panels opened, sounds heard (${panels}, ${sounds})`)
+  // THE HUD'S VALUES (HUD_SET, docs/UI_LAYOUT.md 4.3), published by the
+  // weapons runtime with no script of the module's own: the weapon in hand and
+  // the pool it draws from.
+  const hud = lives[0]?.hud ?? {}
+  check(hud.weapon === 'pistol' && hud.ammo_type === 'bullets' && hud.ammo_max === 200 && typeof hud.ammo === 'number',
+        `the HUD is told the weapon in hand and its ammunition (${JSON.stringify(hud).slice(0, 120)})`)
 }
 
 // --- levels and games ------------------------------------------------------

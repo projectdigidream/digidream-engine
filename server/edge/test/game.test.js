@@ -37,6 +37,7 @@ import {
   decodeSnapshot, axisFromNumber, MSG
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
+import { fpsFrame } from './helpers.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -151,7 +152,8 @@ async function start (extra, maps = [A, B]) {
 // One input frame, walking east, kept leading the server's clock.
 async function walkEast (run) {
   run.tick = Math.max(run.tick + 1, run.lastTick + 8)
-  const f = { buttons: 0, moveX: axisFromNumber(1), moveY: 0, aim: 0 }
+  // As this run's scheme sends it (helpers.js): the same intent in either.
+  const f = fpsFrame({ buttons: 0, moveX: axisFromNumber(1), moveY: 0, aim: 0 })
   run.history = [f, ...run.history].slice(0, 12)
   await run.dw.write(encodeInputBundle({ clientTick: run.tick, ackSnapshotTick: run.lastTick, frames: run.history }))
 }

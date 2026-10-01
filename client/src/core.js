@@ -533,8 +533,8 @@ export class WasmWorld {
     return out
   }
 
-  setInput (idx, { buttons = 0, moveX = 0, moveY = 0, aim = 0 }) {
-    this.core.M._dnp_world_set_input(this.ptr, idx, buttons, moveX, moveY, aim)
+  setInput (idx, { buttons = 0, moveX = 0, moveY = 0, aim = 0, pitch = 0 }) {
+    this.core.M._dnp_world_set_input(this.ptr, idx, buttons, moveX, moveY, aim, pitch)
   }
 
   step () { this.core.M._dnp_world_step(this.ptr) }

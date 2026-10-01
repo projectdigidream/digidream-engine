@@ -68,3 +68,39 @@ export function mirrorEntities (world, snap, {
     if (def) world.placeProp(index, kind, e.pos, def)
   }
 }
+
+// --- THE TWO FLAVOURS (docs/MODULES.md, "controls") -------------------------
+//
+// The DOOM tests run twice: as a platformer and as a first-person shooter
+// (DNP_CONTROLS=fps, which the server takes as its default scheme). A test
+// writes its input as a platformer does -- a WORLD-space push and an aim -- and
+// these turn it into what a first-person client would send for the same
+// intent: the push relative to the view. In first person the body faces its
+// aim at once, so the world-space movement is the same either way, and a test
+// asserting where the player got to asserts it of both schemes.
+
+/** The scheme this run is for: 'fps' or 'platformer'. */
+export const CONTROLS = process.env.DNP_CONTROLS === 'fps' ? 'fps' : 'platformer'
+
+/**
+ * A world-space frame ({moveX, moveY} as Q1.15, `aim` a brad) as this run's
+ * scheme sends it. Identity for a platformer.
+ */
+export function fpsFrame (f) {
+  if (CONTROLS !== 'fps') return f
+  const wx = (f.moveX ?? 0) / 32767
+  const wy = (f.moveY ?? 0) / 32767
+  const a = ((f.aim ?? 0) >>> 0) / 4294967296 * 2 * Math.PI
+  const fwd = { x: Math.cos(a), y: Math.sin(a) }
+  // Right of the facing is clockwise of it: (fwd.y, -fwd.x), as the core turns
+  // a push (World::step_agent, move_relative).
+  const forward = wx * fwd.x + wy * fwd.y
+  const right = wx * fwd.y - wy * fwd.x
+  const q = (v) => Math.max(-32767, Math.min(32767, Math.round(v * 32767)))
+  return { ...f, moveX: q(right), moveY: q(forward) }
+}
+
+/** encodeInputBundle with every frame as this run's scheme sends it. */
+export function encodeInput (encodeInputBundle, bundle) {
+  return encodeInputBundle({ ...bundle, frames: bundle.frames.map(fpsFrame) })
+}

@@ -110,6 +110,16 @@ int l_entity_jumps(lua_State* L) {
     return 1;
 }
 
+// e:pitch() -> where the body looks vertically, as an fx fraction of a turn
+// (+ up), from its input this tick. Zero for a scheme with no vertical aim.
+int l_entity_pitch(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    push_fx(L, fx::from_frac(ctx.world->agent(static_cast<u32>(a)).pitch, 65536));
+    return 1;
+}
+
 int l_entity_sector(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -589,6 +599,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"vel", l_entity_vel},
     {"grounded", l_entity_grounded},
     {"jumps", l_entity_jumps},
+    {"pitch", l_entity_pitch},
     {"sector", l_entity_sector},
     {"index", l_entity_index_of},
     {"player", l_entity_player},
@@ -1963,6 +1974,64 @@ int l_dnp_predict_sounds(lua_State* L) {
     return 0;
 }
 
+// dnp.hud(e_or_nil, { name = value, ... })
+//
+// Values for the HUD layout's server-known bindings (`hud.<name>`): a whole
+// number, a string, or false to clear one. Sent only when a value changes, so a
+// script may call this every tick for nothing (docs/UI_LAYOUT.md 4).
+int l_dnp_hud(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    i32 agent = -1;
+    if (!lua_isnoneornil(L, 1)) {
+        agent = resolve(L, ctx, check_handle(L, 1));
+        if (agent < 0) return 0;
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+    std::vector<HudSet> set;
+    lua_pushnil(L);
+    while (lua_next(L, 2) != 0) {
+        size_t n = 0;
+        const char* name = lua_type(L, -2) == LUA_TSTRING ? lua_tolstring(L, -2, &n) : nullptr;
+        if (name == nullptr || n == 0 || n > proto::HUD_NAME_MAX) {
+            return luaL_error(L, "dnp.hud: a name must be a string of 1..%d characters",
+                              static_cast<int>(proto::HUD_NAME_MAX));
+        }
+        for (size_t k = 0; k < n; ++k) {
+            const char c = name[k];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+                return luaL_error(L, "dnp.hud: '%s' -- a name is [a-z0-9_]", name);
+            }
+        }
+        HudSet h;
+        h.name.assign(name, n);
+        if (lua_isboolean(L, -1)) {
+            if (lua_toboolean(L, -1)) { h.kind = proto::HUD_INT; h.i = 1; }
+            else h.kind = proto::HUD_CLEAR;
+        } else if (lua_type(L, -1) == LUA_TNUMBER) {
+            h.kind = proto::HUD_INT;
+            h.i = static_cast<i32>(lua_tonumber(L, -1));
+        } else if (lua_type(L, -1) == LUA_TSTRING) {
+            size_t sn = 0;
+            const char* s = lua_tolstring(L, -1, &sn);
+            h.kind = proto::HUD_STR;
+            h.s.assign(s, std::min<size_t>(sn, proto::HUD_STR_MAX));
+        } else if (is_fx(L, -1)) {
+            return luaL_error(L, "dnp.hud: '%s' is an fx; a HUD shows whole numbers -- "
+                              "convert it (.int) first", name);
+        } else {
+            return luaL_error(L, "dnp.hud: '%s' must be a number, a string or false", name);
+        }
+        set.push_back(std::move(h));
+        lua_pop(L, 1);
+    }
+    if (set.empty() || ctx.ui == nullptr) return 0;
+    if (!ctx.ui->hud(ctx.level, agent, set)) {
+        return luaL_error(L, "dnp.hud: more than %d names for one player",
+                          static_cast<int>(proto::HUD_MAX_NAMES));
+    }
+    return 0;
+}
+
 // dnp.ui_close(entity, ui_id)
 int l_dnp_ui_close(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -2829,6 +2898,12 @@ int l_dnp_call_owner(lua_State* L) {
     return n < 0 ? 0 : n;
 }
 
+// dnp.controls() -> "fps" or "platformer": the module's control scheme.
+int l_dnp_controls(lua_State* L) {
+    lua_pushstring(L, ctx_of(L).controls == 1 ? "fps" : "platformer");
+    return 1;
+}
+
 // dnp.is_game() -> whether this script runs in the game VM.
 int l_dnp_is_game(lua_State* L) {
     lua_pushboolean(L, ctx_of(L).game ? 1 : 0);
@@ -2845,6 +2920,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"call_level", l_dnp_call_level},
     {"call_owner", l_dnp_call_owner},
     {"is_game", l_dnp_is_game},
+    {"controls", l_dnp_controls},
     {"tick", l_dnp_tick},
     {"entity", l_dnp_entity},
     {"entities", l_dnp_entities},
@@ -2865,6 +2941,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"vfx", l_dnp_vfx},
     {"sound", l_dnp_sound},
     {"predict_sounds", l_dnp_predict_sounds},
+    {"hud", l_dnp_hud},
     {"level", l_dnp_level},
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},

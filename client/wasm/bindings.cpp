@@ -474,12 +474,14 @@ unsigned dnp_world_spawn(sim::World* w, const long long* pos64) {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void dnp_world_set_input(sim::World* w, unsigned idx, unsigned buttons, int mx, int my, unsigned aim) {
+void dnp_world_set_input(sim::World* w, unsigned idx, unsigned buttons, int mx, int my, unsigned aim,
+                         int pitch) {
     proto::InputFrame f;
     f.buttons = static_cast<u16>(buttons);
     f.move_x  = static_cast<i16>(mx);
     f.move_y  = static_cast<i16>(my);
     f.aim     = brad(aim);
+    f.pitch   = static_cast<i16>(pitch);
     w->set_input(idx, f);
 }
 

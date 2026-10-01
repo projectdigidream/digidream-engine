@@ -478,6 +478,12 @@ else
   # pinned against the server's, and the predictor of the player's own sounds,
   # each rule with a control.
   node client/test/sfx.test.js | grep -E 'FAIL|failures'
+  # Control schemes, the pure half: the view turns the way the screen does, the
+  # aim it sends is the direction it looks, and the push is relative to it.
+  node client/test/controls.test.js | grep -E 'FAIL|failures'
+  # The first-person weapon: Doom's frame timing, its 320x200 placement, and
+  # that every frame the module names has a picture with its offsets.
+  node client/test/viewmodel.test.js | grep -E 'FAIL|failures'
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | grep -E 'FAIL|failures'
@@ -628,6 +634,28 @@ else
      `# DNP_LEAKS=1 adds macOS leaks; DNP_SOAK_CONTROL=1 plants one, caught.` \
      && node test/soak.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
+
+  # THE FIRST-PERSON FLAVOUR. The DOOM tests again with DNP_CONTROLS=fps: the
+  # server's default scheme is then first person (an instant turn, movement
+  # relative to the view, a pitch), and each test sends what a first-person
+  # client would for the same intent (server/edge/test/helpers.js, fpsFrame).
+  # Same assertions -- where the player got to, what opened, what was heard --
+  # and the same zero mispredictions.
+  echo
+  echo "--- the first-person flavour (DNP_CONTROLS=fps) ---"
+  (cd server/edge && export DNP_CONTROLS=fps \
+     && node test/prediction.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/attack.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/enemies.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/doors.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/triggers.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/levels.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/game.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/persist.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/sound.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     && node test/soak.test.js 2>/dev/null | grep -E 'FAIL|failures')
+  # And the scheme itself: fps against a platformer, each the other's control.
+  (cd server/edge && node test/fps.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters
   # MUST mispredict. If it does not, the replication is doing nothing and the

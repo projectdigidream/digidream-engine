@@ -99,6 +99,15 @@ struct LevelListSink {
     virtual const char* level_name(u32 i) const = 0;
 };
 
+// One HUD value a script set (dnp.hud): kind proto::HUD_INT, HUD_STR or
+// HUD_CLEAR.
+struct HudSet {
+    std::string name;
+    u8          kind = 0;
+    i32         i = 0;
+    std::string s;
+};
+
 struct UiSink {
     virtual ~UiSink() = default;
     // Returns the allocated ui_id, or 0 if the agent has nobody watching it --
@@ -131,6 +140,9 @@ struct UiSink {
     // actions: the group `group` (a name hash) replaced by `list`.
     virtual void predict_sounds(u32 level, u32 agent, u32 group,
                                 const proto::PredictSound* list, u32 n) = 0;
+    // HUD values for whoever watches `agent`, or everyone in the level when it
+    // is negative. False when a session would hold more than HUD_MAX_NAMES.
+    virtual bool hud(u32 level, i32 agent, const std::vector<HudSet>& set) = 0;
 };
 
 struct WorldContext;
@@ -296,6 +308,10 @@ struct WorldContext {
     // the server, per call, to the world of the player concerned, in that
     // world's own coordinates -- `chunk` stays null.
     bool              game = false;
+    // The module's control scheme (module.txt `controls`): 0 platformer, 1
+    // fps. What dnp.controls() answers, so a weapon aims by the view in an FPS
+    // and by auto-aim in a platformer.
+    u8                controls = 0;
     // Which player each body is, as a number that stays the same from level to
     // level (a session's id), or 0 for a body nobody plays. Borrowed from the
     // host. e:player() reads it; null means nobody is anybody (a test).

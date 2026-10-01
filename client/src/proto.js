@@ -36,6 +36,7 @@ export const MSG = {
   GAME_RESULT: 0x2E,
   GAME_NEW: 0x2F,
   SOUND_PREDICT: 0x33,
+  HUD_SET: 0x34,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -417,6 +418,9 @@ export function decodeControlMessage (buf) {
     // The level's name, appended (docs/protocol.md §3.2): what its music is
     // found by. Absent from an older server, which is not an error.
     msg.levelName = readLevelName(r)
+    // The module's control scheme, appended after the name: 0 platformer, 1
+    // fps (client/src/controls.js). Absent from an older server: a platformer.
+    msg.controls = r.ok && r.pos < r.buf.length ? r.u8() : 0
     return r.ok ? msg : null
   }
   if (type === MSG.SECTOR_MOTION_SET) {
@@ -493,6 +497,33 @@ export function decodeControlMessage (buf) {
     if (!r.ok || b === null) return null
     return { type, op: ['save', 'load', 'new'][op] ?? 'unknown', slot, ok, text: new TextDecoder().decode(b) }
   }
+  // HUD values (docs/UI_LAYOUT.md 4): {name, kind, value}; kind 0 i32, 1 str,
+  // 2 clear. A kind this reader does not know refuses the message, as MUSIC's
+  // reader refuses an unknown `at`.
+  if (type === MSG.HUD_SET) {
+    const n = r.u16()
+    if (!r.ok || n > HUD_MAX_FIELDS) return null
+    const fields = []
+    const text = (max) => {
+      const len = r.u16()
+      if (!r.ok || len > max) return null
+      const b = r.bytes(len)
+      return b ? new TextDecoder().decode(b) : null
+    }
+    for (let i = 0; i < n; i++) {
+      const name = text(HUD_NAME_MAX)
+      if (name === null) return null
+      const kind = r.u8()
+      if (kind === 0) fields.push({ name, kind, value: r.i32() })
+      else if (kind === 1) {
+        const v = text(HUD_STR_MAX)
+        if (v === null) return null
+        fields.push({ name, kind, value: v })
+      } else if (kind === 2) fields.push({ name, kind, value: undefined })
+      else return null
+    }
+    return r.ok ? { type, fields } : null
+  }
   // What to play the moment this client predicts its own action (§5.7).
   if (type === MSG.SOUND_PREDICT) {
     const group = r.u32()
@@ -560,7 +591,7 @@ export function encodeUiEvent (uiId, widgetId, value) {
 
 export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) {
   const n = Math.min(frames.length, 16)
-  const w = new Writer(16 + n * 10)
+  const w = new Writer(16 + n * 12)
   w.u8(MSG.INPUT_BUNDLE).u32(clientTick).u32(ackSnapshotTick).u8(n)
   for (let i = 0; i < n; i++) {
     const f = frames[i]
@@ -568,6 +599,8 @@ export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) 
     w.i16(f.moveX ?? 0)
     w.i16(f.moveY ?? 0)
     w.u32(f.aim ?? 0)
+    // Vertical aim, 1/65536 of a turn (docs/protocol.md 4).
+    w.i16(f.pitch ?? 0)
   }
   return w.done()
 }
@@ -683,6 +716,10 @@ export function decodeSnapshot (buf) {
 }
 
 export const MAX_SOUNDS = 32
+// HUD_SET's limits, as core/include/dnp/proto/messages.hpp sets them.
+export const HUD_MAX_FIELDS = 32
+export const HUD_NAME_MAX = 24
+export const HUD_STR_MAX = 128
 // SOUND_PREDICT triggers, as core/include/dnp/proto/messages.hpp numbers them.
 export const PREDICT = {
   JUMP: 1, LAND: 2, PRIMARY: 3, PRIMARY_HELD: 4, SECONDARY: 5, SECONDARY_HELD: 6, SWING: 7

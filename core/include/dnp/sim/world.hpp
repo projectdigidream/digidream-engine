@@ -211,6 +211,12 @@ struct AgentState {
     fx3  pos{};
     fx3  vel{};
     brad facing{};
+    // Where the body looks vertically, in 1/65536 of a turn, from this tick's
+    // input (proto::InputFrame::pitch, clamped). NOT HASHED and not in a
+    // snapshot: it is a function of the input alone, every tick, so both sides
+    // already agree on it -- and nothing in the simulation reads it. Scripts do
+    // (e:pitch(), a weapon's aim), and the renderer does (the view).
+    i16  pitch = 0;
     bool active = false;
 
     // Whether other bodies collide with this one.

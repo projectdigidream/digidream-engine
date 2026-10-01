@@ -26,6 +26,9 @@ export class OwnSounds {
     this.groups = new Map()     // group hash -> entries
     this.prev = null
     this.lastFire = new Map()   // entry -> tick it last fired
+    // What the last step fired, as { group, trigger }: so the view model can
+    // kick the gun on the same predicted shot the sound is played for.
+    this.fired = []
   }
 
   /** A group's entries replaced (one SOUND_PREDICT message). */
@@ -43,13 +46,15 @@ export class OwnSounds {
    */
   step (s) {
     const out = []
+    this.fired = []
     const p = this.prev
     this.prev = { ...s }
     if (!p) return out
-    for (const entries of this.groups.values()) {
+    for (const [group, entries] of this.groups) {
       for (const e of entries) {
         if (this.#fires(e, p, s)) {
           out.push(e.sound >>> 0)
+          this.fired.push({ group, trigger: e.trigger })
           this.lastFire.set(e, s.tick)
           if (e.shots > 0) e.shots--
         }

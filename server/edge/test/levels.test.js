@@ -30,6 +30,7 @@ import {
   axisFromNumber, fxToNumber, MSG, BUTTON
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
+import { fpsFrame } from './helpers.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -160,7 +161,8 @@ async function send (P, buttons, moveX) {
   // as too old, which is a property of the test and not of the engine.
   const lead = (P.snapshots.at(-1)?.serverTick ?? 0) + 8
   if (P.tick < lead) P.tick = lead
-  const f = { buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 }
+  // As this run's scheme sends it (helpers.js): the same intent in either.
+  const f = fpsFrame({ buttons, moveX: axisFromNumber(moveX), moveY: 0, aim: 0 })
   P.history = [f, ...P.history].slice(0, 12)
   await P.dw.write(encodeInputBundle({
     clientTick: P.tick,

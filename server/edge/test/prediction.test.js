@@ -72,6 +72,11 @@ const waitFor = async (fn, ms, label) => {
 const MAP_PATH = bakedMapPath(ROOT)
 const serverArgs = ['--port', String(LINK_PORT)]
 if (MAP_PATH) serverArgs.push('--map', MAP_PATH)
+// THE FIRST-PERSON FLAVOUR (DNP_CONTROLS=fps): the body snaps to the aim and
+// walks relative to it, and every frame carries a pitch. The same absolute
+// bound -- zero mispredictions -- because nothing about it is approximate.
+const FPS = process.env.DNP_CONTROLS === 'fps'
+if (FPS) serverArgs.push('--controls', 'fps')
 const server = spawn(serverBin,
                      serverArgs, { stdio: ['ignore', 'inherit', 'pipe'] })
 let serverLog = ''
@@ -136,6 +141,7 @@ class PredictingClient {
     this.control = await this.wt.createBidirectionalStream()
     this.controlWriter = this.control.writable.getWriter()
     this.dgWriter = this.wt.datagrams.createWritable().getWriter()
+    this.paramUpdates = []
     this._pumpControl()
     this._pumpDatagrams()
     await this.controlWriter.write(encodeHello())
@@ -160,6 +166,12 @@ class PredictingClient {
     this.world = core.createWorld({ map: this.map })
     this.agent = this.world.spawn(spawnPos)
     this.predictor = new Predictor(this.world, this.agent)
+    // THE RULES THE SERVER SENT, as the real client applies them (main.js). They
+    // arrive with WELCOME, before there is a world to apply them to. This
+    // client used to ignore them, which passed only because a platformer's
+    // rules ARE the defaults -- an fps server's are not, and every tick was a
+    // misprediction of the test's making.
+    for (const m of this.paramUpdates.splice(0)) this.world.applyParamUpdate(this.agent, m)
   }
 
   async _pumpControl () {
@@ -177,6 +189,10 @@ class PredictingClient {
           buf = buf.subarray(4 + len)
           if (msg?.type === MSG.WELCOME) this.welcome = msg
           else if (msg?.type === MSG.MAP_DATA) this.mapAcc.push(msg)
+          else if (msg?.type === MSG.PARAM_UPDATE) {
+            if (this.world) this.world.applyParamUpdate(this.agent, msg)
+            else this.paramUpdates.push(msg)
+          }
         }
       }
     } catch {}
@@ -203,7 +219,8 @@ class PredictingClient {
       buttons: rawInput.buttons ?? 0,
       moveX: core.axisFromFxRaw(numberToFx(rawInput.moveX ?? 0)),
       moveY: core.axisFromFxRaw(numberToFx(rawInput.moveY ?? 0)),
-      aim: rawInput.aim ?? 0
+      aim: rawInput.aim ?? 0,
+      pitch: rawInput.pitch ?? 0
     }
 
     this.predictor.step(frame)
@@ -254,7 +271,9 @@ for (let i = 0; i < TICKS; i++) {
     moveX: [0, 1, -1, 0.5, -0.25, 1, 0][phase % 7],
     moveY: [0, 0, 0.5, -1, 0, 0.75, -0.5][phase % 7],
     buttons: (i % 47 === 0) ? BUTTON.JUMP : 0,
-    aim: (i * 7919) >>> 0
+    aim: (i * 7919) >>> 0,
+    // Looking about, up and down, as a first-person player does.
+    pitch: FPS && !process.env.DNP_NO_PITCH ? ((i * 37) % 29127) - 14563 : 0
   }
   await c.frame(input)
   c.drain()

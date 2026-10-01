@@ -157,10 +157,64 @@ static void test_turn_speed_is_a_parameter() {
     CHECK(ticks_to_face(F(120), quarter) == 1);
 }
 
+// FIRST-PERSON MOVEMENT (MoveParams::move_relative): the push is turned by the
+// body's facing -- y forward, x a sidestep to the right -- and the vertical aim
+// is taken from the input and clamped. Each claim is against the same body
+// with the parameter off, so a test that passed because nothing moved fails.
+static void test_move_relative_and_pitch() {
+    std::printf("turning: first-person movement walks where the body faces\n");
+    // Walk `ticks` with a push, facing `face` (an instant turn), from the middle.
+    const auto walk = [](bool relative, brad face, i16 mx, i16 my, i16 pitch = 0) {
+        // Static, both: a MapStorage is too big for the stack since the caps rose.
+        static Room room;
+        static World w;
+        w.reset();
+        room.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        w.params_mut(a).turn_speed = F(1000);   // a snap: facing = aim
+        w.params_mut(a).move_relative = relative;
+        for (int t = 0; t < 40; ++t) {
+            proto::InputFrame f;
+            f.aim = face;
+            f.move_x = mx;
+            f.move_y = my;
+            f.pitch = pitch;
+            w.set_input(a, f);
+            w.step();
+        }
+        struct R { double dx, dy; i16 pitch; };
+        const AgentState& s = w.agent(a);
+        return R{static_cast<double>((s.pos.x - F(20)).raw) / 4294967296.0,
+                 static_cast<double>((s.pos.y - F(20)).raw) / 4294967296.0, s.pitch};
+    };
+    const brad north{0x40000000u};   // a quarter turn: +y
+    // Facing north, forward goes north.
+    const auto fwd = walk(true, north, 0, 32767);
+    std::printf("  facing north, forward: moved (%.2f, %.2f)\n", fwd.dx, fwd.dy);
+    CHECK(fwd.dy > 2.0 && fwd.dx > -0.01 && fwd.dx < 0.01);
+    // CONTROL: the same push with the parameter off is a world-space push north
+    // too (y is north on the stick) -- so turn to EAST and it must differ.
+    const brad east{0};
+    const auto fwd_e = walk(true, east, 0, 32767);
+    CHECK(fwd_e.dx > 2.0 && fwd_e.dy > -0.01 && fwd_e.dy < 0.01);
+    const auto world_e = walk(false, east, 0, 32767);
+    CHECK(world_e.dy > 2.0);   // off: the stick's y is the world's y, whatever the facing
+    // Facing north, right is east: clockwise of the facing.
+    const auto right = walk(true, north, 32767, 0);
+    std::printf("  facing north, right: moved (%.2f, %.2f)\n", right.dx, right.dy);
+    CHECK(right.dx > 2.0 && right.dy > -0.01 && right.dy < 0.01);
+    // PITCH: what the input says, clamped to MAX_PITCH, and zero by default.
+    CHECK(walk(true, north, 0, 0, 5000).pitch == 5000);
+    CHECK(walk(true, north, 0, 0, 32000).pitch == proto::MAX_PITCH);
+    CHECK(walk(true, north, 0, 0, -32000).pitch == -proto::MAX_PITCH);
+    CHECK(walk(false, north, 0, 0).pitch == 0);
+}
+
 int main() {
     test_turning_takes_time_and_then_stops();
     test_turning_takes_the_short_way();
     test_turn_speed_is_a_parameter();
+    test_move_relative_and_pitch();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

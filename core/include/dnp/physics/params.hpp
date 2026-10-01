@@ -202,6 +202,13 @@ struct MoveParams {
     // "Fixed forward" is not a third value: it is turn_speed = 0, which this
     // table already expresses.
     u8 aim_snap = 0;
+
+    // MOVEMENT RELATIVE TO THE BODY'S FACING, not to the world: the stick's
+    // y is forward and its x is a sidestep to the right. What a first-person
+    // scheme needs, where the aim is the view and "up" on the stick means "the
+    // way I am looking". Off is a platformer's world-space push, unchanged.
+    // Replicated, so the client turns its own push exactly as the server does.
+    bool move_relative = false;
 };
 
 // Runtime state the abilities carry between ticks.

@@ -112,6 +112,10 @@ weapon_vocab = {
             "the parameter `attack_enabled`, so the client predicts the " ..
             "absence rather than predicting a swing the server then denies. " ..
             "See swing_fields." },
+    { name = "icon", type = "string", optional = true,
+      doc = "A picture for the HUD's current-weapon slot: a sprite frame key " ..
+            "from the module's sheets, or a texture name. Published as " ..
+            "`weapon_icon` (docs/UI_LAYOUT.md 4.3)." },
     { name = "predict", type = "table", optional = true,
       doc = "What the player's OWN client plays the moment it predicts a shot, " ..
             "so they hear it at once rather than a round trip later: a list of " ..

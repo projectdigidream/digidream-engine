@@ -161,13 +161,18 @@ static void test_input_bundle() {
             in.frames[i].move_x = static_cast<i16>(rng.next_u32());
             in.frames[i].move_y = static_cast<i16>(rng.next_u32());
             in.frames[i].aim    = brad(rng.next_u32());
+            // The vertical aim, every value -- the wire carries it whole and
+            // the simulation clamps it, so a clamp here would hide a dropped
+            // high byte.
+            in.frames[i].pitch  = static_cast<i16>(rng.next_u32());
         }
 
         u8 buf[512];
         ByteWriter w(buf, sizeof(buf));
         encode_input_bundle(w, in);
         CHECK(w.ok());
-        CHECK(w.size() == 1u + 4 + 4 + 1 + 10u * in.frame_count);
+        // Twelve bytes a frame: buttons, two axes, the aim, the pitch.
+        CHECK(w.size() == 1u + 4 + 4 + 1 + 12u * in.frame_count);
 
         InputBundle out;
         ByteReader r(buf, w.size());

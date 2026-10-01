@@ -31,6 +31,7 @@ void encode_input_bundle(ByteWriter& w, const InputBundle& b) noexcept {
         w.i16v(f.move_x);
         w.i16v(f.move_y);
         w.bradv(f.aim);
+        w.i16v(f.pitch);
     }
 }
 
@@ -49,6 +50,7 @@ bool decode_input_bundle(ByteReader& r, InputBundle& out) noexcept {
         f.move_x  = r.i16v();
         f.move_y  = r.i16v();
         f.aim     = r.bradv();
+        f.pitch   = r.i16v();
     }
     return r.ok();
 }

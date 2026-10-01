@@ -1301,6 +1301,10 @@ function acts.hitscan(m, a)
   local aim_off, slope = 0, nil
   if m.target ~= nil and not m.target_prop and m.target:valid() then
     slope = slope_to(m.e, m.target)
+  elseif m.player and M.free_aim() then
+    -- FIRST PERSON: where they look is where it goes, up and down included,
+    -- and nothing corrects it -- the view is the aim.
+    slope = M.pitch_slope(m.e)
   elseif m.player then
     local t, ang = M.autoaim(m.e, a.range)
     if t ~= nil then
@@ -2374,6 +2378,20 @@ function M.launch_from(e, kind, ang, offset, slope)
   return owner
 end
 
+-- A PLAYER'S VERTICAL AIM, as a slope (rise per unit of run): from where they
+-- look (e:pitch(), a fraction of a turn) when the module's controls are
+-- first-person. A pitch is at most 80 degrees, so the run is never zero.
+function M.free_aim()
+  return dnp.controls ~= nil and dnp.controls() == "fps"
+end
+function M.pitch_slope(e)
+  local p = e.pitch and e:pitch()
+  if p == nil or p == ZERO then return nil end
+  local brad = math.floor((p * fx.int(65536)).int * 65536) % 4294967296
+  local d = dnp.dir(brad)
+  return d.y / d.x
+end
+
 -- WHAT A PLAYER'S WEAPON DOES TO THE WORLD, in one place.
 --
 -- The weapon runtime (weapons.lua) decides WHEN -- which button, which phase,
@@ -2389,7 +2407,12 @@ end
 -- in and positions are read here.
 function M.weapon_runtime(e, op, a, b, c, d, f)
   if e == nil or not e:valid() then return nil end
-  if op == "autoaim" then return M.autoaim(e) end
+  -- First person aims by the view: no target, the facing as it is, and the
+  -- slope it looks at.
+  if op == "autoaim" then
+    if M.free_aim() then return nil, nil, M.pitch_slope(e) end
+    return M.autoaim(e)
+  end
   if op == "launch" then
     -- kind, the declaration (when the game owns it), heading, offset, slope.
     if missiles[a] == nil and b ~= nil then M.add_missiles({ [a] = b }) end

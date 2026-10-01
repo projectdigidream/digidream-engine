@@ -178,6 +178,24 @@ void World::step_agent(u32 i) noexcept {
         }
     }
 
+    // THE VERTICAL AIM, straight from the input and clamped. No rate: a look
+    // up is the view, and the view is the player's.
+    {
+        const i16 p = inputs_[i].pitch;
+        a.pitch = p > proto::MAX_PITCH ? proto::MAX_PITCH : (p < -proto::MAX_PITCH ? -proto::MAX_PITCH : p);
+    }
+
+    // MOVEMENT RELATIVE TO THE FACING (MoveParams::move_relative): the push's
+    // y is forward along the body's facing and its x a sidestep to its right.
+    // After the turn, so a strafe that is also turning moves along the new
+    // heading -- the same order a first-person view draws it in.
+    if (params_[i].move_relative) {
+        const fx2 fwd = fx_dir(a.facing);
+        const fx2 right{fwd.y, -fwd.x};
+        const fx2 m = cmd.move;
+        cmd.move = fx2{right.x * m.x + fwd.x * m.y, right.y * m.x + fwd.y * m.y};
+    }
+
     // Interaction, on the PRESS edge and before the move.
     //
     // Before, so that what an entity reaches for is what was in front of it

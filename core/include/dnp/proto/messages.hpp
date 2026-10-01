@@ -111,6 +111,15 @@ inline constexpr u8 MSG_GAME_NEW    = 0x2F;
 // own jump and shot are heard at once rather than a round trip later
 // (docs/protocol.md §5.7). S->C, reliable.
 inline constexpr u8 MSG_SOUND_PREDICT = 0x33;
+// HUD values: what the HUD layout's server-known bindings read (docs/
+// UI_LAYOUT.md 4, protocol.md 11.1). S->C, reliable, only when a value changes.
+// u16 count, then count x (str name, u8 kind, value): kind 0 i32, 1 str, 2 clear.
+inline constexpr u8  MSG_HUD_SET     = 0x34;
+inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
+inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
+inline constexpr u32 HUD_NAME_MAX    = 24;
+inline constexpr u32 HUD_STR_MAX     = 128;
+inline constexpr u8  HUD_INT = 0, HUD_STR = 1, HUD_CLEAR = 2;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -172,11 +181,16 @@ struct InputFrame {
     i16  move_x  = 0;   // Q1.15, clamped to [-1, 1]
     i16  move_y  = 0;
     brad aim{};
+    // Looking up (+) or down (-), in 1/65536 of a turn: +16384 is straight up.
+    // The simulation clamps it to MAX_PITCH. What a first-person player aims
+    // with vertically; zero for a scheme that has no vertical aim.
+    i16  pitch   = 0;
 };
+inline constexpr i16 MAX_PITCH = 14563;   // 80 degrees
 
 constexpr bool operator==(const InputFrame& a, const InputFrame& b) noexcept {
     return a.buttons == b.buttons && a.move_x == b.move_x &&
-           a.move_y == b.move_y && a.aim == b.aim;
+           a.move_y == b.move_y && a.aim == b.aim && a.pitch == b.pitch;
 }
 
 struct InputBundle {

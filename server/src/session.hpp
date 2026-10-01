@@ -3,6 +3,8 @@
 // Per-client session state: the input jitter buffer and the bookkeeping
 // reconciliation and clock sync depend on.
 //
+#include <map>
+#include <string>
 #include <vector>
 #include "dnp/proto/messages.hpp"
 #include "snapshot_history.hpp"
@@ -107,6 +109,12 @@ public:
     // panel that has closed names an id that no longer exists rather than one
     // that has been recycled into a different panel.
     u32 next_ui_id = 1;
+
+    // THE HUD VALUES this client has been sent (dnp.hud): what a set is
+    // compared with, so an unchanged one costs nothing on the wire, and what is
+    // sent again whole when the client arrives somewhere new.
+    struct HudValue { u8 kind = 0; i32 i = 0; std::string s; };
+    std::map<std::string, HudValue> hud;
 
     proto::UiPanel* find_ui(u32 ui_id) {
         for (auto& p : open_ui) if (p.ui_id == ui_id) return &p;
