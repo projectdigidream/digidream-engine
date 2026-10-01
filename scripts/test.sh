@@ -445,6 +445,12 @@ else
   # Self-gated like the editor's: it launches headless Chrome, so it skips
   # loudly without DNP_CLIENT_PAGE_TEST=1 rather than costing every run.
   node client/test/page.test.js | grep -E 'FAIL|failures'
+  # Does the game client leak? Chrome against a real stack: rounds of play and a
+  # new game each, measuring the JS heap, the wasm heap, the DOM, and three.js's
+  # live geometries and textures -- each world change used to strand the old
+  # simulation world (14 MB of wasm a round) and the body's capsule. Opt-in with
+  # the page test; DNP_LEAK_CONTROL=1 is its control (a planted leak, caught).
+  node client/test/leak.test.js | grep -E 'FAIL|failures'
   node client/test/entities.test.js | grep -E 'FAIL|failures'
   node client/test/lighting.test.js | grep -E 'FAIL|failures'
   node client/test/shadows.test.js | grep -E 'FAIL|failures'
@@ -617,6 +623,10 @@ else
      `# Sounds on the wire: by name hash, cut at earshot, and a player's own` \
      `# jump told to their client and marked on the server's copy (docs/SOUNDS.md).` \
      && node test/sound.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Does the server leak? A DOOM II player's life, and levels and new games,` \
+     `# twelve rounds each, its physical footprint read after every round.` \
+     `# DNP_LEAKS=1 adds macOS leaks; DNP_SOAK_CONTROL=1 plants one, caught.` \
+     && node test/soak.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters

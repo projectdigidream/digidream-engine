@@ -289,6 +289,15 @@ let liveMapBytes = null
 const sideTextures = []
 // Music cues, for the same reason. See the MUSIC case in onControl.
 const musicCues = []
+// Counters for the page tests (client/test/leak.test.js): how many times the
+// world was handed over, how many snapshots arrived, and -- once the renderer
+// exists -- what three.js says is still alive on the GPU. Declared up here
+// because the handlers that count are installed before the renderer is made.
+const dnpStats = { welcomes: 0, snapshots: 0, gpu: () => null }
+window.__dnpStats = dnpStats
+// The wasm core's whole memory, which only ever grows: a world or a map never
+// destroyed shows up here and nowhere in the JS heap.
+dnpStats.wasmBytes = () => (core.M.HEAPU8 ?? core.M.HEAP8)?.buffer?.byteLength ?? 0
 // What this client plays on its own predicted actions (audio/ownsounds.js).
 // Declared up here because SOUND_PREDICT arrives with the WELCOME, long before
 // the sound engine further down exists.
@@ -426,6 +435,7 @@ if (LIVE) {
     certHash,
     onControl (m) {
       if (m.type === MSG.WELCOME) {
+        dnpStats.welcomes++
         if (!welcome) {
           // The join. The handshake below waits for this map in `acc`.
           welcome = m
@@ -576,7 +586,7 @@ if (LIVE) {
       }
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
     },
-    onSnapshot (s) { pendingSnapshots.push(s) },
+    onSnapshot (s) { dnpStats.snapshots++; pendingSnapshots.push(s) },
     // A WebTransport close carries { closeCode, reason }, not an Error, so
     // `e.message` is undefined and the object stringifies to [object Object].
     // The reason is the whole point of the close -- it is how the edge says
@@ -876,6 +886,17 @@ let falls = 0
 // --- scene -----------------------------------------------------------------
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
+dnpStats.gpu = () => ({ ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 })
+// What is in the scene, by type and name: what a test compares across a new
+// game to find the object that was added and never taken away.
+dnpStats.scene = () => {
+  const out = {}
+  for (const o of scene.children) {
+    const k = `${o.type}:${o.name || o.userData?.kind || ''}`
+    out[k] = (out[k] ?? 0) + 1
+  }
+  return out
+}
 // Pixel ratio, capped and overridable.
 //
 // The fragment shader is where this renderer's time goes -- lighting, occlusion
@@ -1238,6 +1259,15 @@ function buildBody () {
   const next = want >= 0 ? props.makeAvatar(want) : null
   if (!next && want >= 0) return          // the catalogue could not build it
   scene.remove(body)
+  // THE OLD CAPSULE IS FREED, when it was ours. Every level change resets the
+  // avatar and comes through here, so the capsule it replaced stayed on the
+  // GPU: one geometry per new world, for ever (client/test/leak.test.js). An
+  // avatar from the catalogue is the catalogue's -- its geometry and material
+  // may be shared with every other body drawn from it -- so only our own goes.
+  if (bodyAvatar < 0) {
+    body.geometry?.dispose?.()
+    body.material?.dispose?.()
+  }
   bodyAvatar = want
   body = next ?? makeAgentMesh(0x66ccff, bodyRadius, bodyHeight)
   scene.add(body)
@@ -1576,6 +1606,10 @@ function enterLevel (w, streamed) {
     say('map hash mismatch after a level change')
     return false
   }
+  // What this replaces, retired once the new ones exist (see below).
+  const oldWorld = world
+  const oldMap = map
+  const oldStore = simStore
   map = loaded.map
   mapData = readMap(map)
   // A new map's paths are different paths, and the tag the camera holds may not
@@ -1616,6 +1650,15 @@ function enterLevel (w, streamed) {
     simStore = map
   }
   world = core.createWorld({ map: simStore })
+  // THE OLD WORLD AND ITS MAP GO, in the wasm heap. They were replaced and never
+  // freed: a world is two thousand agent slots and their state, and every level
+  // change and every new game stranded one -- 28 MB of wasm memory becoming
+  // 154 MB over ten new games, which on a phone's fixed ceiling is a crash after
+  // a handful (client/test/leak.test.js). Not a map still held as a neighbour.
+  const held = new Set(chunkMaps.values())
+  if (oldWorld && oldWorld !== world) oldWorld.destroy()
+  if (oldStore && oldStore !== simStore && oldStore !== oldMap && !held.has(oldStore)) oldStore.destroy()
+  if (oldMap && oldMap !== map && oldMap !== simStore && !held.has(oldMap)) oldMap.destroy()
   // Where the server put the body, in the world's coordinates.
   spawn = w.arrival
   agent = world.spawn(spawn)
