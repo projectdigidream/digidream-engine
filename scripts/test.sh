@@ -272,6 +272,7 @@ if [[ -f third_party/luajit/src/libluajit.a ]]; then
   "./build/lua/test_lua_vm"
   "./build/lua/test_lua_fx"
   "./build/lua/test_lua_effects"
+  "./build/lua/test_lua_persist"
   # The trigger interpreter, against a world made of test doubles: dispatch,
   # validation, tick deadlines and the bounded `run`. It is also the only place
   # a syntax error in maps/scripts/triggers.lua is caught without standing up a
@@ -598,6 +599,9 @@ else
      `# Walking across a seam: two maps composed in world space by a metamap's` \
      `# pitch, and a crossing that is a change of frame rather than a teleport.` \
      && node test/seam.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Persistence: save and load a game, refused without the module's say-so,` \
+     `# and a level that survives a server restart (docs/SAVING.md).` \
+     && node test/persist.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters

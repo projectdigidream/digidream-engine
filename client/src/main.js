@@ -53,7 +53,7 @@ import { Neighbourhood } from './seam/neighbourhood.js'
 import { buildCell } from './seam/buildcell.js'
 import { report, CrossingProbe, BodyWatch } from './seam/diag.js'
 import { Music } from './audio/music.js'
-import { MSG, encodeUiEvent, CAMERA_FIELD } from './proto.js'
+import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, CAMERA_FIELD } from './proto.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -430,6 +430,13 @@ if (LIVE) {
       // The body walked into another level of the same world. In order, like
       // everything else about levels: the moves that follow are from there.
       else if (m.type === MSG.HOME) seamEvents.push({ home: m.level })
+      // What became of a save or load the player asked for. Said on screen:
+      // "saving is not enabled for this module" is an answer, not an error.
+      else if (m.type === MSG.GAME_RESULT) {
+        const what = m.op === 'save' ? 'save' : 'load'
+        say(`${what} slot ${m.slot}: ${m.ok ? '' : 'refused -- '}${m.text}`)
+        report(`[save] ${what} slot ${m.slot}: ${m.ok ? 'ok' : 'refused'} -- ${m.text}`)
+      }
       else if (m.type === MSG.MAP_DATA) {
         if (!stream) {
           report('[seam] VIOLATION: map data with no map announced', 'error')
@@ -1711,6 +1718,13 @@ addEventListener('wheel', (e) => {
 
 const held = new Set()
 addEventListener('keydown', (e) => { held.add(e.code); if (e.code === 'Space') e.preventDefault() })
+// QUICK SAVE AND LOAD, as Doom had them: F5 saves to slot 0, F9 loads it. The
+// server decides whether this game may (docs/SAVING.md) and says why not.
+addEventListener('keydown', (e) => {
+  if (!LIVE || !conn || e.repeat) return
+  if (e.code === 'F5') { e.preventDefault(); conn.sendControl(encodeGameSave(0)); say('saving...') }
+  if (e.code === 'F9') { e.preventDefault(); conn.sendControl(encodeGameLoad(0)); say('loading...') }
+})
 addEventListener('keyup', (e) => held.delete(e.code))
 addEventListener('blur', () => held.clear())
 

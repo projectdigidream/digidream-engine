@@ -30,6 +30,10 @@ export const MSG = {
   NEIGHBOUR_MOVE: 0x2A,
   // The body walked into another level of the same world (docs/protocol.md 8.7).
   HOME: 0x2B,
+  // Single-player save and load (docs/SAVING.md).
+  GAME_SAVE: 0x2C,
+  GAME_LOAD: 0x2D,
+  GAME_RESULT: 0x2E,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -467,6 +471,13 @@ export function decodeControlMessage (buf) {
                   dx: fxToNumber(dxRaw), dy: fxToNumber(dyRaw) }
     return r.ok ? msg : null
   }
+  if (type === MSG.GAME_RESULT) {
+    const op = r.u8(), slot = r.u8(), ok = r.u8() !== 0
+    const n = r.u16()
+    const b = r.bytes(n)
+    if (!r.ok || b === null) return null
+    return { type, op: op === 0 ? 'save' : 'load', slot, ok, text: new TextDecoder().decode(b) }
+  }
   if (type === MSG.HOME) {
     const msg = { type, level: r.u16() }
     return r.ok ? msg : null
@@ -496,6 +507,18 @@ export function decodeControlMessage (buf) {
 // --------------------------------------------------------------- state channel
 
 /** What the player did with a panel (docs/protocol.md §11.1). */
+/** Ask the server to save the game to `slot` (or load it from there). */
+export function encodeGameSave (slot) {
+  const w = new Writer(8)
+  w.u32(1 + 1).u8(MSG.GAME_SAVE).u8(slot & 0xFF)
+  return w.done()
+}
+export function encodeGameLoad (slot) {
+  const w = new Writer(8)
+  w.u32(1 + 1).u8(MSG.GAME_LOAD).u8(slot & 0xFF)
+  return w.done()
+}
+
 export function encodeUiEvent (uiId, widgetId, value) {
   const w = new Writer(16)
   w.u32(1 + 10).u8(MSG.UI_EVENT).u32(uiId).u16(widgetId).i32(value | 0)

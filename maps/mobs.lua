@@ -1994,7 +1994,7 @@ function M.spawn(kind, pos, opts)
   if e == nil then return nil end
 
   local m = {
-    e = e, def = def, idx = e:index(),
+    e = e, def = def, idx = e:index(), kind = kind,
     hp = def.hp, max_hp = def.hp,
     vars = {}, target = nil, aim = 0,
     dormant = opts ~= nil and opts.dormant or false,
@@ -2100,6 +2100,10 @@ end
 -- silently divided every coordinate by 48 would be a Doom framework, and the
 -- next game's maps would be forty-eight times too small with nothing saying so.
 function M.place(list)
+  -- RESTORING a saved level: the monsters that were alive come back through
+  -- the 'mobs' load hook below, where they were, as hurt as they were. Placing
+  -- the level's original list on top of them would bring the dead back.
+  if dnp ~= nil and dnp.restoring ~= nil and dnp.restoring() then return end
   local scale = list ~= nil and list.scale or nil
   local function coord(v)
     if scale == nil then return v end
@@ -2801,3 +2805,35 @@ check_vocabulary_matches_implementation(conds, acts)
 
 -- No `return M`: the VM discards a script's return value, and a map reaches
 -- this through the global above.
+
+-- PERSISTENCE (docs/SAVING.md): the monsters still alive, where they are
+-- and how hurt. Checkpoint fidelity: a monster comes back in its initial state
+-- of mind, not mid-attack, and the dead do not come back at all.
+if dnp ~= nil and dnp.persist ~= nil then
+  dnp.persist("mobs", function()
+    local idxs = {}
+    for idx, m in pairs(live) do
+      if (m.hp or 0) > 0 and m.e:valid() then idxs[#idxs + 1] = idx end
+    end
+    table.sort(idxs)
+    local out = {}
+    for _, idx in ipairs(idxs) do
+      local m = live[idx]
+      out[#out + 1] = { kind = m.kind, at = m.e:pos(), hp = m.hp,
+                        dormant = m.dormant or nil }
+    end
+    return out
+  end, function(list)
+    local back = 0
+    for _, s in ipairs(list or {}) do
+      local e = M.spawn(s.kind, s.at, { dormant = s.dormant })
+      local m = e and live[e:index()]
+      if m then
+        back = back + 1
+        m.hp = s.hp
+        if m.cpp and dnp.mob_set ~= nil then dnp.mob_set(m.idx, "hp", s.hp) end
+      end
+    end
+    print(("mobs: restored %d of %d"):format(back, #(list or {})))
+  end)
+end

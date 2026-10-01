@@ -75,6 +75,16 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/mobs/mob_binding.cpp" \
         $(ls "$ROOT"/core/src/*/*.cpp) \
         "$ROOT/server/tests/test_mob_loop.cpp" "${LINK[@]}" -o "$OUT/test_mob_loop"
+# Persistence (docs/SAVING.md): what a library saves through dnp.persist
+# and gets back, against the real bindings.
+clang++ "${FLAGS[@]}" "${SRCS[@]}" \
+        "$ROOT/server/src/lua/world_binding.cpp" \
+        "$ROOT/server/src/mobs/mob_compile.cpp" \
+        "$ROOT/server/src/mobs/mob_eval.cpp" \
+        "$ROOT/server/src/mobs/mob_runtime.cpp" \
+        "$ROOT/server/src/mobs/mob_binding.cpp" \
+        $(ls "$ROOT"/core/src/*/*.cpp) \
+        "$ROOT/server/tests/test_lua_persist.cpp" "${LINK[@]}" -o "$OUT/test_lua_persist"
 # Not a test: the generator that hands the trigger vocabulary to readers that
 # are not Lua (the editor). It lives here because this is the only build script
 # that already links LuaJIT, and because its output is checked by the suite

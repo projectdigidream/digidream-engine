@@ -96,6 +96,14 @@ inline constexpr u8 MSG_NEIGHBOUR_MOVE = 0x2A;
 // NEIGHBOUR_* messages that re-state the neighbourhood from there.
 inline constexpr u8 MSG_HOME = 0x2B;
 
+// SINGLE-PLAYER SAVE AND LOAD (docs/SAVING.md). Client to server, {u8 slot}.
+// Answered with GAME_RESULT {u8 op (0 save, 1 load), u8 slot, u8 ok, u16 len,
+// text}: refused, with the reason, unless the module enables saves and there is
+// exactly one player.
+inline constexpr u8 MSG_GAME_SAVE   = 0x2C;
+inline constexpr u8 MSG_GAME_LOAD   = 0x2D;
+inline constexpr u8 MSG_GAME_RESULT = 0x2E;
+
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
 inline constexpr u32 MAX_INPUT_FRAMES   = 16;

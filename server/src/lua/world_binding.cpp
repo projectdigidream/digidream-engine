@@ -1,7 +1,12 @@
 #include "lua/world_binding.hpp"
 #include "mobs/mob_runtime.hpp"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "dnp/proto/messages.hpp"
 #include "dnp/sim/sectormotion.hpp"
@@ -1176,6 +1181,15 @@ int l_dnp_side(lua_State* L) {
 // silent slot-zero entity -- "the key did not appear" should say which key.
 int l_dnp_spawn_prop(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
+    // HELD BACK while a level is restored: whatever its scripts place as they
+    // load, the saved state puts back instead (docs/SAVING.md). Caught
+    // here rather than trusted to every script, because any script can place
+    // things -- including ones nobody thought to teach about restoring.
+    if (ctx.restoring) {
+        ++ctx.held_back_spawns;
+        lua_pushnil(L);
+        return 1;
+    }
     size_t len = 0;
     const char* name = luaL_checklstring(L, 1, &len);
     const fx3 pos = ctx.to_world(check_vec3(L, 2));
@@ -1235,6 +1249,15 @@ int l_dnp_spawn_prop(lua_State* L) {
 // can see, and a thing the same physics applies to.
 int l_dnp_spawn_enemy(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
+    // HELD BACK while a level is restored: whatever its scripts place as they
+    // load, the saved state puts back instead (docs/SAVING.md). Caught
+    // here rather than trusted to every script, because any script can place
+    // things -- including ones nobody thought to teach about restoring.
+    if (ctx.restoring) {
+        ++ctx.held_back_spawns;
+        lua_pushnil(L);
+        return 1;
+    }
     size_t len = 0;
     const char* name = luaL_checklstring(L, 1, &len);
     const fx3 pos = ctx.to_world(check_vec3(L, 2));
@@ -2158,7 +2181,311 @@ int l_dnp_stale_ops(lua_State* L) {
     return 1;
 }
 
+// --- persistence (docs/SAVING.md) -----------------------------------------
+//
+// THE ENCODING, one value at a time, as text:
+//
+//   T F                 true, false
+//   i<integer>;         a number with no fraction (the common case: counts, ids)
+//   n<%.17g>;           any other number, exactly as a double reads back
+//   s<len>:<bytes>      a string
+//   x<raw>;             an fx, by its raw i64: exact, and the reason for this format
+//   v<x>;<y>;<z>;       a vec3, the same
+//   {<key><value>...}   a table, keys in sorted order of their encoding
+//
+// Sorted, so the same state always encodes to the same bytes: two saves of an
+// unchanged level compare equal, and a test can say what it expects.
+
+namespace {
+
+constexpr int MAX_SAVE_DEPTH = 32;
+
+bool encode_at(lua_State* L, int idx, std::string& out, std::string& err,
+               int depth, const std::string& path) {
+    // Lua 5.1 (LuaJIT) has no lua_absindex.
+    if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
+    switch (lua_type(L, idx)) {
+        case LUA_TBOOLEAN: out += lua_toboolean(L, idx) ? 'T' : 'F'; return true;
+        case LUA_TNUMBER: {
+            const double d = lua_tonumber(L, idx);
+            char buf[40];
+            if (d == static_cast<double>(static_cast<long long>(d)) && d > -9.0e15 && d < 9.0e15) {
+                std::snprintf(buf, sizeof(buf), "i%lld;", static_cast<long long>(d));
+            } else {
+                std::snprintf(buf, sizeof(buf), "n%.17g;", d);
+            }
+            out += buf;
+            return true;
+        }
+        case LUA_TSTRING: {
+            size_t n = 0;
+            const char* s = lua_tolstring(L, idx, &n);
+            out += 's';
+            out += std::to_string(n);
+            out += ':';
+            out.append(s, n);
+            return true;
+        }
+        case LUA_TUSERDATA: {
+            if (is_fx(L, idx)) {
+                out += 'x';
+                out += std::to_string(static_cast<long long>(check_fx(L, idx).raw));
+                out += ';';
+                return true;
+            }
+            if (is_vec3(L, idx)) {
+                const fx3 v = check_vec3(L, idx);
+                out += 'v';
+                for (const fx c : {v.x, v.y, v.z}) {
+                    out += std::to_string(static_cast<long long>(c.raw));
+                    out += ';';
+                }
+                return true;
+            }
+            err = "cannot save a handle or other userdata at " + path +
+                  " -- save what it stands for (a kind, a position) instead";
+            return false;
+        }
+        case LUA_TTABLE: {
+            if (depth >= MAX_SAVE_DEPTH) { err = "tables nested too deep at " + path; return false; }
+            struct Pair { std::string k, v; };
+            std::vector<Pair> pairs;
+            lua_pushnil(L);
+            while (lua_next(L, idx) != 0) {
+                // key at -2, value at -1
+                Pair p;
+                const int kt = lua_type(L, -2);
+                if (kt != LUA_TNUMBER && kt != LUA_TSTRING && kt != LUA_TBOOLEAN) {
+                    lua_pop(L, 2);
+                    err = "a table key at " + path + " is not a number, string or boolean";
+                    return false;
+                }
+                // Encode the key from a copy: lua_tolstring on a number key in
+                // place would confuse lua_next.
+                lua_pushvalue(L, -2);
+                std::string kname;
+                if (kt == LUA_TSTRING) kname = lua_tostring(L, -1);
+                else if (kt == LUA_TNUMBER) { char b[32]; std::snprintf(b, sizeof(b), "%.17g", lua_tonumber(L, -1)); kname = b; }
+                else kname = lua_toboolean(L, -1) ? "true" : "false";
+                const bool kok = encode_at(L, -1, p.k, err, depth + 1, path);
+                lua_pop(L, 1);
+                if (!kok) { lua_pop(L, 2); return false; }
+                if (!encode_at(L, -1, p.v, err, depth + 1, path + "." + kname)) { lua_pop(L, 2); return false; }
+                lua_pop(L, 1);
+                pairs.push_back(std::move(p));
+            }
+            std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.k < b.k; });
+            out += '{';
+            for (const Pair& p : pairs) { out += p.k; out += p.v; }
+            out += '}';
+            return true;
+        }
+        default:
+            err = std::string("cannot save a ") + luaL_typename(L, idx) + " at " + path;
+            return false;
+    }
+}
+
+struct Reader {
+    const std::string& s;
+    size_t i = 0;
+    bool at_end() const { return i >= s.size(); }
+};
+
+bool read_i64(Reader& r, long long& v) {
+    size_t j = r.i;
+    if (j < r.s.size() && (r.s[j] == '-' || r.s[j] == '+')) ++j;
+    const size_t digits = j;
+    while (j < r.s.size() && r.s[j] >= '0' && r.s[j] <= '9') ++j;
+    if (j == digits || j >= r.s.size() || r.s[j] != ';') return false;
+    v = std::strtoll(r.s.c_str() + r.i, nullptr, 10);
+    r.i = j + 1;
+    return true;
+}
+
+bool decode_at(lua_State* L, Reader& r, std::string& err, int depth) {
+    if (r.at_end()) { err = "save data ends early"; return false; }
+    if (depth >= MAX_SAVE_DEPTH) { err = "save data nested too deep"; return false; }
+    const char c = r.s[r.i++];
+    switch (c) {
+        case 'T': lua_pushboolean(L, 1); return true;
+        case 'F': lua_pushboolean(L, 0); return true;
+        case 'i': {
+            long long v = 0;
+            if (!read_i64(r, v)) { err = "bad integer in save data"; return false; }
+            lua_pushnumber(L, static_cast<lua_Number>(v));
+            return true;
+        }
+        case 'n': {
+            const size_t semi = r.s.find(';', r.i);
+            if (semi == std::string::npos) { err = "bad number in save data"; return false; }
+            lua_pushnumber(L, std::strtod(r.s.substr(r.i, semi - r.i).c_str(), nullptr));
+            r.i = semi + 1;
+            return true;
+        }
+        case 's': {
+            const size_t colon = r.s.find(':', r.i);
+            if (colon == std::string::npos) { err = "bad string in save data"; return false; }
+            const size_t n = static_cast<size_t>(std::strtoull(r.s.c_str() + r.i, nullptr, 10));
+            if (colon + 1 + n > r.s.size()) { err = "string runs past the end of the save data"; return false; }
+            lua_pushlstring(L, r.s.data() + colon + 1, n);
+            r.i = colon + 1 + n;
+            return true;
+        }
+        case 'x': {
+            long long v = 0;
+            if (!read_i64(r, v)) { err = "bad fx in save data"; return false; }
+            push_fx(L, fx::from_raw(v));
+            return true;
+        }
+        case 'v': {
+            long long a = 0, b = 0, d = 0;
+            if (!read_i64(r, a) || !read_i64(r, b) || !read_i64(r, d)) { err = "bad vec3 in save data"; return false; }
+            push_vec3(L, fx3{fx::from_raw(a), fx::from_raw(b), fx::from_raw(d)});
+            return true;
+        }
+        case '{': {
+            lua_newtable(L);
+            while (!r.at_end() && r.s[r.i] != '}') {
+                if (!decode_at(L, r, err, depth + 1)) { lua_pop(L, 1); return false; }
+                if (!decode_at(L, r, err, depth + 1)) { lua_pop(L, 2); return false; }
+                lua_rawset(L, -3);
+            }
+            if (r.at_end()) { lua_pop(L, 1); err = "a table in the save data is not closed"; return false; }
+            ++r.i;
+            return true;
+        }
+        default:
+            err = std::string("unexpected '") + c + "' in save data";
+            return false;
+    }
+}
+
+const char* const PERSIST_KEY = "dnp_persist";
+const char* const PERSIST_PLAYER_KEY = "dnp_persist_player";
+
+// dnp.persist(name, save, load) and dnp.persist_player(...): register a part.
+int register_part(lua_State* L, const char* key) {
+    const char* name = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, key);
+    }
+    lua_createtable(L, 0, 2);
+    lua_pushvalue(L, 2); lua_setfield(L, -2, "save");
+    lua_pushvalue(L, 3); lua_setfield(L, -2, "load");
+    lua_setfield(L, -2, name);
+    lua_pop(L, 1);
+    return 0;
+}
+
+// The registered part names, sorted: parts are saved and loaded in one order.
+std::vector<std::string> part_names(lua_State* L, const char* key) {
+    std::vector<std::string> names;
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
+    if (lua_istable(L, -1)) {
+        lua_pushnil(L);
+        while (lua_next(L, -2) != 0) {
+            lua_pop(L, 1);
+            if (lua_type(L, -1) == LUA_TSTRING) names.emplace_back(lua_tostring(L, -1));
+        }
+    }
+    lua_pop(L, 1);
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+// Push parts[name][field], or return false.
+bool push_part_fn(lua_State* L, const char* key, const std::string& name, const char* field) {
+    lua_getfield(L, LUA_REGISTRYINDEX, key);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return false; }
+    lua_getfield(L, -1, name.c_str());
+    if (!lua_istable(L, -1)) { lua_pop(L, 2); return false; }
+    lua_getfield(L, -1, field);
+    lua_remove(L, -2);
+    lua_remove(L, -2);
+    if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return false; }
+    return true;
+}
+
+// Save every part: run each save with `nargs` arguments already pushed (copied
+// per call), collect { [name] = value }, encode.
+bool capture_parts(lua_State* L, const char* key, int nargs, std::string& out, std::string& err) {
+    const int base = lua_gettop(L) - nargs;
+    lua_newtable(L);
+    const int tab = lua_gettop(L);
+    std::string problems;
+    for (const std::string& name : part_names(L, key)) {
+        if (!push_part_fn(L, key, name, "save")) continue;
+        for (int a = 1; a <= nargs; ++a) lua_pushvalue(L, base + a);
+        if (lua_pcall(L, nargs, 1, 0) != 0) {
+            problems += name + ": " + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "error") + "; ";
+            lua_pop(L, 1);
+            continue;
+        }
+        if (lua_isnil(L, -1)) { lua_pop(L, 1); continue; }
+        // Check this part encodes before keeping it, so one bad part is named
+        // and left out instead of losing every part with it.
+        std::string probe, perr;
+        if (!encode_at(L, -1, probe, perr, 0, name)) {
+            problems += name + ": " + perr + "; ";
+            lua_pop(L, 1);
+            continue;
+        }
+        lua_setfield(L, tab, name.c_str());
+    }
+    const bool ok = encode_at(L, tab, out, err, 0, "parts");
+    lua_settop(L, base);
+    if (!problems.empty()) err = problems;
+    return ok;
+}
+
+bool restore_parts(lua_State* L, const char* key, int nargs, const std::string& in, std::string& err) {
+    const int base = lua_gettop(L) - nargs;
+    Reader r{in};
+    if (!decode_at(L, r, err, 0)) { lua_settop(L, base); return false; }
+    if (!lua_istable(L, -1)) { lua_settop(L, base); err = "save data is not a table of parts"; return false; }
+    const int tab = lua_gettop(L);
+    std::string problems;
+    std::vector<std::string> saved;
+    lua_pushnil(L);
+    while (lua_next(L, tab) != 0) {
+        lua_pop(L, 1);
+        if (lua_type(L, -1) == LUA_TSTRING) saved.emplace_back(lua_tostring(L, -1));
+    }
+    std::sort(saved.begin(), saved.end());
+    for (const std::string& name : saved) {
+        if (!push_part_fn(L, key, name, "load")) { problems += name + ": nothing loads it; "; continue; }
+        for (int a = 1; a <= nargs; ++a) lua_pushvalue(L, base + a);
+        lua_getfield(L, tab, name.c_str());
+        if (lua_pcall(L, nargs + 1, 0, 0) != 0) {
+            problems += name + ": " + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "error") + "; ";
+            lua_pop(L, 1);
+        }
+    }
+    lua_settop(L, base);
+    if (!problems.empty()) err = problems;
+    return true;
+}
+
+}  // namespace
+
+int l_dnp_persist(lua_State* L) { return register_part(L, PERSIST_KEY); }
+int l_dnp_persist_player(lua_State* L) { return register_part(L, PERSIST_PLAYER_KEY); }
+int l_dnp_restoring(lua_State* L) {
+    lua_pushboolean(L, ctx_of(L).restoring ? 1 : 0);
+    return 1;
+}
+
 const luaL_Reg DNP_FUNCS[] = {
+    {"persist", l_dnp_persist},
+    {"persist_player", l_dnp_persist_player},
+    {"restoring", l_dnp_restoring},
     {"tick", l_dnp_tick},
     {"entity", l_dnp_entity},
     {"entities", l_dnp_entities},
@@ -2322,6 +2649,42 @@ void open_world(lua_State* L, WorldContext* ctx) {
     mobs::open_mobs(L);
 
     lua_setglobal(L, "dnp");
+}
+
+}  // namespace dnp::server::lua
+
+// --- persistence, the C++ side (see world_binding.hpp) -------------------------
+namespace dnp::server::lua {
+
+bool encode_value(lua_State* L, int idx, std::string& out, std::string& err) {
+    return encode_at(L, idx, out, err, 0, "value");
+}
+
+bool decode_value(lua_State* L, const std::string& in, std::string& err) {
+    Reader r{in};
+    if (!decode_at(L, r, err, 0)) return false;
+    if (!r.at_end()) { lua_pop(L, 1); err = "trailing bytes after the saved value"; return false; }
+    return true;
+}
+
+bool persist_capture(lua_State* L, std::string& out, std::string& err) {
+    return capture_parts(L, PERSIST_KEY, 0, out, err);
+}
+
+bool persist_restore(lua_State* L, const std::string& in, std::string& err) {
+    return restore_parts(L, PERSIST_KEY, 0, in, err);
+}
+
+bool persist_player_capture(lua_State* L, WorldContext& ctx, u32 agent,
+                            std::string& out, std::string& err) {
+    push_entity(L, ctx, agent);
+    return capture_parts(L, PERSIST_PLAYER_KEY, 1, out, err);
+}
+
+bool persist_player_restore(lua_State* L, WorldContext& ctx, u32 agent,
+                            const std::string& in, std::string& err) {
+    push_entity(L, ctx, agent);
+    return restore_parts(L, PERSIST_PLAYER_KEY, 1, in, err);
 }
 
 }  // namespace dnp::server::lua

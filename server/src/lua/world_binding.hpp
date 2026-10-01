@@ -18,6 +18,8 @@
 // increments a counter. "My script silently does nothing" has to be
 // diagnosable, or the defined-no-op rule just moves the confusion.
 //
+#include <string>
+
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapstore.hpp"
 #include "dnp/math/rng.hpp"
@@ -239,6 +241,13 @@ struct WorldContext {
         if (owner && entity < sim::MAX_ENTITIES) owner[entity] = level;
     }
 
+    // Whether the level is being RESTORED from saved state (docs/SAVING.md):
+    // a script's own placement of monsters and props stands aside, because the
+    // libraries' load hooks put back what was there instead.
+    bool              restoring = false;
+    // Spawns refused because the level was being restored (see restoring).
+    u32               held_back_spawns = 0;
+
     i32*              hp = nullptr;
     // Which avatar draws each player (design 4.1). Borrowed like hp, and server
     // state for the same reason: a costume is not physics, so it is not hashed,
@@ -272,6 +281,35 @@ struct WorldContext {
 
 // Install `dnp` and the entity type. `ctx` must outlive the VM.
 void open_world(lua_State* L, WorldContext* ctx);
+
+// --- persistence (docs/SAVING.md) ---------------------------------------
+//
+// A script library saves its own state through dnp.persist(name, save, load):
+// `save()` returns a plain value -- tables, numbers, strings, booleans, fx,
+// vec3 -- and `load(value)` puts it back. The engine stores what save returned
+// with the level and hands it to load when the level is restored. Players the
+// same way through dnp.persist_player(name, save(e), load(e, value)).
+//
+// The encoding is text, deterministic (keys sorted), and refuses anything
+// that is not plain data: a function or a handle saved today would mean
+// nothing when it is read back.
+
+// Encode the value at `idx`. False, with `err` saying where, on anything that
+// cannot be saved.
+bool encode_value(lua_State* L, int idx, std::string& out, std::string& err);
+// Decode one value and push it. False (nothing pushed) on malformed input.
+bool decode_value(lua_State* L, const std::string& in, std::string& err);
+
+// Every level part registered with dnp.persist, saved: { [name] = save() }.
+// A part whose save fails is left out and named in `err`; the rest are kept.
+bool persist_capture(lua_State* L, std::string& out, std::string& err);
+// Hand each saved part to its load. Parts with no loader are named in `err`.
+bool persist_restore(lua_State* L, const std::string& in, std::string& err);
+// The same for one player.
+bool persist_player_capture(lua_State* L, WorldContext& ctx, u32 agent,
+                            std::string& out, std::string& err);
+bool persist_player_restore(lua_State* L, WorldContext& ctx, u32 agent,
+                            const std::string& in, std::string& err);
 
 // Push an entity handle for an agent index, or nil if the slot is empty.
 void push_entity(lua_State* L, WorldContext& ctx, u32 index);

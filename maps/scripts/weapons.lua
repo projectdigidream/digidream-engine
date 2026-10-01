@@ -1321,3 +1321,25 @@ end
 -- would run and the double damage this phase exists to collapse would return
 -- through the other door.
 if mobs ~= nil then mobs.weapon_swing_damage = W.swing_damage end
+
+-- PERSISTENCE (docs/SAVING.md): what a player carries -- weapons held,
+-- ammunition, armour, the one in hand. The phase machine is not saved: a
+-- weapon comes back ready, not mid-swing.
+if dnp ~= nil and dnp.persist_player ~= nil then
+  dnp.persist_player("weapons", function(e)
+    local inv = W.of[e:index()]
+    if inv == nil then return nil end
+    local have = {}
+    for k, v in pairs(inv.have or {}) do if v then have[k] = true end end
+    local ammo = {}
+    for k, v in pairs(inv.ammo or {}) do ammo[k] = v end
+    return { have = have, ammo = ammo, armour = inv.armour or 0, current = inv.current }
+  end, function(e, t)
+    if t == nil then return end
+    local idx = e:index()
+    W.forget(idx)
+    W.of[idx] = { have = t.have or {}, ammo = t.ammo or {}, armour = t.armour or 0,
+                  current = t.current }
+    if W.rearm_player ~= nil then W.rearm_player(idx) end
+  end)
+end

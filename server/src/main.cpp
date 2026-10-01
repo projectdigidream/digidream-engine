@@ -17,7 +17,9 @@
 #include <thread>
 #include <string>
 #include <algorithm>
+#include <csignal>
 #include <dirent.h>
+#include <sys/stat.h>
 
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapfile.hpp"
@@ -727,6 +729,366 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     // for one map, when somebody is near it: the file, the nav graph, the Lua
     // VM and the map's own scripts. Idempotent, so a caller may ask without
     // checking.
+    // --- persistence (docs/SAVING.md) ---------------------------------
+    //
+    // Three switches, each turned on by a module (`persist levels|saves|server`
+    // in its module.txt) or by --persist:
+    //
+    //   levels  a level that unloads keeps its state, and gets it back when it
+    //           loads again, instead of resetting;
+    //   saves   a single player may save the game to a slot and load it again;
+    //   server  level state is written to --state-dir and read back at start,
+    //           so the world survives a restart.
+    //
+    // What a level's state IS: the engine's part (sectors away from where they
+    // were authored -- doors, lifts -- and switch pictures) and each script
+    // library's part (dnp.persist). Checkpoint fidelity: who is alive, where,
+    // how hurt, what was taken, what was opened. Not what anybody was in the
+    // middle of doing.
+    bool persist_levels = false;
+    bool persist_saves = false;
+    bool persist_server = false;
+    std::string state_dir = ".dnp-state";
+    // Saved level state, by level NAME: names survive a restart and a change
+    // in the order levels were given; indices do not.
+    std::map<std::string, std::string> level_saves_;
+    // Set while a game save is being loaded: the levels torn down then are the
+    // game being replaced, and capturing them would overwrite what is loading.
+    bool discarding_levels_ = false;
+    u32 autosave_tick_ = 0;
+    static constexpr u32 AUTOSAVE_TICKS = 60 * sim::TICK_RATE_HZ;
+
+    bool restores_levels() const { return persist_levels || persist_server; }
+
+    static bool make_dirs(const std::string& path) {
+        std::string at;
+        for (size_t i = 0; i <= path.size(); ++i) {
+            if (i == path.size() || path[i] == '/') {
+                if (!at.empty()) ::mkdir(at.c_str(), 0755);
+            }
+            if (i < path.size()) at += path[i];
+        }
+        DIR* d = opendir(path.c_str());
+        if (!d) return false;
+        closedir(d);
+        return true;
+    }
+
+    // Written beside, then renamed over: a crash mid-write leaves the last good
+    // file, never half of a new one.
+    static bool write_file(const std::string& path, const std::string& bytes) {
+        const std::string tmp = path + ".tmp";
+        std::FILE* f = std::fopen(tmp.c_str(), "wb");
+        if (!f) return false;
+        const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+        std::fclose(f);
+        if (!ok) return false;
+        return std::rename(tmp.c_str(), path.c_str()) == 0;
+    }
+
+    static bool read_file(const std::string& path, std::string& out) {
+        std::FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) return false;
+        out.clear();
+        char buf[8192];
+        size_t n = 0;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+        std::fclose(f);
+        return true;
+    }
+
+    // A level's chunk in its host's store, or null for a level on its own.
+    const geom::Chunk* chunk_of(const Level& L, u32 li) const {
+        return L.own ? nullptr : L.host->store->find_chunk(li);
+    }
+
+    // THE LEVEL'S STATE, as text. Sector and side numbers and positions in the
+    // level's OWN terms, so a save is good whatever else the region holds.
+    std::string capture_level(u32 li) {
+        Level& L = level(li);
+        Host& H = *L.host;
+        const geom::Chunk* c = chunk_of(L, li);
+        const fx2 o = c ? origin_of(li) : fx2{};
+        std::string out = "dnp-level-save 1\n";
+        char line[256];
+        const auto& ms = H.world.motions();
+        for (u32 i = 0; i < ms.count(); ++i) {
+            if (!ms.active(i)) continue;
+            const sim::SectorMotion& m = ms.at(i);
+            if (m.offset == fx3::zero() && m.angle == 0) continue;
+            u32 local = m.sector;
+            if (c) {
+                if (m.sector < c->sectors.first || m.sector >= c->sectors.first + c->sectors.count) continue;
+                local = m.sector - c->sectors.first;
+            }
+            std::snprintf(line, sizeof(line), "motion %u %u %lld %lld %lld %u %lld %lld\n",
+                          local, static_cast<u32>(m.target),
+                          static_cast<long long>(m.offset.x.raw), static_cast<long long>(m.offset.y.raw),
+                          static_cast<long long>(m.offset.z.raw), m.angle,
+                          static_cast<long long>((m.pivot.x - o.x).raw),
+                          static_cast<long long>((m.pivot.y - o.y).raw));
+            out += line;
+        }
+        for (const proto::SideTexture& t : L.side_textures) {
+            const u32 local = c ? t.side - c->sides.first : t.side;
+            std::snprintf(line, sizeof(line), "side %u %u %.*s\n", local, static_cast<u32>(t.field),
+                          static_cast<int>(t.name.len), t.name.text);
+            out += line;
+        }
+        if (L.vm.is_open()) {
+            std::string parts, err;
+            lua::persist_capture(L.vm.state(), parts, err);
+            if (!err.empty()) {
+                std::fprintf(stderr, "[srv] level %u: some saved state was left out: %s\n", li, err.c_str());
+            }
+            out += "scripts " + std::to_string(parts.size()) + "\n" + parts + "\n";
+        }
+        return out;
+    }
+
+    // Put a captured state back into a freshly loaded level. The script has
+    // run with dnp.restoring() true, so it placed nothing that this brings back.
+    void restore_level(u32 li, const std::string& text) {
+        Level& L = level(li);
+        Host& H = *L.host;
+        const geom::Chunk* c = chunk_of(L, li);
+        const fx2 o = c ? origin_of(li) : fx2{};
+        size_t at = 0;
+        const auto next_line = [&](std::string& ln) {
+            if (at >= text.size()) return false;
+            const size_t nl = text.find('\n', at);
+            ln = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            at = nl == std::string::npos ? text.size() : nl + 1;
+            return true;
+        };
+        std::string ln;
+        if (!next_line(ln) || ln != "dnp-level-save 1") {
+            std::fprintf(stderr, "[srv] level %u: saved state is not one this server reads\n", li);
+            return;
+        }
+        u32 motions = 0, sides = 0;
+        while (next_line(ln)) {
+            if (ln.compare(0, 7, "motion ") == 0) {
+                unsigned local = 0, target = 0, angle = 0;
+                long long ox = 0, oy = 0, oz = 0, px = 0, py = 0;
+                if (std::sscanf(ln.c_str(), "motion %u %u %lld %lld %lld %u %lld %lld",
+                                &local, &target, &ox, &oy, &oz, &angle, &px, &py) != 8) continue;
+                const u32 s = c ? c->sectors.first + local : local;
+                if (c && local >= c->sectors.count) continue;
+                if (H.world.motions().add(*H.store, s) >= sim::MAX_MOVING_SECTORS) continue;
+                const fx3 off{fx::from_raw(ox), fx::from_raw(oy), fx::from_raw(oz)};
+                const fx2 pivot{fx::from_raw(px) + o.x, fx::from_raw(py) + o.y};
+                // Held where it stood: a one-shot from there to there, which
+                // never frees while it is away from where it was authored.
+                H.world.motions().start_parametric(
+                    s, off, off, H.world.tick(), 1, sim::LoopMode::Once,
+                    static_cast<sim::MotionTarget>(target), pivot,
+                    static_cast<i64>(angle), static_cast<i64>(angle));
+                ++motions;
+            } else if (ln.compare(0, 5, "side ") == 0) {
+                unsigned local = 0, field = 0;
+                char name[64] = {0};
+                if (std::sscanf(ln.c_str(), "side %u %u %63s", &local, &field, name) != 3) continue;
+                proto::SideTexture t;
+                t.side = c ? c->sides.first + local : local;
+                t.field = static_cast<proto::SideField>(field);
+                t.name.len = static_cast<u16>(std::strlen(name));
+                std::memcpy(t.name.text, name, t.name.len);
+                set_side_texture(li, t);
+                ++sides;
+            } else if (ln.compare(0, 8, "scripts ") == 0) {
+                const size_t n = static_cast<size_t>(std::strtoull(ln.c_str() + 8, nullptr, 10));
+                if (at + n > text.size()) break;
+                const std::string parts = text.substr(at, n);
+                at += n + 1;
+                // The scripts' own placement is over; their load hooks spawn.
+                L.ctx.restoring = false;
+                if (L.vm.is_open()) {
+                    std::string err;
+                    lua::persist_restore(L.vm.state(), parts, err);
+                    if (!err.empty()) {
+                        std::fprintf(stderr, "[srv] level %u: restoring: %s\n", li, err.c_str());
+                    }
+                }
+            }
+        }
+        L.ctx.restoring = false;
+        std::fprintf(stderr, "[srv] level %u restored: %u sector(s) where they were left, "
+                     "%u switch picture(s); %u spawn(s) its scripts tried at load held back\n",
+                     li, motions, sides, L.ctx.held_back_spawns);
+        L.ctx.held_back_spawns = 0;
+    }
+
+    std::string level_file(const std::string& name) const {
+        return state_dir + "/levels/" + name + ".save";
+    }
+
+    // Keep a level's state: in memory, and on disk when the server persists.
+    void keep_level(u32 li) {
+        if (!restores_levels() || discarding_levels_) return;
+        const std::string name = level_name(li);
+        level_saves_[name] = capture_level(li);
+        if (persist_server) {
+            if (!make_dirs(state_dir + "/levels") || !write_file(level_file(name), level_saves_[name])) {
+                std::fprintf(stderr, "[srv] could not write %s\n", level_file(name).c_str());
+            }
+        }
+    }
+
+    // At start, when the server persists: every level state it wrote.
+    void read_state_dir() {
+        if (!persist_server) return;
+        const std::string dir = state_dir + "/levels";
+        DIR* d = opendir(dir.c_str());
+        if (!d) return;
+        u32 n = 0;
+        while (dirent* e = readdir(d)) {
+            const std::string f = e->d_name;
+            if (f.size() < 6 || f.compare(f.size() - 5, 5, ".save") != 0) continue;
+            std::string bytes;
+            if (read_file(dir + "/" + f, bytes)) { level_saves_[f.substr(0, f.size() - 5)] = bytes; ++n; }
+        }
+        closedir(d);
+        std::fprintf(stderr, "[srv] %u saved level state(s) read from %s\n", n, dir.c_str());
+    }
+
+    // Every so often, and at shutdown: the levels in memory, kept.
+    void autosave(bool now) {
+        if (!persist_server) return;
+        if (!now && ++autosave_tick_ < AUTOSAVE_TICKS) return;
+        autosave_tick_ = 0;
+        u32 n = 0;
+        for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) { keep_level(li); ++n; }
+        if (now) std::fprintf(stderr, "[srv] %u level state(s) written to %s\n", n, state_dir.c_str());
+    }
+
+    // --- single-player save games ------------------------------------------
+
+    std::string game_file(u8 slot) const {
+        return state_dir + "/saves/slot" + std::to_string(slot) + ".save";
+    }
+
+    void send_game_result(u32 id, u8 op, u8 slot, bool ok, const std::string& text) {
+        u8 buf[512];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_GAME_RESULT);
+        w.u8v(op);
+        w.u8v(slot);
+        w.u8v(ok ? 1 : 0);
+        const u16 n = static_cast<u16>(std::min<size_t>(text.size(), 400));
+        w.u16v(n);
+        w.bytes(reinterpret_cast<const u8*>(text.data()), n);
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(id, buf, w.size());
+        std::fprintf(stderr, "[srv] session %u: %s slot %u: %s\n", id, op == 0 ? "save" : "load",
+                     slot, text.c_str());
+    }
+
+    // Why a save or load is refused, or empty if it may go ahead.
+    std::string game_refusal(const Session& s) const {
+        if (!persist_saves) return "saving is not enabled for this module";
+        if (sessions.size() != 1) return "saving is for a single player";
+        if (!s.has_agent || !is_live(s.level)) return "not in a level";
+        return "";
+    }
+
+    void save_game(Session& s, u32 id, u8 slot) {
+        const std::string why = game_refusal(s);
+        if (!why.empty()) { send_game_result(id, 0, slot, false, why); return; }
+        Level& L = level(s.level);
+        const sim::AgentState& a = L.world.agent(s.agent);
+        const fx2 o = in_region(s.level) ? origin_of(s.level) : fx2{};
+        std::string out = "dnp-game-save 1\n";
+        char line[256];
+        std::snprintf(line, sizeof(line), "player %s %lld %lld %lld %u %d\n", level_name(s.level),
+                      static_cast<long long>((a.pos.x - o.x).raw), static_cast<long long>((a.pos.y - o.y).raw),
+                      static_cast<long long>(a.pos.z.raw), a.facing.raw, L.hp[s.agent]);
+        out += line;
+        std::string parts, err;
+        if (L.vm.is_open()) lua::persist_player_capture(L.vm.state(), L.ctx, s.agent, parts, err);
+        out += "playerparts " + std::to_string(parts.size()) + "\n" + parts + "\n";
+        // Every level: the ones in memory as they are now, the rest as kept.
+        std::map<std::string, std::string> all = level_saves_;
+        for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) all[level_name(li)] = capture_level(li);
+        for (const auto& [name, text] : all) {
+            out += "level " + name + " " + std::to_string(text.size()) + "\n" + text + "\n";
+        }
+        if (!make_dirs(state_dir + "/saves") || !write_file(game_file(slot), out)) {
+            send_game_result(id, 0, slot, false, "could not write " + game_file(slot));
+            return;
+        }
+        send_game_result(id, 0, slot, true, "saved " + std::to_string(all.size()) + " level(s)");
+    }
+
+    void load_game(Session& s, u32 id, u8 slot) {
+        const std::string why = game_refusal(s);
+        if (!why.empty()) { send_game_result(id, 1, slot, false, why); return; }
+        std::string text;
+        if (!read_file(game_file(slot), text)) { send_game_result(id, 1, slot, false, "no save in that slot"); return; }
+        // Parse first, change nothing until it reads.
+        std::map<std::string, std::string> levels_in;
+        std::string pname, pparts;
+        long long px = 0, py = 0, pz = 0;
+        unsigned pfacing = 0;
+        int php = 100;
+        size_t at = 0;
+        const auto next_line = [&](std::string& ln) {
+            if (at >= text.size()) return false;
+            const size_t nl = text.find('\n', at);
+            ln = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            at = nl == std::string::npos ? text.size() : nl + 1;
+            return true;
+        };
+        std::string ln;
+        if (!next_line(ln) || ln != "dnp-game-save 1") { send_game_result(id, 1, slot, false, "not a save this server reads"); return; }
+        while (next_line(ln)) {
+            if (ln.compare(0, 7, "player ") == 0) {
+                char name[128] = {0};
+                if (std::sscanf(ln.c_str(), "player %127s %lld %lld %lld %u %d", name, &px, &py, &pz, &pfacing, &php) == 6) pname = name;
+            } else if (ln.compare(0, 12, "playerparts ") == 0) {
+                const size_t n = static_cast<size_t>(std::strtoull(ln.c_str() + 12, nullptr, 10));
+                if (at + n > text.size()) break;
+                pparts = text.substr(at, n);
+                at += n + 1;
+            } else if (ln.compare(0, 6, "level ") == 0) {
+                char name[128] = {0};
+                unsigned long long n = 0;
+                if (std::sscanf(ln.c_str(), "level %127s %llu", name, &n) != 2 || at + n > text.size()) break;
+                levels_in[name] = text.substr(at, static_cast<size_t>(n));
+                at += static_cast<size_t>(n) + 1;
+            }
+        }
+        i32 target = -1;
+        for (u32 li = 0; li < level_count(); ++li) if (pname == level_name(li)) target = static_cast<i32>(li);
+        if (target < 0) { send_game_result(id, 1, slot, false, "the saved level '" + pname + "' is not one this server has"); return; }
+
+        // THE GAME BEING REPLACED goes, without being kept: it is not the one
+        // the player wants back.
+        detach_session(s, id);
+        discarding_levels_ = true;
+        for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) unload_level(li);
+        discarding_levels_ = false;
+        level_saves_ = levels_in;
+
+        const u32 li = static_cast<u32>(target);
+        if (!load_level(li)) { send_game_result(id, 1, slot, false, "the saved level would not load"); return; }
+        const fx2 o = in_region(li) ? origin_of(li) : fx2{};
+        const fx3 pos{fx::from_raw(px) + o.x, fx::from_raw(py) + o.y, fx::from_raw(pz)};
+        if (!place_in_level(s, id, li, &pos)) { send_game_result(id, 1, slot, false, "no room in the saved level"); return; }
+        Level& L = level(li);
+        L.world.agent_mut(s.agent).facing = brad(static_cast<u32>(pfacing));
+        L.hp[s.agent] = php;
+        if (L.vm.is_open() && !pparts.empty()) {
+            std::string err;
+            lua::persist_player_restore(L.vm.state(), L.ctx, s.agent, pparts, err);
+            if (!err.empty()) std::fprintf(stderr, "[srv] restoring the player: %s\n", err.c_str());
+        }
+        refresh_residency();
+        send_game_result(id, 1, slot, true, "loaded " + std::to_string(levels_in.size()) + " level(s)");
+    }
+
     bool load_level(u32 li) {
         if (li >= levels.size()) return false;
         if (levels[li].live) return true;
@@ -839,11 +1201,27 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         const bool wants_scripts =
             scripts_enabled &&
             (!shared_scripts.empty() || L.map_store.script_count() > 0);
+        // A KEPT STATE to come back to? Then the scripts run knowing it
+        // (dnp.restoring()), so their own placement stands aside, and the
+        // state is put back after them.
+        // Whatever is kept: by level persistence, by the server's state
+        // directory, or by a save game just loaded.
+        const auto saved = level_saves_.find(level_name(li));
+        const bool restoring = saved != level_saves_.end();
+        slot.live->ctx.restoring = restoring;
         if (wants_scripts &&
             !start_scripts(li, shared_scripts.data(),
                            static_cast<u32>(shared_scripts.size()))) {
             slot.live.reset();
             return false;
+        }
+        if (restoring) {
+            restore_level(li, saved->second);
+            slot.live->ctx.restoring = false;
+            // Without level persistence a kept state is good for ONE load --
+            // the one a save game asked for. Kept on, it would put the level
+            // back to that save every time it loaded again.
+            if (!restores_levels()) level_saves_.erase(saved);
         }
         return true;
     }
@@ -866,6 +1244,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         LevelSlot& slot = levels[li];
         std::fprintf(stderr, "[srv] level %u (%s) unloaded at tick %u\n",
                      li, slot.path.c_str(), slot.live->world.tick());
+        keep_level(li);
         Level& L = *slot.live;
         if (!L.own) {
             // OUT OF THE REGION, taking with it everything its script spawned:
@@ -1138,7 +1517,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
     //
     // Always at a spawn point. Walking between two levels of the region is not
     // a placement at all (update_region_homes); this is the join, and exits.
-    bool place_in_level(Session& s, u32 id, u32 li) {
+    // Take a session's body out of the world it is in: what leaving a level
+    // has always done, for a map change and for loading a save.
+    void detach_session(Session& s, u32 id) {
+        (void)id;
+        if (!s.has_agent) return;
+        Level& old = level(s.level);
+        old.effects.clear_agent(s.agent);
+        old.world.despawn(s.agent);
+        s.has_agent = false;
+        // Panels do not travel between levels: the old level's VM holds their
+        // handlers and will never see another event from them.
+        for (const auto& p : s.open_ui) send_ui_close(s, p.ui_id);
+        s.open_ui.clear();
+        // And the input buffer, or the last thing they did before touching the
+        // exit is repeated forever in the new level. See Session::reset_input.
+        s.reset_input();
+    }
+
+    bool place_in_level(Session& s, u32 id, u32 li, const fx3* arrive_at = nullptr) {
         if (li >= level_count()) {
             std::fprintf(stderr, "[srv] session %u: level %u does not exist\n", id, li);
             return false;
@@ -1165,30 +1562,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // Leave the old one first. A player who has moved on must stop
         // occupying a slot in the map they left -- otherwise their body stands
         // there forever, in everyone else's snapshots, being collided with.
-        if (s.has_agent) {
-            Level& old = level(s.level);
-            old.effects.clear_agent(s.agent);
-            old.world.despawn(s.agent);
-            s.has_agent = false;
+        detach_session(s, id);
 
-            // Panels do not travel between levels.
-            //
-            // Each level runs its own VM, so a panel opened by the old level's
-            // script is held by a script that is about to stop being consulted
-            // about this player -- its handlers are in a different Lua state
-            // and will never see another event from it. Left alone the window
-            // stays on screen, permanently dead, and the new level's script
-            // opens a second one beside it.
-            for (const auto& p : s.open_ui) send_ui_close(s, p.ui_id);
-            s.open_ui.clear();
-
-            // And the input buffer, or the last thing they did before touching
-            // the exit is repeated forever in the new level. See
-            // Session::reset_input.
-            s.reset_input();
-        }
-
-        const fx3 spawn_pos = spawn_of(L, li);
+        const fx3 spawn_pos = arrive_at ? *arrive_at : spawn_of(L, li);
         const u32 agent = L.world.spawn(spawn_pos);
         if (agent >= sim::MAX_AGENTS) {
             std::fprintf(stderr, "[srv] session %u: level %u has no free body slot\n", id, li);
@@ -1519,6 +1895,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         const u8  type = r.u8v();
         (void)msg_len;
         if (!r.ok()) return;
+
+        // Single-player save and load (docs/SAVING.md). Refused, with a
+        // reason the client shows, unless the module enables it.
+        if (type == proto::MSG_GAME_SAVE || type == proto::MSG_GAME_LOAD) {
+            const u8 slot = r.u8v();
+            if (!r.ok() || !s.hello_done) return;
+            if (type == proto::MSG_GAME_SAVE) save_game(s, id, slot);
+            else                              load_game(s, id, slot);
+            return;
+        }
 
         if (type == proto::MSG_UI_EVENT) {
             proto::UiEvent ev;
@@ -2443,6 +2829,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         // iterating. It also keeps the rule the command queue already follows:
         // scripts ask, and the ask lands at a defined point.
         if (region_ && region_live_count() > 0) tick_region();
+        autosave(false);
         apply_map_changes();
         update_region_homes();
     }
@@ -2998,6 +3385,10 @@ static void dnp_untag_heap() {
 static void dnp_untag_heap() {}
 #endif
 
+// Set by SIGINT/SIGTERM; the main loop keeps the world and stops.
+static volatile std::sig_atomic_t g_stop_requested = 0;
+static void on_stop_signal(int) { g_stop_requested = 1; }
+
 int main(int argc, char** argv) {
     dnp_untag_heap();
 
@@ -3027,6 +3418,10 @@ int main(int argc, char** argv) {
     // A flag still wins, so a command line remains the last word.
     u32 hash_trace_every = 0;
     bool test_player = false;
+    // Persistence (docs/SAVING.md): from the modules' module.txt, unless
+    // --persist says otherwise.
+    const char* persist_arg = nullptr;
+    const char* state_dir_arg = nullptr;
     const char* env_perf = std::getenv("DNP_PERF");
     const char* env_stall = std::getenv("DNP_LUA_STALL_US");
     u32  perf_every = env_perf ? static_cast<u32>(std::atoi(env_perf)) : 0;
@@ -3043,6 +3438,10 @@ int main(int argc, char** argv) {
             else { std::fprintf(stderr, "[srv] too many --map arguments\n"); return 2; }
         } else if (std::strcmp(argv[i], "--metamap") == 0 && i + 1 < argc) {
             metamap_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--persist") == 0 && i + 1 < argc) {
+            persist_arg = argv[++i];
+        } else if (std::strcmp(argv[i], "--state-dir") == 0 && i + 1 < argc) {
+            state_dir_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--map-chunk") == 0 && i + 1 < argc) {
             const long n = std::atol(argv[++i]);
             MAP_CHUNK_BYTES = n < 64 ? 64 : static_cast<size_t>(n);
@@ -3143,6 +3542,37 @@ int main(int argc, char** argv) {
     for (u32 mi = 0; mi < module_count; ++mi) {
         module_dirs[mi] = module_resolved[mi].c_str();
     }
+
+    // PERSISTENCE, per module: `persist levels`, `persist saves`, `persist
+    // server` in its module.txt. Any module that asks turns it on; --persist
+    // (a comma list, or none, or all) is the last word.
+    for (u32 mi = 0; mi < module_count; ++mi) {
+        std::FILE* f = std::fopen((std::string(module_dirs[mi]) + "/module.txt").c_str(), "rb");
+        if (!f) continue;
+        char line[256];
+        while (std::fgets(line, sizeof(line), f)) {
+            char what[64] = {0};
+            if (std::sscanf(line, "persist %63s", what) != 1) continue;
+            if (std::strcmp(what, "levels") == 0) srv.persist_levels = true;
+            else if (std::strcmp(what, "saves") == 0) srv.persist_saves = true;
+            else if (std::strcmp(what, "server") == 0) srv.persist_server = true;
+            else std::fprintf(stderr, "[srv] %s/module.txt: unknown persist '%s'\n", module_dirs[mi], what);
+        }
+        std::fclose(f);
+    }
+    if (persist_arg) {
+        const std::string a = persist_arg;
+        const bool all = a == "all";
+        srv.persist_levels = all || a.find("levels") != std::string::npos;
+        srv.persist_saves  = all || a.find("saves")  != std::string::npos;
+        srv.persist_server = all || a.find("server") != std::string::npos;
+    }
+    if (state_dir_arg) srv.state_dir = state_dir_arg;
+    std::fprintf(stderr, "[srv] persistence: levels %s, saves %s, server %s%s%s\n",
+                 srv.persist_levels ? "on" : "off", srv.persist_saves ? "on" : "off",
+                 srv.persist_server ? "on" : "off",
+                 (srv.persist_saves || srv.persist_server) ? ", state in " : "",
+                 (srv.persist_saves || srv.persist_server) ? srv.state_dir.c_str() : "");
 
     static std::vector<std::string> discovered;
     if (map_count == 0 && module_count > 0) {
@@ -3286,6 +3716,8 @@ int main(int argc, char** argv) {
     // The other thirty-one wait. That is the whole change: they are declared,
     // they are listed, an exit still advances to them, and they cost a path
     // and a tick counter until somebody is near enough to want one.
+    // What the server kept last time, before the first level loads.
+    srv.read_state_dir();
     if (srv.level_count() > 0 && !srv.load_level(0)) {
         std::fprintf(stderr, "[srv] refusing to start without the entry map\n");
         return 1;
@@ -3332,8 +3764,16 @@ int main(int argc, char** argv) {
 
     auto next_tick = Clock::now() + TICK_PERIOD;
     u32 tick_counter = 0;
+    // Stopped by a signal: the world is kept on the way out (persist server).
+    std::signal(SIGINT, on_stop_signal);
+    std::signal(SIGTERM, on_stop_signal);
 
     for (;;) {
+        if (g_stop_requested) {
+            std::fprintf(stderr, "[srv] stopping\n");
+            srv.autosave(true);
+            break;
+        }
         const auto now = Clock::now();
         auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(next_tick - now).count();
         if (wait < 0) wait = 0;
