@@ -6,6 +6,7 @@
 // or an FPS player shoots where they are not looking. Each claim has a control.
 //
 import { FpsLook, fpsPush, MAX_PITCH_RAD } from '../src/controls.js'
+import { viewYaw, billboardYaw } from '../src/camera.js'
 
 let checks = 0
 let fails = 0
@@ -61,6 +62,33 @@ const none = fpsPush({ forward: true, back: true })
 check(none.x === 0 && none.y === 0, 'CONTROL: forward and back together cancel')
 const stick = fpsPush({ forward: true, stick: { x: 0.3, y: -0.4 } })
 check(stick.x === 0.3 && stick.y === -0.4, 'a stick, when pushed, is taken as it is')
+
+// --- billboards face the first-person eye --------------------------------------
+//
+// A sprite is a quad turned by billboardYaw(camViewYaw). In first person the
+// orbit angle is nobody's view, so main.js reads the yaw off the eye, as it is
+// built there: eye at the body, look-at one forward step away (sim -> THREE is
+// x, z, -y). The quad's normal must point back at the eye, for every heading.
+{
+  let worst = 0
+  let control = 0
+  for (const deg of [0, 30, 90, 145, 180, 250, 300]) {
+    const look = new FpsLook({ yaw: deg * Math.PI / 180 })
+    const f = look.forward()
+    const eye = { x: 0, y: 1, z: 0 }
+    eye.lookAt = { x: f.x, y: 1 + f.z, z: -f.y }
+    const bb = billboardYaw(viewYaw(eye, 0.123, 1))
+    const n = { x: Math.sin(bb), z: Math.cos(bb) }      // a plane's normal after rotation.y
+    const back = { x: -f.x, z: f.y }                    // toward the eye, THREE xz
+    const len = Math.hypot(back.x, back.z) || 1
+    worst = Math.max(worst, 1 - (n.x * back.x + n.z * back.z) / len)
+    const stale = billboardYaw(viewYaw(eye, 0.123, 0))  // the orbit angle: the bug
+    const s = { x: Math.sin(stale), z: Math.cos(stale) }
+    control = Math.max(control, 1 - (s.x * back.x + s.z * back.z) / len)
+  }
+  check(worst < 1e-9, `a billboard faces the first-person eye at every heading (worst ${worst.toExponential(1)})`)
+  check(control > 0.5, 'CONTROL: turned by the orbit angle instead, it does not')
+}
 
 console.log(`\ncontrols: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

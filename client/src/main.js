@@ -2623,7 +2623,11 @@ function frame (now) {
   // What the next frame's input and this frame's billboards are measured
   // against. Written here because only now is it known: the path crossfade is
   // resolved inside camera.update.
-  camViewYaw = viewYaw(eye, yaw, camera.pathMix)
+  // In FIRST PERSON the orbit angle is nobody's view -- the eye is the player's
+  // and looks where the mouse says -- so the yaw is read off the eye itself, as
+  // on a path. Without this every billboard faced a camera that was not there
+  // and showed edge-on.
+  camViewYaw = viewYaw(eye, yaw, isFps() && !camPathSpline ? 1 : camera.pathMix)
 
   // THE LISTENER, once a frame, now that the camera is placed: at the body, in
   // SIMULATION space, facing the way the camera looks -- so a sound on the
