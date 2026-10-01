@@ -101,6 +101,7 @@ async function start (extra, maps = [A, B]) {
   run.cw = control.writable.getWriter()
   run.welcomes = 0
   run.homes = []           // levels walked into
+  run.names = []           // the level name each WELCOME and HOME carried
   run.snapshots = 0
   run.lastTick = 0
   run.opened = []          // { id, title }
@@ -119,8 +120,8 @@ async function start (extra, maps = [A, B]) {
           if (buf.length < 4 + len) break
           const m = decodeControlMessage(buf.subarray(0, 4 + len))
           buf = buf.subarray(4 + len)
-          if (m?.type === MSG.WELCOME) run.welcomes++
-          else if (m?.type === MSG.HOME) run.homes.push(m.level)
+          if (m?.type === MSG.WELCOME) { run.welcomes++; run.names.push(m.levelName) }
+          else if (m?.type === MSG.HOME) { run.homes.push(m.level); run.names.push(m.levelName) }
           else if (m?.type === MSG.UI_OPEN) run.opened.push({ id: m.uiId, title: m.title })
           else if (m?.type === MSG.UI_CLOSE) run.closed.push(m.uiId)
           else if (m?.type === MSG.GAME_RESULT) run.results.push(m)
@@ -200,6 +201,8 @@ try {
     const firstB = inB[0]?.ticks ?? 0
     check(firstB > lastA, `the count went on across the level change (${lastA} in A, then ${firstB} in B)`)
     check(/player \S+ entered level 1 \(visit 2\)/.test(run.log), 'the game was told the player arrived in level B')
+    // Each WELCOME names its level: what the client finds the music by.
+    check(run.names.join(' ') === 'level_a level_b', `each WELCOME names its level (${run.names.join(' ')})`)
     await stop(run)
   }
 
@@ -267,6 +270,7 @@ try {
     check(run.homes.includes(1), `the player walked into the second level (homes: ${run.homes.join(' ') || 'none'})`)
     await sleep(300)
     check(run.welcomes === 1, `one world: no second WELCOME (${run.welcomes})`)
+    check(run.names.join(' ') === 'seam_a seam_b', `and the HOME names the level walked into (${run.names.join(' ')})`)
     const game = titled(run, 'Game')
     check(game.length === 1 && !run.closed.includes(game[0].id), 'the game\'s panel stayed open')
     const l0 = titled(run, 'Level 0')

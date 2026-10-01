@@ -17,7 +17,8 @@
 // The engine runs under Node because Emscripten builds do; midisynth's golden
 // harness already cross-checks the WASM build against the native one that way.
 //
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { musicKeyFor } from '../src/audio/musickey.js'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -331,10 +332,11 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
 
 // --- the map-to-track manifest -----------------------------------------------
 //
-// The client looks a track up by the map's CONTENT HASH, which is the only
-// identity it has for a map. A rebake changes every hash, so the manifest going
-// stale is the normal failure -- and it is silent: the game simply plays
-// nothing. This is the check that notices.
+// The client looks a track up by the level's NAME (client/src/audio/
+// musickey.js), which the server sends in WELCOME and HOME. A manifest that
+// does not cover a level is a level that silently plays nothing -- which is
+// what every doomworld level did while the manifest was keyed by map hash, and
+// what every re-bake did to the DOOM II maps. This is the check that notices.
 if (existsSync(INDEX) && existsSync(MAPS)) {
   const index = JSON.parse(readFileSync(INDEX, 'utf8'))
   check(Object.keys(index).length >= 30,
@@ -354,25 +356,27 @@ if (existsSync(INDEX) && existsSync(MAPS)) {
   check(danglingCues.length === 0,
         `every cue names a track that exists${danglingCues.length ? ': ' + danglingCues.slice(0, 3).join(', ') : ''}`)
 
-  // The hash is the trailing eight bytes of a .dnpm, little-endian, and the
-  // client formats it with BigInt.toString(16) -- so the manifest key has to be
-  // exactly that, with no padding and no 0x.
-  let matched = 0
-  let missing = []
-  for (let i = 1; i <= 32; i++) {
-    const dnpm = join(MAPS, `map${String(i).padStart(2, '0')}.dnpm`)
-    if (!existsSync(dnpm)) continue
-    const bytes = readFileSync(dnpm)
-    const key = bytes.readBigUInt64LE(bytes.length - 8).toString(16)
-    // A cue TABLE, not a filename: a map has several loops and switches between
-    // them. `default` is the one it starts on, and a map whose entry lacks it
-    // starts silent -- which is the failure worth catching, because it looks
-    // exactly like no entry at all.
-    if (index[key] && typeof index[key] === 'object' && index[key].default) matched++
-    else missing.push(`map${String(i).padStart(2, '0')}`)
+  // Every level both modules ship, by the name the server sends: DOOM II's own
+  // and doomworld's re-laid copies of them. A cue TABLE, not a filename, and
+  // `default` is where it starts -- an entry without one starts silent, which
+  // looks exactly like no entry at all.
+  const names = []
+  for (const dir of [MAPS, join(ROOT, 'modules', 'doomworld', 'maps')]) {
+    if (!existsSync(dir)) continue
+    for (const f of readdirSync(dir)) if (f.endsWith('.dnpm')) names.push(f.slice(0, -5))
   }
-  check(missing.length === 0,
-        `every baked map has a track (${matched} matched${missing.length ? ', missing ' + missing.join(',') : ''})`)
+  const missing = names.filter((n) => {
+    const key = musicKeyFor(index, null, n)
+    return !(key && index[key] && index[key].default)
+  })
+  check(names.length >= 60 && missing.length === 0,
+        `every level of both modules has a track (${names.length - missing.length} of ${names.length}` +
+        `${missing.length ? ', missing ' + missing.slice(0, 5).join(',') : ''})`)
+  // And by name, not by an accident of content: a map whose bytes change keeps
+  // its music. CONTROL: a name the manifest does not know finds nothing.
+  check(musicKeyFor(index, 0x1234n, 'dw_map05') === 'map05', 'a re-laid level plays the music of the level it copies')
+  check(musicKeyFor(index, 0x1234n, 'nowhere') === null, 'CONTROL: a level nobody scored finds nothing')
+  check(musicKeyFor({ abc: { default: 'x' } }, 0xabcn, null) === 'abc', 'a hash key still works, for a map nobody named')
 }
 
 console.log(`\nmusic: ${checks} checks, ${fails} failures`)

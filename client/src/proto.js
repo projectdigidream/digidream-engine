@@ -260,6 +260,15 @@ export function encodeHello ({ version = PROTOCOL_VERSION } = {}) {
   return encodeControlMessage(MSG.HELLO, w.done())
 }
 
+// A level's name, `u8 length, bytes`, if the message has one left -- it was
+// appended, so a message from an older server simply ends before it.
+function readLevelName (r) {
+  if (!r.ok || r.pos >= r.buf.length) return null
+  const n = r.u8()
+  const b = r.bytes(n)
+  return r.ok && b ? new TextDecoder().decode(b) : null
+}
+
 export function decodeControlMessage (buf) {
   const r = new Reader(buf)
   const len = r.u32()
@@ -403,6 +412,9 @@ export function decodeControlMessage (buf) {
       // then crossing into one is a HOME message, not another WELCOME.
       region: r.u8() !== 0
     }
+    // The level's name, appended (docs/protocol.md §3.2): what its music is
+    // found by. Absent from an older server, which is not an error.
+    msg.levelName = readLevelName(r)
     return r.ok ? msg : null
   }
   if (type === MSG.SECTOR_MOTION_SET) {
@@ -481,6 +493,7 @@ export function decodeControlMessage (buf) {
   }
   if (type === MSG.HOME) {
     const msg = { type, level: r.u16() }
+    msg.levelName = readLevelName(r)
     return r.ok ? msg : null
   }
   if (type === MSG.NEIGHBOUR_DROP) {

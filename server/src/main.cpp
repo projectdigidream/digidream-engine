@@ -1906,7 +1906,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         const bool map_follows = !server::world::rehome(s.held, had_home, from_level, li);
         s.has_home = true;
 
-        u8 buf[128];
+        u8 buf[256];
         ByteWriter w(buf, sizeof(buf));
         const size_t len_pos = w.mark();
         w.u32v(0);   // patched below
@@ -1940,6 +1940,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             w.i64v(o.y.raw);
             w.u8v(in_region(li) ? 1 : 0);
         }
+        // The level's NAME, which is what its music is found by.
+        write_level_name(w, li);
         const size_t end = w.size();
         const u32 body_len = static_cast<u32>(end - len_pos - 4);
         buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -3059,13 +3061,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         if (moved) refresh_residency();
     }
 
+    // `u8 length, bytes`: a level's basename ("map05"), appended to WELCOME and
+    // HOME (docs/protocol.md §3.2, §8.7). What the client finds the level's
+    // music by -- a name survives a re-bake, and a map hash does not.
+    static constexpr u32 LEVEL_NAME_MAX = 64;
+    void write_level_name(ByteWriter& w, u32 li) {
+        const char* n = level_name(li);
+        const u32 len = std::min<u32>(static_cast<u32>(std::strlen(n)), LEVEL_NAME_MAX);
+        w.u8v(static_cast<u8>(len));
+        w.bytes(reinterpret_cast<const u8*>(n), len);
+    }
+
     void send_home(u32 id, u32 li) {
-        u8 msg[16];
+        u8 msg[16 + LEVEL_NAME_MAX];
         ByteWriter w(msg, sizeof(msg));
         const size_t len_pos = w.mark();
         w.u32v(0);
         w.u8v(proto::MSG_HOME);
         w.u16v(static_cast<u16>(li));
+        write_level_name(w, li);
         finish_frame(msg, len_pos, w.size());
         link.send_control(id, msg, w.size());
     }
