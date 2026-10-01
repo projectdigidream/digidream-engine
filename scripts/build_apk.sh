@@ -188,7 +188,7 @@ cp "$ROOT/server/edge/src/framing.js" "$W/framing.js"
 # Art, with the module winning per FILE -- which is devserver.js's rule and has
 # to be, or a module that overrides ten textures would have to ship all two
 # thousand.
-for kind in textures sprites music; do
+for kind in textures sprites music sounds; do
   mkdir -p "$W/$kind"
   [[ -d "$ROOT/assets/$kind" ]] && cp -R "$ROOT/assets/$kind/." "$W/$kind/" 2>/dev/null || true
   [[ -d "$MODULE_DIR/assets/$kind" ]] && cp -R "$MODULE_DIR/assets/$kind/." "$W/$kind/" 2>/dev/null || true
@@ -211,6 +211,16 @@ if [[ -d "$ROOT/midisynth/tool" ]]; then
   cp -R "$ROOT/midisynth/tool/." "$W/synth/" 2>/dev/null || true
   cp -R "$ROOT/midisynth/content/." "$W/synth-content/" 2>/dev/null || true
 fi
+# The sound-effects engine (docs/SOUNDS.md): one file, served at /sfx/. Optional
+# like the synth -- without it the game has music and no sound effects -- and
+# said, because silence is what a missing sound file looks like.
+if [[ -f "$ROOT/sound/tool/dist/dsound.mjs" ]]; then
+  mkdir -p "$W/sfx"
+  cp "$ROOT/sound/tool/dist/dsound.mjs" "$W/sfx/"
+else
+  echo "[apk] NO SOUND ENGINE: sound/tool/dist/dsound.mjs is missing; build it with" >&2
+  echo "      sound/scripts/build_wasm.sh, or this APK has no sound effects" >&2
+fi
 
 # --- 4. what the SERVER reads, as files ---------------------------------------
 #
@@ -227,6 +237,10 @@ cp "$MODULE_DIR/assets/props.txt" "$G/modules/$MODULE/assets/" 2>/dev/null || tr
 # are for and what scripts/check_map_scripts.sh guards. A baked map without
 # the scripts it declares kills the server at startup.
 cp -R "$MODULE_DIR/maps" "$G/modules/$MODULE/"
+# And module.txt, which the server reads for the module's `game` scripts and
+# its `persist` switches (docs/MODULES.md). Without it the weapons ran once per
+# level on a phone and the module's persistence was silently off.
+cp "$MODULE_DIR/module.txt" "$G/modules/$MODULE/" 2>/dev/null || true
 # With the studio, the module's documents and pictures too: the studio imports
 # the shipped module from this tree on first launch (docs/STUDIO.md), and a
 # module without its sheets and textures would import as an empty one.

@@ -66,6 +66,34 @@ for map in maps/*.map modules/*/maps/*.map; do
   done < <(grep -E '^\s*script\s+' "$map" || true)
 done
 
+# AND A MODULE'S GAME SCRIPTS (docs/MODULES.md, "Game scripts"): `game <file>`
+# in module.txt names a file in the module's maps/ directory, which is the copy
+# a packaged game carries -- so it must be there, and where maps/scripts has a
+# file of the same name, it must be that file.
+for mt in modules/*/module.txt; do
+  [[ -f "$mt" ]] || continue
+  mdir="$(dirname "$mt")/maps"
+  while read -r _ gfile; do
+    [[ -n "$gfile" ]] || continue
+    want="$mdir/$gfile"
+    checked=$((checked + 1))
+    if [[ ! -f "$want" ]]; then
+      echo "  MISSING $want   (a game script of $mt)"
+      missing=$((missing + 1))
+      continue
+    fi
+    src="maps/scripts/$(basename "$gfile")"
+    if [[ -f "$src" ]] && ! cmp -s "$src" "$want"; then
+      if [[ " $reported " != *" $want "* ]]; then
+        reported="$reported $want"
+        echo "  STALE   $want"
+        echo "          differs from $src   (a game script of $mt)"
+        stale=$((stale + 1))
+      fi
+    fi
+  done < <(grep -E '^\s*game\s+' "$mt" || true)
+done
+
 if (( missing > 0 || stale > 0 )); then
   (( missing > 0 )) && {
     echo "map scripts: $missing missing of $checked declared"

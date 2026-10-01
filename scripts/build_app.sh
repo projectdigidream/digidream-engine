@@ -190,6 +190,21 @@ else
   echo "      app will have no music. Build it with midisynth/scripts/build_wasm.sh" >&2
 fi
 
+# THE SOUND-EFFECTS ENGINE (sound/, docs/SOUNDS.md), if it has been built.
+#
+# Optional for the same reason as the synth: its wasm is produced by
+# sound/scripts/build_wasm.sh and not committed. One file, served at /sfx/,
+# which client/src/audio/sfx-worklet.js imports. The banks need nothing here:
+# each module's assets/sounds travels with the module.
+if [[ -f sound/tool/dist/dsound.mjs ]]; then
+  mkdir -p "$OUT/sfx"
+  cp sound/tool/dist/dsound.mjs "$OUT/sfx/"
+  echo "[app] sound engine staged"
+else
+  echo "[app] NO SOUND ENGINE: sound/tool/dist/dsound.mjs is missing, so this" >&2
+  echo "      app will have no sound effects. Build it with sound/scripts/build_wasm.sh" >&2
+fi
+
 # The client, as served. Same files the browser build runs -- see app/static.js
 # for why they are served rather than bundled.
 cp client/index.html "$OUT/client/"

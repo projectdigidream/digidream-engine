@@ -644,7 +644,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // what an author has in front of them. A cell naming a map this server did
     // not load is refused rather than ignored: it is almost always a typo, and
     // the alternative is a neighbour that silently never loads.
-    bool load_metamap(const char* path) {
+    // `strict`: a metamap somebody NAMED (--metamap) must place only levels
+    // this run has. One merely FOUND beside a module's maps may place levels
+    // the run was not given -- a phone starts one map of a module whose layout
+    // covers all of them -- and those are left off the grid, said once.
+    bool load_metamap(const char* path, bool strict = true) {
         std::FILE* f = std::fopen(path, "rb");
         if (f == nullptr) {
             std::fprintf(stderr, "[srv] cannot open metamap %s\n", path);
@@ -661,13 +665,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             std::fprintf(stderr, "[srv] %s: %s\n", path, problem.c_str());
         }
 
-        u32 placed = 0;
+        u32 placed = 0, absent = 0;
         for (const server::world::MetaCell& c : meta.cells) {
             i32 found = -1;
             for (u32 i = 0; i < level_count(); ++i) {
                 if (c.map == level_name(i)) { found = static_cast<i32>(i); break; }
             }
             if (found < 0) {
+                if (!strict) { ++absent; continue; }
                 std::fprintf(stderr, "[srv] %s places '%s', which is not a level here\n",
                              path, c.map.c_str());
                 meta.problems.push_back("'" + c.map + "' is not a level here");
@@ -678,6 +683,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             slot.cell.x = c.x;
             slot.cell.y = c.y;
             ++placed;
+        }
+        if (absent > 0) {
+            std::fprintf(stderr, "[srv] %s places %u level(s) this run was not given; "
+                         "they are off the grid\n", path, absent);
         }
         if (!meta.ok()) {
             std::fprintf(stderr, "[srv] refusing to start on a metamap it could not read\n");
@@ -4108,6 +4117,7 @@ int main(int argc, char** argv) {
     // not, which is the kind of fault that presents as an occasional stall.
     {
         std::string mm = metamap_path ? metamap_path : std::string();
+        const bool named = !mm.empty();
         if (mm.empty()) {
             for (u32 mi = 0; mi < module_count; ++mi) {
                 const std::string candidate =
@@ -4116,7 +4126,7 @@ int main(int argc, char** argv) {
                 if (probe) { std::fclose(probe); mm = candidate; break; }
             }
         }
-        if (!mm.empty() && !srv.load_metamap(mm.c_str())) return 1;
+        if (!mm.empty() && !srv.load_metamap(mm.c_str(), named)) return 1;
     }
     std::fprintf(stderr, "[srv] %u level(s) declared; an exit advances to the next\n",
                  srv.level_count());

@@ -310,7 +310,8 @@ final class AssetHandler: NSObject, WKURLSchemeHandler {
       }
       return try? JSONSerialization.data(withJSONObject: ["sizes": sizes, "cutout": cutout])
     }
-    if path.hasPrefix("textures/") || path.hasPrefix("sprites/") || path.hasPrefix("music/") {
+    if path.hasPrefix("textures/") || path.hasPrefix("sprites/") || path.hasPrefix("music/") ||
+       path.hasPrefix("sounds/") {
       for m in mods {
         if let d = try? Data(contentsOf: m.appendingPathComponent("assets/" + path)) { return d }
       }

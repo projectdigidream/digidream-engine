@@ -136,7 +136,7 @@ cp -R "$ROOT/client/wasm/." "$W/wasm/"
 cp "$ROOT/android/web/shell.js" "$W/shell.js"
 cp "$ROOT/server/edge/src/framing.js" "$W/framing.js"
 cp "$ROOT/ios/web/native.js" "$APP/native.js"
-for kind in textures sprites music; do
+for kind in textures sprites music sounds; do
   mkdir -p "$W/$kind"
   [[ -d "$ROOT/assets/$kind" ]] && cp -R "$ROOT/assets/$kind/." "$W/$kind/" 2>/dev/null || true
   [[ -d "$MODULE_DIR/assets/$kind" ]] && cp -R "$MODULE_DIR/assets/$kind/." "$W/$kind/" 2>/dev/null || true
@@ -151,6 +151,13 @@ if [[ -f "$ROOT/midisynth/tool/dist/midisynth.mjs" ]]; then
   mkdir -p "$W/synth" "$W/synth-content"
   cp -R "$ROOT/midisynth/tool/." "$W/synth/"
   cp -R "$ROOT/midisynth/content/." "$W/synth-content/"
+fi
+# The sound-effects engine (docs/SOUNDS.md), served at /sfx/; optional like the synth.
+if [[ -f "$ROOT/sound/tool/dist/dsound.mjs" ]]; then
+  mkdir -p "$W/sfx"
+  cp "$ROOT/sound/tool/dist/dsound.mjs" "$W/sfx/"
+else
+  echo "[ios] NO SOUND ENGINE: sound/tool/dist/dsound.mjs is missing; no sound effects" >&2
 fi
 if [[ $STUDIO -eq 1 ]]; then
   mkdir -p "$W/studio/wasm/dist" "$W/studio/runtime"

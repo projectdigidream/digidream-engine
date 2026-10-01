@@ -92,6 +92,22 @@ check(doomMaps.filter((f) => extname(f) === '.map').length === 0,
 check(doomMaps.some((f) => extname(f) === '.lua'),
       "but the maps' scripts are, because a baked map is nothing without them")
 
+// SOUND (docs/SOUNDS.md): the engine, where the client's worklet imports it,
+// and the module's bank, which travels with the module. Only when the engine
+// has been built -- staging says so out loud when it has not.
+if (existsSync(join(ROOT, 'sound', 'tool', 'dist', 'dsound.mjs'))) {
+  check(existsSync(join(doom, 'sfx', 'dsound.mjs')), 'the sound engine is staged at sfx/')
+} else {
+  console.log('  (sound/tool/dist/dsound.mjs not built; the sound engine check is skipped)')
+}
+check(existsSync(join(doom, 'modules', 'doom2', 'assets', 'sounds', 'bank.sfxproj')),
+      "and the module's sound bank travels with it")
+// And the game scripts module.txt names, beside the maps that also list them.
+const gameLines = readFileSync(join(doom, 'modules', 'doom2', 'module.txt'), 'utf8')
+  .split('\n').map((l) => l.match(/^\s*game\s+(\S+)/)?.[1]).filter(Boolean)
+check(gameLines.length >= 4 && gameLines.every((g) => existsSync(join(doom, 'modules', 'doom2', 'maps', g))),
+      `every game script the module declares is staged (${gameLines.join(', ')})`)
+
 const doomFiles = walk(doom)
 const doomImages = doomFiles.filter((f) => extname(f) === '.png')
 check(doomImages.length > 2000, `and the art it needs (${doomImages.length} images)`)

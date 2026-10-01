@@ -40,7 +40,10 @@ const TYPES = {
   '.txt': 'text/plain; charset=utf-8',
   '.lua': 'text/plain; charset=utf-8',
   // A baked track is opaque bytes; only the synth ever reads one.
-  '.mstk': 'application/octet-stream'
+  '.mstk': 'application/octet-stream',
+  // A sound bank: its source (JSON) or its bake.
+  '.sfxproj': 'application/json',
+  '.sfxb': 'application/octet-stream'
 }
 
 /**
@@ -60,6 +63,11 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
     ['/synth/', join(root, 'synth')],
     ['/synth-content/', join(root, 'synth-content')],
     ['/music/', join(root, 'assets', 'music')],
+    // The sound-effects engine's single-file module (sound/tool/dist), and the
+    // modules' sound banks. Staging the engine is scripts/build_app.sh's; until
+    // it does, /sfx/ is a 404 and the game is silent but for its music.
+    ['/sfx/', join(root, 'sfx')],
+    ['/sounds/', join(root, 'assets', 'sounds')],
     // The studio and the runtime Lua it bakes against; both staged only with
     // --studio, and a 404 otherwise.
     ['/studio/runtime/', join(root, 'studio', 'runtime')],
@@ -163,7 +171,7 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
 
       let file
       if (path.startsWith('/sprites/') || path.startsWith('/textures/') ||
-          path.startsWith('/music/')) {
+          path.startsWith('/music/') || path.startsWith('/sounds/')) {
         const clean = normalize(decodeURIComponent(path))
         file = clean.includes('..') ? null : await moduleFile(join('assets', clean))
       } else {
