@@ -138,6 +138,11 @@ struct Host {
     // state by something that survives walking into another world.
     u32  player[sim::MAX_AGENTS]{};
 
+    // Sounds scripts asked for since the last snapshots (dnp.sound), in this
+    // world's coordinates. Per WORLD, like the vfx queue: whoever is in it
+    // hears them, whichever level's script made them.
+    std::vector<lua::PendingSound> sounds;
+
     // Parameter effects, per agent: they are computed from an agent's base, and
     // an agent is in exactly one world.
     lua::EffectStack   effects;
@@ -814,6 +819,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.avatar    = H.avatar;
         game_ctx.effects   = &H.effects;
         game_ctx.player    = H.player;
+        game_ctx.sounds    = &H.sounds;
         game_ctx.commands  = commands;
         game_ctx.level     = li;
         // The WORLD's frame, whatever the level: nothing a game script does is
@@ -2018,6 +2024,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.levels = this;
         L.ctx.player = L.host->player;
         L.ctx.cross  = this;
+        L.ctx.sounds = &L.host->sounds;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
         // to a client but replayable by the server. Per level, or two maps
@@ -2897,6 +2904,30 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
     }
 
+    // SOUND_PREDICT (docs/protocol.md §5.7): u32 group, u8 count, then
+    // {u8 trigger, u32 sound, u16 param, i16 shots} each.
+    void predict_sounds(u32 level_index, u32 agent, u32 group,
+                        const proto::PredictSound* list, u32 n) override {
+        Session* s = session_for(level_index, agent);
+        if (s == nullptr) return;
+        u8 buf[16 + proto::MAX_PREDICT_SOUNDS * 9];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_SOUND_PREDICT);
+        w.u32v(group);
+        w.u8v(static_cast<u8>(n));
+        for (u32 i = 0; i < n; ++i) {
+            w.u8v(list[i].trigger);
+            w.u32v(list[i].sound);
+            w.u16v(list[i].param);
+            w.u16v(static_cast<u16>(list[i].shots));
+        }
+        if (!w.ok()) return;
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(s->id, buf, w.size());
+    }
+
     void send_screen(Session& s, const proto::ScreenSet& sc) {
         u8 buf[256];
         ByteWriter w(buf, sizeof(buf));
@@ -3343,6 +3374,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     //
     // Cleared at the end of this function instead: the queue holds whatever
     // accumulated since the last send, and is emptied once it has gone out.
+    // How far, in world units on each axis, a sound is sent to an observer.
+    // Sixty-four units is 3072 Doom units -- further than DOOM's own 1200-unit
+    // clipping distance, so nothing the bank would make audible is cut.
+    static constexpr i64 SOUND_EARSHOT = 64;
+
     void send_snapshots() {
         // Once per level, not once per session: the offsets are a property of
         // the world, and every observer of a moving sector sees the same one.
@@ -3577,9 +3613,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             // difference between eight events fitting and seven.
             const u32 pending_vfx = world.vfx_count();
             const u32 want_vfx = pending_vfx < 8 ? pending_vfx : 8;
+            // And the sounds, reserved the same way and for the same reason: a
+            // sound lost to a crowded room is a door that opens in silence.
+            const u32 pending_snd = static_cast<u32>(L.host->sounds.size());
+            const u32 want_snd = pending_snd < 6 ? pending_snd : 6;
             const size_t vfx_reserve =
-                pending_vfx == 0 ? 0
-                                 : (want_vfx + 1) * proto::SnapshotWriter::VFX_BYTES + 2;
+                (pending_vfx == 0 ? 0
+                                  : (want_vfx + 1) * proto::SnapshotWriter::VFX_BYTES + 2) +
+                (pending_snd == 0 ? 0
+                                  : (want_snd + 1) * proto::SnapshotWriter::SOUND_BYTES + 2);
 
             for (u32 oi = 0; oi < order_n; ++oi) {
                 // Stop ADDING entities once the reserve is all that is left.
@@ -3701,6 +3743,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 ev.param = pv.param;
                 if (!w.try_vfx(ev)) { vfx_dropped = world.vfx_count() - v; break; }
             }
+            // SOUNDS, after the vfx (docs/protocol.md §5.7), and only those
+            // within earshot: a door three rooms away costs a datagram budget
+            // that a monster next to you needs, and the bank's own falloff
+            // would make it silent anyway.
+            u32 snd_dropped = 0;
+            {
+                const fx3 ear = self.pos;
+                const fx far = fx::from_int(SOUND_EARSHOT);
+                for (const lua::PendingSound& ps : L.host->sounds) {
+                    const fx dx = ps.pos.x - ear.x, dy = ps.pos.y - ear.y;
+                    if (dx > far || dx < -far || dy > far || dy < -far) continue;
+                    proto::SoundEvent se;
+                    se.sound = ps.sound;
+                    se.pos = ps.pos;
+                    se.source = ps.source;
+                    se.flags = ps.flags;
+                    if (!w.try_sound(se)) { ++snd_dropped; }
+                }
+            }
 
             s.last_snapshot_sent = world.tick();
             const size_t n = w.finish();
@@ -3731,6 +3792,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 std::fprintf(stderr, "[srv] tick %u session %u: %u vfx dropped (budget)\n",
                              world.tick(), id, vfx_dropped);
             }
+            if (snd_dropped > 0) {
+                std::fprintf(stderr, "[srv] tick %u session %u: %u sound(s) dropped (budget)\n",
+                             world.tick(), id, snd_dropped);
+            }
             s.bytes_sent += n;
             s.snapshots_sent += 1;
             s.entities_omitted += unchanged;
@@ -3739,7 +3804,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     
         // Sent; the queue may go.
         for (u32 li = 0; li < level_count(); ++li) {
-            if (is_live(li)) level(li).world.clear_vfx();
+            if (!is_live(li)) continue;
+            Level& L = level(li);
+            L.world.clear_vfx();
+            L.host->sounds.clear();
+            if (L.ctx.sounds_dropped > 0) {
+                std::fprintf(stderr, "[srv] level %u: %u sound(s) dropped (more than %u between snapshots)\n",
+                             li, L.ctx.sounds_dropped, lua::MAX_PENDING_SOUNDS);
+                L.ctx.sounds_dropped = 0;
+            }
         }
 }
 };

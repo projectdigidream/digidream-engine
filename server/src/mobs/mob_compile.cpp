@@ -167,6 +167,7 @@ constexpr LuaOnly LUA_ACTIONS[] = {
     {"set_param",      "goes through the effect stack"},
     {"effect",         "goes through the effect stack"},
     {"vfx",            "touches the world"},
+    {"sound",          "emits a sound event; rare"},
     {"despawn",        "touches the world"},
     {"target_nearest", "may point at a prop, which Mob::target cannot hold"},
     {"target_attacker","reads `hurt`'s record, which lives in Lua"},

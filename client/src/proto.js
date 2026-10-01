@@ -35,6 +35,7 @@ export const MSG = {
   GAME_LOAD: 0x2D,
   GAME_RESULT: 0x2E,
   GAME_NEW: 0x2F,
+  SOUND_PREDICT: 0x33,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -207,6 +208,7 @@ class Reader {
   u8 () { if (!this.need(1)) return 0; return this.view.getUint8(this.pos++) }
   i8 () { if (!this.need(1)) return 0; return this.view.getInt8(this.pos++) }
   u16 () { if (!this.need(2)) return 0; const v = this.view.getUint16(this.pos, LE); this.pos += 2; return v }
+  i16 () { if (!this.need(2)) return 0; const v = this.view.getInt16(this.pos, LE); this.pos += 2; return v }
   u32 () { if (!this.need(4)) return 0; const v = this.view.getUint32(this.pos, LE); this.pos += 4; return v }
   i32 () { if (!this.need(4)) return 0; const v = this.view.getInt32(this.pos, LE); this.pos += 4; return v }
   // Returns null rather than a short view when the buffer does not hold n
@@ -491,6 +493,17 @@ export function decodeControlMessage (buf) {
     if (!r.ok || b === null) return null
     return { type, op: ['save', 'load', 'new'][op] ?? 'unknown', slot, ok, text: new TextDecoder().decode(b) }
   }
+  // What to play the moment this client predicts its own action (§5.7).
+  if (type === MSG.SOUND_PREDICT) {
+    const group = r.u32()
+    const n = r.u8()
+    if (!r.ok || n > 16) return null
+    const entries = []
+    for (let i = 0; i < n; i++) {
+      entries.push({ trigger: r.u8(), sound: r.u32(), param: r.u16(), shots: r.i16() })
+    }
+    return r.ok ? { type, group, entries } : null
+  }
   if (type === MSG.HOME) {
     const msg = { type, level: r.u16() }
     msg.levelName = readLevelName(r)
@@ -571,7 +584,8 @@ export function decodeSnapshot (buf) {
     flags: r.u16(),
     self: {},
     entities: [],
-    vfx: []
+    vfx: [],
+    sounds: []
   }
 
   snap.self.pos = r.vec3raw()
@@ -655,7 +669,36 @@ export function decodeSnapshot (buf) {
     snap.vfx.push({ kind: r.u16(), pos: r.vec3q(), dir: r.u32(), param: r.u32() })
   }
 
+  // Sounds, only when the snapshot has any (docs/protocol.md §5.7). `sound` is
+  // the FNV-1a hash of the sound's name -- see soundHash.
+  if (r.ok && r.pos < r.buf.length) {
+    const n = r.u16()
+    if (!r.ok || n > MAX_SOUNDS) return null
+    for (let i = 0; i < n; i++) {
+      snap.sounds.push({ sound: r.u32(), pos: r.vec3q(), source: r.u32(), flags: r.u8() })
+    }
+  }
+
   return r.ok ? snap : null
+}
+
+export const MAX_SOUNDS = 32
+// SOUND_PREDICT triggers, as core/include/dnp/proto/messages.hpp numbers them.
+export const PREDICT = {
+  JUMP: 1, LAND: 2, PRIMARY: 3, PRIMARY_HELD: 4, SECONDARY: 5, SECONDARY_HELD: 6, SWING: 7
+}
+export const SOUND_FOLLOW = 1      // moves with its source
+export const SOUND_PREDICTED = 2   // its source's own client already played it
+
+// The name hash the server puts on the wire: 32-bit FNV-1a over the UTF-8
+// bytes, exactly proto::sound_hash in core/include/dnp/proto/messages.hpp.
+export function soundHash (name) {
+  let h = 2166136261
+  for (const b of new TextEncoder().encode(name)) {
+    h ^= b
+    h = Math.imul(h, 16777619) >>> 0
+  }
+  return h >>> 0
 }
 
 export const handleIndex = (h) => h & 0x00ffffff

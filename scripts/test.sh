@@ -468,6 +468,10 @@ else
   # The synth: instruments, a baked track, and audio that is not silence.
   # Skips itself when midisynth's wasm has not been built.
   node client/test/music.test.js | grep -E 'FAIL|failures'
+  # Sounds, the client's half (docs/SOUNDS.md): the name hash the wire uses,
+  # pinned against the server's, and the predictor of the player's own sounds,
+  # each rule with a control.
+  node client/test/sfx.test.js | grep -E 'FAIL|failures'
   # And the same rules applied to the map the server actually ships, read
   # through the same wasm module the client predicts with.
   node client/test/mapmesh.test.js | grep -E 'FAIL|failures'
@@ -610,6 +614,9 @@ else
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \
      && node test/game.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Sounds on the wire: by name hash, cut at earshot, and a player's own` \
+     `# jump told to their client and marked on the server's copy (docs/SOUNDS.md).` \
+     && node test/sound.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/live.test.js 2>/dev/null | grep -E 'FAIL|failures')
 
   # The control case: a client that ignores the replicated motion parameters

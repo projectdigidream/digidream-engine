@@ -222,6 +222,9 @@ W.defs    = {}      -- name -> weapon
 W.pickups = {}      -- catalogue name -> what walking over it does
 W.health  = { max = 100, bonus_max = 200 }
 W.missiles = {}     -- name -> declaration, when running game-wide
+-- What taking a pickup sounds like when it names no sound of its own, by what
+-- it gives: { weapon =, armour =, health =, ammo = } (a module sets it).
+W.pickup_sounds = nil
 
 -- Declaration order, which several things need and `pairs` does not give: the
 -- panel's read-out list, and the "first phase declared" default.
@@ -870,6 +873,12 @@ function acts.switch_if_empty(c)
   if not has_ammo(c.inv, c.def) then switch_to_usable(c.inv) end
 end
 
+-- A sound from the player, moving with them. `predicted`: their own client
+-- already played it (see the weapon's `predict`), so it drops this copy.
+function acts.sound(c, a)
+  dnp.sound(a.name, c.e, { predicted = a.predicted == true })
+end
+
 function acts.lua(c, a)
   local fn = _G[a.fn]
   if type(fn) == "function" then fn(c.e, c.def.name, c.state.phase) end
@@ -1008,6 +1017,30 @@ local function first_transition(c, ph)
   return nil
 end
 
+-- WHAT THE PLAYER'S OWN CLIENT PLAYS on a predicted shot (the weapon's
+-- `predict`, docs/protocol.md §5.7), with how many shots are left so it stops
+-- when they run out. Said whenever either changes, and only then.
+local PREDICT_ON = { primary = true, primary_held = true, secondary = true,
+                     secondary_held = true, swing = true }
+local function send_predict(e, inv, def, state)
+  if dnp.predict_sounds == nil then return end
+  local shots = nil
+  if def and def.ammo then
+    shots = math.floor((inv.ammo[def.ammo] or 0) / (def.per or 1))
+  end
+  local sig = tostring(def and def.name) .. "/" .. tostring(shots)
+  if state.predicted == sig then return end
+  state.predicted = sig
+  local list = {}
+  for _, p in ipairs((def and def.predict) or {}) do
+    if PREDICT_ON[p.on] and type(p.sound) == "string" then
+      list[#list + 1] = { on = p.on, sound = p.sound, every = p.every or 0,
+                          shots = (p.on ~= "swing") and shots or nil }
+    end
+  end
+  dnp.predict_sounds(e, "weapon", list)
+end
+
 local function tick_player(e, idx, now)
   local inv = W.get(idx)
   if inv == nil or inv.current == nil then return end
@@ -1020,6 +1053,7 @@ local function tick_player(e, idx, now)
 
   local def = W.defs[inv.current]
   if def == nil then return end
+  send_predict(e, inv, def, state)
 
   -- Button edges, and how long each has been down. Kept here rather than read
   -- from the engine because the ENGINE has no notion of how long a button has
@@ -1183,7 +1217,16 @@ function W.pickup(entity, prop)
   -- REFUSED PICKUPS STAY ON THE FLOOR. Walking over a medikit at full health
   -- must not consume it, or a player who is topped up destroys the health they
   -- will need in a minute. Doom does the same.
-  if took then prop:despawn() end
+  if took then
+    -- Heard from the player: it is theirs now. The pickup's own sound, or the
+    -- module's default for what it gave -- weapon over armour over health over
+    -- ammunition, the order a player cares about.
+    local ps = W.pickup_sounds or {}
+    local snd = p.sound or (p.weapon and ps.weapon) or (p.armour and ps.armour) or
+                (p.heal and ps.health) or (p.ammo and ps.ammo)
+    if snd and dnp.sound then dnp.sound(snd, entity) end
+    prop:despawn()
+  end
 end
 
 function on_touch(entity, prop) return W.pickup(entity, prop) end

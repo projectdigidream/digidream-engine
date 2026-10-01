@@ -55,6 +55,9 @@ import { report, CrossingProbe, BodyWatch } from './seam/diag.js'
 import { Music } from './audio/music.js'
 import { musicKeyFor } from './audio/musickey.js'
 import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, encodeGameNew, CAMERA_FIELD } from './proto.js'
+import { SOUND_FOLLOW, SOUND_PREDICTED } from './proto.js'
+import { Sfx } from './audio/sfx.js'
+import { OwnSounds } from './audio/ownsounds.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -286,6 +289,18 @@ let liveMapBytes = null
 const sideTextures = []
 // Music cues, for the same reason. See the MUSIC case in onControl.
 const musicCues = []
+// What this client plays on its own predicted actions (audio/ownsounds.js).
+// Declared up here because SOUND_PREDICT arrives with the WELCOME, long before
+// the sound engine further down exists.
+const ownSounds = new OwnSounds()
+// Where the listener was last placed, for the sounds that are the CLIENT's own
+// (a panel opening, a widget clicked): heard at the ear, not from anywhere.
+let lastEar = { x: 0, y: 0, z: 0 }
+function uiSound (name) {
+  // The engine is made further down; a panel can open before it exists, and
+  // that one is simply silent.
+  try { sfx.play(name, lastEar) } catch {}
+}
 // The last input sampled, for the body watch (client/src/seam/diag.js).
 let lastSampled = null
 
@@ -464,8 +479,8 @@ if (LIVE) {
       else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
       // Panels (docs/protocol.md §11). Reliable channel, like everything that
       // must not be missed.
-      else if (m.type === MSG.UI_OPEN) ui.open(m)
-      else if (m.type === MSG.UI_CLOSE) ui.close(m.uiId)
+      else if (m.type === MSG.UI_OPEN) { ui.open(m); uiSound('ui.open') }
+      else if (m.type === MSG.UI_CLOSE) { ui.close(m.uiId); uiSound('ui.close') }
       // A switch was thrown, here or before we arrived. Purely visual: what the
       // switch DID travels as sector motion, exactly as it did before.
       // The map's music changes cue. The name is resolved here, from the
@@ -475,6 +490,8 @@ if (LIVE) {
       // thousand lines below this callback, and this callback runs during the
       // join. A cue arriving then would have thrown the same ReferenceError.
       else if (m.type === MSG.MUSIC) musicCues.push(m)
+      // What to play the moment this client predicts its own jump or shot.
+      else if (m.type === MSG.SOUND_PREDICT) ownSounds.set(m.group, m.entries)
       // QUEUED, like every other message that needs the renderer.
       //
       // This used to reach `view` directly from here -- and this callback runs
@@ -573,7 +590,10 @@ if (LIVE) {
   // click that arrived late still bought the thing, and one that arrived never
   // is a player pressing a button that does nothing.
   ui = new UiView({
-    onEvent: (uiId, widgetId, value) => conn.sendControl(encodeUiEvent(uiId, widgetId, value))
+    onEvent: (uiId, widgetId, value) => {
+      uiSound('ui.select')
+      conn.sendControl(encodeUiEvent(uiId, widgetId, value))
+    }
   })
 
   await conn.open()
@@ -803,6 +823,9 @@ let agent = world.spawn(spawn)
 // referred to had run. The fix is the ordinary one -- declare a binding where
 // it is first needed.
 let myAgentIndex = (LIVE && welcome) ? (welcome.selfHandle & 0x00ffffff) - 1 : null
+// This client's own handle, as the wire writes it: what a PREDICTED sound's
+// `source` is compared with (docs/protocol.md §5.7).
+let mySelfHandle = (LIVE && welcome) ? welcome.selfHandle >>> 0 : 0
 
 // Where mirrored bodies live in this client's own world: the band of prop slots
 // the engine reserves for exactly this. spawn_prop never allocates there, so a
@@ -1601,6 +1624,10 @@ function enterLevel (w, streamed) {
   // A new level is a new entity index: keeping the old one would mirror a body
   // on top of us and us onto somebody else.
   myAgentIndex = (w.selfHandle & 0x00ffffff) - 1
+  mySelfHandle = w.selfHandle >>> 0
+  sfx.stopAll()
+  // A new body: the game says again what it sounds like (on_player_enter).
+  ownSounds.clear()
   world.tick = w.serverTick
   predictor = new Predictor(world, agent)
 
@@ -1924,6 +1951,17 @@ function drainSnapshots () {
                 { x: toThreeX(to.x), y: toThreeY(to.z), z: toThreeZ(to.y) },
                 performance.now() / 1000)
     }
+    // SOUNDS (docs/protocol.md §5.7). One this client PREDICTED -- its own
+    // jump, its own shot -- already played when it happened here, so the
+    // server's copy, a round trip later, is dropped rather than heard twice.
+    // The seed is a function of what every client receives, so two clients
+    // hear the same variation (sound/docs/EMBEDDING.md, 3).
+    for (const so of s.sounds ?? []) {
+      if ((so.flags & SOUND_PREDICTED) && (so.source >>> 0) === mySelfHandle) continue
+      const seed = Math.imul(s.serverTick ^ so.sound, 2654435761) ^ so.source
+      sfx.play(so.sound, { x: fxToFloat(so.pos.x), y: fxToFloat(so.pos.y), z: fxToFloat(so.pos.z) },
+               { seed, key: (so.flags & SOUND_FOLLOW) ? so.source >>> 0 : 0 })
+    }
     for (const so of s.sectorOffsets ?? []) world.setDiscreteOffset(so.sector, so.offset)
     others.ingest(s, { fxToFloat, toThree: (x, y, z) => ({ x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) }) })
     predictor.reconcile(s)
@@ -2103,6 +2141,18 @@ function frame (now) {
   const py = fxToFloat(a.pos.y)
   const pz = fxToFloat(a.pos.z)
   const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
+
+  // THIS CLIENT'S OWN SOUNDS, the moment it predicts the action: its jump, its
+  // landing, its swing, its shot (audio/ownsounds.js). The server's copies are
+  // marked PREDICTED and dropped when they arrive.
+  if (LIVE) {
+    for (const h of ownSounds.step({
+      grounded: !!a.grounded, velZ: fxToFloat(a.vel.z), jumps: a.jumpsUsed | 0, attackLeft: a.attackLeft | 0,
+      buttons: lastSampled?.buttons ?? 0, tick: world.tick
+    })) {
+      sfx.play(h, { x: px, y: py, z: pz }, { seed: Math.imul(world.tick ^ h, 2654435761), key: mySelfHandle })
+    }
+  }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
   if (SHOW_SWING) {
@@ -2355,6 +2405,33 @@ function frame (now) {
   // resolved inside camera.update.
   camViewYaw = viewYaw(eye, yaw, camera.pathMix)
 
+  // THE LISTENER, once a frame, now that the camera is placed: at the body, in
+  // SIMULATION space, facing the way the camera looks -- so a sound on the
+  // left of the screen is heard on the left. Converted from three-space here
+  // rather than taken off the camera, which is Y-up with z = -y and would pan
+  // everything backwards (sound/docs/EMBEDDING.md, 4).
+  {
+    const fx3 = eye.lookAt.x - eye.x
+    const fz3 = eye.lookAt.z - eye.z
+    const yawTurns = (Math.atan2(-fz3, fx3) / (2 * Math.PI) + 1) % 1
+    lastEar = { x: px, y: py, z: pz }
+    sfx.listener(lastEar, Math.floor(yawTurns * 4294967296) >>> 0)
+    // And whatever a sound is following, where it is drawn now.
+    const keys = sfx.followed()
+    if (keys.length) {
+      const at = []
+      for (const k of keys) {
+        const index = (k & 0x00ffffff) - 1
+        if (index === myAgentIndex) { at.push([k, { x: px, y: py, z: pz }]); continue }
+        const ent = others?.entities?.get(index)
+        if (!ent) continue
+        const m = ent.mesh.position
+        at.push([k, { x: m.x, y: -m.z, z: m.y - (ent.mesh.userData.yOffset ?? 0) }])
+      }
+      sfx.follow(at)
+    }
+  }
+
   // Did the view move with the body across the last crossing?
   // client/test/seamcam.test.js reads this.
   crossing.frame(eye, subject)
@@ -2582,6 +2659,13 @@ const music = new Music({ log: (m) => console.log(m) })
 // Exposed for the page smoke test, which has no other way to ask whether the
 // synth came up -- the same reason the editor's page test reaches into its app.
 window.__music = music
+
+// SOUND EFFECTS (client/src/audio/sfx.js), in the music's context once it has
+// one, ducking the music under whatever the bank says deserves it.
+const sfx = new Sfx({ log: (m) => console.log(m), onDuck: (milli) => music.duck(milli, 60) })
+window.__sfx = sfx
+music.onContext = (ctx) => sfx.attach(ctx).catch((e) => console.warn(`[sfx] ${e.message}`))
+sfx.setBank('/sounds/bank.sfxproj')
 music.arm()
 
 // WHICH TRACK BELONGS TO THIS MAP, by content hash.

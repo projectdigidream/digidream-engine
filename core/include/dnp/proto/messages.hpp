@@ -107,6 +107,10 @@ inline constexpr u8 MSG_GAME_RESULT = 0x2E;
 // player at the first level's spawn. Client to server, no body; answered with
 // GAME_RESULT, op 2. Single player only.
 inline constexpr u8 MSG_GAME_NEW    = 0x2F;
+// What this client should play the moment it predicts its own action, so its
+// own jump and shot are heard at once rather than a round trip later
+// (docs/protocol.md §5.7). S->C, reliable.
+inline constexpr u8 MSG_SOUND_PREDICT = 0x33;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.
@@ -118,6 +122,7 @@ inline constexpr u32 MAX_INPUT_FRAMES   = 16;
 // without the other fails the build rather than truncating a level on the wire.
 inline constexpr u32 MAX_ENTITIES       = 4480;
 inline constexpr u32 MAX_VFX            = 64;
+inline constexpr u32 MAX_SOUNDS         = 32;
 inline constexpr u32 MAX_VISUAL_PARAMS  = 8;
 inline constexpr u32 MAX_SECTOR_OFFSETS = 32;
 
@@ -546,6 +551,46 @@ struct VfxEvent {
     u32  param = 0;
 };
 
+// A SOUND, fire-and-forget like a VfxEvent and under the same rule (R4): never
+// the sole carrier of anything the simulation needs. docs/protocol.md §5.7.
+//
+// `sound` is the FNV-1a hash of the sound's NAME ("weapon.shotgun.fire") --
+// the client hashes the names in the bank it loaded and plays the match, so
+// neither side needs a table of numbers the other keeps in step. `source` is
+// the entity that made it (a handle, 0 for none), which a FOLLOW sound tracks
+// and which the client compares with itself for a PREDICTED one.
+inline constexpr u8 SOUND_FOLLOW    = 1;   // moves with `source`
+inline constexpr u8 SOUND_PREDICTED = 2;   // `source`'s own client already played it
+struct SoundEvent {
+    u32 sound  = 0;
+    fx3 pos{};
+    u32 source = 0;
+    u8  flags  = 0;
+};
+
+// SOUND_PREDICT entries: on which of its own actions a client plays which
+// sound. `param` is the trigger's: for a button, the ticks between two shots;
+// for a landing, the fall speed that counts as one, in 1/16 world units a
+// second. `shots` is how many the weapon has left, -1 for no limit -- the
+// client counts it down itself between updates.
+inline constexpr u8 PREDICT_JUMP = 1, PREDICT_LAND = 2, PREDICT_PRIMARY = 3,
+                    PREDICT_PRIMARY_HELD = 4, PREDICT_SECONDARY = 5,
+                    PREDICT_SECONDARY_HELD = 6, PREDICT_SWING = 7;
+inline constexpr u32 MAX_PREDICT_SOUNDS = 16;
+struct PredictSound {
+    u8  trigger = 0;
+    u32 sound   = 0;   // sound_hash
+    u16 param   = 0;
+    i16 shots   = -1;
+};
+
+// The name hash both sides agree on: 32-bit FNV-1a over the name's bytes.
+constexpr u32 sound_hash(const char* s, size_t n) noexcept {
+    u32 h = 2166136261u;
+    for (size_t i = 0; i < n; ++i) { h ^= static_cast<u8>(s[i]); h *= 16777619u; }
+    return h;
+}
+
 struct DecodedSnapshot {
     SnapshotHeader header{};
     SelfBlock      self{};
@@ -556,6 +601,10 @@ struct DecodedSnapshot {
     EntityBlock    entities[MAX_ENTITIES]{};
     u16            vfx_count = 0;
     VfxEvent       vfx[MAX_VFX]{};
+    // After the vfx, and only when there are any: a snapshot with no sound
+    // ends where it always did.
+    u16            sound_count = 0;
+    SoundEvent     sounds[MAX_SOUNDS]{};
 };
 
 // ------------------------------------------------------------------ functions
@@ -584,6 +633,8 @@ public:
     // was, so the caller may keep offering smaller ones or stop.
     bool try_entity(const EntityBlock& e) noexcept;
     bool try_vfx(const VfxEvent& v) noexcept;
+    // After every vfx: once a sound is written no vfx may follow.
+    bool try_sound(const SoundEvent& s) noexcept;
 
     // Patches the two counts and returns the final byte count (0 if the header
     // itself did not fit).
@@ -602,6 +653,8 @@ public:
     // a brad (4) + param (4). Named so a caller can reserve N of them without
     // restating the format, which is how a reserve silently becomes wrong.
     static constexpr size_t VFX_BYTES = 22;
+    // sound (4) + a quantised vec3 (12) + source (4) + flags (1).
+    static constexpr size_t SOUND_BYTES = 21;
 
 private:
     u8*        buf_;
@@ -612,6 +665,9 @@ private:
     u16        vfx_count_        = 0;
     bool       began_            = false;
     bool       vfx_started_      = false;
+    size_t     sound_count_pos_  = 0;
+    u16        sound_count_      = 0;
+    bool       sound_started_    = false;
 };
 
 }  // namespace dnp::proto

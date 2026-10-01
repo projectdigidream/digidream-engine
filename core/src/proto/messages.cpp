@@ -277,7 +277,7 @@ bool SnapshotWriter::try_entity(const EntityBlock& e) noexcept {
 }
 
 bool SnapshotWriter::try_vfx(const VfxEvent& v) noexcept {
-    if (!began_) return false;
+    if (!began_ || sound_started_) return false;
     if (!vfx_started_) {
         const size_t m = w_.mark();
         vfx_count_pos_ = m;
@@ -296,6 +296,32 @@ bool SnapshotWriter::try_vfx(const VfxEvent& v) noexcept {
     return true;
 }
 
+bool SnapshotWriter::try_sound(const SoundEvent& s) noexcept {
+    if (!began_) return false;
+    if (!sound_started_) {
+        // The vfx count has to be in place before anything follows it.
+        const size_t m0 = w_.mark();
+        if (!vfx_started_) {
+            vfx_count_pos_ = w_.mark();
+            w_.u16v(0);
+        }
+        sound_count_pos_ = w_.mark();
+        w_.u16v(0);
+        if (!w_.ok()) { w_.rollback(m0); return false; }
+        vfx_started_ = true;
+        sound_started_ = true;
+    }
+    if (sound_count_ >= MAX_SOUNDS) return false;
+    const size_t m = w_.mark();
+    w_.u32v(s.sound);
+    w_.vec3_q(s.pos);
+    w_.u32v(s.source);
+    w_.u8v(s.flags);
+    if (!w_.ok()) { w_.rollback(m); return false; }
+    ++sound_count_;
+    return true;
+}
+
 size_t SnapshotWriter::finish() noexcept {
     if (!began_) return 0;
     if (!vfx_started_) {
@@ -308,6 +334,10 @@ size_t SnapshotWriter::finish() noexcept {
     buf_[entity_count_pos_ + 1] = static_cast<u8>((entity_count_ >> 8) & 0xFF);
     buf_[vfx_count_pos_]        = static_cast<u8>(vfx_count_ & 0xFF);
     buf_[vfx_count_pos_ + 1]    = static_cast<u8>((vfx_count_ >> 8) & 0xFF);
+    if (sound_started_) {
+        buf_[sound_count_pos_]     = static_cast<u8>(sound_count_ & 0xFF);
+        buf_[sound_count_pos_ + 1] = static_cast<u8>((sound_count_ >> 8) & 0xFF);
+    }
     return w_.size();
 }
 
@@ -347,6 +377,21 @@ bool decode_snapshot(ByteReader& r, DecodedSnapshot& out) noexcept {
     out.vfx_count = vcount;
     for (u16 i = 0; i < vcount; ++i) {
         if (!decode_vfx(r, out.vfx[i])) return false;
+    }
+
+    // Sounds, if the snapshot has any (docs/protocol.md §5.7).
+    out.sound_count = 0;
+    if (r.ok() && r.remaining() > 0) {
+        const u16 scount = r.u16v();
+        if (!r.ok() || scount > MAX_SOUNDS) return false;
+        out.sound_count = scount;
+        for (u16 i = 0; i < scount; ++i) {
+            SoundEvent& s = out.sounds[i];
+            s.sound  = r.u32v();
+            s.pos    = r.vec3_q();
+            s.source = r.u32v();
+            s.flags  = r.u8v();
+        }
     }
 
     return r.ok();

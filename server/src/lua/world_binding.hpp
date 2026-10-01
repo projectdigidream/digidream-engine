@@ -19,6 +19,7 @@
 // diagnosable, or the defined-no-op rule just moves the confusion.
 //
 #include <string>
+#include <vector>
 
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapstore.hpp"
@@ -126,9 +127,25 @@ struct UiSink {
     // remembered: a fade is a moment in a cutscene, and a player joining
     // halfway through one should arrive at a screen they can see out of.
     virtual void screen(u32 level, i32 agent, const proto::ScreenSet& s) = 0;
+    // What the player watching `agent` should play when it predicts its own
+    // actions: the group `group` (a name hash) replaced by `list`.
+    virtual void predict_sounds(u32 level, u32 agent, u32 group,
+                                const proto::PredictSound* list, u32 n) = 0;
 };
 
 struct WorldContext;
+
+// A sound a script asked for this tick (dnp.sound), waiting for the snapshots:
+// proto::SoundEvent before it is sent. In the WORLD's coordinates.
+struct PendingSound {
+    u32 sound  = 0;   // proto::sound_hash of the name
+    fx3 pos{};
+    u32 source = 0;   // handle raw, 0 for none
+    u8  flags  = 0;   // proto::SOUND_*
+};
+// How many one world keeps between snapshots. Past it a sound is dropped and
+// counted, never silently.
+inline constexpr u32 MAX_PENDING_SOUNDS = 128;
 
 // THE GAME'S SCRIPTS AND THE LEVELS' SCRIPTS, CALLING EACH OTHER.
 //
@@ -284,6 +301,10 @@ struct WorldContext {
     // host. e:player() reads it; null means nobody is anybody (a test).
     const u32*        player = nullptr;
     CrossSink*        cross = nullptr;
+    // The world's sounds waiting for the snapshots (dnp.sound). Borrowed from
+    // the host; null means a script's sounds go nowhere (a test).
+    std::vector<PendingSound>* sounds = nullptr;
+    u32               sounds_dropped = 0;
 
     // Whether the level is being RESTORED from saved state (docs/SAVING.md):
     // a script's own placement of monsters and props stands aside, because the

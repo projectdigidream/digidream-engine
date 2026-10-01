@@ -356,6 +356,69 @@ static void test_snapshot_roundtrip() {
     }
 }
 
+// SOUNDS (docs/protocol.md §5.7): after the vfx, and only when there are any.
+static void test_snapshot_sounds() {
+    std::printf("snapshot: sounds after the vfx, absent when there are none\n");
+    Rng rng(4242);
+    for (int iter = 0; iter < 200; ++iter) {
+        SnapshotHeader h;
+        h.server_tick = rng.next_u32();
+        SelfBlock self;
+        self.facing = brad(rng.next_u32());
+
+        // The same snapshot twice: once with sounds and once without.
+        u8 a[MAX_DATAGRAM_BYTES], b[MAX_DATAGRAM_BYTES];
+        SnapshotWriter wa(a, sizeof(a)), wb(b, sizeof(b));
+        wa.begin(h, self, 100);
+        wb.begin(h, self, 100);
+        const int vwant = static_cast<int>(rng.next_below(3));
+        for (int i = 0; i < vwant; ++i) {
+            VfxEvent v;
+            v.kind = static_cast<u16>(rng.next_below(50));
+            v.param = rng.next_u32();
+            wa.try_vfx(v);
+            wb.try_vfx(v);
+        }
+        const int swant = 1 + static_cast<int>(rng.next_below(5));
+        SoundEvent sent[6];
+        for (int i = 0; i < swant; ++i) {
+            sent[i].sound  = rng.next_u32();
+            sent[i].pos    = fx3{fx::from_int(static_cast<i64>(rng.next_below(200)) - 100),
+                                 fx::from_int(static_cast<i64>(rng.next_below(200)) - 100),
+                                 fx::from_frac(static_cast<i64>(rng.next_below(96)), 48)};
+            sent[i].source = rng.next_u32();
+            sent[i].flags  = static_cast<u8>(rng.next_below(4));
+            CHECK(wa.try_sound(sent[i]));
+        }
+        // CONTROL: no vfx may follow a sound -- the reader would take it for one.
+        VfxEvent late;
+        CHECK(!wa.try_vfx(late));
+        const size_t na = wa.finish(), nb = wb.finish();
+        CHECK(na == nb + 2 + static_cast<size_t>(swant) * SnapshotWriter::SOUND_BYTES);
+
+        DecodedSnapshot got;
+        ByteReader ra(a, na);
+        CHECK(decode_snapshot(ra, got));
+        CHECK(got.vfx_count == vwant);
+        CHECK(got.sound_count == swant);
+        for (int i = 0; i < swant && i < got.sound_count; ++i) {
+            CHECK(got.sounds[i].sound == sent[i].sound);
+            CHECK(got.sounds[i].source == sent[i].source);
+            CHECK(got.sounds[i].flags == sent[i].flags);
+            CHECK(got.sounds[i].pos.x == sent[i].pos.x && got.sounds[i].pos.y == sent[i].pos.y);
+        }
+        // Without sounds the snapshot ends where it always did, and says none.
+        ByteReader rb(b, nb);
+        DecodedSnapshot none;
+        CHECK(decode_snapshot(rb, none));
+        CHECK(none.sound_count == 0);
+    }
+    // The name hash, pinned: the JS client computes the same number
+    // (client/src/proto.js soundHash) and a drift between them is silence.
+    CHECK(sound_hash("weapon.shotgun.fire", 19) == 0x31b9dc0du);
+    std::printf("  sound_hash(\"weapon.shotgun.fire\") = %08x\n", sound_hash("weapon.shotgun.fire", 19));
+}
+
 static void test_snapshot_budget() {
     std::printf("snapshot: budget is enforced structurally, rollback is clean\n");
     Rng rng(4242);
@@ -964,6 +1027,7 @@ int main() {
     test_quantisation();
     test_input_bundle();
     test_snapshot_roundtrip();
+    test_snapshot_sounds();
     test_snapshot_budget();
     test_snapshot_hostile();
     test_param_update();

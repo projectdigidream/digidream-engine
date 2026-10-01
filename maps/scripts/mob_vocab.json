@@ -536,6 +536,28 @@
     {
       "args": [
         {
+          "doc": "The sound's name in the module's bank (`monster.imp.sight`). A name the bank does not have is silence, said once by the client.",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "doc": "Where it is heard from -- not `at`, which in a sequence is WHEN. `self` (the default) follows the mob as it moves; `impact` is where a missile landed, for its burst.",
+          "name": "from",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "self",
+            "target",
+            "impact"
+          ]
+        }
+      ],
+      "doc": "Play a sound. Heard by everybody near it, and never the only sign of anything: a sound may be dropped, a hit may not.",
+      "name": "sound"
+    },
+    {
+      "args": [
+        {
           "name": "anim",
           "type": "int"
         }

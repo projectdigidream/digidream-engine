@@ -727,6 +727,20 @@ mob_vocab = {
             "which is per victim and so shows nothing at all when a rocket " ..
             "hits an empty wall." },
 
+    { name = "sound",
+      args = { { name = "name", type = "string",
+                 doc = "The sound's name in the module's bank " ..
+                       "(`monster.imp.sight`). A name the bank does not have " ..
+                       "is silence, said once by the client." },
+               { name = "from", type = "enum", optional = true,
+                 values = { "self", "target", "impact" },
+                 doc = "Where it is heard from -- not `at`, which in a sequence " ..
+                       "is WHEN. `self` (the default) follows " ..
+                       "the mob as it moves; `impact` is where a missile " ..
+                       "landed, for its burst." } },
+      doc = "Play a sound. Heard by everybody near it, and never the only " ..
+            "sign of anything: a sound may be dropped, a hit may not." },
+
     { name = "set_anim",
       args = { { name = "anim", type = "int" } },
       doc = "Override the state's own `anim` mid-sequence." },

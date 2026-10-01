@@ -99,6 +99,17 @@ int l_entity_grounded(lua_State* L) {
     return 1;
 }
 
+// e:jumps() -> how many jumps the body has used since it last stood on
+// something. Rises by one on every jump, in the air as well as off the ground,
+// which is what makes it the way to hear a double jump.
+int l_entity_jumps(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->agent(static_cast<u32>(a)).mv.jumps_used);
+    return 1;
+}
+
 int l_entity_sector(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -577,6 +588,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"pos", l_entity_pos},
     {"vel", l_entity_vel},
     {"grounded", l_entity_grounded},
+    {"jumps", l_entity_jumps},
     {"sector", l_entity_sector},
     {"index", l_entity_index_of},
     {"player", l_entity_player},
@@ -856,6 +868,28 @@ int l_sector_floor(lua_State* L) {
     return 1;
 }
 
+// sector:center() -> vec3: the middle of its bounding box, at its floor. Where
+// a door or a lift is heard from -- a sector has no position of its own.
+int l_sector_center(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 s = check_sector(L, 1);
+    if (!sector_in_range(ctx, s)) { lua_pushnil(L); return 1; }
+    const geom::MapData& m = *ctx.world->map();
+    const geom::Sector& sec = m.sector(s);
+    if (sec.point_count == 0) { lua_pushnil(L); return 1; }
+    fx2 lo = m.point(sec.first_point), hi = lo;
+    for (u32 i = 1; i < sec.point_count; ++i) {
+        const fx2 p = m.point(static_cast<u32>(sec.first_point) + i);
+        if (p.x < lo.x) lo.x = p.x;
+        if (p.y < lo.y) lo.y = p.y;
+        if (p.x > hi.x) hi.x = p.x;
+        if (p.y > hi.y) hi.y = p.y;
+    }
+    const fx two = fx::from_int(2);
+    push_vec3(L, ctx.to_local(fx3{(lo.x + hi.x) / two, (lo.y + hi.y) / two, sec.floor_z}));
+    return 1;
+}
+
 int l_sector_ceil(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const u32 s = check_sector(L, 1);
@@ -1029,6 +1063,7 @@ const luaL_Reg SECTOR_METHODS[] = {
     {"tag", l_sector_tag},
     {"floor", l_sector_floor},
     {"ceil", l_sector_ceil},
+    {"center", l_sector_center},
     {"offset", l_sector_offset},
     {"neighbors", l_sector_neighbors},
     {"move_parametric", l_sector_move_parametric},
@@ -1869,6 +1904,65 @@ int l_dnp_screen(lua_State* L) {
     return 0;
 }
 
+// dnp.predict_sounds(e, group, { {on = "jump", sound = name, ...}, ... })
+//
+// What e's own client plays the moment it predicts its own action, replacing
+// what `group` said before (docs/protocol.md §5.7). `on` is jump, land,
+// primary, primary_held, secondary, secondary_held or swing; `every` is the
+// ticks between two shots, `fall` the speed a landing needs (world units a
+// second), `shots` how many are left (absent: no limit). The server's own copy
+// of the same sound should be marked `predicted`, so this client drops it.
+int l_dnp_predict_sounds(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    size_t gn = 0;
+    const char* group = luaL_checklstring(L, 2, &gn);
+    luaL_checktype(L, 3, LUA_TTABLE);
+    if (a < 0 || ctx.ui == nullptr) return 0;
+    static const struct { const char* name; u8 trigger; } ONS[] = {
+        {"jump", proto::PREDICT_JUMP}, {"land", proto::PREDICT_LAND},
+        {"primary", proto::PREDICT_PRIMARY}, {"primary_held", proto::PREDICT_PRIMARY_HELD},
+        {"secondary", proto::PREDICT_SECONDARY}, {"secondary_held", proto::PREDICT_SECONDARY_HELD},
+        {"swing", proto::PREDICT_SWING},
+    };
+    proto::PredictSound list[proto::MAX_PREDICT_SOUNDS];
+    u32 n = 0;
+    const int count = static_cast<int>(lua_objlen(L, 3));
+    for (int i = 1; i <= count && n < proto::MAX_PREDICT_SOUNDS; ++i) {
+        lua_rawgeti(L, 3, i);
+        if (!lua_istable(L, -1)) { lua_pop(L, 1); continue; }
+        proto::PredictSound p;
+        lua_getfield(L, -1, "on");
+        const char* on = lua_tostring(L, -1);
+        for (const auto& o : ONS) if (on && std::strcmp(on, o.name) == 0) p.trigger = o.trigger;
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "sound");
+        size_t sn = 0;
+        const char* sname = lua_tolstring(L, -1, &sn);
+        if (sname) p.sound = proto::sound_hash(sname, sn);
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "every");
+        if (lua_isnumber(L, -1)) p.param = static_cast<u16>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "fall");
+        if (!lua_isnil(L, -1)) {
+            const fx f = is_fx(L, -1) ? check_fx(L, -1) : fx::from_int(static_cast<i64>(lua_tonumber(L, -1)));
+            p.param = static_cast<u16>(std::min<i64>(65535, (f * fx::from_int(16)).raw >> 32));
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, -1, "shots");
+        if (lua_isnumber(L, -1)) p.shots = static_cast<i16>(std::min(32767.0, lua_tonumber(L, -1)));
+        lua_pop(L, 1);
+        lua_pop(L, 1);
+        if (p.trigger == 0 || p.sound == 0) {
+            return luaL_error(L, "predict_sounds: entry %d needs a known `on` and a `sound`", i);
+        }
+        list[n++] = p;
+    }
+    ctx.ui->predict_sounds(ctx.level, static_cast<u32>(a), proto::sound_hash(group, gn), list, n);
+    return 0;
+}
+
 // dnp.ui_close(entity, ui_id)
 int l_dnp_ui_close(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -1895,6 +1989,56 @@ int l_dnp_vfx(lua_State* L) {
     v.dir = brad(lua_isnoneornil(L, 3) ? 0u : static_cast<u32>(luaL_checknumber(L, 3)));
     v.param = lua_isnoneornil(L, 4) ? 0u : static_cast<u32>(luaL_checknumber(L, 4));
     lua_pushboolean(L, ctx.world->push_vfx(v) ? 1 : 0);
+    return 1;
+}
+
+// dnp.sound(name, where [, opts]) -> bool
+//
+// A sound, heard by everybody near `where` (docs/protocol.md §5.7). `where` is
+// a position, or an entity or prop -- then the sound comes from it and, unless
+// `opts.follow` is false, moves with it. `opts.predicted` says the entity's own
+// client has already played it (its own jump, its own shot), so that client
+// drops this copy rather than hearing it twice, a round trip apart.
+//
+// The name is sent as its hash and resolved by the client against the bank it
+// loaded; a name the bank does not have is silence there, said once.
+int l_dnp_sound(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    size_t n = 0;
+    const char* name = luaL_checklstring(L, 1, &n);
+    PendingSound s;
+    s.sound = proto::sound_hash(name, n);
+    if (proto::Handle* h = to_handle(L, 2)) {
+        const i32 a = resolve(L, ctx, *h);
+        if (a < 0) { lua_pushboolean(L, 0); return 1; }
+        s.pos = ctx.world->agent(static_cast<u32>(a)).pos;
+        s.source = h->raw;
+        s.flags = proto::SOUND_FOLLOW;
+    } else if (proto::Handle* p = to_prop(L, 2)) {
+        const i32 e = resolve_prop(L, ctx, *p);
+        if (e < 0) { lua_pushboolean(L, 0); return 1; }
+        s.pos = ctx.world->prop(static_cast<u32>(e)).pos;
+        s.source = p->raw;
+        s.flags = proto::SOUND_FOLLOW;
+    } else {
+        s.pos = ctx.to_world(check_vec3(L, 2));
+    }
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "follow");
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) s.flags &= static_cast<u8>(~proto::SOUND_FOLLOW);
+        lua_pop(L, 1);
+        lua_getfield(L, 3, "predicted");
+        if (lua_toboolean(L, -1) && s.source != 0) s.flags |= proto::SOUND_PREDICTED;
+        lua_pop(L, 1);
+    }
+    if (ctx.sounds == nullptr) { lua_pushboolean(L, 0); return 1; }
+    if (ctx.sounds->size() >= MAX_PENDING_SOUNDS) {
+        ++ctx.sounds_dropped;
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    ctx.sounds->push_back(s);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -2719,6 +2863,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"atan2", l_dnp_atan2},
     {"dir", l_dnp_dir},
     {"vfx", l_dnp_vfx},
+    {"sound", l_dnp_sound},
+    {"predict_sounds", l_dnp_predict_sounds},
     {"level", l_dnp_level},
     {"levels", l_dnp_levels},
     {"ui_open", l_dnp_ui_open},

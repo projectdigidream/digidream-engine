@@ -323,6 +323,23 @@
     {
       "args": [
         {
+          "doc": "The sound's name in the module's bank (`weapon.shotgun.fire`).",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "doc": "The player's own client has already played this -- it predicts its own shots from the weapon's `predict` entry -- so that client drops this copy instead of hearing the shot twice, a round trip apart. Everybody else hears it.",
+          "name": "predicted",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "doc": "Play a sound, from the player and moving with them. Never the only sign of anything: a sound may be dropped.",
+      "name": "sound"
+    },
+    {
+      "args": [
+        {
           "name": "fn",
           "type": "string"
         }
@@ -621,6 +638,12 @@
       "type": "int"
     },
     {
+      "doc": "What taking it sounds like. Absent takes the module's default for what the pickup gives (`weapons.pickup_sounds`). A refused pickup makes no sound, because nothing happened.",
+      "name": "sound",
+      "optional": true,
+      "type": "string"
+    },
+    {
       "doc": "This pickup is declared and does nothing, and says so when walked over, naming itself. A pickup that silently does nothing is indistinguishable from a bug -- which is the whole reason this field exists rather than the entry simply being absent.",
       "name": "not_yet",
       "optional": true,
@@ -768,6 +791,12 @@
     {
       "doc": "The swept melee collider, whose shape is written into the REPLICATED parameter table when this weapon is selected. Absent means this weapon does not swing -- and that is enforced through the parameter `attack_enabled`, so the client predicts the absence rather than predicting a swing the server then denies. See swing_fields.",
       "name": "swing",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "What the player's OWN client plays the moment it predicts a shot, so they hear it at once rather than a round trip later: a list of {on = primary | primary_held | secondary | secondary_held | swing, sound = name, every = ticks between two shots}. `_held` repeats while the button is down (a chaingun); `swing` is the swept collider starting, which the client predicts exactly. The client also counts the weapon's shots down. The phase's own `sound` for the same shot should be `predicted`, so that client drops the server's copy.",
+      "name": "predict",
       "optional": true,
       "type": "table"
     },

@@ -562,7 +562,10 @@ function M.load(data)
     -- nothing can enter is almost always a renamed transition, and finding it
     -- at load beats finding it because a monster never plays its death
     -- animation.
-    local reached = { [d.initial or ""] = true }
+    -- Seeded with the states the RUNTIME enters, as well as the initial one:
+    -- `pain` and `death` are reached by being hurt, and what they lead to by
+    -- `next` is as reachable as they are.
+    local reached = { [d.initial or ""] = true, pain = true, death = true }
     local changed = true
     while changed do
       changed = false
@@ -582,7 +585,7 @@ function M.load(data)
       end
     end
     for sname in pairs(d.states) do
-      if not reached[sname] and sname ~= "pain" and sname ~= "death" then
+      if not reached[sname] then
         complain("%s: state '%s' cannot be reached from '%s' by any " ..
                  "transition, `next` or `goto`", where, sname,
                  tostring(d.initial))
@@ -1958,6 +1961,20 @@ function acts.vfx(m, a)
           a.radius and math.floor((a.radius * fx.int(256)).int) or 0)
 end
 
+-- A SOUND (docs/protocol.md §5.7). From the mob, following it, unless it is
+-- the target's or an impact's -- a missile's burst is heard where it burst,
+-- not from the monster that threw it.
+function acts.sound(m, a)
+  local from = a.from or "self"
+  if from == "target" and m.target ~= nil and m.target:valid() then
+    dnp.sound(a.name, m.target)
+  elseif from == "impact" and m.impact ~= nil then
+    dnp.sound(a.name, m.impact)
+  elseif m.e ~= nil and m.e:valid() then
+    dnp.sound(a.name, m.e)
+  end
+end
+
 function acts.lua(m, a)
   local fn = compiled[a]
   if fn == nil then return end
@@ -2175,8 +2192,17 @@ function hurt(target, amount, by)
       return
     end
 
+    -- WHAT A PLAYER SOUNDS LIKE hurt and dying is the module's to say
+    -- (M.player_sounds = { pain = name, death = name }); nil is silence.
+    local ps = M.player_sounds
     local hp = (target:hp() or 100) - amount
-    if hp > 0 then target:set_hp(hp); return end
+    if hp > 0 then
+      target:set_hp(hp)
+      if ps and ps.pain then dnp.sound(ps.pain, target) end
+      return
+    end
+    -- Heard where they FELL, not where the respawn puts them.
+    if ps and ps.death then dnp.sound(ps.death, target, { follow = false }) end
 
     -- DEATH, and something has to happen. Writing zero and stopping leaves the
     -- player alive at no health forever, taking hits that change nothing --
@@ -2226,6 +2252,14 @@ function hurt(target, amount, by)
     end
     if m.e:valid() then m.e:set_solid(false) end
     enter(m, "death", dnp.tick())
+    -- THE DEAD DO NOT THINK -- neither runtime gives a dead mob another think
+    -- -- so a death state's sequence would never run. What it opens with (its
+    -- `at = 0` entries: the scream, a pain elemental's last brood) runs here,
+    -- as it dies, and once.
+    local dst = m.def.states and m.def.states.death
+    for _, a in ipairs((dst and dst.sequence) or {}) do
+      if (a.at or 0) == 0 and acts[a.action] then acts[a.action](m, a) end
+    end
     if m.def.corpse then
       corpses[#corpses + 1] = m
     elseif m.e:valid() then

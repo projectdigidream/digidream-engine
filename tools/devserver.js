@@ -25,6 +25,9 @@ const TYPES = {
   '.mjs': 'text/javascript; charset=utf-8',
   // A baked track is opaque bytes; the browser only ever hands it to the synth.
   '.mstk': 'application/octet-stream',
+  // A sound bank: its source (a .sfxproj, JSON) or its bake (.sfxb).
+  '.sfxproj': 'application/json',
+  '.sfxb': 'application/octet-stream',
   '.wasm': 'application/wasm',
   '.json': 'application/json',
   '.dnpm': 'application/octet-stream',
@@ -118,6 +121,12 @@ const MOUNTS = [
   // soundtrack (modules/doom2/assets/music) and the per-file rule above finds
   // it first, exactly as it does for sprites.
   ['/music/', join(ROOT, 'assets', 'music')],
+  // The sound-effects engine (sound/, DigidreamSound): its single-file wasm
+  // module, which client/src/audio/sfx-worklet.js imports. Only dist/ -- the
+  // rest of tool/ is the sound editor's.
+  ['/sfx/', join(ROOT, 'sound', 'tool', 'dist')],
+  // Sound banks, by module like music (modules/doom2/assets/sounds).
+  ['/sounds/', join(ROOT, 'assets', 'sounds')],
   // The studio (docs/STUDIO.md), and the runtime Lua plus vocabularies it
   // bakes and validates against. The runtime mount comes first because the
   // studio mount would otherwise claim the prefix.
@@ -256,7 +265,7 @@ createServer(async (req, res) => {
       file = await findMap(req.url.slice('/maps/'.length).split('?')[0])
     } else if (MODULES.length &&
                (req.url.startsWith('/sprites/') || req.url.startsWith('/textures/') ||
-                req.url.startsWith('/music/'))) {
+                req.url.startsWith('/music/') || req.url.startsWith('/sounds/'))) {
       // PER FILE, not per directory. A module that adds three sprites does not
       // have to carry the other two thousand, and one that ships a whole set
       // overrides all of them -- without either having to say which it is.

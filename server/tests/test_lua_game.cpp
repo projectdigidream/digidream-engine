@@ -193,6 +193,34 @@ int main(int argc, char** argv) {
     if (!run(LV, "level_is_game = dnp.is_game()", "asking the level")) return 1;
     CHECK(!truthy(LV, "level_is_game"));
 
+    // WHAT THE PLAYER'S OWN CLIENT PREDICTS, read off DOOM's weapons' phases:
+    // a press for the pistol, a hold for the chaingun, the swing for the fists,
+    // each with the ticks until it can fire again.
+    if (!run(GV, "local function p(w) local e = weapons.defs[w].predict; return e and e[1] end\n"
+                 "pistol_on = p('pistol') and p('pistol').on\n"
+                 "pistol_every = p('pistol') and p('pistol').every or -1\n"
+                 "chaingun_on = p('chaingun') and p('chaingun').on\n"
+                 "fists_on = p('fists') and p('fists').on\n"
+                 "ssg_every = p('supershotgun') and p('supershotgun').every or -1\n"
+                 "ssg_fire = weapons.defs.supershotgun.phases.fire.ticks\n", "reading predict")) return 1;
+    {
+        const auto s = [&](const char* g) {
+            lua_getglobal(GV, g);
+            std::string v = lua_tostring(GV, -1) ? lua_tostring(GV, -1) : "nil";
+            lua_pop(GV, 1);
+            return v;
+        };
+        std::printf("  predicted: pistol on %s every %d, chaingun on %s, fists on %s\n",
+                    s("pistol_on").c_str(), (int)num(GV, "pistol_every"),
+                    s("chaingun_on").c_str(), s("fists_on").c_str());
+        CHECK(s("pistol_on") == "primary");
+        CHECK(num(GV, "pistol_every") > 0);
+        CHECK(s("chaingun_on") == "primary_held");
+        CHECK(s("fists_on") == "swing");
+        // The super shotgun's reload counts: it cannot fire again until it ends.
+        CHECK(num(GV, "ssg_every") > num(GV, "ssg_fire"));
+    }
+
     // A player is keyed by who they are, not by the slot their body is in.
     if (!run(GV, "local p = dnp.players()[1]\n"
                  "key = weapons.key_of(p)\n"

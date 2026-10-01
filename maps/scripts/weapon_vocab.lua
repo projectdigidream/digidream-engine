@@ -112,6 +112,16 @@ weapon_vocab = {
             "the parameter `attack_enabled`, so the client predicts the " ..
             "absence rather than predicting a swing the server then denies. " ..
             "See swing_fields." },
+    { name = "predict", type = "table", optional = true,
+      doc = "What the player's OWN client plays the moment it predicts a shot, " ..
+            "so they hear it at once rather than a round trip later: a list of " ..
+            "{on = primary | primary_held | secondary | secondary_held | swing, " ..
+            "sound = name, every = ticks between two shots}. `_held` repeats " ..
+            "while the button is down (a chaingun); `swing` is the swept " ..
+            "collider starting, which the client predicts exactly. The " ..
+            "client also counts the weapon's shots down. The phase's own " ..
+            "`sound` for the same shot should be `predicted`, so that client " ..
+            "drops the server's copy." },
     { name = "aim_snap", type = "int", optional = true,
       doc = "How many directions aim snaps to while this is held. 0 or absent " ..
             "is free aim; 8 is eight-way. A replicated parameter, so the snap " ..
@@ -522,6 +532,19 @@ weapon_vocab = {
       doc = "A visual effect at the player, by catalogue id. A muzzle flash, " ..
             "or with `attach` a spray that follows them." },
 
+    { name = "sound",
+      args = { { name = "name", type = "string",
+                 doc = "The sound's name in the module's bank " ..
+                       "(`weapon.shotgun.fire`)." },
+               { name = "predicted", type = "bool", optional = true,
+                 doc = "The player's own client has already played this -- it " ..
+                       "predicts its own shots from the weapon's `predict` " ..
+                       "entry -- so that client drops this copy instead of " ..
+                       "hearing the shot twice, a round trip apart. Everybody " ..
+                       "else hears it." } },
+      doc = "Play a sound, from the player and moving with them. Never the " ..
+            "only sign of anything: a sound may be dropped." },
+
     { name = "lua",
       args = { { name = "fn", type = "string" } },
       doc = "The escape hatch, called with (entity, weapon_name, phase_name)." },
@@ -570,6 +593,10 @@ weapon_vocab = {
             "buried in the runtime." },
     { name = "armour", type = "int", optional = true,
       doc = "Sets armour to this if it is higher. Doom's green and blue." },
+    { name = "sound", type = "string", optional = true,
+      doc = "What taking it sounds like. Absent takes the module's default " ..
+            "for what the pickup gives (`weapons.pickup_sounds`). A refused " ..
+            "pickup makes no sound, because nothing happened." },
     { name = "not_yet", type = "string", optional = true,
       doc = "This pickup is declared and does nothing, and says so when " ..
             "walked over, naming itself. A pickup that silently does nothing " ..

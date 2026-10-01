@@ -37,6 +37,8 @@ W.rolls = nil                 -- nil = always the low end; else a list, cycled
 W.roll_i = 0
 W.log = {}
 W.vfx = {}
+-- dnp.sound calls, as { name, at }: what a test can ask was heard.
+W.sounds = {}
 
 local function fxv(v)
   if type(v) == "table" then return v.n end
@@ -268,7 +270,7 @@ function W.reset()
   W.calls = 0
   W.tick_n, W.entities, W.next_index = 0, {}, 1
   W.see, W.rolls, W.roll_i = true, nil, 0
-  W.log, W.vfx = {}, {}
+  W.log, W.vfx, W.sounds = {}, {}, {}
 end
 
 -- Every call into the fake engine is counted, because the cost that matters on
@@ -443,6 +445,12 @@ dnp = {
     return mkfx(math.sqrt(x * x + y * y + z * z))
   end,
 
+  -- The engine's dnp.sound (docs/SOUNDS.md): from a place or a thing. Recorded,
+  -- never played -- what a sound is is the client's business.
+  sound = function(name, at, opts)
+    W.sounds[#W.sounds + 1] = { name = name, at = at, opts = opts }
+    return true
+  end,
   vfx = function(kind, at, dir, param)
     W.vfx[#W.vfx + 1] = { kind = kind, at = at, dir = dir, param = param }
   end,

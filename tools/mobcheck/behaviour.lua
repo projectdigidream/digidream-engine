@@ -66,8 +66,16 @@ do
   local p = W.add("player", 5, 0, 0)
   W.see = true
   step(mobs.THINK + 1)
-  CHECK(state_of(z) == "chase" or state_of(z) == "missile",
-        "it leaves `look` once a player is visible (got " .. state_of(z) .. ")")
+  -- `alert` is the one-tick beat in which it shouts on seeing you
+  -- (maps/mobs/doom_monsters.lua, the sounds), on its way to `chase`.
+  local s = state_of(z)
+  CHECK(s == "alert" or s == "chase" or s == "missile",
+        "it leaves `look` once a player is visible (got " .. s .. ")")
+  -- The shout is the state's sequence, run on its next think.
+  step(mobs.THINK)
+  local heard = 0
+  for _, snd in ipairs(W.sounds) do if snd.name == "monster.human.sight" then heard = heard + 1 end end
+  CHECK(heard == 1, "and says so, once: its sight sound (" .. heard .. ")")
 
   -- It reaches `missile` and fires. The zombieman's attack_range is 2048 Doom
   -- units, so a player 5 units away is well inside it.
@@ -88,6 +96,23 @@ do
   for _ = 1, 200 do step(1); seen[state_of(z)] = true end
   CHECK(seen["chase"] and seen["missile"],
         "it cycles between `chase` and `missile` rather than sticking in one")
+end
+
+-- ---------------------------------------------------------------------------
+print("mobs: a monster screams once as it dies, though the dead do not think")
+do
+  W.reset(); mobs.reset()
+  local z = mobs.spawn("zombieman", { x = W.mkfx(0), y = W.mkfx(0), z = W.mkfx(0) })
+  local function screams()
+    local n = 0
+    for _, snd in ipairs(W.sounds) do if snd.name == "monster.human.death" then n = n + 1 end end
+    return n
+  end
+  CHECK(screams() == 0, "CONTROL: alive, it does not")
+  mobs.hurt(z, 1000, nil)
+  CHECK(rec(z) == nil or rec(z).dead, "it is dead")
+  step(60)
+  CHECK(screams() == 1, "and it screamed once (" .. screams() .. ")")
 end
 
 -- ---------------------------------------------------------------------------

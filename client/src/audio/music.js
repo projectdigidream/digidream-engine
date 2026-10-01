@@ -61,6 +61,8 @@ export class Music {
     // Is what is playing a sibling of the cues in `this.cues`? Only then may a
     // cue change crossfade rather than swap. See play().
     this.sameContent = false
+    // Called with the AudioContext once it is running: see start().
+    this.onContext = null
   }
 
   /**
@@ -168,6 +170,9 @@ export class Music {
 
     this.node.connect(this.ctx.destination)
     await ready
+    // The sound effects run in the same context (client/src/audio/sfx.js), so
+    // the context that exists only after a gesture is handed on from here.
+    this.onContext?.(this.ctx)
 
     // The instruments. Both are plain JSON the synth parses itself.
     const [bank, kit] = await Promise.all([
