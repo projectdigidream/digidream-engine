@@ -386,7 +386,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
     void send_motion_sets(Level& L, u32 id) {
         const auto& ms = L.world.motions();
-        for (u32 i = 0; i < ms.count(); ++i) send_motion(L, id, ms.at(i));
+        for (u32 i = 0; i < ms.count(); ++i) if (ms.active(i)) send_motion(L, id, ms.at(i));
     }
 
     // Two parametric motions are the same motion iff a client computing either
@@ -413,6 +413,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         Level& L = level(li);
         const auto& ms = L.world.motions();
         for (u32 i = 0; i < ms.count(); ++i) {
+            // A freed slot is said nothing about: the client frees it on the
+            // same tick by the same rule (SectorMotionSet::apply).
+            if (!ms.active(i)) continue;
             const sim::SectorMotion& m = ms.at(i);
             if (i < L.sent_motion_count && same_motion(L.sent_motions[i], m)) continue;
             L.sent_motions[i] = m;
@@ -1850,6 +1853,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             }
         };
         for (u32 i = 0; i < ms.count(); ++i) {
+            if (!ms.active(i)) continue;
             const u32 si = ms.at(i).sector;
             if (si >= L.host->view->sector_count) continue;
             mix(L.host->view->sector(si).floor_z.raw);

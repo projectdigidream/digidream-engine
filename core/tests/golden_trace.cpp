@@ -417,6 +417,7 @@ void world_dump(const World& w) {
                     a.mv.grappling ? 1 : 0, a.mv.climbing ? 1 : 0);
     }
     for (u32 i = 0; i < w.sim.motions().count(); ++i) {
+        if (!w.sim.motions().active(i)) continue;
         const dnp::sim::SectorMotion& m = w.sim.motions().at(i);
         std::printf("motion %u sector %u off %020lld %020lld %020lld\n", i, m.sector,
                     static_cast<long long>(m.offset.x.raw),

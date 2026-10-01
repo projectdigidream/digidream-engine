@@ -82,43 +82,55 @@ fx3 SectorMotion::carry_delta(fx2 p) const noexcept {
 }
 
 u32 SectorMotionSet::add(const geom::MapStorage& map, u32 sector) noexcept {
-    if (count_ >= MAX_MOVING_SECTORS) return MAX_MOVING_SECTORS;
     const i32 existing = find(sector);
     if (existing >= 0) return static_cast<u32>(existing);
+    // The lowest free slot, else a new one. Lowest, so the layout depends only
+    // on the sequence of adds and frees -- the same sequence, the same slots.
+    u32 slot = count_;
+    for (u32 i = 0; i < count_; ++i) if (!motions_[i].active) { slot = i; break; }
+    if (slot >= MAX_MOVING_SECTORS) return MAX_MOVING_SECTORS;
 
     const geom::MapData m = map.view();
     if (sector >= m.sector_count) return MAX_MOVING_SECTORS;
     const geom::Sector& s = m.sector(sector);
     if (s.point_count > geom::MAX_POLY_POINTS) return MAX_MOVING_SECTORS;
 
-    motion_of_sector_[sector] = static_cast<i16>(count_);
-    SectorMotion& sm = motions_[count_];
+    motion_of_sector_[sector] = static_cast<i16>(slot);
+    SectorMotion& sm = motions_[slot];
     sm = SectorMotion{};
+    sm.active = true;
     sm.sector = sector;
     sm.base_point_count = s.point_count;
     for (u16 i = 0; i < s.point_count; ++i) sm.base_points[i] = m.point(s.first_point + i);
     sm.base_floor = s.floor_z;
     sm.base_ceil = s.ceil_z;
-    return count_++;
+    if (slot == count_) ++count_;
+    return slot;
+}
+
+void SectorMotionSet::release(u32 i) noexcept {
+    if (i >= count_ || !motions_[i].active) return;
+    SectorMotion& m = motions_[i];
+    if (m.sector < geom::MAX_MAP_SECTORS && motion_of_sector_[m.sector] == static_cast<i16>(i)) {
+        motion_of_sector_[m.sector] = -1;
+    }
+    // Inert as well as inactive: anything that still reads the slot sees a
+    // sector that is not moving.
+    m = SectorMotion{};
+    // The high-water mark comes down past free slots at the top, so an empty
+    // set is count() == 0 again.
+    while (count_ > 0 && !motions_[count_ - 1].active) --count_;
 }
 
 void SectorMotionSet::forget_sectors(u32 first, u32 count) noexcept {
-    u32 kept = 0;
-    for (u32 i = 0; i < count_; ++i) {
-        const u32 s = motions_[i].sector;
-        if (s >= first && s < first + count) continue;
-        if (kept != i) motions_[kept] = motions_[i];
-        ++kept;
+    for (u32 i = count_; i-- > 0;) {
+        const SectorMotion& m = motions_[i];
+        if (m.active && m.sector >= first && m.sector < first + count) release(i);
     }
-    count_ = kept;
-    for (u32 i = 0; i < geom::MAX_MAP_SECTORS; ++i) motion_of_sector_[i] = -1;
-    for (u32 i = 0; i < count_; ++i) motion_of_sector_[motions_[i].sector] = static_cast<i16>(i);
 }
 
 i32 SectorMotionSet::find(u32 sector) const noexcept {
-    for (u32 i = 0; i < count_; ++i) {
-        if (motions_[i].sector == sector) return static_cast<i32>(i);
-    }
+    if (sector < geom::MAX_MAP_SECTORS) return motion_of_sector_[sector];
     return -1;
 }
 
@@ -155,8 +167,14 @@ bool SectorMotionSet::set_discrete(u32 sector, fx3 offset, MotionTarget target) 
 void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
     if (count_ == 0) return;   // nothing moves; the waypoint pass has nothing to do either
 
+    // Motions that finish this tick with their sector back where it was
+    // authored. Freed at the END of apply, after the waypoints and paths below
+    // have ridden this tick's (zero) offset.
+    u32 done[MAX_MOVING_SECTORS];
+    u32 ndone = 0;
     for (u32 i = 0; i < count_; ++i) {
         SectorMotion& m = motions_[i];
+        if (!m.active) continue;
         m.prev_offset = m.offset;
         m.prev_angle = m.angle;
 
@@ -166,6 +184,17 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
         }
         // ScriptedDiscrete keeps whatever set_discrete() last wrote; Static
         // keeps a zero offset.
+
+        // AT REST FOR GOOD: a one-shot that has run its course and ends where
+        // the sector began -- every Doom door that closes, every lift that
+        // returns. Its geometry is the authored geometry, so the slot can go.
+        // A pure function of the motion and the tick, so a predicting client
+        // frees the same slot on the same tick without being told.
+        if (m.type == MotionType::Parametric && m.loop == LoopMode::Once &&
+            tick >= m.start_tick + m.duration_ticks + MOTION_FREE_GRACE_TICKS &&
+            m.offset == fx3::zero() && m.angle == 0) {
+            done[ndone++] = i;
+        }
 
         geom::Sector& s = map.sector_mut(m.sector);
 
@@ -263,12 +292,16 @@ void SectorMotionSet::apply(geom::MapStorage& map, u32 tick) noexcept {
     // horizontally: a lift travelling straight up does not change any
     // footprint, and the overwhelmingly common case costs one boolean test.
     if (map.grid_dirty()) map.rebuild_grid();
+
+    for (u32 k = 0; k < ndone; ++k) release(done[k]);
 }
 
 void SectorMotionSet::hash_into(StateHasher& h) const noexcept {
     h.u32v(count_);
     for (u32 i = 0; i < count_; ++i) {
         const SectorMotion& m = motions_[i];
+        h.boolv(m.active);
+        if (!m.active) continue;
         h.u32v(m.sector);
         h.byte(static_cast<unsigned char>(m.type));
         h.byte(static_cast<unsigned char>(m.target));

@@ -32,6 +32,15 @@ using namespace dnp;
 // so 64 ran out inside one large level. ~3 KB a slot (the base footprint).
 inline constexpr u32 MAX_MOVING_SECTORS = 512;
 
+// How long a motion stays held after it has come to rest for good, before its
+// slot is freed. Not zero: a predicting client REWINDS to the last snapshot and
+// replays ticks forward, and a motion freed at its end tick is missing from the
+// replay of the ticks just before it -- the lift sits at rest where the server
+// had it moving, and every rider mispredicts. Four seconds is far longer than
+// any replay reaches back; one past that is a client that has lost the plot
+// and resyncs anyway.
+inline constexpr u32 MOTION_FREE_GRACE_TICKS = 4 * TICK_RATE_HZ;
+
 enum class MotionType : u8 {
     Static = 0,
     Parametric = 1,
@@ -59,6 +68,11 @@ enum class MotionTarget : u8 {
 };
 
 struct SectorMotion {
+    // Whether this slot holds a motion. A slot is FREED when its motion has
+    // finished with the sector back exactly where it was authored (see
+    // SectorMotionSet::apply), and the next add() reuses it. Slots never move,
+    // so an index means the same slot for as long as it is held.
+    bool         active = false;
     u32          sector = 0;
     MotionType   type = MotionType::Static;
     MotionTarget target = MotionTarget::Both;
@@ -164,7 +178,15 @@ public:
         count_ = 0;
         for (u32 i = 0; i < geom::MAX_MAP_SECTORS; ++i) motion_of_sector_[i] = -1;
     }
+    // The slots in use or once used: iterate [0, count()) and skip !active().
     u32 count() const noexcept { return count_; }
+    bool active(u32 i) const noexcept { return i < count_ && motions_[i].active; }
+    // How many slots hold a motion right now.
+    u32 live_count() const noexcept {
+        u32 n = 0;
+        for (u32 i = 0; i < count_; ++i) if (motions_[i].active) ++n;
+        return n;
+    }
     const SectorMotion& at(u32 i) const noexcept { return motions_[i]; }
     SectorMotion& at_mut(u32 i) noexcept { return motions_[i]; }
 
@@ -175,10 +197,12 @@ public:
     i32 find(u32 sector) const noexcept;
 
     // Drop every motion of a sector in [first, first + count): a chunk of the
-    // map was removed (geom::MapStorage::remove_chunk). The rest keep their
-    // order, so what is hashed and applied does not depend on what was removed
-    // beyond the removal itself.
+    // map was removed (geom::MapStorage::remove_chunk). Their slots are freed;
+    // every other motion keeps its slot.
     void forget_sectors(u32 first, u32 count) noexcept;
+
+    // Free one slot. The sector keeps whatever geometry was last written.
+    void release(u32 i) noexcept;
 
     // Start a parametric motion. Lua-triggered; from here it runs predictably.
     // `pivot`, `spin_from` and `spin_to` are the turn; all three default to

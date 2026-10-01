@@ -403,6 +403,7 @@ void World::sweep_agent(u32 i, const SectorMotion& m) noexcept {
 void World::sweep_moving_sectors() noexcept {
     if (!map_) return;
     for (u32 k = 0; k < motions_.count(); ++k) {
+        if (!motions_.active(k)) continue;
         const SectorMotion& m = motions_.at(k);
         const fx3 d = m.floor_delta();
         // Only a footprint that MOVED sweeps anything. A lift travelling

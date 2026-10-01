@@ -799,6 +799,153 @@ static void test_a_platform_moving_into_its_neighbour_stays_coherent() {
                 D(w.agent(a).pos.x), D(w.agent(a).pos.z), w.agent(a).mv.sector);
 }
 
+
+// ----------------------------------------------------- freeing motion slots
+//
+// A slot is freed when its motion has finished with the sector back where it
+// was authored. Without that, every door that ever moved held a slot for the
+// life of the world, and a world holding several levels ran out.
+
+// A row of `n` separate rooms, each its own sector: so many doors.
+struct Row {
+    MapStorage store;
+    MapData    view{};
+    void build(u32 n) {
+        store.clear();
+        for (u32 i = 0; i < n; ++i) {
+            const fx x = F(static_cast<i64>(i) * 4);
+            const fx2 q[] = {{x, F(0)}, {x + F(3), F(0)}, {x + F(3), F(3)}, {x, F(3)}};
+            const u32 s = store.add_sector(q, 4, F(0), F(8), 0);
+            for (u16 k = 0; k < 4; ++k) store.add_side(s, k, static_cast<u16>((k + 1) % 4), NO_SECTOR, 0);
+        }
+        store.rebuild_grid();
+    }
+    void attach(World& w) {
+        w.set_map_storage(&store);
+        view = store.view();
+        w.set_map(&view);
+    }
+};
+
+// Open a door (0 -> up over `d` ticks), then shut it again: the Doom cycle.
+static void open_and_shut(World& w, MapStorage& store, u32 sector, u32 at, u32 d) {
+    w.motions().add(store, sector);
+    w.motions().start_parametric(sector, fx3::zero(), fx3{fx::zero(), fx::zero(), F(6)},
+                                 at, d, LoopMode::Once, MotionTarget::Ceiling);
+}
+
+static void test_a_door_at_rest_gives_its_slot_back() {
+    std::printf("motion: a door that has closed again gives its slot back\n");
+    static Row row;
+    row.build(2);
+    const auto wp = std::make_unique<World>();
+    World& w = *wp;
+    row.attach(w);
+    const fx ceil0 = row.store.view().sector(0).ceil_z;
+
+    // Open over 10 ticks...
+    w.motions().add(row.store, 0);
+    w.motions().start_parametric(0, fx3::zero(), fx3{fx::zero(), fx::zero(), F(6)},
+                                 0, 10, LoopMode::Once, MotionTarget::Ceiling);
+    for (int t = 0; t < 20; ++t) w.step();
+    CHECK(w.motions().live_count() == 1);            // open, and staying open: held
+    CHECK(row.store.view().sector(0).ceil_z == ceil0 + F(6));
+    // ...then shut over 10 more.
+    w.motions().start_parametric(0, fx3{fx::zero(), fx::zero(), F(6)}, fx3::zero(),
+                                 w.tick(), 10, LoopMode::Once, MotionTarget::Ceiling);
+    for (int t = 0; t < 20; ++t) w.step();
+    // Shut, but held for the grace a replaying client needs (see
+    // MOTION_FREE_GRACE_TICKS): the replay of a tick just before it closed
+    // must still find it.
+    CHECK(w.motions().live_count() == 1);
+    for (u32 t = 0; t < MOTION_FREE_GRACE_TICKS; ++t) w.step();
+    CHECK(w.motions().live_count() == 0);            // shut: given back
+    CHECK(w.motions().count() == 0);
+    CHECK(row.store.view().sector(0).ceil_z == ceil0);   // exactly where it was authored
+    CHECK(w.motions().find(0) < 0);
+
+    // CONTROL: a lift that loops is never at rest for good, and keeps its slot.
+    w.motions().add(row.store, 1);
+    w.motions().start_parametric(1, fx3::zero(), fx3{fx::zero(), fx::zero(), F(2)},
+                                 w.tick(), 10, LoopMode::PingPong, MotionTarget::Floor);
+    for (int t = 0; t < 200; ++t) w.step();
+    CHECK(w.motions().live_count() == 1);
+}
+
+static void test_more_doors_than_slots() {
+    std::printf("motion: more doors than slots, one after another, all open\n");
+    // THE REASON. Each door opens and shuts in turn; a world that never freed a
+    // slot ran out at MAX_MOVING_SECTORS and every door after that stayed shut.
+    const u32 n = MAX_MOVING_SECTORS + 88;
+    static Row row;
+    row.build(n);
+    const auto wp = std::make_unique<World>();
+    World& w = *wp;
+    row.attach(w);
+    u32 refused = 0, peak = 0;
+    for (u32 s = 0; s < n; ++s) {
+        if (w.motions().add(row.store, s) >= MAX_MOVING_SECTORS) { ++refused; continue; }
+        // Up and straight back down: a one-shot from 0 to 0 by way of a
+        // pingpong would loop, so two one-shots, as a Doom door is.
+        w.motions().start_parametric(s, fx3::zero(), fx3{fx::zero(), fx::zero(), F(6)},
+                                     w.tick(), 4, LoopMode::Once, MotionTarget::Ceiling);
+        for (int t = 0; t < 6; ++t) w.step();
+        w.motions().start_parametric(s, fx3{fx::zero(), fx::zero(), F(6)}, fx3::zero(),
+                                     w.tick(), 4, LoopMode::Once, MotionTarget::Ceiling);
+        for (int t = 0; t < 6; ++t) w.step();
+        if (w.motions().live_count() > peak) peak = w.motions().live_count();
+    }
+    for (u32 t = 0; t < MOTION_FREE_GRACE_TICKS; ++t) w.step();
+    CHECK(refused == 0);
+    // A door every 12 ticks, each held for the grace: about grace/12 at once.
+    CHECK(peak <= MOTION_FREE_GRACE_TICKS / 12 + 2);
+    CHECK(w.motions().live_count() == 0);
+    // CONTROL: the same row with every door left OPEN fills the slots, and the
+    // ones past the cap are refused -- so the test above can fail.
+    const auto w2p = std::make_unique<World>();
+    World& w2 = *w2p;
+    static Row row2;
+    row2.build(n);
+    row2.attach(w2);
+    u32 refused2 = 0;
+    for (u32 s = 0; s < n; ++s) {
+        if (w2.motions().add(row2.store, s) >= MAX_MOVING_SECTORS) { ++refused2; continue; }
+        w2.motions().start_parametric(s, fx3::zero(), fx3{fx::zero(), fx::zero(), F(6)},
+                                      w2.tick(), 4, LoopMode::Once, MotionTarget::Ceiling);
+        for (int t = 0; t < 6; ++t) w2.step();
+    }
+    CHECK(refused2 == n - MAX_MOVING_SECTORS);
+}
+
+static void test_two_worlds_free_on_the_same_tick() {
+    std::printf("motion: two worlds free the same slot on the same tick\n");
+    // The client is never told a slot was freed; it frees by the same rule.
+    static Row ra, rb;
+    ra.build(3);
+    rb.build(3);
+    const auto wap = std::make_unique<World>();
+    const auto wbp = std::make_unique<World>();
+    World& wa = *wap;
+    World& wb = *wbp;
+    ra.attach(wa);
+    rb.attach(wb);
+    bool same = true;
+    for (u32 t = 0; t < 120 + MOTION_FREE_GRACE_TICKS; ++t) {
+        if (t == 5)  { open_and_shut(wa, ra.store, 1, 5, 10);  open_and_shut(wb, rb.store, 1, 5, 10); }
+        if (t == 40) {
+            wa.motions().start_parametric(1, fx3{fx::zero(), fx::zero(), F(6)}, fx3::zero(), 40, 10,
+                                          LoopMode::Once, MotionTarget::Ceiling);
+            wb.motions().start_parametric(1, fx3{fx::zero(), fx::zero(), F(6)}, fx3::zero(), 40, 10,
+                                          LoopMode::Once, MotionTarget::Ceiling);
+        }
+        wa.step();
+        wb.step();
+        if (wa.hash() != wb.hash() || wa.motions().live_count() != wb.motions().live_count()) same = false;
+    }
+    CHECK(same);
+    CHECK(wa.motions().live_count() == 0);
+}
+
 int main() {
     std::printf("== core/sim sector motion suite ==\n");
     test_parametric_is_a_pure_function();
@@ -817,6 +964,9 @@ int main() {
     test_no_drift_over_a_long_run();
     test_a_discrete_anchor_is_hashed_in_its_own_frame();
     test_a_parametric_anchor_is_still_hashed_absolutely();
+    test_a_door_at_rest_gives_its_slot_back();
+    test_more_doors_than_slots();
+    test_two_worlds_free_on_the_same_tick();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }
