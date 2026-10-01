@@ -18,6 +18,9 @@
 //           state directory: the level comes back as it was left, and the
 //           script did not put down a fresh four. CONTROL: the first start did.
 //
+// And a NEW GAME in two of them: the world from scratch, and nothing kept --
+// not in memory, and not on disk.
+//
 import { spawn } from 'node:child_process'
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -26,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
-import { encodeHello, decodeControlMessage, encodeGameSave, encodeGameLoad, MSG } from '../../../client/src/proto.js'
+import { encodeHello, decodeControlMessage, encodeGameSave, encodeGameLoad, encodeGameNew, MSG } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -156,6 +159,18 @@ try {
     const restored = [...run.log.matchAll(/restored (\d) keys/g)].map((m) => Number(m[1]))
     check(restored.at(-1) === 3, `the level is back as it was saved: three keys (${restored.at(-1)})`)
     check(run.log.includes('level 0 restored'), 'and the server says it restored it')
+
+    // A NEW GAME: the world from scratch. The level is placed afresh -- four
+    // keys again -- and nothing kept comes back.
+    const placedBefore = (run.log.match(/placed 4 keys/g) ?? []).length
+    const w0 = run.welcomes
+    await run.cw.write(encodeGameNew())
+    await waitFor(() => run.results.length >= 3, 6000, 'new game result')
+    const fresh = run.results[2]
+    check(fresh.ok && fresh.op === 'new', `a new game starts (${fresh.text})`)
+    check(run.welcomes === w0 + 1, 'and the player is put in it')
+    check((run.log.match(/placed 4 keys/g) ?? []).length === placedBefore + 1,
+          'the level is placed afresh: four keys')
     await stop(run)
   }
 
@@ -187,6 +202,16 @@ try {
     const restored = Number(second.log.match(/restored (\d) keys/)?.[1])
     check(restored === 2, `it comes back as it was left: two keys (${restored})`)
     check(/saved level state\(s\) read/.test(second.log), 'and says where it read them from')
+
+    // A new game forgets the kept state ON DISK too, or the next restart would
+    // bring the old game back.
+    const file = join(dir, 'levels', 'test.save')
+    check(existsSync(file), 'CONTROL: the kept state is on disk before a new game')
+    await second.cw.write(encodeGameNew())
+    await waitFor(() => second.results.length >= 1, 6000, 'new game result')
+    check(second.results[0].ok && /deleted/.test(second.results[0].text),
+          `a new game deletes it (${second.results[0].text})`)
+    check(!existsSync(file), 'and it is gone')
     await stop(second)
   }
 } catch (e) {

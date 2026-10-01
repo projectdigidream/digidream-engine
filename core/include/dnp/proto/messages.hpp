@@ -103,6 +103,10 @@ inline constexpr u8 MSG_HOME = 0x2B;
 inline constexpr u8 MSG_GAME_SAVE   = 0x2C;
 inline constexpr u8 MSG_GAME_LOAD   = 0x2D;
 inline constexpr u8 MSG_GAME_RESULT = 0x2E;
+// A NEW GAME: the world from scratch, every kept level state forgotten, the
+// player at the first level's spawn. Client to server, no body; answered with
+// GAME_RESULT, op 2. Single player only.
+inline constexpr u8 MSG_GAME_NEW    = 0x2F;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not
 // gameplay limits.

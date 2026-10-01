@@ -34,6 +34,7 @@ export const MSG = {
   GAME_SAVE: 0x2C,
   GAME_LOAD: 0x2D,
   GAME_RESULT: 0x2E,
+  GAME_NEW: 0x2F,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -476,7 +477,7 @@ export function decodeControlMessage (buf) {
     const n = r.u16()
     const b = r.bytes(n)
     if (!r.ok || b === null) return null
-    return { type, op: op === 0 ? 'save' : 'load', slot, ok, text: new TextDecoder().decode(b) }
+    return { type, op: ['save', 'load', 'new'][op] ?? 'unknown', slot, ok, text: new TextDecoder().decode(b) }
   }
   if (type === MSG.HOME) {
     const msg = { type, level: r.u16() }
@@ -511,6 +512,12 @@ export function decodeControlMessage (buf) {
 export function encodeGameSave (slot) {
   const w = new Writer(8)
   w.u32(1 + 1).u8(MSG.GAME_SAVE).u8(slot & 0xFF)
+  return w.done()
+}
+/** Ask for a new game: the world from scratch (docs/SAVING.md). */
+export function encodeGameNew () {
+  const w = new Writer(8)
+  w.u32(1).u8(MSG.GAME_NEW)
   return w.done()
 }
 export function encodeGameLoad (slot) {

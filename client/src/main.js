@@ -53,7 +53,7 @@ import { Neighbourhood } from './seam/neighbourhood.js'
 import { buildCell } from './seam/buildcell.js'
 import { report, CrossingProbe, BodyWatch } from './seam/diag.js'
 import { Music } from './audio/music.js'
-import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, CAMERA_FIELD } from './proto.js'
+import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, encodeGameNew, CAMERA_FIELD } from './proto.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -433,9 +433,9 @@ if (LIVE) {
       // What became of a save or load the player asked for. Said on screen:
       // "saving is not enabled for this module" is an answer, not an error.
       else if (m.type === MSG.GAME_RESULT) {
-        const what = m.op === 'save' ? 'save' : 'load'
-        say(`${what} slot ${m.slot}: ${m.ok ? '' : 'refused -- '}${m.text}`)
-        report(`[save] ${what} slot ${m.slot}: ${m.ok ? 'ok' : 'refused'} -- ${m.text}`)
+        const what = m.op === 'new' ? 'new game' : `${m.op} slot ${m.slot}`
+        say(`${what}: ${m.ok ? '' : 'refused -- '}${m.text}`)
+        report(`[save] ${what}: ${m.ok ? 'ok' : 'refused'} -- ${m.text}`)
       }
       else if (m.type === MSG.MAP_DATA) {
         if (!stream) {
@@ -1718,12 +1718,27 @@ addEventListener('wheel', (e) => {
 
 const held = new Set()
 addEventListener('keydown', (e) => { held.add(e.code); if (e.code === 'Space') e.preventDefault() })
+let newGameArmedAt = 0
 // QUICK SAVE AND LOAD, as Doom had them: F5 saves to slot 0, F9 loads it. The
 // server decides whether this game may (docs/SAVING.md) and says why not.
 addEventListener('keydown', (e) => {
   if (!LIVE || !conn || e.repeat) return
   if (e.code === 'F5') { e.preventDefault(); conn.sendControl(encodeGameSave(0)); say('saving...') }
   if (e.code === 'F9') { e.preventDefault(); conn.sendControl(encodeGameLoad(0)); say('loading...') }
+  // A NEW GAME throws the current one away, so it asks twice: F2, then F2
+  // again within three seconds.
+  if (e.code === 'F2') {
+    e.preventDefault()
+    const now = performance.now()
+    if (now - newGameArmedAt < 3000) {
+      newGameArmedAt = 0
+      conn.sendControl(encodeGameNew())
+      say('starting a new game...')
+    } else {
+      newGameArmedAt = now
+      say('press F2 again to start a new game (the current one is lost unless saved)')
+    }
+  }
 })
 addEventListener('keyup', (e) => held.delete(e.code))
 addEventListener('blur', () => held.clear())

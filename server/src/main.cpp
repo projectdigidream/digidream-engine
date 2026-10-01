@@ -982,8 +982,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
         w.bytes(reinterpret_cast<const u8*>(text.data()), n);
         finish_frame(buf, len_pos, w.size());
         link.send_control(id, buf, w.size());
-        std::fprintf(stderr, "[srv] session %u: %s slot %u: %s\n", id, op == 0 ? "save" : "load",
-                     slot, text.c_str());
+        std::fprintf(stderr, "[srv] session %u: %s slot %u: %s\n", id,
+                     op == 0 ? "save" : op == 1 ? "load" : "new game", slot, text.c_str());
     }
 
     // Why a save or load is refused, or empty if it may go ahead.
@@ -1020,6 +1020,46 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             return;
         }
         send_game_result(id, 0, slot, true, "saved " + std::to_string(all.size()) + " level(s)");
+    }
+
+    // Tear the game down to `kept`: the session's body leaves the world, every
+    // level in memory is dropped WITHOUT being kept (it is the game being
+    // replaced), and the kept states become exactly `kept`. Each level's VM
+    // goes with its level, so every script starts again from its own source.
+    void replace_world(Session& s, u32 id, const std::map<std::string, std::string>& kept) {
+        detach_session(s, id);
+        discarding_levels_ = true;
+        for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) unload_level(li);
+        discarding_levels_ = false;
+        level_saves_ = kept;
+    }
+
+    // A NEW GAME: the world from scratch, as the module ships it. Every kept
+    // level state is forgotten -- in memory, and on disk when the server
+    // persists, or the next restart would bring the old game back -- and the
+    // player starts at the first level's spawn with nothing.
+    //
+    // Single player only, like a save; but not gated on saves being enabled,
+    // because starting again is not saving.
+    void new_game(Session& s, u32 id) {
+        if (sessions.size() != 1) { send_game_result(id, 2, 0, false, "a new game is for a single player"); return; }
+        replace_world(s, id, {});
+        u32 removed = 0;
+        if (persist_server) {
+            const std::string dir = state_dir + "/levels";
+            if (DIR* d = opendir(dir.c_str())) {
+                while (dirent* e = readdir(d)) {
+                    const std::string f = e->d_name;
+                    if (f.size() > 5 && f.compare(f.size() - 5, 5, ".save") == 0 &&
+                        std::remove((dir + "/" + f).c_str()) == 0) ++removed;
+                }
+                closedir(d);
+            }
+        }
+        if (!place_in_level(s, id, 0)) { send_game_result(id, 2, 0, false, "the first level would not load"); return; }
+        refresh_residency();
+        send_game_result(id, 2, 0, true, removed ? "a new game; " + std::to_string(removed) +
+                                                       " kept level state(s) deleted" : "a new game");
     }
 
     void load_game(Session& s, u32 id, u8 slot) {
@@ -1066,11 +1106,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
 
         // THE GAME BEING REPLACED goes, without being kept: it is not the one
         // the player wants back.
-        detach_session(s, id);
-        discarding_levels_ = true;
-        for (u32 li = 0; li < level_count(); ++li) if (is_live(li)) unload_level(li);
-        discarding_levels_ = false;
-        level_saves_ = levels_in;
+        replace_world(s, id, levels_in);
 
         const u32 li = static_cast<u32>(target);
         if (!load_level(li)) { send_game_result(id, 1, slot, false, "the saved level would not load"); return; }
@@ -1903,6 +1939,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink {
             if (!r.ok() || !s.hello_done) return;
             if (type == proto::MSG_GAME_SAVE) save_game(s, id, slot);
             else                              load_game(s, id, slot);
+            return;
+        }
+        if (type == proto::MSG_GAME_NEW) {
+            if (!s.hello_done) return;
+            new_game(s, id);
             return;
         }
 
