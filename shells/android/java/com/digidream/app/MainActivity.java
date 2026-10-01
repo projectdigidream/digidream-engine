@@ -610,6 +610,34 @@ public final class MainActivity extends Activity {
         throw new IOException("bad music index: " + e.getMessage());
       }
     }
+    // The UI layout index (docs/UI_LAYOUT.md): the first module that says
+    // wins, then the APK's own -- every asset's rule, as tools/devserver.js.
+    if (path.equals("ui/index.json")) {
+      try {
+        JSONObject maps = new JSONObject();
+        String dflt = null;
+        List<byte[]> sources = new ArrayList<>();
+        for (File m : mods) {
+          File f = new File(m, "assets/ui/index.json");
+          if (f.isFile()) try (InputStream in = new FileInputStream(f)) { sources.add(readAllBytes(in)); }
+        }
+        byte[] base = assetBytes(path);
+        if (base != null) sources.add(base);
+        for (byte[] src : sources) {
+          JSONObject j = new JSONObject(new String(src, "utf-8"));
+          if (dflt == null && j.has("default") && !j.isNull("default")) dflt = j.getString("default");
+          JSONObject mp = j.optJSONObject("maps");
+          if (mp != null) for (java.util.Iterator<String> it = mp.keys(); it.hasNext();) { String k = it.next(); if (!maps.has(k)) maps.put(k, mp.get(k)); }
+        }
+        JSONObject out = new JSONObject();
+        out.put("version", 1);
+        out.put("default", dflt == null ? JSONObject.NULL : dflt);
+        out.put("maps", maps);
+        return bytes("application/json", out.toString().getBytes("utf-8"));
+      } catch (org.json.JSONException e) {
+        throw new IOException("bad ui index: " + e.getMessage());
+      }
+    }
     if (path.equals("textures/index.json")) {
       try {
         JSONObject sizes = new JSONObject();
@@ -636,7 +664,8 @@ public final class MainActivity extends Activity {
         throw new IOException("bad texture index: " + e.getMessage());
       }
     }
-    if (path.startsWith("textures/") || path.startsWith("sprites/") || path.startsWith("music/")) {
+    if (path.startsWith("textures/") || path.startsWith("sprites/") || path.startsWith("music/") ||
+        path.startsWith("sounds/") || path.startsWith("ui/")) {
       for (File m : mods) {
         File f = new File(m, "assets/" + path);
         if (f.isFile()) {

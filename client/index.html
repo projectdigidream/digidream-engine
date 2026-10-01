@@ -45,8 +45,6 @@
               left: calc(12px + env(safe-area-inset-left)); }
     #help   { bottom: calc(10px + env(safe-area-inset-bottom));
               left: calc(12px + env(safe-area-inset-left)); }
-    #health { bottom: calc(34px + env(safe-area-inset-bottom));
-              left: calc(12px + env(safe-area-inset-left)); }
   }
 
   /* With the thumbstick mounted, the corner it lives in belongs to it. The
@@ -54,7 +52,6 @@
      under it -- text behind a translucent control is unreadable and looks
      like a rendering fault. */
   .dnp-touch-on #help { display: none !important; }
-  .dnp-touch-on #health { bottom: auto; top: calc(34px + env(safe-area-inset-top)); }
   .dnp-touch-on #hud { font-size: 10px; opacity: .75; }
 
   /* The two bindings that have no button to label them. Centred low, above
@@ -94,27 +91,8 @@
     font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   #help { bottom: 10px; left: 12px; color: #8fa6c4; display: none; }
-  /* HEALTH. Bottom-left, above the help line, and deliberately large: it is the
-     one number a player looks at while something is shooting them, and the HUD
-     block in the corner is a debug readout nobody reads under pressure. */
-  #health {
-    position: fixed; left: 12px; bottom: 34px; width: min(240px, 40vw);
-    display: none;
-  }
-  #health .row {
-    display: flex; align-items: baseline; gap: 8px;
-    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #cfe3ff;
-    text-shadow: 0 1px 2px #000;
-  }
-  #health .num { font-size: 20px; font-weight: 600; min-width: 3ch; text-align: right; }
-  #health .track {
-    margin-top: 4px; height: 8px; background: #1b2230;
-    border: 1px solid #2c3648; border-radius: 3px; overflow: hidden;
-  }
-  /* No transition on the fill: a hit should read as instant. A smoothed bar
-     makes a burst of damage look like one slow drain and hides how many hits
-     landed. */
-  #health .fill { height: 100%; width: 100%; background: #5fbf6a; }
+  /* HEALTH is drawn by the HUD now, from the module's UI layout
+     (client/src/render/layout.js, docs/UI_LAYOUT.md). */
   #status { top: 50%; left: 0; right: 0; text-align: center; color: #9db4d4; font-size: 14px; }
   /* The way back to the studio, only when the studio sent us here (?studio=1).
      A plain link: the studio is a page on the same origin. */
@@ -137,10 +115,6 @@
   <div id="hud"></div>
   <div id="status">starting...</div>
   <div id="loading"><div class="track"><div class="fill"></div></div><div class="detail"></div></div>
-  <div id="health">
-    <div class="row"><span class="num">--</span><span class="label">health</span></div>
-    <div class="track"><div class="fill"></div></div>
-  </div>
   <div id="help">WASD move   SPACE jump   SHIFT dash   E use   F attack   Q/R rotate   wheel zoom   ?proj=orthographic</div>
   <!--
     The touch bindings, shown once and then got out of the way. A phone has no

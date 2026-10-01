@@ -68,6 +68,7 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
     // it does, /sfx/ is a 404 and the game is silent but for its music.
     ['/sfx/', join(root, 'sfx')],
     ['/sounds/', join(root, 'assets', 'sounds')],
+    ['/ui/', join(root, 'assets', 'ui')],
     // The studio and the runtime Lua it bakes against; both staged only with
     // --studio, and a 404 otherwise.
     ['/studio/runtime/', join(root, 'studio', 'runtime')],
@@ -153,6 +154,21 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
         return
       }
 
+      // The UI layout index: the first module that says wins, then the engine,
+      // as for every asset file (tools/devserver.js does the same).
+      if (path === '/ui/index.json') {
+        const out = { version: 1, default: null, maps: {} }
+        for (const m of [...(await moduleRoots()), root]) {
+          const raw = await readFile(join(m, 'assets', 'ui', 'index.json'), 'utf8').catch(() => null)
+          if (!raw) continue
+          let j
+          try { j = JSON.parse(raw) } catch { continue }
+          if (j.default) out.default ??= j.default
+          for (const [k, v] of Object.entries(j.maps ?? {})) out.maps[k] ??= v
+        }
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out))
+        return
+      }
       // The music index likewise: per module on disk, one table for the
       // client, keyed by map hash -- a union, since two modules' maps have
       // different hashes.
@@ -171,7 +187,7 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
 
       let file
       if (path.startsWith('/sprites/') || path.startsWith('/textures/') ||
-          path.startsWith('/music/') || path.startsWith('/sounds/')) {
+          path.startsWith('/music/') || path.startsWith('/sounds/') || path.startsWith('/ui/')) {
         const clean = normalize(decodeURIComponent(path))
         file = clean.includes('..') ? null : await moduleFile(join('assets', clean))
       } else {

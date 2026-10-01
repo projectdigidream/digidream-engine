@@ -188,7 +188,7 @@ cp "$ROOT/server/edge/src/framing.js" "$W/framing.js"
 # Art, with the module winning per FILE -- which is devserver.js's rule and has
 # to be, or a module that overrides ten textures would have to ship all two
 # thousand.
-for kind in textures sprites music sounds; do
+for kind in textures sprites music sounds ui; do
   mkdir -p "$W/$kind"
   [[ -d "$ROOT/assets/$kind" ]] && cp -R "$ROOT/assets/$kind/." "$W/$kind/" 2>/dev/null || true
   [[ -d "$MODULE_DIR/assets/$kind" ]] && cp -R "$MODULE_DIR/assets/$kind/." "$W/$kind/" 2>/dev/null || true

@@ -123,8 +123,14 @@ kill.push(browser)
 // Long enough to load the core, join, and walk the length of seam_a's corridor.
 const crossed = () => (pageLog.match(/\[seam\] crossing:/g) ?? []).length
 for (let i = 0; i < 90 * CROSSINGS && crossed() < CROSSINGS; i++) await sleep(400)
+const gone = new Promise((r) => browser.once('exit', r))
 try { browser.kill('SIGKILL') } catch {}
-rmSync(profile, { recursive: true, force: true })
+// Chrome's helpers outlive the main process by a moment and are still writing
+// the profile, so a delete straight after the kill raced them (ENOTEMPTY) and
+// failed a run whose checks had all passed. Wait for the exit, retry the delete,
+// and never fail on what is only a temporary directory.
+await Promise.race([gone, sleep(3000)])
+try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) } catch {}
 
 if (process.env.DNP_SEAMCAM_VERBOSE) console.log(pageLog)
 const seam = pageLog.split('\n').filter((l) => l.includes('[seam]'))

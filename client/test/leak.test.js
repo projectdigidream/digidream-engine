@@ -15,8 +15,9 @@
 // retained DOM nodes and the listeners.
 //
 // DNP_LEAK_CONTROL=1 is the CONTROL: each round also keeps a hundred thousand
-// small objects (several megabytes of JS heap) the page never lets go of, and
-// the heap check must catch it -- a test that cannot fail measures nothing.
+// small objects (several megabytes of JS heap) and one GPU texture the page
+// never lets go of, and both checks must catch them -- a test that cannot fail
+// measures nothing.
 //
 // OPT-IN, like the other browser tests (DNP_CLIENT_PAGE_TEST=1): one Chrome
 // and a whole stack, for a couple of minutes.
@@ -124,10 +125,13 @@ const metrics = async () => {
   const r = await send('Performance.getMetrics')
   const m = Object.fromEntries(r.result.metrics.map((x) => [x.name, x.value]))
   const gpu = await evaluate('window.__dnpStats?.gpu?.()') ?? {}
+  const cached = await evaluate('window.__dnpStats?.cachedTextures?.() ?? 0')
   const wasm = await evaluate('window.__dnpStats?.wasmBytes?.() ?? 0')
   return {
     nodes: m.Nodes, listeners: m.JSEventListeners, heapMB: m.JSHeapUsedSize / 1048576,
-    geometries: gpu.geometries ?? 0, textures: gpu.textures ?? 0, wasmMB: wasm / 1048576
+    // Textures NOT explained by the sprite caches, whose own count climbs
+    // with what play has happened to show (main.js dnpStats.cachedTextures).
+    geometries: gpu.geometries ?? 0, textures: (gpu.textures ?? 0) - cached, cached, wasmMB: wasm / 1048576
   }
 }
 // Least squares over the later rows, per round.
@@ -168,7 +172,10 @@ try {
       // Objects, not a typed array: a typed array's bytes are EXTERNAL memory,
       // which the JS heap figure never counts -- the first version of this
       // control kept 2 MB a round of it and was not caught.
-      if (CONTROL) await evaluate('(window.__kept = window.__kept || []).push(Array.from({ length: 100000 }, (_, i) => ({ i, s: "x" + i })))')
+      if (CONTROL) {
+        await evaluate('(window.__kept = window.__kept || []).push(Array.from({ length: 100000 }, (_, i) => ({ i, s: "x" + i })))')
+        await evaluate('window.__dnpStats.plantTexture()')
+      }
       // A NEW GAME: F2, then F2 again (client/src/main.js). A fresh world.
       const w0 = await evaluate('window.__dnpStats.welcomes')
       await key('F2', 'F2'); await sleep(300); await key('F2', 'F2')
@@ -188,7 +195,7 @@ try {
       census = now
       const m = rows.at(-1)
       console.log(`  round ${r + 1}: heap ${m.heapMB.toFixed(1)} MB, wasm ${m.wasmMB.toFixed(0)} MB, nodes ${m.nodes}, ` +
-                  `listeners ${m.listeners}, geometries ${m.geometries}, textures ${m.textures}`)
+                  `listeners ${m.listeners}, geometries ${m.geometries}, textures ${m.textures} (+${m.cached} cached)`)
     }
     const welcomes = await evaluate('window.__dnpStats.welcomes')
     check(welcomes >= ROUNDS + 1, `every round started a new game: a fresh world each time (${welcomes} welcomes)`)
@@ -209,6 +216,7 @@ try {
                 `listeners ${g.listeners.toFixed(1)}, geometries ${g.geometries.toFixed(1)}, textures ${g.textures.toFixed(1)}`)
     if (CONTROL) {
       check(g.heap >= 1.5, `CONTROL: a hundred thousand objects kept per round are caught (${g.heap.toFixed(2)} MB per round)`)
+      check(g.textures >= 0.5, `CONTROL: and one texture stranded per round, which no cache explains (${g.textures.toFixed(1)} per round)`)
     } else {
       // THE WASM HEAP: a world and its map left behind at every new game were
       // 14 MB a round, until enterLevel destroyed them.
@@ -216,7 +224,11 @@ try {
       // EXACT for geometry: the body's capsule left on the GPU at every new
       // world was precisely one a round, which any looser bound waves through.
       check(g.geometries < 0.5, `GPU geometries do not grow across new games (${g.geometries.toFixed(1)} per round)`)
-      check(g.textures < 1, `GPU textures do not grow once loaded (${g.textures.toFixed(1)} per round)`)
+      // Less the sprite caches: a monster's frames reach the GPU the first time
+      // one is DRAWN, so the raw count kept climbing for as long as play kept
+      // showing new ones -- at round 8 of 10, and at round 14 of 16 on
+      // another run. A leak is a texture nothing caches.
+      check(g.textures < 0.5, `GPU textures beyond the sprite caches do not grow (${g.textures.toFixed(1)} per round)`)
       check(g.nodes < 50, `retained DOM nodes do not grow (${g.nodes.toFixed(1)} per round)`)
       check(g.listeners < 5, `retained listeners do not grow (${g.listeners.toFixed(1)} per round)`)
       check(g.heap < 1.0, `the JS heap settles (${g.heap.toFixed(2)} MB per round, bound 1.0)`)

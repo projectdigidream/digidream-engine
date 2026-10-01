@@ -127,6 +127,8 @@ const MOUNTS = [
   ['/sfx/', join(ROOT, 'sound', 'tool', 'dist')],
   // Sound banks, by module like music (modules/doom2/assets/sounds).
   ['/sounds/', join(ROOT, 'assets', 'sounds')],
+  // UI layouts (docs/UI_LAYOUT.md), by module; /ui/index.json is merged above.
+  ['/ui/', join(ROOT, 'assets', 'ui')],
   // The studio (docs/STUDIO.md), and the runtime Lua plus vocabularies it
   // bakes and validates against. The runtime mount comes first because the
   // studio mount would otherwise claim the prefix.
@@ -243,6 +245,25 @@ createServer(async (req, res) => {
     // several modules load at once and each contributes its own entries. Ids
     // are absolute and are never renumbered here -- the server refuses to start
     // on a collision, which is the only place that check can be made once.
+    // THE UI LAYOUT INDEX (docs/UI_LAYOUT.md 3.1), merged across modules with
+    // the rule every asset has: the FIRST module that says wins, then the
+    // engine's. It has to be the same rule, or an index naming hud.json would be
+    // one module's while the hud.json served for it was another's.
+    if (req.url.split('?')[0] === '/ui/index.json') {
+      const out = { version: 1, default: null, maps: {} }
+      for (const dir of [...MODULES, ROOT]) {
+        const raw = await readFile(join(dir, 'assets', 'ui', 'index.json'), 'utf8').catch(() => null)
+        if (!raw) continue
+        let j
+        try { j = JSON.parse(raw) } catch { continue }
+        if (j.default) out.default ??= j.default
+        for (const [k, v] of Object.entries(j.maps ?? {})) out.maps[k] ??= v
+      }
+      log(200, req.url)
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(out))
+      return
+    }
+
     for (const [route, rel] of [['/animations.txt', 'assets/animations.txt'],
                                 ['/props.txt', 'assets/props.txt']]) {
       if (req.url.split('?')[0] !== route) continue
@@ -265,7 +286,8 @@ createServer(async (req, res) => {
       file = await findMap(req.url.slice('/maps/'.length).split('?')[0])
     } else if (MODULES.length &&
                (req.url.startsWith('/sprites/') || req.url.startsWith('/textures/') ||
-                req.url.startsWith('/music/') || req.url.startsWith('/sounds/'))) {
+                req.url.startsWith('/music/') || req.url.startsWith('/sounds/') ||
+                req.url.startsWith('/ui/'))) {
       // PER FILE, not per directory. A module that adds three sprites does not
       // have to carry the other two thousand, and one that ships a whole set
       // overrides all of them -- without either having to say which it is.

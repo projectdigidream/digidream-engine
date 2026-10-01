@@ -60,6 +60,7 @@ import { Sfx } from './audio/sfx.js'
 import { OwnSounds } from './audio/ownsounds.js'
 import { SCHEME, FpsLook, fpsPush, TOUCH_SENSITIVITY } from './controls.js'
 import { ViewModel } from './render/viewmodel.js'
+import { HudView, parseLayout, layoutFileFor, DEFAULT_LAYOUT } from './render/layout.js'
 import { soundHash } from './proto.js'
 
 const TICK_HZ = 60
@@ -127,7 +128,9 @@ const TOUCH_BITS = {
   jump: BUTTON.JUMP,
   dash: BUTTON.DASH,
   use: BUTTON.INTERACT,
-  attack: BUTTON.ATTACK_PRIMARY
+  attack: BUTTON.ATTACK_PRIMARY,
+  // The second trigger: shown by an FPS layout (render/layout.js touch_fps).
+  alt: BUTTON.ATTACK_SECONDARY
 }
 
 const MAP_URL = params.get('map') ?? '/maps/test.dnpm'
@@ -207,39 +210,6 @@ function stage (key, frac, detail = null) {
  */
 function stageReset (keys) {
   for (const k of keys) phaseDone.set(k, 0)
-}
-
-// --- the health bar ---------------------------------------------------------
-//
-// The snapshot has carried `hp` since Phase 4 (proto.js reads it into
-// snap.hp) and nothing on the client had ever looked at it: the only way to
-// see your own health was the debug panel's slider, which is a development
-// tool and shows the value it last SET rather than the value the server has.
-//
-// LIVE ONLY. Solo runs the core with no server and no Lua, so there is nothing
-// keeping hp -- a bar sitting at whatever the field defaults to would be a
-// number that means nothing.
-const healthBox = document.getElementById('health')
-const healthNum = healthBox?.querySelector('.num')
-const healthFill = healthBox?.querySelector('.fill')
-// The most health seen this session, which is what the bar is drawn against.
-// The server does not send a maximum -- hp is one integer -- and a script can
-// raise it, so the alternative is hardcoding 100 here and having the bar sit
-// at a third full for anything that grants more.
-let healthMax = 0
-
-function showHealth (hp) {
-  if (!healthBox || hp === undefined || hp === null) return
-  if (hp > healthMax) healthMax = hp
-  if (healthMax <= 0) return
-  healthBox.style.display = 'block'
-  healthNum.textContent = String(Math.max(0, hp))
-  const frac = Math.max(0, Math.min(1, hp / healthMax))
-  healthFill.style.width = `${(frac * 100).toFixed(1)}%`
-  // Green, amber, red. Thresholds rather than a gradient: the point is to be
-  // readable at a glance while something is shooting at you, and a continuous
-  // hue ramp reads as "some colour" at every value.
-  healthFill.style.background = frac > 0.6 ? '#5fbf6a' : frac > 0.25 ? '#d6a13a' : '#d65b5b'
 }
 
 /** Everything is in; put the bar away. */
@@ -322,6 +292,40 @@ const ownSounds = new OwnSounds()
 // placed by the sprite index's offsets; both fetched once, and a module without
 // them simply has no gun on screen.
 const viewModel = new ViewModel({ host: document.body })
+
+// THE LAYOUT (docs/UI_LAYOUT.md): the module's HUD and touch controls as data,
+// or the built-in default, which is what index.html and touchui.js drew before.
+// The health box that used to be hard-coded is drawn by the HUD now.
+const hudView = new HudView({ host: document.body, touch: wantsTouch(params) })
+let uiLayout = DEFAULT_LAYOUT
+let uiIndex = null
+let uiLayoutFile = null
+async function loadLayout (levelName) {
+  try {
+    if (uiIndex === null) {
+      const r = await fetch('/ui/index.json')
+      uiIndex = r.ok ? await r.json() : {}
+    }
+    const file = layoutFileFor(uiIndex, levelName)
+    if (file === uiLayoutFile) return
+    uiLayoutFile = file
+    let layout = DEFAULT_LAYOUT
+    if (file) {
+      const r = await fetch(`/ui/${file}`)
+      const parsed = parseLayout(r.ok ? await r.text() : '{}')
+      // A layout that fails to parse is SAID, on screen -- a phone has no
+      // console -- and the default is used rather than a half-read one.
+      if (!parsed.ok) say(`ui layout ${file}: ${parsed.errors.slice(0, 2).join('; ')} (using the default)`)
+      for (const w of parsed.warnings) console.warn(`[ui] ${file}: ${w}`)
+      layout = parsed.ok ? parsed.layout : DEFAULT_LAYOUT
+    }
+    uiLayout = layout
+    hudView.setLayout(layout)
+    touch?.setLayout(layout, isFps() ? 'fps' : 'platformer')
+  } catch (e) {
+    console.warn(`[ui] layout: ${e.message}`)
+  }
+}
 const WEAPON_GROUP = soundHash('weapon')
 Promise.all([
   fetch('/sprites/weapons.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
@@ -462,6 +466,9 @@ if (LIVE) {
       if (m.type === MSG.WELCOME) {
         dnpStats.welcomes++
         scheme = m.controls ?? SCHEME.PLATFORMER
+        // The touch controls follow the scheme, and the layout the level.
+        touch?.setLayout(uiLayout, scheme === SCHEME.FPS ? 'fps' : 'platformer')
+        loadLayout(m.levelName ?? null)
         // The legend says the controls this scheme has.
         if (scheme === SCHEME.FPS) {
           const help = document.getElementById('help')
@@ -924,6 +931,26 @@ let falls = 0
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
 dnpStats.gpu = () => ({ ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 })
+// How many of the GPU's textures the sprite caches explain: frames and sheets
+// loaded once, kept for the session, and uploaded the first time each is DRAWN
+// -- so their count climbs whenever play reaches a frame not seen before (a
+// pain frame, a death). A leak is what grows beyond them (client/test/leak.test.js).
+dnpStats.cachedTextures = () => {
+  if (!props) return 0
+  const uploaded = (t) => t && renderer.properties.get(t).__webglTexture !== undefined
+  let n = 0
+  for (const t of props.textures.values()) if (uploaded(t)) n++
+  for (const a of props.atlases.values()) if (uploaded(a.texture)) n++
+  return n
+}
+// The leak test's CONTROL: a texture uploaded and never let go of, which no
+// cache explains -- the shape of a texture set stranded per new game.
+dnpStats.plantTexture = () => {
+  const t = new THREE.DataTexture(new Uint8Array(4), 1, 1)
+  t.needsUpdate = true
+  renderer.initTexture(t)
+  ;(dnpStats.planted ??= []).push(t)
+}
 // What is in the scene, by type and name: what a test compares across a new
 // game to find the object that was added and never taken away.
 dnpStats.scene = () => {
@@ -2554,6 +2581,14 @@ function frame (now) {
     viewModel.update(dt, a.grounded ? sp : 0, isFps() && !camPathSpline,
                      { width: innerWidth, height: innerHeight })
   }
+  // THE NEAR PLANE. 0.5 suits a camera metres behind the body; at the eyes it
+  // is further out than the body's own radius (DOOM's 16 units are 0.33 here),
+  // so walking up to a wall put the wall inside it and it vanished. The plane's
+  // CORNERS reach further than its centre -- about 1.7x at this field of view --
+  // so it has to sit well inside the radius, not just under it. Depth
+  // precision at 0.05 is still ~1 cm at 100 m.
+  const wantNear = isFps() && !camPathSpline ? 0.05 : 0.5
+  if (cam3.near !== wantNear) { cam3.near = wantNear; cam3.updateProjectionMatrix() }
   if (isFps() && !camPathSpline) {
     const eyeH = (bodyHeight || 1.17) * 0.88
     const f = fpsLook.forward()
@@ -2646,7 +2681,13 @@ function frame (now) {
   // a Lua decision and the client has no way to run it, so this is the server's
   // number and lags by exactly one snapshot -- which is the honest thing to
   // show.
-  if (LIVE) showHealth(latestHp)
+  // THE HUD, from the module's layout (render/layout.js): the client's own
+  // values and the server's (HUD_SET), every frame -- HudView only touches
+  // what changed.
+  if (LIVE && latestHp !== undefined && latestHp !== null) {
+    hudView.update({ hp: latestHp, map: homeName ?? '' })
+    hudView.update(hudValues)
+  }
 
   // The synth's own numbers, when it has any. A background noise and a synth
   // that is struggling sound alike; steals, drops and queue depth are what

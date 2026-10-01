@@ -20,15 +20,15 @@
 // the first time.
 //
 import { TouchState, STICK_RADIUS } from '../touch.js'
+import { DEFAULT_LAYOUT, TOUCH_IDS, place } from './layout.js'
 
 const STYLE = `
 .dnp-touch{position:fixed;inset:0;z-index:40;pointer-events:none;
   touch-action:none;-webkit-user-select:none;user-select:none}
 /* The zone, not a control: invisible, never hit-tested by the browser, and
-   read only for its rectangle. Its size is what makes the stick reachable on
-   a big phone and it is CSS so it can be changed without touching the code. */
-.dnp-touch-zone{position:absolute;left:0;bottom:0;
-  width:min(46vw,340px);height:min(58vh,380px)}
+   read only for its rectangle. Where it is and how big comes from the layout
+   (render/layout.js), like the buttons. */
+.dnp-touch-zone{position:absolute}
 /* The idle hint and the live pad are the same circle in two states. */
 .dnp-touch-pad{position:absolute;width:${STICK_RADIUS * 2}px;height:${STICK_RADIUS * 2}px;
   margin-left:${-STICK_RADIUS}px;margin-top:${-STICK_RADIUS}px;
@@ -45,23 +45,35 @@ const STYLE = `
   background:rgba(27,34,48,.55);border:2px solid rgba(207,227,255,.28)}
 .dnp-touch-btn[data-down="1"]{background:rgba(91,143,214,.55);
   border-color:rgba(207,227,255,.7)}
-/* Bottom right, clear of the home indicator and of a curved corner. The
-   right-hand cluster is laid out by hand rather than by a grid because a
-   thumb arcs: jump is highest and furthest in, dash is lowest and outermost. */
-.dnp-touch-btn.jump  {right:calc(22px + env(safe-area-inset-right));bottom:calc(150px + env(safe-area-inset-bottom))}
-.dnp-touch-btn.attack{right:calc(104px + env(safe-area-inset-right));bottom:calc(78px + env(safe-area-inset-bottom))}
-.dnp-touch-btn.use   {right:calc(22px + env(safe-area-inset-right));bottom:calc(72px + env(safe-area-inset-bottom))}
-.dnp-touch-btn.dash  {right:calc(104px + env(safe-area-inset-right));bottom:calc(158px + env(safe-area-inset-bottom));
-  width:60px;height:60px;font-size:11px}
+/* WHERE each button goes is the layout's (render/layout.js, a module's
+   assets/ui): placed by left/top from JS, inside the safe area. The default
+   reproduces the hand-made arc this used to be -- a thumb arcs, so jump is
+   highest and furthest in, dash lowest and outermost. */
+.dnp-touch-btn.small{font-size:11px}
+/* A probe for the safe-area insets, which only CSS can read. */
+.dnp-touch-insets{position:fixed;visibility:hidden;pointer-events:none;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 `
 
-/** The buttons, and which protocol bit each one holds down. */
-export const TOUCH_BUTTONS = [
-  { id: 'jump', label: 'JUMP' },
-  { id: 'attack', label: 'ATK' },
-  { id: 'use', label: 'USE' },
-  { id: 'dash', label: 'DASH' }
-]
+/** The buttons the engine has; each holds down one protocol bit (main.js TOUCH_BITS). */
+export const TOUCH_BUTTONS = TOUCH_IDS.map((id) => ({ id }))
+
+/**
+ * The buttons a layout's touch section places, resolved: every engine button,
+ * with where it goes, how big, what it says, and whether it is shown at all.
+ */
+export function touchLayout (layout, scheme = 'platformer') {
+  const t = (scheme === 'fps' ? layout?.touch_fps : layout?.touch) ??
+            (scheme === 'fps' ? DEFAULT_LAYOUT.touch_fps : DEFAULT_LAYOUT.touch)
+  return { zone: t.stick.zone, buttons: t.buttons.filter((b) => !b.hidden) }
+}
+
+/** The safe-area insets, read through a probe element (only CSS can see them). */
+function readInsets (probe) {
+  const cs = getComputedStyle(probe)
+  return { top: parseFloat(cs.paddingTop) || 0, right: parseFloat(cs.paddingRight) || 0,
+           bottom: parseFloat(cs.paddingBottom) || 0, left: parseFloat(cs.paddingLeft) || 0 }
+}
 
 /**
  * Mount the controls and start feeding a TouchState.
@@ -71,10 +83,14 @@ export const TOUCH_BUTTONS = [
  * resize and on every pointerdown -- a phone rotates, the address bar comes
  * and goes, and a region measured once is wrong for the rest of the session.
  */
-export function mountTouch (host = document.body) {
+export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, scheme = 'platformer', preview = false } = {}) {
   const style = document.createElement('style')
   style.textContent = STYLE
   host.append(style)
+  let current = touchLayout(layout, scheme)
+  const probe = document.createElement('div')
+  probe.className = 'dnp-touch-insets'
+  host.append(probe)
 
   const layer = document.createElement('div')
   layer.className = 'dnp-touch'
@@ -90,15 +106,34 @@ export function mountTouch (host = document.body) {
   layer.append(pad, knob)
 
   const buttons = new Map()
-  for (const b of TOUCH_BUTTONS) {
-    const el = document.createElement('div')
-    el.className = `dnp-touch-btn ${b.id}`
-    el.textContent = b.label
-    el.dataset.down = '0'
-    buttons.set(b.id, el)
-    layer.append(el)
+  const build = () => {
+    for (const el of buttons.values()) el.remove()
+    buttons.clear()
+    for (const b of current.buttons) {
+      const el = document.createElement('div')
+      el.className = `dnp-touch-btn ${b.id}${(b.size ?? 74) < 70 ? ' small' : ''}`
+      el.textContent = b.label ?? b.id.toUpperCase()
+      el.dataset.down = '0'
+      buttons.set(b.id, el)
+      layer.append(el)
+    }
   }
+  build()
   host.append(layer)
+
+  // WHERE EVERYTHING GOES, from the layout, in this window, inside the safe area.
+  const placeAll = () => {
+    const W = innerWidth
+    const H = innerHeight
+    const ins = readInsets(probe)
+    const z = place(current.zone, layout, W, H, ins)
+    Object.assign(zone.style, { left: `${z.left}px`, top: `${z.top}px`, width: `${z.width}px`, height: `${z.height}px` })
+    for (const b of current.buttons) {
+      const r = place(b, layout, W, H, ins)
+      Object.assign(buttons.get(b.id).style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
+    }
+  }
+  placeAll()
 
   const state = new TouchState()
   let regions = []
@@ -111,13 +146,14 @@ export function mountTouch (host = document.body) {
   // BUTTONS FIRST, then the stick zone. claim() takes the first match, and a
   // button that overlapped the zone on a small screen must win -- otherwise
   // jumping walks you sideways, which is the worst kind of "sometimes".
-  const layout = () => {
+  const measure = () => {
+    placeAll()
     regions = [
-      ...TOUCH_BUTTONS.map((b) => rectOf(buttons.get(b.id), b.id)),
+      ...current.buttons.map((b) => rectOf(buttons.get(b.id), b.id)),
       rectOf(zone, 'stick')
     ]
   }
-  layout()
+  measure()
 
   // The idle hint: where a thumb usually rests, so there is something to aim
   // at before you have learnt that anywhere in the corner works.
@@ -150,7 +186,7 @@ export function mountTouch (host = document.body) {
   // every pointer and to claim it by where it landed, which is exactly what
   // a window-level listener with a region table does.
   const onDown = (e) => {
-    layout()
+    measure()
     state.down(e.pointerId, e.clientX, e.clientY, regions)
     // Only once it is ours. A pointer landing on a script's panel is that
     // panel's, and preventing its default would make the panel unusable.
@@ -176,27 +212,45 @@ export function mountTouch (host = document.body) {
   addEventListener('pointercancel', onCancel, { passive: true })
   addEventListener('blur', onLost)
   addEventListener('visibilitychange', () => { if (document.hidden) onLost() })
-  addEventListener('resize', layout, { passive: true })
+  addEventListener('resize', measure, { passive: true })
   // A long press over a game is a text selection or a context menu, neither of
   // which is ever wanted here and both of which interrupt whatever the thumb
   // was holding.
   const onMenu = (e) => e.preventDefault()
   addEventListener('contextmenu', onMenu)
 
+  // A PREVIEW draws and claims nothing (the studio's device frame).
+  if (preview) {
+    removeEventListener('pointerdown', onDown)
+    removeEventListener('pointermove', onMove)
+    removeEventListener('pointerup', onUp)
+    removeEventListener('pointercancel', onCancel)
+  }
+
   return {
     state,
-    layout,
+    layout: measure,
     paint,
+    /** A new layout or scheme: the buttons rebuilt and placed again. */
+    setLayout (next = layout, nextScheme = scheme) {
+      layout = next ?? DEFAULT_LAYOUT
+      scheme = nextScheme
+      current = touchLayout(layout, scheme)
+      build()
+      measure()
+      paint()
+    },
     destroy () {
       removeEventListener('pointerdown', onDown)
       removeEventListener('pointermove', onMove)
       removeEventListener('pointerup', onUp)
       removeEventListener('pointercancel', onCancel)
       removeEventListener('blur', onLost)
-      removeEventListener('resize', layout)
+      removeEventListener('resize', measure)
       removeEventListener('contextmenu', onMenu)
       layer.remove()
       style.remove()
+      probe.remove()
     }
   }
 }

@@ -121,7 +121,7 @@ try {
 
   console.log('\n--- the controls are there ---')
   {
-    const btns = [...dom.matchAll(/class="dnp-touch-btn ([a-z]+)"/g)].map((m) => m[1])
+    const btns = [...dom.matchAll(/class="dnp-touch-btn ([a-z]+)[ "]/g)].map((m) => m[1])
     check(new Set(btns).size === 4,
           `all four buttons are mounted (${[...new Set(btns)].sort().join(', ')})`)
     check(/dnp-touch-pad/.test(dom) && /dnp-touch-knob/.test(dom),

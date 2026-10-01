@@ -432,6 +432,11 @@ else
   # camera.js -- one implementation of "a push on screen is a direction in the
   # world", with a control that the comparison can fail.
   node client/test/touch.test.js | grep -E 'FAIL|failures'
+  # The UI layout (docs/UI_LAYOUT.md): parsing that warns rather than fails on
+  # a newer file, the nine anchors inside the safe area, scaling, the HUD drawn
+  # and bound -- and the built-in default held to the CSS it replaced, to half a
+  # pixel, at a portrait and a landscape phone.
+  node client/test/layout.test.js | grep -E 'FAIL|failures'
   # THE CLIENT, LOADED IN A BROWSER. tdz.test.js above checks main.js's
   # declaration order statically and says why that was all it could do:
   # main.js "wants a DOM, a WebGL context, three.js and a live WebTransport
@@ -578,6 +583,9 @@ else
   # seven escaping paths are the control -- and seeding the bundled modules
   # never touches one the user made.
   node app/test/studio_files.test.js | tail -2
+  # /ui/index.json merged across modules by the asset rule (first wins), in the
+  # app and the devserver, and each file served from the module that named it.
+  node app/test/ui_route.test.js | tail -2
   node app/test/local_transport.test.js 2>/dev/null | tail -2
   # And the app under a REAL Electron. Opt-in (DNP_APP_LAUNCH_TEST=1): it is a
   # window, a GPU process and a ~150 MB dependency. Worth having anyway --

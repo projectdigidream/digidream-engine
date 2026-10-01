@@ -136,7 +136,7 @@ cp -R "$ROOT/client/wasm/." "$W/wasm/"
 cp "$ROOT/android/web/shell.js" "$W/shell.js"
 cp "$ROOT/server/edge/src/framing.js" "$W/framing.js"
 cp "$ROOT/ios/web/native.js" "$APP/native.js"
-for kind in textures sprites music sounds; do
+for kind in textures sprites music sounds ui; do
   mkdir -p "$W/$kind"
   [[ -d "$ROOT/assets/$kind" ]] && cp -R "$ROOT/assets/$kind/." "$W/$kind/" 2>/dev/null || true
   [[ -d "$MODULE_DIR/assets/$kind" ]] && cp -R "$MODULE_DIR/assets/$kind/." "$W/$kind/" 2>/dev/null || true

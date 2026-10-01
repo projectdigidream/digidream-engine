@@ -298,6 +298,20 @@ final class AssetHandler: NSObject, WKURLSchemeHandler {
       }
       return out
     }
+    // The UI layout index (docs/UI_LAYOUT.md): the first module that says
+    // wins, then the app's own -- every asset's rule.
+    if path == "ui/index.json" {
+      var maps: [String: Any] = [:]
+      var dflt: Any = NSNull()
+      var sources = mods.compactMap { try? Data(contentsOf: $0.appendingPathComponent("assets/ui/index.json")) }
+      if let base = try? Data(contentsOf: web.appendingPathComponent(path)) { sources.append(base) }
+      for src in sources {
+        guard let j = (try? JSONSerialization.jsonObject(with: src)) as? [String: Any] else { continue }
+        if dflt is NSNull, let d = j["default"] as? String { dflt = d }
+        for (k, v) in (j["maps"] as? [String: Any]) ?? [:] where maps[k] == nil { maps[k] = v }
+      }
+      return try? JSONSerialization.data(withJSONObject: ["version": 1, "default": dflt, "maps": maps])
+    }
     if path == "textures/index.json" {
       var sizes: [String: Any] = [:]
       var cutout: [String: Any] = [:]
@@ -311,7 +325,7 @@ final class AssetHandler: NSObject, WKURLSchemeHandler {
       return try? JSONSerialization.data(withJSONObject: ["sizes": sizes, "cutout": cutout])
     }
     if path.hasPrefix("textures/") || path.hasPrefix("sprites/") || path.hasPrefix("music/") ||
-       path.hasPrefix("sounds/") {
+       path.hasPrefix("sounds/") || path.hasPrefix("ui/") {
       for m in mods {
         if let d = try? Data(contentsOf: m.appendingPathComponent("assets/" + path)) { return d }
       }
