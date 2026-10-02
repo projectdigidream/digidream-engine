@@ -33,6 +33,16 @@ export const IDX = {
 const PATH32_LEN = 4
 export const PATH32 = { FIRST: 0, COUNT: 1, TAG: 2, FLAGS: 3 }
 
+// The actions a weapon event names (sim::WAct): the ones the world carries out.
+export const WEAPON_ACTION = { HITSCAN: 16, LAUNCH: 17, DAMAGE_AREA: 18, TELEGRAPH: 19, VFX: 20, SOUND: 21 }
+const WEAPON_EVENTS_MAX = 32
+const WEAPON_VFX_MAX = 40
+
+// The weapon state's words (client/wasm/bindings.cpp dnp_world_read_weapon):
+// have, current, phase, armed, swing phase, previous buttons, entered, done,
+// two held-since ticks, four vars, eight pools.
+const WEAPON_BUF32_LEN = 22
+
 // map.hpp's path_flag::LOOP.
 export const PATH_LOOP = 1
 
@@ -85,6 +95,14 @@ export class Core {
       throw new Error(`[core] path buffer layout mismatch: wasm wants ` +
                       `${wantPath32}x32, JS has ${PATH32_LEN}x32`)
     }
+    // And the weapon machine's state (docs/WEAPON_PREDICTION.md): its four vars
+    // and eight pools are the core's MAX_WEAPON_VARS and MAX_AMMO_POOLS, which
+    // the self block's decoder in proto.js also reads by count.
+    if (M._dnp_weapon_buf32_len() !== WEAPON_BUF32_LEN) {
+      throw new Error(`[core] weapon buffer layout mismatch: wasm wants ` +
+                      `${M._dnp_weapon_buf32_len()}x32, JS has ${WEAPON_BUF32_LEN}x32`)
+    }
+    this.weaponbuf = M._malloc(WEAPON_BUF32_LEN * 4)
     this.buf64 = M._malloc(BUF64_LEN * 8)
     this.buf32 = M._malloc(BUF32_LEN * 4)
     this.argbuf = M._malloc(8)
@@ -533,9 +551,90 @@ export class WasmWorld {
     return out
   }
 
-  setInput (idx, { buttons = 0, moveX = 0, moveY = 0, aim = 0, pitch = 0 }) {
-    this.core.M._dnp_world_set_input(this.ptr, idx, buttons, moveX, moveY, aim, pitch)
+  setInput (idx, { buttons = 0, moveX = 0, moveY = 0, aim = 0, pitch = 0, weapon = 255 }) {
+    this.core.M._dnp_world_set_input(this.ptr, idx, buttons, moveX, moveY, aim, pitch, weapon)
   }
+
+  // --- the weapon machine (docs/WEAPON_PREDICTION.md) ---
+
+  /**
+   * Predict agent `idx`'s weapon with this table (WEAPON_DEFS' bytes). `stream`
+   * is the same body's index on the SERVER, whose random stream the spread is
+   * drawn from. False if this build cannot read the table.
+   */
+  setWeapons (bytes, idx, stream) {
+    const M = this.core.M
+    const ptr = M._malloc(bytes.length)
+    M.HEAPU8.set(bytes, ptr)
+    const ok = M._dnp_world_set_weapons(this.ptr, ptr, bytes.length, idx, stream) !== 0
+    M._free(ptr)
+    return ok
+  }
+
+  /** After a respawn or a new world: the same table, another body. */
+  predictWeaponFor (idx, stream) { this.core.M._dnp_world_predict_weapon_agent(this.ptr, idx, stream) }
+
+  get hasWeapons () { return this.core.M._dnp_world_has_weapons(this.ptr) !== 0 }
+
+  readWeapon (idx) {
+    const M = this.core.M
+    M._dnp_world_read_weapon(this.ptr, idx, this.core.weaponbuf)
+    const u = this.core.views.u32
+    const b = this.core.weaponbuf / 4
+    return {
+      have: u[b], current: u[b + 1], phase: u[b + 2], armed: u[b + 3], swingPhase: u[b + 4],
+      prevButtons: u[b + 5], entered: u[b + 6], done: u[b + 7], heldSince: [u[b + 8], u[b + 9]],
+      vars: [u[b + 10] | 0, u[b + 11] | 0, u[b + 12] | 0, u[b + 13] | 0],
+      ammo: Array.from(u.subarray(b + 14, b + 22))
+    }
+  }
+
+  /** Adopt the server's (reconciliation), or clear it with null: a body that holds nothing. */
+  writeWeapon (idx, k) {
+    const u = this.core.views.u32
+    const b = this.core.weaponbuf / 4
+    if (!k) k = { have: 0, current: 255, phase: 255, armed: 255, swingPhase: 255, prevButtons: 0,
+                  entered: 0, done: 0, heldSince: [0, 0], vars: [0, 0, 0, 0], ammo: [0, 0, 0, 0, 0, 0, 0, 0] }
+    u[b] = k.have >>> 0
+    u[b + 1] = k.current; u[b + 2] = k.phase; u[b + 3] = k.armed; u[b + 4] = k.swingPhase
+    u[b + 5] = k.prevButtons; u[b + 6] = k.entered >>> 0; u[b + 7] = k.done >>> 0
+    u[b + 8] = k.heldSince[0] >>> 0; u[b + 9] = k.heldSince[1] >>> 0
+    for (let i = 0; i < 4; i++) u[b + 10 + i] = k.vars[i] >>> 0
+    for (let i = 0; i < 8; i++) u[b + 14 + i] = k.ammo[i] ?? 0
+    this.core.M._dnp_world_write_weapon(this.ptr, idx, this.core.weaponbuf)
+  }
+
+  /**
+   * What the predicted weapon did on the last step: its events (action, the
+   * sound and whether it is ours to play) and the effects the server would
+   * have sent for it, as a snapshot's vfx ({kind, pos, dir, param}).
+   */
+  weaponFrame () {
+    const c = this.core
+    const M = c.M
+    if (!c.wevbuf) {
+      c.wevbuf = M._malloc(WEAPON_EVENTS_MAX * 6 * 4)
+      c.wvfx64 = M._malloc(WEAPON_VFX_MAX * 3 * 8)
+      c.wvfx32 = M._malloc(WEAPON_VFX_MAX * 3 * 4)
+    }
+    const n = M._dnp_world_weapon_events(this.ptr, c.wevbuf, WEAPON_EVENTS_MAX)
+    const m = M._dnp_world_weapon_vfx(this.ptr, c.wvfx64, c.wvfx32, WEAPON_VFX_MAX)
+    const { u32, i64 } = c.views
+    const events = []
+    for (let k = 0, b = c.wevbuf / 4; k < n; k++, b += 6) {
+      events.push({ action: u32[b], weapon: u32[b + 1], phase: u32[b + 2], step: u32[b + 3],
+                    sound: u32[b + 4], predicted: u32[b + 5] !== 0 })
+    }
+    const vfx = []
+    for (let k = 0, b64 = c.wvfx64 / 8, b32 = c.wvfx32 / 4; k < m; k++, b64 += 3, b32 += 3) {
+      vfx.push({ kind: u32[b32], pos: { x: i64[b64], y: i64[b64 + 1], z: i64[b64 + 2] },
+                 dir: u32[b32 + 1], param: u32[b32 + 2] })
+    }
+    return { events, vfx }
+  }
+
+  /** The weapon in display slot `n` (1-based, by the table's order), or 255. */
+  weaponSlot (idx, n) { return this.core.M._dnp_world_weapon_slot(this.ptr, idx, n) }
 
   step () { this.core.M._dnp_world_step(this.ptr) }
 

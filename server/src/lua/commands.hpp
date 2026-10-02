@@ -46,6 +46,12 @@ enum class CmdKind : u8 {
     //
     // `subject` is the sector index, not an agent.
     SetSectorOffset = 3,
+
+    // Nothing to apply: a script changed this agent's state in place -- the
+    // weapon inventory, written straight into the world by dnp.weapon_sync --
+    // and the observer has to be told its snapshot is not a misprediction.
+    // Through the queue because that is the one place `touched` is recorded.
+    Touch = 4,
 };
 
 struct Command {
@@ -97,6 +103,7 @@ public:
                 case CmdKind::AddImpulse:  world.add_impulse(c.subject, c.v); break;
                 case CmdKind::SetVelocity: world.set_velocity(c.subject, c.v); break;
                 case CmdKind::SetSectorOffset: break;   // handled above
+                case CmdKind::Touch: break;
             }
             touched(c.subject);
             ++applied;

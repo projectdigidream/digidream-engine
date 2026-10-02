@@ -217,6 +217,21 @@ int main(int argc, char** argv) {
     std::printf("  Doom's weapons loaded with %d complaints\n", (int)num("loaded_errors"));
     CHECK(num("loaded_errors") == 0);
 
+    // WHICH MACHINE runs them (docs/WEAPON_PREDICTION.md): the core's, unless
+    // DNP_WEAPONS_LUA=1 asks for the Lua one -- and every check below passes on
+    // both, which is half of the parity argument. Asserted rather than assumed:
+    // a compile that quietly failed would put every check here on the Lua path
+    // and this file would still pass.
+    {
+        const char* env = std::getenv("DNP_WEAPONS_LUA");
+        const bool want_lua = env != nullptr && std::strcmp(env, "1") == 0;
+        if (!run("weapons_path = weapons.core_index() ~= nil and 'core' or 'lua'\n"
+                 "weapons_why = tostring(weapons.core_why)", "asking which machine")) return 1;
+        std::printf("  the weapon machine runs in %s (%s)\n", str("weapons_path").c_str(),
+                    str("weapons_why").c_str());
+        CHECK(str("weapons_path") == (want_lua ? "lua" : "core"));
+    }
+
     // A player exists and starts armed the way Doom starts you.
     if (!run("local p = dnp.players()[1]\n"
              "start_inv = weapons.get(p:index())\n"
@@ -1859,7 +1874,6 @@ int main(int argc, char** argv) {
              "aim_up = mobs.spawn('zombieman',\n"
              "  vec3.new(pp.x + d.x * fx.int(2), pp.y + d.y * fx.int(2),\n"
              "           pp.z + fx.int(3)))\n"
-             "aim_up:set_solid(false)\n"
              "mobs.live[aim_up:index()].hp = 500\n", "a target on a balcony")) return 1;
     recompute();
 
@@ -1891,6 +1905,23 @@ int main(int argc, char** argv) {
              "searching")) return 1;
     CHECK(num("up_found") == 1);
     CHECK(num("up_climbs") == 1);
+
+    // AND THE CORE'S AUTO-AIM AGREES (docs/WEAPON_PREDICTION.md): the search a
+    // player's predicted shot is corrected with, on the client and the server
+    // alike, is World::autoaim, and it has to land on the same heading and the
+    // same slope as this file's to the last bit -- or the two machines aim
+    // differently and the parity above is about everything but the aim.
+    if (!run("local p = dnp.players()[1]\n"
+             "local t, ang, sl = mobs.autoaim(p, fx.int(8))\n"
+             "local cang, csl = dnp.weapon_autoaim(p, fx.int(8), mobs.autoaim_h)\n"
+             "aim_same = (t ~= nil and cang == ang and csl ~= nil and csl.raw == sl.raw) and 1 or 0\n"
+             "-- CONTROL: the cone shut, the core finds nothing either.\n"
+             "aim_shut = (dnp.weapon_autoaim(p, fx.int(8), 0) == nil) and 1 or 0\n"
+             "aim_dbg = tostring(ang) .. ' ' .. tostring(sl and sl.raw) .. ' / ' .. tostring(cang) .. ' ' .. tostring(csl and csl.raw)\n",
+             "asking the core")) return 1;
+    std::printf("  auto-aim, mobs.lua and the core: %s\n", str("aim_dbg").c_str());
+    CHECK(num("aim_same") == 1);
+    CHECK(num("aim_shut") == 1);
 
     // AND THE WHOLE PLAYER PATH, which is this call: weapons.lua's own
     // `hitscan` action is one line handing the mob runtime a synthetic owner,
@@ -1932,9 +1963,7 @@ int main(int argc, char** argv) {
              "    vec3.new(pp.x + d.x * dist, pp.y + d.y * dist, pp.z))\n"
              "end\n"
              "near_cone = place(4, fx.int(5))\n"
-             "off_cone  = place(15, fx.int(3))\n"
-             "near_cone:set_solid(false)\n"
-             "off_cone:set_solid(false)\n", "two candidates")) return 1;
+             "off_cone  = place(15, fx.int(3))\n", "two candidates")) return 1;
     recompute();
     if (!run("local p = dnp.players()[1]\n"
              "local t = mobs.autoaim(p, fx.int(10))\n"
@@ -1987,6 +2016,176 @@ int main(int argc, char** argv) {
     // it gains exactly what it travelled: a rocket that stored the slope and
     // never spent it would read 0 here and pass every other check in the file.
     CHECK(up_rise > 0);
+
+    // ================================================================
+    // PARITY: THE TWO MACHINES, TICK BY TICK (docs/WEAPON_PREDICTION.md).
+    //
+    // Every weapon this file has loaded -- Doom's, the charge, the combo, the
+    // alt-fire and the airborne ones -- driven through BOTH the Lua machine and
+    // the core's from the same start with the same buttons, the same switches,
+    // the same running dry and the same refills, and the two traces compared
+    // line for line: the weapon in hand, its phase, its vars, every pool, and
+    // each action the world was asked to carry out, by which weapon, phase and
+    // step. The mobdiff argument: two implementations of one rule are only one
+    // rule while something checks they agree.
+    if (!run(R"LUA(
+      local p = dnp.players()[1]
+      local idx = p:index()
+      parity_names = {}
+      for name in pairs(weapons.defs) do parity_names[#parity_names + 1] = name end
+      table.sort(parity_names)
+      -- Which sequence entry an action came from, by the table's identity.
+      parity_ident = {}
+      for wname, def in pairs(weapons.defs) do
+        for pname, ph in pairs(def.phases) do
+          for i, entry in ipairs(ph.sequence or {}) do
+            parity_ident[entry] = wname .. "/" .. pname .. "/" .. i
+          end
+        end
+      end
+      parity_events = {}
+      for _, name in ipairs({ "hitscan", "launch", "damage_area", "telegraph", "vfx", "sound" }) do
+        local real = weapons.acts[name]
+        weapons.acts[name] = function(c, a)
+          parity_events[#parity_events + 1] = parity_ident[c.entry or a] or ("?" .. name)
+          return real(c, a)
+        end
+      end
+      function parity_begin(force_lua)
+        weapons.force_lua = force_lua
+        weapons.core_stale()
+        parity_core = weapons.core_index() ~= nil
+        local inv = weapons.get(idx)
+        inv.have = {}
+        for _, n in ipairs(parity_names) do inv.have[n] = true end
+        for pool, a in pairs(weapons.ammo) do inv.ammo[pool] = a.max end
+        inv.current = parity_names[1]
+        weapons.rearm_player(idx)
+        parity_trace = {}
+      end
+      function parity_tick(t, now)
+        local inv = weapons.get(idx)
+        -- A switch every 97 ticks, round the whole list; every pool down to 2
+        -- at 1500 so weapons run dry and drop to what still fires; refilled
+        -- at 2600.
+        if t % 97 == 0 then
+          inv.current = parity_names[math.floor(t / 97) % #parity_names + 1]
+        end
+        if t == 1500 then for pool in pairs(weapons.ammo) do inv.ammo[pool] = 2 end end
+        if t == 2600 then for pool, a in pairs(weapons.ammo) do inv.ammo[pool] = a.max end end
+        parity_events = {}
+        weapons.tick_player(p, idx, now)
+        local parts = { tostring(inv.current), tostring(weapons.phase_of(idx)) }
+        local vars = weapons.vars_of(idx) or {}
+        local vk = {}
+        for k in pairs(vars) do vk[#vk + 1] = k end
+        table.sort(vk)
+        for _, k in ipairs(vk) do parts[#parts + 1] = k .. "=" .. tostring(vars[k]) end
+        local pk = {}
+        for k in pairs(weapons.ammo) do pk[#pk + 1] = k end
+        table.sort(pk)
+        for _, k in ipairs(pk) do parts[#parts + 1] = k .. ":" .. tostring(inv.ammo[k]) end
+        parts[#parts + 1] = "|"
+        for _, ev in ipairs(parity_events) do parts[#parts + 1] = ev end
+        parity_trace[#parity_trace + 1] = table.concat(parts, " ")
+      end
+    )LUA", "installing the parity harness")) return 1;
+    const int kParityTicks = 3600;
+    std::vector<std::string> traces[2];
+    bool on_core[2] = {false, false};
+    for (int path = 0; path < 2; ++path) {
+        const bool force_lua = path == 0;
+        if (!run(force_lua ? "parity_begin(true)" : "parity_begin(false)", "starting a parity run")) return 1;
+        lua_getglobal(L, "parity_core");
+        on_core[path] = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+        // The same buttons both times: runs of 1..40 ticks of nothing,
+        // primary, secondary or both, from a fixed seed.
+        u32 seed = 0x5eedu, left = 0;
+        u16 mask = 0;
+        for (int t = 0; t < kParityTicks; ++t) {
+            if (left == 0) {
+                seed = seed * 1664525u + 1013904223u;
+                left = 1 + (seed >> 8) % 40;
+                const u32 pick = (seed >> 20) % 8;
+                mask = pick < 3 ? 0
+                     : pick < 6 ? proto::button::ATTACK_PRIMARY
+                     : pick < 7 ? proto::button::ATTACK_SECONDARY
+                     : static_cast<u16>(proto::button::ATTACK_PRIMARY | proto::button::ATTACK_SECONDARY);
+            }
+            --left;
+            set_buttons(mask);
+            const std::string step = "parity_tick(" + std::to_string(t) + ", " +
+                                     std::to_string(500000 + t) + ")";
+            vm.begin_tick();   // a tick's budget, as the server gives one
+            if (!run(step.c_str(), "a parity tick")) return 1;
+        }
+        set_buttons(0);
+        lua_getglobal(L, "parity_trace");
+        for (int i = 1; i <= kParityTicks; ++i) {
+            lua_rawgeti(L, -1, i);
+            traces[path].emplace_back(lua_tostring(L, -1) ? lua_tostring(L, -1) : "");
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    CHECK(!on_core[0] && on_core[1]);
+    int first_diff = -1, diffs = 0;
+    for (int t = 0; t < kParityTicks; ++t) {
+        if (traces[0][t] != traces[1][t]) { ++diffs; if (first_diff < 0) first_diff = t; }
+    }
+    // What the run covered, so a parity that held over nothing is visible.
+    int fired = 0, phases_seen = 0;
+    {
+        std::vector<std::string> seen;
+        for (const std::string& line : traces[1]) {
+            const size_t bar = line.find('|');
+            if (bar != std::string::npos && bar + 1 < line.size()) ++fired;
+            const size_t sp = line.find(' ');
+            const std::string wp = line.substr(0, line.find(' ', sp + 1));
+            if (std::find(seen.begin(), seen.end(), wp) == seen.end()) seen.push_back(wp);
+        }
+        phases_seen = static_cast<int>(seen.size());
+    }
+    std::printf("  parity: %d ticks, %d with actions, %d weapon/phase pairs seen, %d differing\n",
+                kParityTicks, fired, phases_seen, diffs);
+    if (first_diff >= 0) {
+        std::printf("    first at tick %d\n      lua:  %s\n      core: %s\n", first_diff,
+                    traces[0][first_diff].c_str(), traces[1][first_diff].c_str());
+    }
+    CHECK(diffs == 0);
+    if (const char* dump = std::getenv("DNP_PARITY_DUMP")) {
+        if (FILE* f = std::fopen(dump, "w")) {
+            for (int t = 0; t < kParityTicks; ++t) std::fprintf(f, "%d %s\n", t, traces[1][t].c_str());
+            std::fclose(f);
+        }
+    }
+    // CONTROL: the run reached many phases and fired often, or agreement is
+    // agreement about idling.
+    CHECK(fired > 50);
+    CHECK(phases_seen > 20);
+    // And the machine switched weapons ON ITS OWN -- running dry dropped to
+    // one that still fires -- between the switches this run made.
+    int auto_switches = 0;
+    for (int t = 1; t < kParityTicks; ++t) {
+        if (t % 97 == 0) continue;
+        const std::string& a = traces[1][t - 1];
+        const std::string& b = traces[1][t];
+        if (a.substr(0, a.find(' ')) != b.substr(0, b.find(' '))) ++auto_switches;
+    }
+    std::printf("  parity: %d switches the machine made itself\n", auto_switches);
+    CHECK(auto_switches > 0);
+    // CONTROL: the comparison can fail. The same trace with one action
+    // dropped must differ, or `diffs == 0` is a comparison of nothing.
+    {
+        std::vector<std::string> broken = traces[1];
+        for (std::string& line : broken) {
+            const size_t bar = line.find('|');
+            if (bar != std::string::npos && bar + 1 < line.size()) { line.resize(bar + 1); break; }
+        }
+        CHECK(broken != traces[0]);
+    }
+    if (!run("weapons.force_lua = false\nweapons.core_stale()", "restoring the path")) return 1;
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

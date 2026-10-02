@@ -336,6 +336,7 @@ function W.load(t)
     end
   end
 
+  W.core_stale()
   return load_errors
 end
 
@@ -811,8 +812,16 @@ function acts.launch(c, a)
   -- heading, which is what keeps a three-way spread straddling the target
   -- rather than one of its edges.
   local base = c.e:facing()
-  local t, aimed, slope = world(c.e, "autoaim")
-  if t ~= nil then base = aimed end
+  local slope
+  if c.ev ~= nil then
+    -- The core aimed it (docs/WEAPON_PREDICTION.md): the same correction a
+    -- predicting client made.
+    base, slope = c.ev.aim, c.ev.slope
+  else
+    local t, aimed
+    t, aimed, slope = world(c.e, "autoaim")
+    if t ~= nil then base = aimed end
+  end
   local n = a.count or 1
   for i = 1, n do
     local ang = base
@@ -854,8 +863,9 @@ end
 -- runs out from under them, leaving a line behind.
 function acts.vfx(c, a)
   local p = c.e:pos()
+  -- From the core's machine, the shooter's client drew it already.
   dnp.vfx(a.effect, p, c.e:facing(),
-          a.attach and c.e:index() or (a.length or 0))
+          a.attach and c.e:index() or (a.length or 0), c.ev ~= nil and c.e or nil)
 end
 
 function acts.telegraph(c, a)
@@ -1132,8 +1142,171 @@ local function tick_player(e, idx, now)
   end
 end
 
+-- ------------------------------------------------- the machine in the core
+--
+-- THE SAME MACHINE, run by the deterministic core instead of by the loop above
+-- (docs/WEAPON_PREDICTION.md): the one a predicting client runs, so it is the
+-- one the server has to run too. weapons.lua keeps the language -- loading,
+-- validating, the inventory a script sees, and everything that touches the
+-- world -- and each tick it hands the inventory down, steps the core, and
+-- takes the inventory and the events back.
+--
+-- The loop above stays, as the other half of the parity test
+-- (tools/weapondiff) and for a table the core cannot hold: one using `lua`,
+-- or bigger than its fixed sizes. DNP_WEAPONS_LUA=1 forces it.
+local FORCE_LUA = os ~= nil and os.getenv ~= nil and os.getenv("DNP_WEAPONS_LUA") == "1"
+
+-- AUTO-AIM for the core's machine, which corrects a player's shot itself so a
+-- predicting client corrects it identically: mobs.lua's two numbers when the
+-- mob runtime is in this VM, and the same defaults when the weapons run
+-- game-wide and it is not (Doom's 5.625 degrees, and its 2048-unit reach in
+-- the 48-to-a-unit scale the converted maps use).
+W.autoaim_range = fx.frac(2048, 48)
+W.autoaim_h = 5.625
+local function autoaim_knobs()
+  local m = mobs
+  return { range = (m and m.autoaim_range) or W.autoaim_range,
+           cone = (m and m.autoaim_h) or W.autoaim_h }
+end
+W.force_lua = FORCE_LUA
+W.core = nil            -- the compiled table's index, when the core runs it
+W.core_why = nil        -- why it does not, when it does not
+local core_stale = true
+
+--- The table changed: compile it again before the next tick.
+function W.core_stale() core_stale = true end
+
+local function core_index()
+  if not core_stale then return W.core end
+  core_stale = false
+  W.core, W.core_why = nil, nil
+  if W.force_lua then
+    W.core_why = "DNP_WEAPONS_LUA"
+  elseif dnp == nil or dnp.weapons_compile == nil then
+    W.core_why = "no core binding"
+  elseif next(W.defs) == nil then
+    -- Nothing loaded yet. Asked again once something is.
+    core_stale = true
+    W.core_why = "no weapons"
+  else
+    local idx, why = dnp.weapons_compile(W.defs, W.ammo, W.initial_weapons or false, autoaim_knobs())
+    W.core, W.core_why = idx, why
+    if idx == nil then
+      print(("weapons: the machine runs in Lua -- %s"):format(tostring(why)))
+    end
+  end
+  return W.core
+end
+W.core_index = core_index
+
+local function core_tick(e, idx, now, X)
+  local inv = W.get(idx)
+  if inv == nil or inv.current == nil then return end
+
+  -- A machine dropped by rearm_player (or never armed): the core's too.
+  local state = run[idx]
+  if state == nil then
+    state = { vars = {}, down_since = {} }
+    run[idx] = state
+    dnp.weapon_reset(e)
+  end
+
+  -- What the HUD and the predicted sounds show is the inventory as the last
+  -- tick left it, as on the Lua path.
+  local shown_def = W.defs[inv.current]
+  if shown_def ~= nil then
+    send_predict(e, inv, shown_def, state)
+    publish_hud(e, inv, shown_def, state)
+  end
+
+  -- DOWN: the inventory, as scripts left it -- a pickup, the panel, a load.
+  local have = 0
+  for name, held in pairs(inv.have) do
+    local i = held and X.weapons[name]
+    if i then have = bit.bor(have, bit.lshift(1, i)) end
+  end
+  local ammo = {}
+  for i, pool in ipairs(X.pool_names) do ammo[i] = inv.ammo[pool] or 0 end
+  dnp.weapon_sync(e, have, X.weapons[inv.current] or -1, ammo)
+
+  local hops, events = dnp.weapon_step(e, now)
+  local s = dnp.weapon_state(e)
+  if s == nil then return end
+
+  -- UP: what the machine spent and switched to.
+  for i, pool in ipairs(X.pool_names) do inv.ammo[pool] = s.ammo[i] end
+  local cur = X.weapon_names[s.current + 1]
+  if cur ~= nil then inv.current = cur end
+
+  local wname = X.weapon_names[s.armed + 1]
+  local def = wname and W.defs[wname]
+  if def == nil then return end
+  local names = X.phase_names[wname]
+  state.weapon = wname
+  state.phase = names[s.phase + 1]
+  state.entered = s.entered
+  state.vars = {}
+  for slot, vname in ipairs(X.var_names[wname]) do state.vars[vname] = s.vars[slot] end
+
+  -- THE SWING, written when it changes: the weapon's on arming, a phase's
+  -- when the machine enters one that declares its own. What phase_swing and
+  -- rearm do on the Lua path, through the same tagged effects.
+  if state.swing_for ~= wname then
+    state.swing_for = wname
+    state.swing_phase = -1
+    apply_weapon_params(e, def)
+  end
+  if s.swing_phase ~= state.swing_phase then
+    state.swing_phase = s.swing_phase
+    if s.swing_phase >= 0 then phase_swing(e, def, def.phases[names[s.swing_phase + 1]]) end
+  end
+
+  if hops > MAX_HOPS then
+    complain("weapon '%s' changed phase %d times in one tick around '%s' -- " ..
+             "a transition loop. Stopping so the tick can finish.",
+             wname, hops, tostring(state.phase))
+  end
+
+  -- AND WHAT THE WORLD MUST DO, in the order the machine said it. The same
+  -- action implementations the Lua path calls; a hitscan carries the core's
+  -- per-pellet offsets, so the rays go where a predicting client drew them.
+  local c = { e = e, idx = idx, inv = inv, state = state, now = now }
+  for _, ev in ipairs(events or {}) do
+    local ewname = X.weapon_names[ev.weapon + 1]
+    local edef = W.defs[ewname]
+    local ph = edef and edef.phases[X.phase_names[ewname][ev.phase + 1]]
+    local entry = ph and ph.sequence and ph.sequence[ev.step + 1]
+    local fn = entry and acts[entry.action]
+    if fn then
+      c.def = edef
+      c.entry = entry
+      c.ev = ev
+      if ev.action == "hitscan" then
+        -- The core's aim, whole: the per-pellet offsets it drew, the auto-aim
+        -- correction from the facing, and the slope. The mob runtime fires
+        -- with these instead of deciding them again.
+        local a = {}
+        for k, v in pairs(entry) do a[k] = v end
+        a.offsets = ev.offsets
+        local off = (ev.aim - e:facing()) % 4294967296
+        if off > 2147483648 then off = off - 4294967296 end
+        a.aim_off = off
+        a.slope = ev.slope
+        fn(c, a)
+      else
+        fn(c, entry)
+      end
+      c.ev = nil
+    end
+  end
+end
+
 --- Drive one player's weapon for one tick. Public so a test can step it.
-function W.tick_player(e, idx, now) return tick_player(e, idx, now) end
+function W.tick_player(e, idx, now)
+  local X = core_index()
+  if X ~= nil then return core_tick(e, idx, now, X) end
+  return tick_player(e, idx, now)
+end
 
 --- Drop the phase machine, keeping the inventory.
 --
@@ -1442,7 +1615,7 @@ function on_tick()
     local idx = key_of(e)
     if idx ~= nil then
       refresh_panel(e, idx)
-      tick_player(e, idx, now)
+      W.tick_player(e, idx, now)
     end
   end
 end

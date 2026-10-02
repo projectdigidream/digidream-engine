@@ -338,6 +338,8 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
         w.u16v(t.pools[p].initial);
     }
     w.u32v(t.initial_have);
+    w.fxraw(t.autoaim_range);
+    w.u32v(t.autoaim_cone);
     w.u8v(t.weapon_count);
     for (u32 i = 0; i < t.weapon_count; ++i) {
         const WeaponDef& d = t.weapons[i];
@@ -382,8 +384,13 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
     return w.ok();
 }
 
-bool decode_weapon_table(ByteReader& r, WeaponTable& out) noexcept {
-    static WeaponTable t;      // ~MBs of fixed arrays: never on a stack
+namespace {
+
+// Straight into the caller's table, which the public decoder clears again if
+// this refuses. NOT through a scratch copy: a WeaponTable is most of a
+// megabyte, and a static one with these default values is an image the wasm
+// build carries in its data section, while a local one overflows its stack.
+bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
     t.clear();
     t.pool_count = r.u8v();
     if (!r.ok() || t.pool_count > MAX_AMMO_POOLS) return false;
@@ -393,6 +400,8 @@ bool decode_weapon_table(ByteReader& r, WeaponTable& out) noexcept {
         t.pools[p].initial = r.u16v();
     }
     t.initial_have = r.u32v();
+    t.autoaim_range = r.fxraw();
+    t.autoaim_cone = r.u32v();
     t.weapon_count = r.u8v();
     if (!r.ok() || t.weapon_count > MAX_WEAPONS) return false;
     if (t.weapon_count < 32 && (t.initial_have >> t.weapon_count) != 0) return false;
@@ -463,8 +472,36 @@ bool decode_weapon_table(ByteReader& r, WeaponTable& out) noexcept {
         }
     }
     if (!r.ok()) return false;
-    out = t;
     return true;
+}
+
+}  // namespace
+
+bool decode_weapon_table(ByteReader& r, WeaponTable& out) noexcept {
+    if (decode_into(r, out)) return true;
+    out.clear();
+    return false;
+}
+
+// In place, part by part: `*this = WeaponTable{}` builds the whole table as a
+// temporary on the stack first, which in the wasm build is more stack than
+// there is.
+void WeaponTable::clear() noexcept {
+    weapon_count = 0;
+    pool_count = 0;
+    initial_have = 0;
+    autoaim_range = fx{};
+    autoaim_cone = 0;
+    for (AmmoPool& p : pools) p = AmmoPool{};
+    for (WeaponDef& d : weapons) {
+        for (char& ch : d.name) ch = 0;
+        d.order = 0; d.pool = NO_POOL; d.per = 1; d.initial = 0; d.aim_snap = 0;
+        d.swing = WSwing{};
+        d.var_count = 0;
+        for (i32& v : d.vars) v = 0;
+        d.phase_count = 0;
+        for (WPhase& ph : d.phases) ph = WPhase{};
+    }
 }
 
 u64 WeaponTable::hash() const noexcept {

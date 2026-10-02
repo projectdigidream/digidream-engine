@@ -625,6 +625,46 @@ static void test_the_swing_is_shaped_by_parameters() {
 }
 
 // Not swinging hits nothing, and holding the button is one swing.
+static void test_a_swing_at_a_high_prop_slot_writes_only_its_own_record() {
+    std::printf("props: a swing at a prop past slot 192, or at a mirrored body, stays in its record\n");
+
+    // THE OVERFLOW THIS PINS. The swing's record of props already hit was three
+    // words, 192 bits, while it tested every prop slot up to the high-water
+    // mark -- a prop in slot 300, or a client's mirrored body in the band above
+    // the spawnable slots, set a bit past the end, inside the dash timers and
+    // the dash direction. Those are in the prediction hash, so a client swinging
+    // at a monster it mirrors mispredicted every tick until the next adoption.
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    const u32 high = MAX_AGENTS + 300;                      // a spawnable slot past 192
+    const u32 mirror = MAX_AGENTS + SPAWNABLE_PROPS + 7;     // a mirrored body
+    CHECK(w.place_prop(high, 10, fx3{F(21), F(20), F(0)}, fx::from_frac(1, 5), F(1), 0));
+    CHECK(w.place_prop(mirror, 0, fx3{F(21), fx::from_frac(203, 10), F(0)}, fx::from_frac(1, 5), F(1), 1));
+
+    int hit_high = 0, hit_mirror = 0;
+    for (u32 t = 0; t < 30; ++t) {
+        proto::InputFrame f;
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        w.step();
+        for (u32 k = 0; k < w.attacks().count(); ++k) {
+            if (w.attacks().at(k).target == high) ++hit_high;
+            if (w.attacks().at(k).target == mirror) ++hit_mirror;
+        }
+    }
+    // Each is hit ONCE in one held swing: the record holds a bit for both.
+    CHECK(hit_high == 1);
+    CHECK(hit_mirror == 1);
+    // And nothing else was written: the dash state is as it started.
+    const physics::MoveState& m = w.agent(a).mv;
+    CHECK(m.dash_timer == fx::zero() && m.dash_cooldown_timer == fx::zero());
+    CHECK(m.dash_dir.x == fx::zero() && m.dash_dir.y == fx::zero());
+}
+
 static void test_the_swing_is_edge_triggered() {
     std::printf("props: holding attack swings once, and not pressing it swings never\n");
 
@@ -810,6 +850,7 @@ int main() {
     test_the_swing_is_not_instantaneous();
     test_the_swing_is_shaped_by_parameters();
     test_the_swing_is_edge_triggered();
+    test_a_swing_at_a_high_prop_slot_writes_only_its_own_record();
     test_a_swing_reports_agents_and_props_alike();
     test_a_solid_prop_stops_a_body();
     test_a_solid_prop_is_not_a_wall_from_above();

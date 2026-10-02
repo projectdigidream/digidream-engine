@@ -3015,6 +3015,42 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         send_hud(s, list);
     }
 
+    // THE WEAPON TABLE a client predicts its own weapon with
+    // (docs/WEAPON_PREDICTION.md): the game's when its scripts own the
+    // weapons, else this level's. Sent when the client has not got this one --
+    // on arrival, once the table first compiles, and if it ever changes.
+    void send_weapon_defs(Session& s, Level& L) {
+        u64 seed = 0;
+        const sim::WeaponTable* t = nullptr;
+        if (game_vm.is_open()) t = lua::compiled_weapons(game_vm.state(), &seed);
+        if (t == nullptr && L.vm.is_open()) t = lua::compiled_weapons(L.vm.state(), &seed);
+        if (t == nullptr || seed == s.weapon_defs_sent) return;
+        // Encoded once per table, not once per client.
+        static std::vector<u8> bytes;
+        static u64 bytes_for = 0;
+        if (bytes_for != seed) {
+            bytes.assign(1u << 20, 0);
+            ByteWriter w(bytes.data(), bytes.size());
+            w.u32v(0);
+            w.u8v(proto::MSG_WEAPON_DEFS);
+            sim::encode_weapon_table(w, *t);
+            if (!w.ok()) {
+                std::fprintf(stderr, "[srv] the weapon table does not fit a message; not predicted\n");
+                s.weapon_defs_sent = seed;
+                return;
+            }
+            const u32 body = static_cast<u32>(w.size() - 4);
+            bytes[0] = static_cast<u8>(body & 0xFF);
+            bytes[1] = static_cast<u8>((body >> 8) & 0xFF);
+            bytes[2] = static_cast<u8>((body >> 16) & 0xFF);
+            bytes[3] = static_cast<u8>((body >> 24) & 0xFF);
+            bytes.resize(w.size());
+            bytes_for = seed;
+        }
+        link.send_control(s.id, bytes.data(), bytes.size());
+        s.weapon_defs_sent = seed;
+    }
+
     void send_screen(Session& s, const proto::ScreenSet& sc) {
         u8 buf[256];
         ByteWriter w(buf, sizeof(buf));
@@ -3480,6 +3516,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             // indices and tick in it mean nothing anywhere else.
             Level& L = level(s.level);
             const sim::World& world = L.world;
+            send_weapon_defs(s, L);
 
             const sim::AgentState& self = world.agent(s.agent);
 
@@ -3542,6 +3579,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             // its own stream (see the `i == s.agent` skip below), so without
             // this line a script animating a player animates nobody's screen.
             sb.avatar          = L.avatar[s.agent];
+            // The weapon machine, which the client predicts (sent when ARMED).
+            sb.weapon          = world.weapon(s.agent);
             sb.animation_state = world.agent(s.agent).animation_state;
             sb.param_epoch     = L.param_epoch[s.agent];
             sb.state_hash      = world.agent_hash(s.agent);
@@ -3823,6 +3862,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             u32 vfx_dropped = 0;
             for (u32 v = 0; v < world.vfx_count(); ++v) {
                 const sim::PendingVfx& pv = world.vfx(v);
+                // Its own client drew it already, from the prediction -- unless
+                // a test asked for it back to compare (DNP_ECHO_PREDICTED=1).
+                static const bool echo = [] {
+                    const char* e = std::getenv("DNP_ECHO_PREDICTED");
+                    return e != nullptr && std::strcmp(e, "1") == 0;
+                }();
+                if (pv.skip_for != 0 && pv.skip_for == s.agent + 1 && !echo) continue;
                 proto::VfxEvent ev;
                 ev.kind = pv.kind;
                 ev.pos = pv.pos;

@@ -29,6 +29,10 @@ export class OwnSounds {
     // What the last step fired, as { group, trigger }: so the view model can
     // kick the gun on the same predicted shot the sound is played for.
     this.fired = []
+    // Groups not guessed at here: the weapon's, once the core predicts the
+    // weapon itself and its own events say exactly when it fired
+    // (docs/WEAPON_PREDICTION.md).
+    this.mute = new Set()
   }
 
   /** A group's entries replaced (one SOUND_PREDICT message). */
@@ -51,6 +55,7 @@ export class OwnSounds {
     this.prev = { ...s }
     if (!p) return out
     for (const [group, entries] of this.groups) {
+      if (this.mute.has(group)) continue
       for (const e of entries) {
         if (this.#fires(e, p, s)) {
           out.push(e.sound >>> 0)

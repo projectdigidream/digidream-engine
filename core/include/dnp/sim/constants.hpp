@@ -53,6 +53,10 @@ inline constexpr u32 TICK_RATE_HZ = 60;
 // 13 MB, which a server with a hundred players cannot pay.
 inline constexpr u32 MAX_AGENTS = 2048;
 
+// How many 64-bit words a swing's record of the props it has hit takes: one
+// bit per spawnable prop slot (World asserts it covers SPAWNABLE_PROPS).
+inline constexpr u32 ATTACK_HIT_PROP_WORDS = 6;
+
 // Written as an exact rational rather than a decimal literal, so that changing
 // the rate cannot introduce a rounding difference that only shows up as drift.
 inline constexpr fx DT = fx::from_frac(1, TICK_RATE_HZ);

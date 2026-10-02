@@ -163,8 +163,14 @@ struct WeaponTable {
     // What a fresh player holds: the module's W.initial_weapons, or (0) the
     // lowest-order weapon, which is weapons.lua's rule.
     u32       initial_have = 0;
+    // AUTO-AIM for a player's shot (mobs.lua's M.autoaim_range and
+    // M.autoaim_h): how far it looks when the shot names no range of its own,
+    // and how far off the nose it corrects, in brad either way. 0 is no
+    // auto-aim. A first-person body aims with its view instead.
+    fx        autoaim_range{};
+    u32       autoaim_cone = 0;
 
-    void clear() noexcept { *this = WeaponTable{}; }
+    void clear() noexcept;
     // Content hash: what WELCOME can carry so a client running other weapons
     // is a detected condition rather than a stream of mispredictions.
     u64 hash() const noexcept;
@@ -221,6 +227,7 @@ public:
     }
     u32 count() const noexcept { return count_; }
     const WeaponEvent& at(u32 i) const noexcept { return events_[i]; }
+    WeaponEvent& at_mut(u32 i) noexcept { return events_[i]; }
     u32 dropped() const noexcept { return dropped_; }
 private:
     WeaponEvent events_[MAX_WEAPON_EVENTS]{};

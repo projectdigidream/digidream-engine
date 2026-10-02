@@ -94,6 +94,10 @@ export class Predictor {
 
     this.world.setInput(this.agent, frame)
     this.world.step()
+    // What our weapon did on this NEW tick, for drawing and hearing at once.
+    // Only here, never in a replay: a replay re-derives ticks already shown.
+    this.weapon = (typeof this.world.weaponFrame === 'function' && this.world.hasWeapons)
+      ? this.world.weaponFrame() : null
 
     const s = this.world.readAgent(this.agent)
     this.predicted.set(this.tick, { hash: s.hash, epoch: this.paramEpoch })
@@ -177,7 +181,7 @@ export class Predictor {
     }
 
     if (!this.synced) {
-      this.world.writeAgent(this.agent, authoritative)
+      this._adopt(authoritative, sb)
       // Adopt the server's clock along with its state. Parametric sector motion
       // is a pure function of the tick, so a client running its own zero-based
       // counter would evaluate every moving platform at the wrong point in its
@@ -190,7 +194,7 @@ export class Predictor {
     }
 
     if (snapshot.flags & 0x0001) {          // RESYNC_REQUIRED
-      this.world.writeAgent(this.agent, authoritative)
+      this._adopt(authoritative, sb)
       this.world.tick = snapshot.serverTick
       this.inputs.clear()
       this.predicted.clear()
@@ -289,7 +293,7 @@ export class Predictor {
     // Adopt and replay regardless of the verdict. Even on an exact match this
     // is correct and nearly free -- and skipping it when the hashes agree would
     // mean the one path that matters is the one never exercised.
-    this.world.writeAgent(this.agent, authoritative)
+    this._adopt(authoritative, sb)
     // The snapshot's state is the world AFTER server tick `serverTick`, so the
     // replay below must resume from exactly there for sector motion to line up.
     this.world.tick = snapshot.serverTick
@@ -298,6 +302,17 @@ export class Predictor {
 
     this._steerClock(snapshot.inputMargin)
     return { verdict }
+  }
+
+  // Overwrite the local state with the server's: the body and, for a body that
+  // holds weapons, the weapon machine (docs/WEAPON_PREDICTION.md). The machine
+  // is in the hash, so adopting the body and not it would leave a replay
+  // starting from the right place with the wrong cooldown -- a divergence the
+  // correction could never repair. A self block without one is a body holding
+  // nothing, and the local copy is cleared to say so.
+  _adopt (authoritative, sb) {
+    this.world.writeAgent(this.agent, authoritative)
+    if (sb.weapon !== undefined || this.world.hasWeapons) this.world.writeWeapon(this.agent, sb.weapon ?? null)
   }
 
   _replayFrom (t) {

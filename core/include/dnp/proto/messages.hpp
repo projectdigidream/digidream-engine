@@ -8,6 +8,7 @@
 // the caps below are what stops a two-byte field from asking for a gigabyte.
 //
 #include "dnp/proto/bytes.hpp"
+#include "dnp/sim/weapon.hpp"
 
 namespace dnp::proto {
 
@@ -115,6 +116,10 @@ inline constexpr u8 MSG_SOUND_PREDICT = 0x33;
 // UI_LAYOUT.md 4, protocol.md 11.1). S->C, reliable, only when a value changes.
 // u16 count, then count x (str name, u8 kind, value): kind 0 i32, 1 str, 2 clear.
 inline constexpr u8  MSG_HUD_SET     = 0x34;
+// The weapon table a client predicts its own weapon with
+// (docs/WEAPON_PREDICTION.md): sim::encode_weapon_table's bytes, sent when a
+// client has not got the current one. A client holding none predicts none.
+inline constexpr u8  MSG_WEAPON_DEFS = 0x35;
 inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
 inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
 inline constexpr u32 HUD_NAME_MAX    = 24;
@@ -185,12 +190,19 @@ struct InputFrame {
     // The simulation clamps it to MAX_PITCH. What a first-person player aims
     // with vertically; zero for a scheme that has no vertical aim.
     i16  pitch   = 0;
+    // The weapon wanted, by its index in the WEAPON_DEFS table, or NO_WEAPON
+    // (docs/WEAPON_PREDICTION.md). An INPUT, not a request on the side, so a
+    // switch is predicted: the client and the server apply the same choice on
+    // the same tick. Set for the one tick a key went down -- held, it would
+    // undo every switch the machine makes by itself when a weapon runs dry.
+    u8   weapon  = sim::NO_WEAPON;
 };
 inline constexpr i16 MAX_PITCH = 14563;   // 80 degrees
 
 constexpr bool operator==(const InputFrame& a, const InputFrame& b) noexcept {
     return a.buttons == b.buttons && a.move_x == b.move_x &&
-           a.move_y == b.move_y && a.aim == b.aim && a.pitch == b.pitch;
+           a.move_y == b.move_y && a.aim == b.aim && a.pitch == b.pitch &&
+           a.weapon == b.weapon;
 }
 
 struct InputBundle {
@@ -262,6 +274,8 @@ inline constexpr u16 HOVERING  = 1u << 2;
 inline constexpr u16 FLYING    = 1u << 3;
 inline constexpr u16 GRAPPLING = 1u << 4;
 inline constexpr u16 ANCHORED  = 1u << 5;
+// The body holds weapons, so SelfBlock carries the weapon machine's state.
+inline constexpr u16 ARMED     = 1u << 6;
 }  // namespace state_flag
 
 inline constexpr u16 SNAP_RESYNC_REQUIRED = 1u << 0;
@@ -335,6 +349,10 @@ struct SelfBlock {
     // stream, so without it a player would be the one body on the map that could
     // not see its own costume.
     u16    avatar          = 0;
+    // The weapon machine (docs/WEAPON_PREDICTION.md): only when state_flags
+    // has ARMED. Simulation state the client predicts and the hash covers, so
+    // reconciliation has to be able to restore all of it.
+    sim::WeaponState weapon{};
     // The observer's own animation state (design 4.1).
     //
     // SelfBlock's first purely COSMETIC field, and worth a sentence because the

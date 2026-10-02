@@ -395,6 +395,21 @@ bool persist_player_restore(lua_State* L, WorldContext& ctx, u32 agent,
 // Push an entity handle for an agent index, or nil if the slot is empty.
 void push_entity(lua_State* L, WorldContext& ctx, u32 index);
 
+// For the binding files beside this one: the context this VM is attached to
+// (raises when none is), and the agent an entity argument names NOW -- -1 for
+// a stale handle, the one rule every verb here follows.
+WorldContext& context_of(lua_State* L);
+i32 entity_agent(lua_State* L, int idx);
+
+// The weapon machine's bindings (weapon_binding.cpp), onto the `dnp` table at
+// the top of the stack.
+void open_weapons(lua_State* L);
+
+// The weapon table a VM's weapons.lua compiled, and the seed its random stream
+// uses (which is the table's hash, so a client holding it knows both); null
+// when that VM has compiled none.
+const sim::WeaponTable* compiled_weapons(lua_State* L, u64* seed);
+
 // Push a prop handle -- the same entity userdata an agent uses, because from a
 // script's point of view a key and a player are both things with a handle.
 void push_prop(lua_State* L, WorldContext& ctx, u32 entity);

@@ -36,6 +36,7 @@ SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
 # point of it -- four bugs this phase came from a stub being more generous than
 # the engine, and every one of them raised the first time a real server ran.
 RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp"
+            "$ROOT/server/src/lua/weapon_binding.cpp"
             "$ROOT/server/src/mobs/mob_compile.cpp"
             "$ROOT/server/src/mobs/mob_eval.cpp"
             "$ROOT/server/src/mobs/mob_runtime.cpp"
@@ -72,6 +73,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # answer to all of it. Needs core, which the graph test does not.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/lua/world_binding.cpp" \
+        "$ROOT/server/src/lua/weapon_binding.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
         "$ROOT/server/src/mobs/mob_runtime.cpp" \
@@ -82,6 +84,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # and gets back, against the real bindings.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/lua/world_binding.cpp" \
+        "$ROOT/server/src/lua/weapon_binding.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
         "$ROOT/server/src/mobs/mob_runtime.cpp" \

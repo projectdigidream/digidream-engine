@@ -37,6 +37,10 @@ export const MSG = {
   GAME_NEW: 0x2F,
   SOUND_PREDICT: 0x33,
   HUD_SET: 0x34,
+  // The weapon table this client predicts its own weapon with
+  // (docs/WEAPON_PREDICTION.md): the core's encoding, handed to the wasm core
+  // as it came.
+  WEAPON_DEFS: 0x35,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -125,8 +129,13 @@ export const STATE_FLAG = {
   HOVERING: 1 << 2,
   FLYING: 1 << 3,
   GRAPPLING: 1 << 4,
-  ANCHORED: 1 << 5
+  ANCHORED: 1 << 5,
+  // The body holds weapons: the self block carries the weapon machine.
+  ARMED: 1 << 6
 }
+
+// No weapon asked for, in an input frame's `weapon` (sim::NO_WEAPON).
+export const NO_WEAPON = 255
 
 export const PROTOCOL_VERSION = 0
 export const TICK_RATE_HZ = 60
@@ -512,6 +521,13 @@ export function decodeControlMessage (buf) {
     if (!r.ok || b === null) return null
     return { type, op: ['save', 'load', 'new'][op] ?? 'unknown', slot, ok, text: new TextDecoder().decode(b) }
   }
+  // The weapon table, as bytes: the wasm core decodes it with the server's
+  // own decoder, so there is no second reader of it here.
+  if (type === MSG.WEAPON_DEFS) {
+    if (len < 1 || buf.length < 4 + len) return null
+    // A copy: the caller's receive buffer is reused for the next message.
+    return { type, bytes: new Uint8Array(buf.subarray(5, 4 + len)) }
+  }
   // HUD values (docs/UI_LAYOUT.md 4): {name, kind, value}; kind 0 i32, 1 str,
   // 2 clear. A kind this reader does not know refuses the message, as MUSIC's
   // reader refuses an unknown `at`.
@@ -606,7 +622,7 @@ export function encodeUiEvent (uiId, widgetId, value) {
 
 export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) {
   const n = Math.min(frames.length, 16)
-  const w = new Writer(16 + n * 12)
+  const w = new Writer(16 + n * 13)
   w.u8(MSG.INPUT_BUNDLE).u32(clientTick).u32(ackSnapshotTick).u8(n)
   for (let i = 0; i < n; i++) {
     const f = frames[i]
@@ -616,6 +632,8 @@ export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) 
     w.u32(f.aim ?? 0)
     // Vertical aim, 1/65536 of a turn (docs/protocol.md 4).
     w.i16(f.pitch ?? 0)
+    // The weapon wanted this tick, NO_WEAPON for none (docs/WEAPON_PREDICTION.md).
+    w.u8(f.weapon ?? NO_WEAPON)
   }
   return w.done()
 }
@@ -659,6 +677,19 @@ export function decodeSnapshot (buf) {
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()
+  }
+  // The weapon machine, when the body holds weapons (docs/WEAPON_PREDICTION.md).
+  if (snap.self.stateFlags & STATE_FLAG.ARMED) {
+    const k = {}
+    k.have = r.u32()
+    k.current = r.u8(); k.phase = r.u8(); k.armed = r.u8(); k.swingPhase = r.u8()
+    k.prevButtons = r.u8()
+    k.entered = r.u32(); k.done = r.u32()
+    k.heldSince = [r.u32(), r.u32()]
+    k.vars = [r.i32(), r.i32(), r.i32(), r.i32()]
+    k.ammo = []
+    for (let i = 0; i < 8; i++) k.ammo.push(r.u16())
+    snap.self.weapon = k
   }
   // Which generation of the movement parameters the server computed this state
   // with (docs/protocol.md 8.4). Compared against the client's applied epoch to

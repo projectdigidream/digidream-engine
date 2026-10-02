@@ -766,6 +766,10 @@ function M.autoaim(e, range, slop)
 
   local function consider(o)
     if o == nil or not o:valid() or o:index() == e:index() then return end
+    -- A SOLID body only: what a predicting client can see to aim at, since it
+    -- mirrors exactly the solid ones (World::autoaim asks the same). A corpse
+    -- is not solid, and neither is anything a script made a ghost.
+    if o.solid ~= nil and not o:solid() then return end
     local q = o:pos()
     local d = dnp.length(vec3.new(q.x - from.x, q.y - from.y, ZERO))
     if d > reach or d <= ZERO then return end
@@ -1299,7 +1303,11 @@ function acts.hitscan(m, a)
   -- for the last half second, so only the VERTICAL is missing. A player has no
   -- target and no vertical aim at all, so both halves come from the cone.
   local aim_off, slope = 0, nil
-  if m.target ~= nil and not m.target_prop and m.target:valid() then
+  if a.offsets ~= nil then
+    -- A PLAYER'S SHOT THE CORE AIMED (docs/WEAPON_PREDICTION.md): the cone and
+    -- the view were already applied, identically on the shooter's client.
+    aim_off, slope = a.aim_off or 0, a.slope
+  elseif m.target ~= nil and not m.target_prop and m.target:valid() then
     slope = slope_to(m.e, m.target)
   elseif m.player and M.free_aim() then
     -- FIRST PERSON: where they look is where it goes, up and down included,
@@ -1313,7 +1321,7 @@ function acts.hitscan(m, a)
       aim_off, slope = d, slope_to(m.e, t)
     end
   end
-  for _ = 1, (a.count or 1) do
+  for pellet = 1, (a.count or 1) do
     -- TWO returns, not four: dnp.hitscan gives (target_or_nil, impact) where
     -- the impact is a vec3. Reading it as x, y, z made `x` the vec3 and y and z
     -- nil, and vec3.new(vec3, nil, nil) RAISES -- which killed on_tick before
@@ -1343,7 +1351,13 @@ function acts.hitscan(m, a)
     -- of exactly the kind this file keeps finding.
     local scale = m.spread_scale or M.spread_scale or 1
     local off = 0
-    if a.spread and a.spread ~= 0 and scale ~= 0 then
+    -- OR THE CORE'S, when a player's weapon ran in it (docs/WEAPON_PREDICTION.md):
+    -- the same floor(r / 1000 * spread) per pellet, drawn from the per-player
+    -- stream a predicting client draws from too, so its tracers go where these
+    -- rays do. The spread knobs do not apply: a client cannot see them.
+    if a.offsets ~= nil then
+      off = a.offsets[pellet] or 0
+    elseif a.spread and a.spread ~= 0 and scale ~= 0 then
       off = math.floor(dnp.random(-1000, 1000) / 1000
                        * (a.spread * scale * 4294967296 / 360))
     end
@@ -1392,8 +1406,11 @@ function acts.hitscan(m, a)
       local rise = slope ~= nil and slope * len or ZERO
       local muzzle = vec3.new(from.x, from.y, at.z - rise)
       -- Length and rise in 1/256 units, which the event carries as one u32.
+      -- A shot the core aimed was drawn by its shooter's own client the
+      -- moment it was predicted (World::present_weapon): sent to everybody
+      -- but that client.
       dnp.vfx(a.tracer, muzzle, wrap_brad(m.e:facing() + off),
-              tracer_param(len, rise))
+              tracer_param(len, rise), a.offsets ~= nil and m.e or nil)
     end
 
     -- An observability hook, for anything that wants to know what the shots

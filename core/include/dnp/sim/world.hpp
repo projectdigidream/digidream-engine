@@ -17,6 +17,7 @@
 #include "dnp/sim/crush.hpp"
 #include "dnp/sim/sectormotion.hpp"
 #include "dnp/sim/state_hash.hpp"
+#include "dnp/sim/weapon.hpp"
 
 namespace dnp::sim {
 
@@ -62,6 +63,8 @@ static_assert(MAX_PROPS > MIRROR_SLOTS,
               "the mirror band fills the prop range: SPAWNABLE_PROPS would "
               "underflow and spawn_prop would hand out indices inside it");
 inline constexpr u32 SPAWNABLE_PROPS = MAX_PROPS - MIRROR_SLOTS;
+static_assert(ATTACK_HIT_PROP_WORDS * 64 >= SPAWNABLE_PROPS,
+              "a swing's prop hit mask must have a bit for every spawnable prop slot");
 inline constexpr u32 MAX_ENTITIES = MAX_AGENTS + MAX_PROPS;
 
 // What a prop IS, as far as the simulation is concerned: a number the map and
@@ -121,6 +124,9 @@ struct PendingVfx {
     fx3  pos{};
     brad dir{};
     u32  param = 0;
+    // Not sent to this agent (its index + 1; 0 sends to everyone): one its own
+    // client already drew from its predicted weapon (docs/WEAPON_PREDICTION.md).
+    u32  skip_for = 0;
 };
 
 // What one TICK may queue, and it matches proto::MAX_VFX -- what one snapshot
@@ -521,6 +527,63 @@ public:
     physics::MoveParams&        params_mut(u32 i) noexcept { return params_[i]; }
     const proto::InputFrame&    input(u32 i) const noexcept { return inputs_[i]; }
 
+    // A player's weapon (docs/WEAPON_PREDICTION.md): the machine's state,
+    // beside the body it fires from. Reset with the slot.
+    const WeaponState& weapon(u32 i) const noexcept { return weapons_[i]; }
+    WeaponState&       weapon_mut(u32 i) noexcept { return weapons_[i]; }
+
+    // ONE TICK OF AGENT i's WEAPON, the one function both sides call: the
+    // server from the weapon runtime's tick, a predicting client at the same
+    // point of its own tick. Reads the body and this tick's buttons, writes
+    // the recoil straight into the velocity and a set_anim into the
+    // animation state, and pushes what the world must do to `log`. Returns
+    // the phase changes made, which past WEAPON_HOPS means a loop was stopped.
+    //
+    // `stream` is whose random stream the spread is drawn from: the agent's
+    // index ON THE SERVER, which a client's own world -- where the same body
+    // sits at an index of its own -- has to be told. Defaults to `i`.
+    u32 step_weapon(u32 i, const WeaponTable& table, u8 want, u32 tick, u64 seed,
+                    WeaponEventLog& log, u32 stream = MAX_AGENTS) noexcept;
+
+    // A SHOT from agent i's middle, along `aim` (a heading) rising `slope` per
+    // unit of run, out to `range`: the nearest body -- an agent other than i,
+    // or a prop -- by the swing's cylinder test, unless the map stops it
+    // first. dnp.hitscan's whole answer, here so a predicting client can ask
+    // it of its own world, where the other bodies are mirrored props.
+    struct ShotHit {
+        i32 entity = -1;     // what it reached, -1 for nothing or a wall
+        fx3 from{};          // the muzzle: the body's middle
+        fx3 at{};            // where the ray stopped
+    };
+    ShotHit hitscan(u32 i, brad aim, fx slope, fx range) const noexcept;
+
+    // AUTO-AIM (mobs.lua's M.autoaim, which a player's shot uses): the nearest
+    // body inside `cone` brad either side of agent i's facing, within `range`
+    // and in sight. On the server the bodies are the solid agents; on a client
+    // they are the mirrored bodies (props in the mirror band), so both ask the
+    // same question of what each can see. False when nothing qualifies.
+    bool autoaim(u32 i, fx range, u32 cone, brad& heading, fx& slope, bool& slope_set) const noexcept;
+
+    // FOR A PREDICTING CLIENT: run agent `agent`'s weapon inside step(), with
+    // this table, at the point the server runs it, drawing from the stream of
+    // the server's agent `stream`. Null (the default, and the server's) runs
+    // nothing. The table is the caller's and must outlive this.
+    void predict_weapon(const WeaponTable* table, u64 seed, u32 agent, u32 stream) noexcept {
+        weapon_table_ = table;
+        weapon_seed_ = seed;
+        weapon_agent_ = agent;
+        weapon_stream_ = stream;
+    }
+    // What the predicted weapon asked for on the last step: tracers, flashes,
+    // sounds to draw at once.
+    const WeaponEventLog& weapon_events() const noexcept { return weapon_events_; }
+    // And the effects it would have been sent for it, in the snapshot's own
+    // terms -- a tracer per pellet, from World::hitscan in this world, and each
+    // `vfx` step -- so the client draws its own shot through the same code that
+    // draws everybody else's.
+    u32 weapon_vfx_count() const noexcept { return weapon_vfx_count_; }
+    const PendingVfx& weapon_vfx(u32 k) const noexcept { return weapon_vfx_[k]; }
+
     // Wire-format state flags for an agent, assembled in one place so the
     // server and the wasm client cannot disagree about what "grounded" means.
     u16 state_flags(u32 i) const noexcept;
@@ -713,6 +776,15 @@ private:
     u8                   generation_[MAX_ENTITIES]{};
     physics::MoveParams  params_[MAX_AGENTS]{};
     proto::InputFrame    inputs_[MAX_AGENTS]{};
+    WeaponState          weapons_[MAX_AGENTS]{};
+    const WeaponTable*   weapon_table_ = nullptr;
+    u64                  weapon_seed_ = 0;
+    u32                  weapon_agent_ = MAX_AGENTS;
+    u32                  weapon_stream_ = MAX_AGENTS;
+    WeaponEventLog       weapon_events_{};
+    PendingVfx           weapon_vfx_[MAX_PELLETS + 8]{};
+    u32                  weapon_vfx_count_ = 0;
+    void present_weapon(u32 i, const WeaponTable& table) noexcept;
     u32                  tick_ = 0;
 };
 

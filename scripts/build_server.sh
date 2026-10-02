@@ -69,6 +69,7 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
   "$ROOT/server/src/lua/vm.cpp" \
   "$ROOT/server/src/lua/fx_binding.cpp" \
   "$ROOT/server/src/lua/world_binding.cpp" \
+  "$ROOT/server/src/lua/weapon_binding.cpp" \
   "$ROOT/server/src/mobs/mob_compile.cpp" \
   "$ROOT/server/src/mobs/mob_eval.cpp" \
   "$ROOT/server/src/mobs/mob_runtime.cpp" \

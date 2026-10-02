@@ -306,6 +306,15 @@ int l_entity_set_solid(lua_State* L) {
     return 0;
 }
 
+// entity:solid() -> whether other bodies collide with it. What auto-aim asks
+// (a corpse is not solid, and a predicting client mirrors only solid bodies).
+int l_entity_solid(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    lua_pushboolean(L, a >= 0 && ctx.world->agent(static_cast<u32>(a)).solid);
+    return 1;
+}
+
 // entity:hp() -> integer, and entity:set_hp(n)
 //
 // Health is the server's, not the simulation's: the engine has no notion of it,
@@ -608,6 +617,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"press", l_entity_press},
     {"release", l_entity_release},
     {"set_solid", l_entity_set_solid},
+    {"solid", l_entity_solid},
     {"hp", l_entity_hp},
     {"set_hp", l_entity_set_hp},
     {"avatar", l_entity_avatar},
@@ -1401,107 +1411,25 @@ int l_dnp_hitscan(lua_State* L) {
     if (m == nullptr) { lua_pushnil(L); return 1; }
 
     const sim::AgentState& sh = ctx.world->agent(static_cast<u32>(a));
-    // From the middle of the body, not its feet: a shot from ankle height is
-    // stopped by every step in the map.
-    const fx eye = sh.pos.z + ctx.world->params(static_cast<u32>(a)).height / 2;
-    const fx2 from{sh.pos.x, sh.pos.y};
-
     // An OPTIONAL angular offset from the body's facing, in brad, so one pull
-    // of a trigger can put several pellets in different places.
-    //
-    // The offset, not the randomness. Where a pellet goes is a gameplay
-    // decision and belongs in the script -- which also means a shotgun's
-    // pattern can be tuned without recompiling anything. Without it every
-    // pellet of a seven-pellet shot travels the identical ray and a shotgun is
-    // a pistol that does seven times the damage at any range.
-    // brad wraps by design -- an angle has no range to saturate against -- so a
-    // negative offset is just an addition that goes round the other way.
+    // of a trigger can put several pellets in different places. The offset,
+    // not the randomness: where a pellet goes is the script's decision (or,
+    // for a player's own weapon, the core's -- docs/WEAPON_PREDICTION.md).
+    // brad wraps by design, so a negative offset goes round the other way.
     const i64 spread = static_cast<i64>(luaL_optnumber(L, 3, 0));
     const brad aim = sh.facing + brad(static_cast<u32>(spread));
-    const fx2 dir = fx_dir(aim);
-    const fx2 to = from + dir * range;
-
-    // AND AN OPTIONAL SLOPE: rise per unit of horizontal run.
-    //
-    // Zero is the flat ray this binding cast for its whole life, and is the
-    // default, so every caller that does not aim upwards is unchanged.
-    //
-    // It has to exist here because there is no vertical aim INPUT anywhere in
-    // the engine: a command carries one brad and a brad is a heading. Without
-    // a slope a body whose middle is not level with yours cannot be shot at
-    // all -- the `eye < z0 || eye > z1` test below rejects it -- so a monster
-    // on a ledge, or standing in a pit, was immune to every bullet in the game
-    // and an auto-aim above this would have had nothing to aim with.
-    //
-    // Rise per RUN rather than a pitch angle because both consumers want it
-    // that way: the ray's height at a distance is one multiply, and a missile
-    // adds the same product to its z every step. A pitch would be converted
-    // back at each of them, twice, with a tangent that blows up looking
-    // straight down.
+    // AND AN OPTIONAL SLOPE: rise per unit of horizontal run, zero for the flat
+    // ray this binding cast for its whole life. Without one a body whose middle
+    // is not level with yours could not be shot at all.
     const fx slope = lua_isnoneornil(L, 4) ? fx::zero() : check_fx(L, 4);
 
-    // Nearest ENTITY along the ray, by the same "in front and within the
-    // corridor" test a swing uses -- a cylinder test rather than an exact
-    // capsule intersection, which for bodies this size differs only where a
-    // shot grazes an edge.
-    i32  best = -1;
-    fx   best_t = fx::one() + fx::one();
-    const auto consider = [&](fx2 p, fx r, fx z0, fx z1, i32 entity) {
-        const fx2 toward = p - from;
-        const fx along = dot(dir, toward);
-        if (along <= fx::zero() || along > range) return;
-        // WHERE THE RAY IS BY THE TIME IT GETS THERE. For a flat shot that is
-        // the eye, which is why this used to be the first line of the lambda;
-        // a sloped one has to know how far along the body is before it can say
-        // how high the bullet is, so the cheap reject moved below the
-        // projection rather than above it.
-        const fx ray_z = eye + slope * along;
-        if (ray_z < z0 || ray_z > z1) return;           // over or under it
-        // Perpendicular distance from the ray to the centre.
-        const fx2 closest = from + dir * along;
-        const u128 off_sq = len_sq_raw(p - closest);
-        if (off_sq > static_cast<u128>(static_cast<i128>(r.raw) * r.raw)) return;
-        const fx t = along / range;
-        if (t >= best_t) return;
-        best_t = t;
-        best = entity;
-    };
-
-    for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
-        if (i == static_cast<u32>(a) || !ctx.world->agent(i).active) continue;
-        const sim::AgentState& e = ctx.world->agent(i);
-        consider(fx2{e.pos.x, e.pos.y}, ctx.world->params(i).radius,
-                 e.pos.z, e.pos.z + ctx.world->params(i).height, static_cast<i32>(i));
-    }
-    for (u32 e = sim::MAX_AGENTS; e < ctx.world->prop_high_water(); ++e) {
-        if (!ctx.world->prop(e).active) continue;
-        const sim::PropState& p = ctx.world->prop(e);
-        consider(fx2{p.pos.x, p.pos.y}, p.radius, p.pos.z, p.pos.z + p.height,
-                 static_cast<i32>(e));
-    }
-
-    // And the geometry, which OCCLUDES: a wall between the shooter and a target
-    // stops the shot, so the wall is consulted even when a body was found.
-    const physics::RayHit wall =
-        physics::raycast(*m, sh.mv.sector, from, dir, range, 0, eye,
-                         eye + slope * range);
-    fx2 end = to;
-    if (wall.blocked) {
-        const fx wall_t = wall.distance / range;
-        if (best < 0 || wall_t < best_t) { best = -1; best_t = wall_t; }
-        end = wall.point;
-    }
-    if (best >= 0) end = from + dir * (range * best_t);
-
-    if (best < 0) lua_pushnil(L);
-    else if (sim::World::is_prop(static_cast<u32>(best))) push_prop(L, ctx, static_cast<u32>(best));
-    else push_entity(L, ctx, static_cast<u32>(best));
-    // The impact's HEIGHT is where the ray was when it stopped, which for a
-    // sloped shot is not the eye. `best_t` is a fraction of the range when
-    // anything was reached and stays at two when nothing was, so one
-    // comparison distinguishes them.
-    const fx end_d = best_t <= fx::one() ? range * best_t : range;
-    push_vec3(L, ctx.to_local(fx3{end.x, end.y, eye + slope * end_d}));
+    // The shot itself is the core's (World::hitscan), so a predicting client
+    // asks its own world the identical question and draws the same tracer.
+    const sim::World::ShotHit hit = ctx.world->hitscan(static_cast<u32>(a), aim, slope, range);
+    if (hit.entity < 0) lua_pushnil(L);
+    else if (sim::World::is_prop(static_cast<u32>(hit.entity))) push_prop(L, ctx, static_cast<u32>(hit.entity));
+    else push_entity(L, ctx, static_cast<u32>(hit.entity));
+    push_vec3(L, ctx.to_local(hit.at));
     return 2;
 }
 
@@ -2074,6 +2002,13 @@ int l_dnp_vfx(lua_State* L) {
     v.pos = ctx.to_world(check_vec3(L, 2));
     v.dir = brad(lua_isnoneornil(L, 3) ? 0u : static_cast<u32>(luaL_checknumber(L, 3)));
     v.param = lua_isnoneornil(L, 4) ? 0u : static_cast<u32>(luaL_checknumber(L, 4));
+    // An optional entity whose own client already drew this one, from its
+    // predicted weapon (docs/WEAPON_PREDICTION.md): everybody else is sent it,
+    // that client is not, so its shot is not drawn twice.
+    if (!lua_isnoneornil(L, 5)) {
+        const i32 who = resolve(L, ctx, check_handle(L, 5));
+        if (who >= 0) v.skip_for = static_cast<u32>(who) + 1;
+    }
     lua_pushboolean(L, ctx.world->push_vfx(v) ? 1 : 0);
     return 1;
 }
@@ -3002,6 +2937,13 @@ void push_sector(lua_State* L, u32 index) {
     lua_setmetatable(L, -2);
 }
 
+WorldContext& context_of(lua_State* L) { return ctx_of(L); }
+
+i32 entity_agent(lua_State* L, int idx) {
+    WorldContext& ctx = ctx_of(L);
+    return resolve(L, ctx, check_handle(L, idx));
+}
+
 void push_entity(lua_State* L, WorldContext& ctx, u32 index) {
     if (index >= sim::MAX_AGENTS || !ctx.world->agent(index).active) {
         lua_pushnil(L);
@@ -3102,6 +3044,8 @@ void open_world(lua_State* L, WorldContext* ctx) {
     // world, that one is about a behaviour graph -- and separate compilation
     // unit so the mob work does not rebuild this.
     mobs::open_mobs(L);
+    // And the weapon machine's (docs/WEAPON_PREDICTION.md), likewise.
+    open_weapons(L);
 
     lua_setglobal(L, "dnp");
 }

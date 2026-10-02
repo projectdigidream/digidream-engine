@@ -14,7 +14,7 @@
 // renderer is not where the fault is.
 //
 import * as THREE from 'three'
-import { Core } from './core.js'
+import { Core, WEAPON_ACTION } from './core.js'
 import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
@@ -48,7 +48,7 @@ import { mountTouch } from './render/touchui.js'
 import { parseAnimations, TextureAnimator } from './render/animtex.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
-import { BUTTON } from './proto.js'
+import { BUTTON, NO_WEAPON } from './proto.js'
 import { MapAccumulator } from './maploader.js'
 import { Neighbourhood } from './seam/neighbourhood.js'
 import { buildCell } from './seam/buildcell.js'
@@ -454,6 +454,16 @@ const pendingSnapshots = []
 // down would hit the temporal dead zone on the first PARAM_UPDATE -- which is
 // to say, on a real server, immediately.
 const paramUpdates = []
+// The weapon table (WEAPON_DEFS, docs/WEAPON_PREDICTION.md): the newest bytes,
+// and the world they were last handed to -- a level change builds a new world,
+// which has to be handed them again.
+let weaponDefs = null
+let weaponDefsWorld = null
+// A number key: the n-th weapon held, asked for in the next tick's input.
+let weaponSlotWanted = 0
+// What our predicted weapon did on each new tick since the last frame: its
+// sounds, its tracers and effects, and whether the gun kicked.
+const ownWeapon = []
 
 if (LIVE) {
   say(DESKTOP ? 'starting...' : `connecting to ${SERVER_URL}...`)
@@ -544,6 +554,7 @@ if (LIVE) {
       }
       else if (m.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
       else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
+      else if (m.type === MSG.WEAPON_DEFS) { weaponDefs = m.bytes; weaponDefsWorld = null }
       // Panels (docs/protocol.md §11). Reliable channel, like everything that
       // must not be missed.
       else if (m.type === MSG.UI_OPEN) { ui.open(m); uiSound('ui.open') }
@@ -1889,6 +1900,9 @@ let newGameArmedAt = 0
 // server decides whether this game may (docs/SAVING.md) and says why not.
 addEventListener('keydown', (e) => {
   if (!LIVE || !conn || e.repeat) return
+  // 1-9: the n-th weapon held, in the weapon table's order.
+  const digit = /^Digit([1-9])$/.exec(e.code)
+  if (digit) weaponSlotWanted = Number(digit[1])
   if (e.code === 'F5') { e.preventDefault(); conn.sendControl(encodeGameSave(0)); say('saving...') }
   if (e.code === 'F9') { e.preventDefault(); conn.sendControl(encodeGameLoad(0)); say('loading...') }
   // A NEW GAME throws the current one away, so it asks twice: F2, then F2
@@ -1972,7 +1986,8 @@ function fpsInput () {
   if (mouseHeld.has(2)) buttons |= BUTTON.ATTACK_SECONDARY
   if (touch) buttons |= touch.state.buttons(TOUCH_BITS)
   lastAim = fpsLook.aimBrad()
-  lastSampled = { buttons, moveX: axis(push.x), moveY: axis(push.y), aim: lastAim, pitch: fpsLook.pitchWire() }
+  lastSampled = { buttons, moveX: axis(push.x), moveY: axis(push.y), aim: lastAim, pitch: fpsLook.pitchWire(),
+                  weapon: takeWeaponWanted() }
   return lastSampled
 }
 
@@ -2026,7 +2041,7 @@ function currentInput () {
   // Held across a stop, so letting go of the keys leaves the agent facing where
   // it was walking rather than snapping east. See aimFor.
   lastAim = aimFor(wx, wy, lastAim)
-  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim }
+  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim, weapon: takeWeaponWanted() }
   return lastSampled
 }
 
@@ -2121,24 +2136,7 @@ function drainSnapshots () {
       // renderer threw them away (an unknown kind, a zero length); both non-zero
       // means they are on screen and something else is wrong.
       vfxSeen++
-      if (!vfx) { vfxNoView++; continue }
-      // AN ATTACHED EMITTER READS `param` AS AN ENTITY, not as a length.
-      //
-      // Branching here rather than inside spawn because tracerEnds would turn
-      // an entity index into a distance and hand the renderer a point several
-      // hundred units away -- the two meanings of `param` have to be told apart
-      // before anything does arithmetic on it.
-      const vdef = vfx.kindOf(v.kind)
-      if (vdef?.attach) {
-        vfx.attach(v.kind, v.param, (v.dir >>> 0) / 4294967296,
-                   performance.now() / 1000)
-        continue
-      }
-      const { from, to } = tracerEnds(v, fxToFloat)
-      vfx.spawn(v.kind,
-                { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
-                { x: toThreeX(to.x), y: toThreeY(to.z), z: toThreeZ(to.y) },
-                performance.now() / 1000)
+      drawVfx(v)
     }
     // SOUNDS (docs/protocol.md §5.7). One this client PREDICTED -- its own
     // jump, its own shot -- already played when it happened here, so the
@@ -2160,6 +2158,48 @@ function drainSnapshots () {
     predictor.paramEpoch = m.epoch
   }
   paramUpdates.length = 0
+  applyWeaponDefs()
+}
+
+// One effect, as a snapshot carries it -- the server's, or one our own predicted
+// weapon produced (World::present_weapon), which arrive in identical terms.
+function drawVfx (v) {
+  if (!vfx) { vfxNoView++; return }
+  // AN ATTACHED EMITTER READS `param` AS AN ENTITY, not as a length.
+  //
+  // Branching here rather than inside spawn because tracerEnds would turn
+  // an entity index into a distance and hand the renderer a point several
+  // hundred units away -- the two meanings of `param` have to be told apart
+  // before anything does arithmetic on it.
+  const vdef = vfx.kindOf(v.kind)
+  if (vdef?.attach) {
+    vfx.attach(v.kind, v.param, (v.dir >>> 0) / 4294967296, performance.now() / 1000)
+    return
+  }
+  const { from, to } = tracerEnds(v, fxToFloat)
+  vfx.spawn(v.kind,
+            { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
+            { x: toThreeX(to.x), y: toThreeY(to.z), z: toThreeZ(to.y) },
+            performance.now() / 1000)
+}
+
+// Predict our own weapon with the table the server sent, drawing the spread
+// from the stream of our body's index ON THE SERVER, which is not our local one.
+function applyWeaponDefs () {
+  if (!weaponDefs || weaponDefsWorld === world || myAgentIndex === null) return
+  if (!world.setWeapons(weaponDefs, agent, myAgentIndex)) {
+    report('[weapons] this build cannot read the server\'s weapon table; not predicting them', 'error')
+  }
+  weaponDefsWorld = world
+}
+
+// The weapon wanted this tick, by number key, then forgotten: it is a key
+// going down, and holding it would undo every switch the weapon makes itself.
+function takeWeaponWanted () {
+  if (!weaponSlotWanted) return NO_WEAPON
+  const n = weaponSlotWanted
+  weaponSlotWanted = 0
+  return world.hasWeapons ? world.weaponSlot(agent, n) : NO_WEAPON
 }
 
 function frame (now) {
@@ -2226,6 +2266,7 @@ function frame (now) {
       // stay one; this is about leaving the map the simulation is holding.
       const before = world.readAgent(agent)
       predictor.step(f)
+      if (predictor.weapon) ownWeapon.push(predictor.weapon)
       const after = world.readAgent(agent)
       if (!region && before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
         // AND STOPPED, not merely put back.
@@ -2335,6 +2376,26 @@ function frame (now) {
   // landing, its swing, its shot (audio/ownsounds.js). The server's copies are
   // marked PREDICTED and dropped when they arrive.
   if (LIVE) {
+    // OUR WEAPON, AS THE CORE PREDICTED IT (docs/WEAPON_PREDICTION.md): what it
+    // played, drew and kicked on the tick it fired, rather than a guess from the
+    // buttons. The button guess below stays for jumps and landings, and for a
+    // weapon the server did not send a table for.
+    const predictsWeapon = world.hasWeapons
+    if (predictsWeapon) ownSounds.mute.add(WEAPON_GROUP)
+    else ownSounds.mute.delete(WEAPON_GROUP)
+    for (const wf of ownWeapon.splice(0)) {
+      let kick = false
+      for (const e of wf.events) {
+        if (e.action === WEAPON_ACTION.SOUND && e.predicted && e.sound) {
+          sfx.play(e.sound, { x: px, y: py, z: pz }, { seed: Math.imul(world.tick ^ e.sound, 2654435761), key: mySelfHandle })
+          kick = true
+        }
+        if (e.action === WEAPON_ACTION.HITSCAN || e.action === WEAPON_ACTION.LAUNCH ||
+            e.action === WEAPON_ACTION.DAMAGE_AREA) kick = true
+      }
+      for (const v of wf.vfx) drawVfx(v)
+      if (kick) viewModel.fire()
+    }
     for (const h of ownSounds.step({
       grounded: !!a.grounded, velZ: fxToFloat(a.vel.z), jumps: a.jumpsUsed | 0, attackLeft: a.attackLeft | 0,
       buttons: lastSampled?.buttons ?? 0, tick: world.tick
@@ -2342,7 +2403,7 @@ function frame (now) {
       sfx.play(h, { x: px, y: py, z: pz }, { seed: Math.imul(world.tick ^ h, 2654435761), key: mySelfHandle })
     }
     // The gun kicks on the same predicted shot.
-    if (ownSounds.fired.some((f) => f.group === WEAPON_GROUP)) viewModel.fire()
+    if (!predictsWeapon && ownSounds.fired.some((f) => f.group === WEAPON_GROUP)) viewModel.fire()
   }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)

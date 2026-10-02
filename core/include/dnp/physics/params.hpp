@@ -264,7 +264,13 @@ struct MoveState {
     // swing hit everything above slot 63 once per tick instead of once per
     // swing.
     u64  attack_hit_agents[sim::MAX_AGENTS / 64]{};
-    u64  attack_hit_props[3]{};
+    // One bit per SPAWNABLE prop slot (sim::World asserts the width covers
+    // them). A client's mirrored body is not a prop: it is an agent's copy, and
+    // its hit is the agent's bit above. This was three words while a swing
+    // tested every prop slot up to the high-water mark -- a prop in slot 192 or
+    // above set a bit past the end, inside the dash timers and the dash
+    // direction, which are in the prediction hash.
+    u64  attack_hit_props[sim::ATTACK_HIT_PROP_WORDS]{};
 
     fx  dash_timer{};
     fx  dash_cooldown_timer{};

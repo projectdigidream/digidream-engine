@@ -21,6 +21,7 @@ void World::reset() noexcept {
         agents_[i] = AgentState{};
         params_[i] = MoveParams{};
         inputs_[i] = proto::InputFrame{};
+        weapons_[i] = WeaponState{};
         // Generations start at 1, not 0: handle raw 0 means "no entity", and a
         // slot-0 agent at generation 0 would encode to exactly that.
         generation_[i] = 1;
@@ -55,6 +56,7 @@ u32 World::spawn(fx3 pos) noexcept {
             agents_[i].active = true;
             params_[i] = MoveParams{};
             inputs_[i] = proto::InputFrame{};
+            weapons_[i] = WeaponState{};
 
             if (i + 1 > agent_high_water_) agent_high_water_ = i + 1;
 
@@ -86,6 +88,216 @@ void World::despawn(u32 index) noexcept {
     }
     agents_[index] = AgentState{};
     inputs_[index] = proto::InputFrame{};
+    weapons_[index] = WeaponState{};
+}
+
+// The effects the server's weapon runtime would send for agent i's events this
+// tick (mobs.lua's acts.hitscan tracer, weapons.lua's acts.vfx), worked out in
+// THIS world -- for a client, against the bodies it mirrors.
+void World::present_weapon(u32 i, const WeaponTable& t) noexcept {
+    const AgentState& a = agents_[i];
+    const auto push = [&](u16 kind, fx3 pos, brad dir, u32 param) {
+        if (weapon_vfx_count_ >= sizeof(weapon_vfx_) / sizeof(weapon_vfx_[0])) return;
+        PendingVfx& v = weapon_vfx_[weapon_vfx_count_++];
+        v.kind = kind; v.pos = pos; v.dir = dir; v.param = param; v.skip_for = 0;
+    };
+    for (u32 k = 0; k < weapon_events_.count(); ++k) {
+        const WeaponEvent& e = weapon_events_.at(k);
+        if (e.weapon >= t.weapon_count || e.phase >= t.weapons[e.weapon].phase_count) continue;
+        const WPhase& ph = t.weapons[e.weapon].phases[e.phase];
+        if (e.step >= ph.step_count) continue;
+        const WStep& st = ph.steps[e.step];
+        if (e.action == WAct::Hitscan && st.effect != 0) {
+            const fx slope = e.slope_set ? e.slope : fx{};
+            for (u32 p = 0; p < e.count; ++p) {
+                const brad dir = e.aim + brad(static_cast<u32>(e.offsets[p]));
+                const ShotHit hit = hitscan(i, dir, slope, st.range);
+                // The tracer carries its start, direction and length; its rise
+                // rides in the same param (mobs.lua's tracer_param).
+                const fx len = length(fx2{hit.at.x - a.pos.x, hit.at.y - a.pos.y});
+                const fx rise = e.slope_set ? slope * len : fx{};
+                i64 n = (len * fx::from_int(256)).raw >> 32;
+                n = n < 0 ? 0 : (n > 65535 ? 65535 : n);
+                i64 r = 32768 + ((rise * fx::from_int(256)).raw >> 32);
+                r = r < 0 ? 0 : (r > 65535 ? 65535 : r);
+                push(st.effect, fx3{a.pos.x, a.pos.y, hit.at.z - rise}, dir,
+                     static_cast<u32>(r) * 65536u + static_cast<u32>(n));
+            }
+        } else if (e.action == WAct::Vfx && st.effect != 0) {
+            // At the body, along its facing; an attached one names the body by
+            // its index on the server, which is what a client follows.
+            push(st.effect, a.pos, a.facing, st.attach ? e.agent : 0u);
+        }
+    }
+}
+
+World::ShotHit World::hitscan(u32 i, brad aim, fx slope, fx range) const noexcept {
+    ShotHit out;
+    const AgentState& sh = agents_[i];
+    // From the middle of the body, not its feet: a shot from ankle height is
+    // stopped by every step in the map.
+    const fx eye = sh.pos.z + params_[i].height / 2;
+    const fx2 from{sh.pos.x, sh.pos.y};
+    out.from = fx3{from.x, from.y, eye};
+    const fx2 dir = fx_dir(aim);
+    const fx2 to = from + dir * range;
+
+    // Nearest BODY along the ray, by the "in front and within the corridor"
+    // test a swing uses -- a cylinder test rather than an exact capsule
+    // intersection, which for bodies this size differs only where a shot
+    // grazes an edge.
+    i32  best = -1;
+    fx   best_t = fx::one() + fx::one();
+    const auto consider = [&](fx2 p, fx r, fx z0, fx z1, i32 entity) {
+        const fx2 toward = p - from;
+        const fx along = dot(dir, toward);
+        if (along <= fx::zero() || along > range) return;
+        // Where the ray is by the time it gets there: a sloped shot has to
+        // know how far along the body is before it can say how high it is.
+        const fx ray_z = eye + slope * along;
+        if (ray_z < z0 || ray_z > z1) return;
+        const fx2 closest = from + dir * along;
+        const u128 off_sq = len_sq_raw(p - closest);
+        if (off_sq > static_cast<u128>(static_cast<i128>(r.raw) * r.raw)) return;
+        const fx t = along / range;
+        if (t >= best_t) return;
+        best_t = t;
+        best = entity;
+    };
+    for (u32 j = 0; j < agent_high_water_; ++j) {
+        if (j == i || !agents_[j].active) continue;
+        const AgentState& e = agents_[j];
+        consider(fx2{e.pos.x, e.pos.y}, params_[j].radius, e.pos.z, e.pos.z + params_[j].height,
+                 static_cast<i32>(j));
+    }
+    for (u32 k = 0; k < prop_high_water_; ++k) {
+        if (!props_[k].active) continue;
+        const PropState& p = props_[k];
+        consider(fx2{p.pos.x, p.pos.y}, p.radius, p.pos.z, p.pos.z + p.height,
+                 static_cast<i32>(MAX_AGENTS + k));
+    }
+
+    // And the geometry, which OCCLUDES: a wall between the shooter and a body
+    // stops the shot, so it is consulted even when a body was found.
+    fx2 end = to;
+    if (map_ != nullptr) {
+        const physics::RayHit wall =
+            physics::raycast(*map_, sh.mv.sector, from, dir, range, 0, eye, eye + slope * range);
+        if (wall.blocked) {
+            const fx wall_t = wall.distance / range;
+            if (best < 0 || wall_t < best_t) { best = -1; best_t = wall_t; }
+            end = wall.point;
+        }
+    }
+    if (best >= 0) end = from + dir * (range * best_t);
+    out.entity = best;
+    // The impact's height is where the ray was when it stopped. `best_t` stays
+    // at two when nothing was reached, so one comparison tells them apart.
+    const fx end_d = best_t <= fx::one() ? range * best_t : range;
+    out.at = fx3{end.x, end.y, eye + slope * end_d};
+    return out;
+}
+
+bool World::autoaim(u32 i, fx range, u32 cone, brad& heading, fx& slope, bool& slope_set) const noexcept {
+    if (cone == 0 || i >= MAX_AGENTS || !agents_[i].active || map_ == nullptr) return false;
+    const AgentState& me = agents_[i];
+    const fx my_eye = me.pos.z + params_[i].height / 2;
+    const fx3 eye{me.pos.x, me.pos.y, my_eye};
+    bool found = false;
+    fx best_d{};
+    brad best_ang{};
+    fx best_eye{};
+    // NEAREST WINS, then the sight test for the one currently winning -- the
+    // ray is the expensive part (mobs.lua's M.autoaim, rule for rule).
+    const auto consider = [&](fx3 q, fx height) {
+        const fx d = length(fx2{q.x - me.pos.x, q.y - me.pos.y});
+        if (d > range || d <= fx::zero()) return;
+        if (found && d >= best_d) return;
+        const brad ang = fx_atan2(q.y - me.pos.y, q.x - me.pos.x);
+        // Signed, wrapped, in brad: a target a degree left of north is one
+        // degree away, not 359.
+        const i64 off = static_cast<i64>(static_cast<i32>(ang.raw - me.facing.raw));
+        if (off > static_cast<i64>(cone) || off < -static_cast<i64>(cone)) return;
+        if (!physics::can_see(*map_, me.mv.sector, eye, fx2{q.x, q.y}, q.z, q.z + height)) return;
+        found = true;
+        best_d = d;
+        best_ang = ang;
+        best_eye = q.z + height / 2;
+    };
+    for (u32 j = 0; j < agent_high_water_; ++j) {
+        if (j == i || !agents_[j].active || !agents_[j].solid) continue;
+        consider(agents_[j].pos, params_[j].height);
+    }
+    // A client's mirrored bodies: the band spawn_prop never allocates in.
+    for (u32 k = SPAWNABLE_PROPS; k < prop_high_water_; ++k) {
+        if (!props_[k].active) continue;
+        const PropState& p = props_[k];
+        consider(p.pos, p.height);
+    }
+    if (!found) return false;
+    heading = best_ang;
+    // slope_to: rise from our middle to theirs, per unit of run.
+    slope = (best_eye - my_eye) / best_d;
+    slope_set = true;
+    return true;
+}
+
+u32 World::step_weapon(u32 i, const WeaponTable& table, u8 want, u32 tick, u64 seed,
+                       WeaponEventLog& log, u32 stream) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active) return 0;
+    AgentState& a = agents_[i];
+    WeaponBody body;
+    body.grounded = a.mv.grounded;
+    body.vel = a.vel;
+    body.facing = a.facing;
+    body.pitch = a.pitch;
+    const u16 b = inputs_[i].buttons;
+    const u8 triggers = static_cast<u8>(((b & proto::button::ATTACK_PRIMARY) ? 1 : 0) |
+                                        ((b & proto::button::ATTACK_SECONDARY) ? 2 : 0));
+    const u32 first = log.count();
+    const u32 hops = sim::step_weapon(table, weapons_[i], body, triggers, want, tick,
+                                      stream < MAX_AGENTS ? stream : i, seed, log);
+
+    // THE AIM of each shot this tick, decided here so both sides agree on it
+    // (docs/WEAPON_PREDICTION.md): mobs.lua's for a player, rule for rule.
+    // A first-person body (move_relative, which the fps scheme sets) shoots
+    // where it looks, up and down included; any other is corrected towards
+    // the nearest body in the cone. A missile names no range, so its search
+    // uses the table's.
+    for (u32 k = first; k < log.count(); ++k) {
+        WeaponEvent& e = log.at_mut(k);
+        if (e.action != WAct::Hitscan && e.action != WAct::Launch) continue;
+        e.aim = a.facing;
+        e.slope = fx{};
+        e.slope_set = false;
+        if (params_[i].move_relative) {
+            if (a.pitch != 0) {
+                const fx2 d = fx_dir(brad(static_cast<u32>(static_cast<u16>(a.pitch)) << 16));
+                e.slope = d.y / d.x;
+                e.slope_set = true;
+            }
+            continue;
+        }
+        fx range = table.autoaim_range;
+        if (e.action == WAct::Hitscan && e.weapon < table.weapon_count &&
+            e.phase < table.weapons[e.weapon].phase_count &&
+            e.step < table.weapons[e.weapon].phases[e.phase].step_count) {
+            range = table.weapons[e.weapon].phases[e.phase].steps[e.step].range;
+        }
+        brad heading{};
+        fx slope{};
+        bool slope_set = false;
+        if (autoaim(i, range, table.autoaim_cone, heading, slope, slope_set)) {
+            e.aim = heading;
+            e.slope = slope;
+            e.slope_set = slope_set;
+        }
+    }
+    // add_impulse, which is what the Lua path's e:add_impulse lands in: a
+    // vertical shove also leaves the ground.
+    if (body.impulse.x.raw | body.impulse.y.raw | body.impulse.z.raw) add_impulse(i, body.impulse);
+    if (body.anim_set) a.animation_state = body.anim;
+    return hops;
 }
 
 void World::set_input(u32 index, const proto::InputFrame& f) noexcept {
@@ -245,9 +457,7 @@ void World::step_agent(u32 i) noexcept {
             a.mv.attack_cooldown_left == 0) {
             a.mv.attack_left = params_[i].attack_ticks == 0 ? 1 : params_[i].attack_ticks;
             for (u64& w : a.mv.attack_hit_agents) w = 0;
-            a.mv.attack_hit_props[0] = 0;
-            a.mv.attack_hit_props[1] = 0;
-            a.mv.attack_hit_props[2] = 0;
+            for (u64& w : a.mv.attack_hit_props) w = 0;
         }
         a.mv.attack_held = swing;
 
@@ -514,6 +724,7 @@ void World::step_idle() noexcept {
     interacts_.clear();
     prop_events_.clear();
     attacks_.clear();
+    weapon_events_.clear();
 
     // Sectors still move. A lift in an empty level goes on travelling, so the
     // first client to arrive computes it exactly where the server has it -- and
@@ -532,6 +743,19 @@ void World::step() noexcept {
     interacts_.clear();
     prop_events_.clear();
     attacks_.clear();
+    weapon_events_.clear();
+    weapon_vfx_count_ = 0;
+
+    // A PREDICTING CLIENT's own weapon, first: where the server's weapon
+    // runtime steps it, in on_tick, before the flush and the step -- with this
+    // tick's input, the body as the last tick left it, and this tick's number.
+    // The server never sets this; its Lua calls step_weapon itself.
+    if (weapon_table_ != nullptr && weapon_agent_ < MAX_AGENTS &&
+        agents_[weapon_agent_].active) {
+        step_weapon(weapon_agent_, *weapon_table_, inputs_[weapon_agent_].weapon, tick_,
+                    weapon_seed_, weapon_events_, weapon_stream_);
+        present_weapon(weapon_agent_, *weapon_table_);
+    }
 
     // Sectors move BEFORE agents do. The order matters: an agent riding a lift
     // must be carried by this tick's motion and then run its own physics from
@@ -579,6 +803,7 @@ u16 World::state_flags(u32 i) const noexcept {
     // kept riding an anchor the server had dropped, and the two only reconverged
     // once the entity landed and both re-derived it.
     if (m.anchored) f |= proto::state_flag::ANCHORED;
+    if (weapons_[i].have != 0) f |= proto::state_flag::ARMED;
     return f;
 }
 
@@ -618,6 +843,10 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.vec3(a.pos - anchor_frame(m));
     h.vec3(a.vel);
     h.bradv(a.facing);
+    // The weapon machine (docs/WEAPON_PREDICTION.md), which the client predicts
+    // and SelfBlock restores. Only once held: a body with no weapons hashes as
+    // it always did.
+    if (weapons_[i].have != 0) hash_weapon_state(h, weapons_[i]);
 
     // Every field the controller carries between ticks. A replay that started
     // from the wrong dash timer or the wrong jump-edge flag would diverge from
@@ -1343,7 +1572,12 @@ void World::resolve_attack(u32 agent) noexcept {
     for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
-        if ((a.mv.attack_hit_props[pi / 64] >> (pi % 64)) & 1u) continue;
+        // A prop's own bit, or -- for a client's mirrored body, in the band
+        // above the spawnable slots -- the bit of the agent it mirrors.
+        u64& word = pi < SPAWNABLE_PROPS ? a.mv.attack_hit_props[pi / 64]
+                                         : a.mv.attack_hit_agents[(pi - SPAWNABLE_PROPS) / 64];
+        const u64 bit = static_cast<u64>(1) << ((pi < SPAWNABLE_PROPS ? pi : pi - SPAWNABLE_PROPS) % 64);
+        if (word & bit) continue;
         if (a_top + mp.attack_reach < p.pos.z) continue;
         if (a.pos.z > p.pos.z + p.height + mp.attack_reach) continue;
         const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
@@ -1351,7 +1585,7 @@ void World::resolve_attack(u32 agent) noexcept {
         if (!in_arc(toward)) continue;
         if (!in_pitch(toward, p.pos.z + p.height / fx::from_int(2))) continue;
         if (!clear_path(toward)) continue;
-        a.mv.attack_hit_props[pi / 64] |= (static_cast<u64>(1) << (pi % 64));
+        word |= bit;
         attacks_.push(AttackEvent{agent, MAX_AGENTS + pi});
     }
 }

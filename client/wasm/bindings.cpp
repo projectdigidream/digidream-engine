@@ -15,6 +15,8 @@
 //
 #include <emscripten/emscripten.h>
 
+#include <map>
+#include <memory>
 #include <unordered_map>
 
 #include "dnp/geom/mapfile.hpp"
@@ -377,6 +379,13 @@ unsigned dnp_map_texture_name(const geom::MapStorage* m, unsigned i, char* out, 
     return n;
 }
 
+// The weapon table each world predicts with (dnp_world_set_weapons), released
+// with the world.
+static std::map<const sim::World*, std::unique_ptr<sim::WeaponTable>>& weapon_tables() {
+    static std::map<const sim::World*, std::unique_ptr<sim::WeaponTable>> t;
+    return t;
+}
+
 // Attach a loaded map to a world. The view is stored out of line because
 // World keeps a pointer to it.
 // ONE VIEW PER WORLD, kept for as long as the world lives. It used to be a ring
@@ -494,7 +503,11 @@ EMSCRIPTEN_KEEPALIVE
 sim::World* dnp_world_create() { return new sim::World(); }
 
 EMSCRIPTEN_KEEPALIVE
-void dnp_world_destroy(sim::World* w) { world_views().erase(w); delete w; }
+void dnp_world_destroy(sim::World* w) {
+    world_views().erase(w);
+    weapon_tables().erase(w);
+    delete w;
+}
 
 // A REGION's store on the client: the levels it holds, each at its cell's
 // origin, joined where they meet (geom::MapStorage::add_chunk). The world the
@@ -532,14 +545,155 @@ unsigned dnp_world_spawn(sim::World* w, const long long* pos64) {
 
 EMSCRIPTEN_KEEPALIVE
 void dnp_world_set_input(sim::World* w, unsigned idx, unsigned buttons, int mx, int my, unsigned aim,
-                         int pitch) {
+                         int pitch, unsigned weapon) {
     proto::InputFrame f;
     f.buttons = static_cast<u16>(buttons);
     f.move_x  = static_cast<i16>(mx);
     f.move_y  = static_cast<i16>(my);
     f.aim     = brad(aim);
     f.pitch   = static_cast<i16>(pitch);
+    f.weapon  = static_cast<u8>(weapon);
     w->set_input(idx, f);
+}
+
+// --- the weapon machine (docs/WEAPON_PREDICTION.md) --------------------------
+//
+// The table arrives as WEAPON_DEFS and is decoded HERE, by the core's own
+// decoder, into storage this file owns -- one per world, released with it. The
+// seed is the table's hash, which is what the server seeds its stream with, so
+// holding the table is holding everything the spread is drawn from.
+
+// Decode a table and predict agent `agent`'s weapon with it. 1 on success; 0
+// leaves the world predicting nothing, which is the honest answer to a table
+// this build cannot read.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_set_weapons(sim::World* w, const unsigned char* data, unsigned len, unsigned agent,
+                          unsigned stream) {
+    auto t = std::make_unique<sim::WeaponTable>();
+    ByteReader r(data, len);
+    if (!sim::decode_weapon_table(r, *t)) {
+        w->predict_weapon(nullptr, 0, sim::MAX_AGENTS, sim::MAX_AGENTS);
+        weapon_tables().erase(w);
+        return 0;
+    }
+    const u64 seed = t->hash();
+    w->predict_weapon(t.get(), seed, agent, stream);
+    weapon_tables()[w] = std::move(t);
+    return 1;
+}
+
+// Which agent's weapon is predicted, once the table is held, and which of the
+// server's agents it is (whose random stream it draws from): after a respawn or
+// a move into another world, both are different.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_predict_weapon_agent(sim::World* w, unsigned agent, unsigned stream) {
+    auto it = weapon_tables().find(w);
+    if (it == weapon_tables().end()) return;
+    w->predict_weapon(it->second.get(), it->second->hash(), agent, stream);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_has_weapons(const sim::World* w) { return weapon_tables().count(w) ? 1 : 0; }
+
+// The weapon state as 32-bit words, in this order; the length is asked for,
+// not assumed, as the agent buffers' are.
+constexpr unsigned WEAPON_BUF32_LEN = 6 + 4 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS;
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_weapon_buf32_len() { return WEAPON_BUF32_LEN; }
+
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_read_weapon(const sim::World* w, unsigned idx, unsigned* out32) {
+    const sim::WeaponState& s = w->weapon(idx);
+    out32[0] = s.have;
+    out32[1] = s.current; out32[2] = s.phase; out32[3] = s.armed;
+    out32[4] = s.swing_phase; out32[5] = s.prev_buttons;
+    out32[6] = s.entered; out32[7] = s.done;
+    out32[8] = s.held_since[0]; out32[9] = s.held_since[1];
+    for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) out32[10 + i] = static_cast<unsigned>(s.vars[i]);
+    for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) out32[10 + sim::MAX_WEAPON_VARS + i] = s.ammo[i];
+}
+
+// Adopt the server's (reconciliation step 2, as dnp_world_write_agent).
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_write_weapon(sim::World* w, unsigned idx, const unsigned* in32) {
+    sim::WeaponState& s = w->weapon_mut(idx);
+    s.have = in32[0];
+    s.current = static_cast<u8>(in32[1]); s.phase = static_cast<u8>(in32[2]);
+    s.armed = static_cast<u8>(in32[3]); s.swing_phase = static_cast<u8>(in32[4]);
+    s.prev_buttons = static_cast<u8>(in32[5]);
+    s.entered = in32[6]; s.done = in32[7];
+    s.held_since[0] = in32[8]; s.held_since[1] = in32[9];
+    for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) s.vars[i] = static_cast<i32>(in32[10 + i]);
+    for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) s.ammo[i] = static_cast<u16>(in32[10 + sim::MAX_WEAPON_VARS + i]);
+}
+
+// The weapon held in display slot `n` (1-based: the n-th held weapon by the
+// table's `order`), or 255 for none -- what a number key asks for.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_weapon_slot(const sim::World* w, unsigned idx, unsigned n) {
+    auto it = weapon_tables().find(w);
+    if (it == weapon_tables().end() || n == 0) return sim::NO_WEAPON;
+    const sim::WeaponTable& t = *it->second;
+    const u32 have = w->weapon(idx).have;
+    // Stable: order first, then the index, which is the name's order.
+    u8 picked[sim::MAX_WEAPONS];
+    u32 count = 0;
+    for (u8 k = 0; k < t.weapon_count; ++k) if ((have >> k) & 1u) picked[count++] = k;
+    for (u32 a = 1; a < count; ++a) {
+        for (u32 b = a; b > 0 && t.weapons[picked[b]].order < t.weapons[picked[b - 1]].order; --b) {
+            const u8 x = picked[b]; picked[b] = picked[b - 1]; picked[b - 1] = x;
+        }
+    }
+    return n <= count ? picked[n - 1] : sim::NO_WEAPON;
+}
+
+// What the predicted weapon asked the world for on the last step, six words
+// each: action, weapon, phase, step, the sound (its wire hash, for a `sound`
+// step) and whether that sound is the client's own to play (`predicted`). For
+// hearing and feeling one's own shot at once; at most `cap`.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_weapon_events(const sim::World* w, unsigned* out32, unsigned cap) {
+    const sim::WeaponEventLog& log = w->weapon_events();
+    auto it = weapon_tables().find(w);
+    unsigned n = 0;
+    for (u32 i = 0; i < log.count() && n < cap; ++i, ++n) {
+        const sim::WeaponEvent& e = log.at(i);
+        u32 sound = 0, predicted = 0;
+        if (it != weapon_tables().end() && e.weapon < it->second->weapon_count) {
+            const sim::WeaponDef& d = it->second->weapons[e.weapon];
+            if (e.phase < d.phase_count && e.step < d.phases[e.phase].step_count) {
+                const sim::WStep& st = d.phases[e.phase].steps[e.step];
+                sound = st.sound;
+                predicted = st.predicted ? 1u : 0u;
+            }
+        }
+        out32[n * 6 + 0] = static_cast<unsigned>(e.action);
+        out32[n * 6 + 1] = e.weapon;
+        out32[n * 6 + 2] = e.phase;
+        out32[n * 6 + 3] = e.step;
+        out32[n * 6 + 4] = sound;
+        out32[n * 6 + 5] = predicted;
+    }
+    return n;
+}
+
+// The effects the predicted weapon would have been sent on the last step
+// (World::weapon_vfx), as a snapshot's vfx: per entry three i64 -- the
+// position -- and three words -- kind, direction, param. At most `cap`.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_weapon_vfx(const sim::World* w, long long* out64, unsigned* out32, unsigned cap) {
+    const u32 n = w->weapon_vfx_count() < cap ? w->weapon_vfx_count() : cap;
+    for (u32 k = 0; k < n; ++k) {
+        const sim::PendingVfx& v = w->weapon_vfx(k);
+        out64[k * 3 + 0] = v.pos.x.raw;
+        out64[k * 3 + 1] = v.pos.y.raw;
+        out64[k * 3 + 2] = v.pos.z.raw;
+        out32[k * 3 + 0] = v.kind;
+        out32[k * 3 + 1] = v.dir.raw;
+        out32[k * 3 + 2] = v.param;
+    }
+    return n;
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -744,6 +898,53 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
 EMSCRIPTEN_KEEPALIVE
 int dnp_axis_from_buf(const long long* p) {
     return proto::axis_from_fx(fx::from_raw(p[0]));
+}
+
+// A snapshot written by the REAL encoder, with every SelfBlock field set to a
+// value of its own, for client/test/proto_self.test.js. A reader checked only
+// against bytes its own test laid out agrees with itself -- which is how
+// proto.js read the self block's swing counters and dash count in the wrong
+// order, unnoticed, because all three are zero most of the time.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_test_snapshot(unsigned char* out, unsigned cap, unsigned options) {
+    const bool grappling = (options & 1u) != 0;
+    const bool armed = (options & 2u) != 0;
+    proto::SnapshotHeader h;
+    h.server_tick = 1001; h.baseline_tick = 0; h.last_input_tick = 999; h.input_margin = -3; h.flags = 2;
+    proto::SelfBlock s;
+    s.pos = fx3{fx::from_int(11), fx::from_int(12), fx::from_int(13)};
+    s.vel = fx3{fx::from_int(21), fx::from_int(22), fx::from_int(23)};
+    s.facing = brad(0x31000000u);
+    s.controller_mode = 4;
+    s.state_flags = static_cast<u16>(proto::state_flag::GROUNDED |
+                                     (grappling ? proto::state_flag::GRAPPLING : 0) |
+                                     (armed ? proto::state_flag::ARMED : 0));
+    s.weapon.have = 0x00A5u;
+    s.weapon.current = 7; s.weapon.phase = 3; s.weapon.armed = 6; s.weapon.swing_phase = 2;
+    s.weapon.prev_buttons = 1;
+    s.weapon.entered = 70001; s.weapon.done = 0x15;
+    s.weapon.held_since[0] = 70003; s.weapon.held_since[1] = 70004;
+    for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) s.weapon.vars[i] = -100 - static_cast<i32>(i);
+    for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) s.weapon.ammo[i] = static_cast<u16>(200 + i);
+    s.anchor.raw = 0x55;
+    s.jumps_used = 1;
+    s.attack_left = 2;
+    s.attack_cooldown_left = 3;
+    s.dashes_used = 5;
+    s.sector = 66;
+    s.dash_timer = fx::from_int(7);
+    s.dash_cooldown = fx::from_int(8);
+    s.hover_fuel = fx::from_int(9);
+    s.flight_fuel = fx::from_int(10);
+    s.grapple_anchor = fx3{fx::from_int(41), fx::from_int(42), fx::from_int(43)};
+    s.grapple_dist = fx::from_int(44);
+    s.avatar = 77;
+    s.animation_state = 88;
+    s.param_epoch = 99;
+    s.state_hash = 0x0123456789ABCDEFull;
+    proto::SnapshotWriter w(out, cap);
+    w.begin(h, s, 123);
+    return static_cast<unsigned>(w.finish());
 }
 
 

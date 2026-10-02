@@ -32,6 +32,7 @@ void encode_input_bundle(ByteWriter& w, const InputBundle& b) noexcept {
         w.i16v(f.move_y);
         w.bradv(f.aim);
         w.i16v(f.pitch);
+        w.u8v(f.weapon);
     }
 }
 
@@ -51,6 +52,7 @@ bool decode_input_bundle(ByteReader& r, InputBundle& out) noexcept {
         f.move_y  = r.i16v();
         f.aim     = r.bradv();
         f.pitch   = r.i16v();
+        f.weapon  = r.u8v();
     }
     return r.ok();
 }
@@ -148,6 +150,16 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
     }
+    if (s.state_flags & state_flag::ARMED) {
+        const sim::WeaponState& k = s.weapon;
+        w.u32v(k.have);
+        w.u8v(k.current); w.u8v(k.phase); w.u8v(k.armed); w.u8v(k.swing_phase);
+        w.u8v(k.prev_buttons);
+        w.u32v(k.entered); w.u32v(k.done);
+        w.u32v(k.held_since[0]); w.u32v(k.held_since[1]);
+        for (i32 v : k.vars) w.i32v(v);
+        for (u16 a : k.ammo) w.u16v(a);
+    }
     w.u16v(s.avatar);
     // The observer's OWN animation state (design 4.1). Ungated: the local agent
     // is the one body that never appears in its own entity stream, so without
@@ -181,6 +193,16 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     if (s.state_flags & state_flag::GRAPPLING) {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();
+    }
+    if (s.state_flags & state_flag::ARMED) {
+        sim::WeaponState& k = s.weapon;
+        k.have = r.u32v();
+        k.current = r.u8v(); k.phase = r.u8v(); k.armed = r.u8v(); k.swing_phase = r.u8v();
+        k.prev_buttons = r.u8v();
+        k.entered = r.u32v(); k.done = r.u32v();
+        k.held_since[0] = r.u32v(); k.held_since[1] = r.u32v();
+        for (i32& v : k.vars) v = r.i32v();
+        for (u16& a : k.ammo) a = r.u16v();
     }
     s.avatar          = r.u16v();
     s.animation_state = r.u16v();

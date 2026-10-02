@@ -116,6 +116,11 @@ public:
     struct HudValue { u8 kind = 0; i32 i = 0; std::string s; };
     std::map<std::string, HudValue> hud;
 
+    // The hash of the weapon table this client was last sent (WEAPON_DEFS),
+    // 0 for none. Kept across levels: the table is the game's, and a client
+    // already holding it needs it again only when it changes.
+    u64 weapon_defs_sent = 0;
+
     proto::UiPanel* find_ui(u32 ui_id) {
         for (auto& p : open_ui) if (p.ui_id == ui_id) return &p;
         return nullptr;
@@ -377,6 +382,10 @@ public:
 
         ++starved_ticks;
         ++consecutive_starves_;
+        // A repeat carries the movement and the buttons, never the weapon
+        // asked for: that is a key going down, once, and applying it again
+        // would undo a switch the weapon made by itself in between.
+        last_applied_frame_.weapon = sim::NO_WEAPON;
 
         // GIVE UP ON A GAP THAT IS NEVER GOING TO BE FILLED.
         //

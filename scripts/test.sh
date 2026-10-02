@@ -516,6 +516,9 @@ suite_client () {
   # The MUSIC message: a cue name, a fade and a moment survive the wire as the
   # server writes them, and a moment the protocol does not know is refused.
   node client/test/proto_music.test.js | grep -E 'FAIL|failures'
+  # The self block against the C++ encoder's own bytes, every field distinct,
+  # the weapon block included, and the weapon state through the wasm world.
+  node client/test/proto_self.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.
@@ -722,6 +725,9 @@ suite_stack () {
      && node test/doors.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/triggers.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/attack.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Your own weapon predicted: DOOM II's, firing and switching, zero` \
+     `# mispredictions -- and a client without the table must mispredict.` \
+     && node test/weapons.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/enemies.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# WHICH entities a full snapshot spends its budget on. A datagram holds` \
      `# about 46 and a real level has more, so the choice is the whole question,` \
@@ -849,6 +855,9 @@ suite_fps () {
   (cd server/edge && export DNP_CONTROLS=fps \
      && node test/prediction.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/attack.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Your own weapon predicted: DOOM II's, firing and switching, zero` \
+     `# mispredictions -- and a client without the table must mispredict.` \
+     && node test/weapons.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/enemies.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/doors.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/triggers.test.js 2>/dev/null | grep -E 'FAIL|failures' \

@@ -165,14 +165,17 @@ static void test_input_bundle() {
             // the simulation clamps it, so a clamp here would hide a dropped
             // high byte.
             in.frames[i].pitch  = static_cast<i16>(rng.next_u32());
+            // The weapon asked for, every byte value, NO_WEAPON included.
+            in.frames[i].weapon = static_cast<u8>(rng.next_u32());
         }
 
         u8 buf[512];
         ByteWriter w(buf, sizeof(buf));
         encode_input_bundle(w, in);
         CHECK(w.ok());
-        // Twelve bytes a frame: buttons, two axes, the aim, the pitch.
-        CHECK(w.size() == 1u + 4 + 4 + 1 + 12u * in.frame_count);
+        // Thirteen bytes a frame: buttons, two axes, the aim, the pitch, the
+        // weapon wanted.
+        CHECK(w.size() == 1u + 4 + 4 + 1 + 13u * in.frame_count);
 
         InputBundle out;
         ByteReader r(buf, w.size());
@@ -257,7 +260,20 @@ static void test_snapshot_roundtrip() {
                        fx::from_raw(static_cast<i64>(rng.next_u64()) >> 20),
                        fx::from_raw(static_cast<i64>(rng.next_u64()) >> 20)};
         self.facing      = brad(rng.next_u32());
-        self.state_flags = static_cast<u16>(rng.next_u32() & 0x3F);
+        // Every flag, ARMED included, so the weapon block is written on about
+        // half the iterations and its absence is exercised on the rest.
+        self.state_flags = static_cast<u16>(rng.next_u32() & 0x7F);
+        if (self.state_flags & state_flag::ARMED) {
+            sim::WeaponState& k = self.weapon;
+            k.have = rng.next_u32();
+            k.current = static_cast<u8>(rng.next_u32()); k.phase = static_cast<u8>(rng.next_u32());
+            k.armed = static_cast<u8>(rng.next_u32()); k.swing_phase = static_cast<u8>(rng.next_u32());
+            k.prev_buttons = static_cast<u8>(rng.next_u32() & 3);
+            k.entered = rng.next_u32(); k.done = rng.next_u32();
+            k.held_since[0] = rng.next_u32(); k.held_since[1] = rng.next_u32();
+            for (i32& v : k.vars) v = static_cast<i32>(rng.next_u32());
+            for (u16& a : k.ammo) a = static_cast<u16>(rng.next_u32());
+        }
         self.anchor      = Handle::make(rng.next_below(1000), 3);
         self.jumps_used  = static_cast<u8>(rng.next_below(4));
         self.animation_state = static_cast<u16>(rng.next_u32());
@@ -336,6 +352,18 @@ static void test_snapshot_roundtrip() {
         CHECK(got.self.jumps_used == self.jumps_used);
         CHECK(got.self.animation_state == self.animation_state);
         CHECK(got.self.avatar == self.avatar);
+        if (self.state_flags & state_flag::ARMED) {
+            const sim::WeaponState& a = got.self.weapon;
+            const sim::WeaponState& b = self.weapon;
+            bool same = a.have == b.have && a.current == b.current && a.phase == b.phase &&
+                        a.armed == b.armed && a.swing_phase == b.swing_phase &&
+                        a.prev_buttons == b.prev_buttons && a.entered == b.entered &&
+                        a.done == b.done && a.held_since[0] == b.held_since[0] &&
+                        a.held_since[1] == b.held_since[1];
+            for (u32 v = 0; v < sim::MAX_WEAPON_VARS; ++v) same = same && a.vars[v] == b.vars[v];
+            for (u32 p = 0; p < sim::MAX_AMMO_POOLS; ++p) same = same && a.ammo[p] == b.ammo[p];
+            CHECK(same);
+        }
 
         CHECK(got.entity_count == written);
         for (int i = 0; i < written; ++i) {
