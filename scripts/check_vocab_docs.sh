@@ -29,7 +29,7 @@ if [[ ! -x "$LUAJIT" ]]; then
 fi
 
 # The line that separates the two halves. Everything after it is generated.
-MARKER='<!-- generated from the vocabulary below this line; see tools/vocabdoc -->'
+MARKER='<!-- generated from the vocabulary below this line; see engine/tools/vocabdoc -->'
 
 fails=0
 checked=0

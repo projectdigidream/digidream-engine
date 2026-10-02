@@ -43,6 +43,7 @@ SRCS=(
   "$ROOT/core/src/sim/world.cpp"
   "$ROOT/core/src/sim/testmap.cpp"
   "$ROOT/core/src/sim/sectormotion.cpp"
+  "$ROOT/core/src/sim/weapon.cpp"
   "$ROOT/core/src/sim/crush.cpp"
   "$ROOT/core/src/geom/map.cpp"
   "$ROOT/core/src/geom/triangulate.cpp"
@@ -68,6 +69,8 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_props.cpp"        -o "
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_bodies.cpp"       -o "$OUT/test_bodies"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sweep.cpp"        -o "$OUT/test_sweep"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sight.cpp"        -o "$OUT/test_sight"
+# The weapon machine both sides run (docs/WEAPON_PREDICTION.md).
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_weapons.cpp"      -o "$OUT/test_weapons"
 # Several maps in one store, joined at their open edges, added and removed live.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_chunks.cpp"       -o "$OUT/test_chunks"
 # The metamap: where each level sits, and what that means has to be resident.

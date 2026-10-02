@@ -24,7 +24,7 @@ WORK="$ROOT/build/determinism"
 mkdir -p "$WORK"
 
 FLAGS=(-std=c++17 -O2 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -I"$ROOT/core/include")
-SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/sim/testmap.cpp" "$ROOT/core/src/sim/sectormotion.cpp" "$ROOT/core/src/sim/crush.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/geom/triangulate.cpp" "$ROOT/core/src/geom/mapstore.cpp" "$ROOT/core/src/geom/mapfile.cpp" "$ROOT/core/src/geom/rail.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/src/physics/controller.cpp" "$ROOT/core/src/nav/navgraph.cpp" "$ROOT/core/tests/golden_trace.cpp")
+SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/sim/testmap.cpp" "$ROOT/core/src/sim/sectormotion.cpp" "$ROOT/core/src/sim/weapon.cpp" "$ROOT/core/src/sim/crush.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/geom/triangulate.cpp" "$ROOT/core/src/geom/mapstore.cpp" "$ROOT/core/src/geom/mapfile.cpp" "$ROOT/core/src/geom/rail.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/src/physics/controller.cpp" "$ROOT/core/src/nav/navgraph.cpp" "$ROOT/core/tests/golden_trace.cpp")
 
 declare -a NAMES=()
 declare -a TRACES=()

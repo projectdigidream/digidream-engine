@@ -25,6 +25,7 @@ add_library(dnp_core STATIC
   core/src/sim/world.cpp
   core/src/sim/testmap.cpp
   core/src/sim/sectormotion.cpp
+  core/src/sim/weapon.cpp
   core/src/sim/crush.cpp
   core/src/geom/map.cpp
   core/src/geom/triangulate.cpp
@@ -115,6 +116,9 @@ add_test(NAME nav COMMAND test_nav)
 add_executable(test_rail core/tests/test_rail.cpp)
 target_link_libraries(test_rail PRIVATE dnp_core)
 add_test(NAME rail COMMAND test_rail)
+add_executable(test_weapons core/tests/test_weapons.cpp)
+target_link_libraries(test_weapons PRIVATE dnp_core)
+add_test(NAME weapons COMMAND test_weapons)
 
 add_executable(test_path core/tests/test_path.cpp)
 target_link_libraries(test_path PRIVATE dnp_core)

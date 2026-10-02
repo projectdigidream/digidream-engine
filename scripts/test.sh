@@ -178,6 +178,7 @@ suite_core () {
   "./build/$HOST_ARCH/test_bodies"
   "./build/$HOST_ARCH/test_sweep"
   "./build/$HOST_ARCH/test_sight"
+  "./build/$HOST_ARCH/test_weapons"
   "./build/$HOST_ARCH/test_chunks"
   "./build/$HOST_ARCH/test_turning"
   "./build/$HOST_ARCH/test_nav"
