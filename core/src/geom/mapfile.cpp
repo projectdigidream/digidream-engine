@@ -18,8 +18,13 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     const MapData m = store.view();
     const RenderData rd = store.render_view();
 
+    // THE OLDEST VERSION THAT CAN SAY IT. A map without sector effects is
+    // written as version 13, byte for byte what it was before 14 existed, so
+    // adding effects to the format changes no file that does not use them:
+    // not a committed level, not a studio bake, not a generated module.
+    const bool has_effects = store.effect_count() > 0;
     w.u32v(MAP_MAGIC);
-    w.u16v(MAP_VERSION);
+    w.u16v(has_effects ? MAP_VERSION : static_cast<u16>(13));
     w.u16v(0);   // flags, reserved
 
     w.u32v(m.point_count);
@@ -43,6 +48,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.fxraw(store.body_radius());
     w.fxraw(store.body_height());
     w.fxraw(store.texture_scale());
+    if (has_effects) w.u32v(store.effect_count());   // 14
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -184,6 +190,19 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         w.u8v(r.alpha);
     }
 
+    // Sector effects (14). Variable width -- a kind takes only some keys, and
+    // an effect names the ones it sets -- so each says how many follow.
+    for (u32 i = 0; i < store.effect_count(); ++i) {
+        const SectorFx& e = store.effect(i);
+        w.u32v(e.sector);
+        w.u8v(e.kind);
+        w.u8v(e.count);
+        for (u8 k = 0; k < e.count; ++k) {
+            w.u8v(e.params[k].key);
+            w.i64v(e.params[k].raw);
+        }
+    }
+
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
     // running different geometry from the server is a detectable condition
     // rather than an unexplained series of collision disagreements.
@@ -225,7 +244,9 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const fx body_radius = r.fxraw();
     const fx body_height = r.fxraw();
     const fx texture_scale = r.fxraw();
+    const u32 fx_count = version >= 14 ? r.u32v() : 0;
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+    if (fx_count > MAX_MAP_FX) { store.clear(); return MapLoadStatus::TooLarge; }
 
     // Structural, like the counts below: a body with no size is not a body, and
     // an entity with a zero height stands in every ceiling at once. Bounded
@@ -742,6 +763,35 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         sr.x_offset = xo;
         sr.y_offset = yo;
         sr.alpha = alpha;
+    }
+
+    // SECTOR EFFECTS. Cosmetic, and checked as strictly as geometry anyway:
+    // the file is attacker-chosen, and an effect a reader does not understand
+    // -- an unknown kind, a key that kind does not take, the same key twice --
+    // is refused rather than guessed at, so a flipped bit cannot pass as a
+    // different, plausible storm.
+    for (u32 i = 0; i < fx_count; ++i) {
+        SectorFx e;
+        e.sector = r.u32v();
+        e.kind = r.u8v();
+        e.count = r.u8v();
+        if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+        if (e.sector >= sector_count || e.kind < 1 || e.kind > FX_KIND_COUNT || e.count > MAX_FX_PARAMS) {
+            store.clear(); return MapLoadStatus::BadIndex;
+        }
+        u32 seen = 0;
+        for (u8 k = 0; k < e.count; ++k) {
+            e.params[k].key = r.u8v();
+            e.params[k].raw = r.i64v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            const u8 key = e.params[k].key;
+            if (!fx_takes(e.kind, key) || (seen >> key) & 1u) { store.clear(); return MapLoadStatus::BadIndex; }
+            seen |= 1u << key;
+            if (FX_KEYS[key - 1].is_color && (e.params[k].raw < 0 || e.params[k].raw > 0xFFFFFF)) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+        }
+        if (!store.add_effect(e)) { store.clear(); return MapLoadStatus::TooLarge; }
     }
 
     const u64 want_hash = r.u64v();

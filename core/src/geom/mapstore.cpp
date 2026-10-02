@@ -19,6 +19,7 @@ void MapStorage::clear() noexcept {
     path_point_count_ = 0;
     texture_count_ = 0;
     light_count_ = 0;
+    fx_count_ = 0;
     hole_count_ = 0;
     script_count_ = 0;
     body_radius_ = fx::from_frac(1, 2);
@@ -79,6 +80,12 @@ bool MapStorage::add_hole(u32 sector, const fx2* pts, u32 n) noexcept {
 bool MapStorage::add_light(const MapLight& l) noexcept {
     if (light_count_ >= MAX_MAP_LIGHTS) return false;
     lights_[light_count_++] = l;
+    return true;
+}
+
+bool MapStorage::add_effect(const SectorFx& e) noexcept {
+    if (fx_count_ >= MAX_MAP_FX || e.count > MAX_FX_PARAMS) return false;
+    fx_[fx_count_++] = e;
     return true;
 }
 
@@ -971,6 +978,17 @@ u64 MapStorage::hash() const noexcept {
         h.byte(sp.tag_len);
         for (u32 k = 0; k < sp.tag_len; ++k) h.byte(static_cast<unsigned char>(sp.tag[k]));
         h.vec3(sp.pos);
+    }
+    // SECTOR EFFECTS, folded in only when there are some -- the flat styles'
+    // rule above, for their reason: a map baked before effects existed, or with
+    // none, keeps the hash it had.
+    if (fx_count_ > 0) {
+        h.u32v(fx_count_);
+        for (u32 i = 0; i < fx_count_; ++i) {
+            const SectorFx& e = fx_[i];
+            h.u32v(e.sector); h.byte(e.kind); h.byte(e.count);
+            for (u8 k = 0; k < e.count; ++k) { h.byte(e.params[k].key); h.i64v(e.params[k].raw); }
+        }
     }
     return h.value();
 }

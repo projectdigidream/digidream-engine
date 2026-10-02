@@ -110,6 +110,52 @@ void err(int line, const char* fmt, ...) {
 bool flat_attr(int line, const std::string& key, const std::string& val,
                SurfaceStyle& st);
 
+bool parse_fx(const std::string& tok, fx& out);
+
+// AN EFFECT LINE: `fx <kind> key value ...` inside a sector block
+// (docs/SECTOR_FX.md). The kinds, keys and which kind takes which are
+// core/include/dnp/geom/sector_fx.hpp's table -- this only parses against it.
+// A colour is six hex digits; everything else is a number like any other here.
+bool parse_effect(int line, const std::vector<std::string>& tok, SectorFx& out) {
+    if (tok.size() < 2) { err(line, "fx needs a kind: rain, snow, dust, embers or fog"); return false; }
+    out = SectorFx{};
+    for (u8 k = 1; k <= FX_KIND_COUNT; ++k) if (tok[1] == fx_kind_name(k)) out.kind = k;
+    if (out.kind == 0) { err(line, "unknown fx kind '%s' (rain, snow, dust, embers, fog)", tok[1].c_str()); return false; }
+    if ((tok.size() - 2) % 2 != 0) { err(line, "fx %s: '%s' has no value", tok[1].c_str(), tok.back().c_str()); return false; }
+    bool ok = true;
+    u32 seen = 0;
+    for (size_t i = 2; i + 1 < tok.size(); i += 2) {
+        u8 key = 0;
+        for (u8 k = 1; k <= FX_KEY_COUNT; ++k) if (tok[i] == FX_KEYS[k - 1].name) key = k;
+        if (key == 0 || !fx_takes(out.kind, key)) {
+            err(line, "fx %s takes no '%s'", tok[1].c_str(), tok[i].c_str()); ok = false; continue;
+        }
+        if ((seen >> key) & 1u) { err(line, "fx %s: '%s' given twice", tok[1].c_str(), tok[i].c_str()); ok = false; continue; }
+        seen |= 1u << key;
+        FxParam p;
+        p.key = key;
+        if (FX_KEYS[key - 1].is_color) {
+            const std::string& v = tok[i + 1];
+            char* end = nullptr;
+            const long rgb = std::strtol(v.c_str(), &end, 16);
+            if (v.size() != 6 || end == nullptr || *end != '\0') {
+                err(line, "fx %s: %s '%s' is not six hex digits", tok[1].c_str(), tok[i].c_str(), v.c_str());
+                ok = false; continue;
+            }
+            p.raw = rgb;
+        } else {
+            fx v{};
+            if (!parse_fx(tok[i + 1], v)) {
+                err(line, "fx %s: bad %s '%s'", tok[1].c_str(), tok[i].c_str(), tok[i + 1].c_str());
+                ok = false; continue;
+            }
+            p.raw = v.raw;
+        }
+        out.params[out.count++] = p;
+    }
+    return ok;
+}
+
 bool parse_fx(const std::string& tok, fx& out) {
     size_t i = 0;
     bool neg = false;
@@ -379,6 +425,7 @@ int main(int argc, char** argv) {
     // because a hole's points must go in after the outer loop's and the outer
     // loop is not committed until then.
     std::vector<std::vector<PendingVertex>> pending_holes;
+    std::vector<SectorFx> pending_fx;
     bool in_hole = false;
     bool in_sector = false;
     bool in_rail = false;
@@ -420,6 +467,7 @@ int main(int argc, char** argv) {
             in_sector = true;
             verts.clear();
             pending_holes.clear();
+            pending_fx.clear();
             in_hole = false;
             floor_z = fx::zero();
             ceil_z = fx::from_int(32);
@@ -465,6 +513,10 @@ int main(int argc, char** argv) {
             if (in_hole) { err(lineno, "hole inside a hole; missing 'end'?"); continue; }
             in_hole = true;
             pending_holes.push_back({});
+        } else if (tok[0] == "fx") {
+            if (!in_sector || in_hole) { err(lineno, "fx outside a sector"); continue; }
+            SectorFx e;
+            if (parse_effect(lineno, tok, e)) pending_fx.push_back(e);
         } else if (tok[0] == "vertex") {
             if (!in_sector) { err(lineno, "vertex outside a sector"); continue; }
             if (tok.size() < 3) { err(lineno, "vertex needs x and y"); continue; }
@@ -593,6 +645,10 @@ int main(int argc, char** argv) {
 
             store.sector_render_mut(si) = sector_render;
             store.sector_mut(si).thickness = thickness;
+            for (SectorFx e : pending_fx) {
+                e.sector = si;
+                if (!store.add_effect(e)) err(sector_start_line, "too many sector effects (the map holds %u)", MAX_MAP_FX);
+            }
 
             // Holes before sides: a hole's points must be contiguous with the
             // sector's outer loop, and add_side adds none.

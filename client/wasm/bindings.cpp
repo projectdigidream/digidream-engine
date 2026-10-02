@@ -227,6 +227,63 @@ void dnp_map_light(const geom::MapStorage* m, unsigned i, long long* out64, unsi
     out32[2] = l.b;
 }
 
+// --- sector effects (docs/SECTOR_FX.md) ---------------------------------------
+//
+// The kinds, keys and defaults are core's table (dnp/geom/sector_fx.hpp),
+// handed over here rather than copied into JS: one definition, so a key added
+// to the format is a key the client can read.
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_map_fx_count(const geom::MapStorage* m) { return m->effect_count(); }
+
+// out32: sector, kind.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_fx(const geom::MapStorage* m, unsigned i, unsigned* out32) {
+    if (i >= m->effect_count()) { out32[0] = 0; out32[1] = 0; return; }
+    out32[0] = m->effect(i).sector;
+    out32[1] = m->effect(i).kind;
+}
+
+// One key of one effect: 1 and the authored value when it is set, else 0 and
+// the kind's default. A value is an fx raw -- the default is in thousandths and
+// is converted here, so the caller sees one unit -- except a colour's, which is
+// 0xRRGGBB either way.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_fx_param(const geom::MapStorage* m, unsigned i, unsigned key, long long* out64) {
+    out64[0] = 0;
+    if (i >= m->effect_count() || key < 1 || key > geom::FX_KEY_COUNT) return 0;
+    const geom::SectorFx& e = m->effect(i);
+    for (unsigned k = 0; k < e.count; ++k) {
+        if (e.params[k].key == key) { out64[0] = e.params[k].raw; return 1; }
+    }
+    const geom::FxKeyDef& d = geom::FX_KEYS[key - 1];
+    const long long def = (e.kind >= 1 && e.kind <= geom::FX_KIND_COUNT) ? d.defaults[e.kind - 1] : 0;
+    out64[0] = d.is_color ? def : fx::from_frac(def, 1000).raw;
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_fx_key_count() { return geom::FX_KEY_COUNT; }
+
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_fx_key_name(unsigned key, char* out, unsigned cap) {
+    if (key < 1 || key > geom::FX_KEY_COUNT) return 0;
+    const char* s = geom::FX_KEYS[key - 1].name;
+    unsigned n = 0;
+    while (s[n] != 0 && n < cap) { out[n] = s[n]; ++n; }
+    return n;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_fx_key_is_color(unsigned key) {
+    return key >= 1 && key <= geom::FX_KEY_COUNT && geom::FX_KEYS[key - 1].is_color;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int dnp_fx_takes(unsigned kind, unsigned key) {
+    return geom::fx_takes(static_cast<u8>(kind), static_cast<u8>(key));
+}
+
 EMSCRIPTEN_KEEPALIVE
 void dnp_map_point(const geom::MapStorage* m, unsigned i, long long* out64) {
     const geom::MapData v = m->view();
@@ -900,6 +957,31 @@ int dnp_map_add_light(geom::MapStorage* m, const long long* in64, unsigned r,
     l.g = static_cast<u8>(g);
     l.b = static_cast<u8>(b);
     return m->add_light(l) ? 1 : 0;
+}
+
+// A sector effect, for a map built in memory (the old editor's build.js) to
+// hash as mapc's bake does. Checked as the loader checks one, so what the
+// editor accepts is what the compiler accepts: 0 for a kind, key or colour the
+// file format would refuse.
+EMSCRIPTEN_KEEPALIVE
+int dnp_map_add_effect(geom::MapStorage* m, unsigned sector, unsigned kind, unsigned count,
+                       const unsigned* keys, const long long* vals) {
+    if (sector >= m->view().sector_count || kind < 1 || kind > geom::FX_KIND_COUNT ||
+        count > geom::MAX_FX_PARAMS) return 0;
+    geom::SectorFx e;
+    e.sector = sector;
+    e.kind = static_cast<u8>(kind);
+    unsigned seen = 0;
+    for (unsigned k = 0; k < count; ++k) {
+        const unsigned key = keys[k];
+        if (!geom::fx_takes(e.kind, static_cast<u8>(key)) || ((seen >> key) & 1u)) return 0;
+        seen |= 1u << key;
+        if (geom::FX_KEYS[key - 1].is_color && (vals[k] < 0 || vals[k] > 0xFFFFFF)) return 0;
+        e.params[e.count].key = static_cast<u8>(key);
+        e.params[e.count].raw = vals[k];
+        ++e.count;
+    }
+    return m->add_effect(e) ? 1 : 0;
 }
 
 // The scripts the map declares. Exposed even though the editor never runs one:

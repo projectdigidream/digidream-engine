@@ -18,6 +18,7 @@
 // authors do not build on undefined geometry.
 //
 #include "dnp/geom/map.hpp"
+#include "dnp/geom/sector_fx.hpp"
 #include "dnp/geom/triangulate.hpp"
 
 namespace dnp::geom {
@@ -262,6 +263,14 @@ public:
     u32 light_count() const noexcept { return light_count_; }
     const MapLight& light(u32 i) const noexcept { return lights_[i]; }
 
+    // Sector effects: rain, snow, dust, embers, fog (docs/SECTOR_FX.md).
+    // Cosmetic like lights, and refused rather than dropped when full, for the
+    // same reason. `sector` is checked by the loader, not here: mapc adds an
+    // effect for the sector it has just created.
+    bool add_effect(const SectorFx& e) noexcept;
+    u32 effect_count() const noexcept { return fx_count_; }
+    const SectorFx& effect(u32 i) const noexcept { return fx_[i]; }
+
     // The scripts this map needs. Order is preserved and meaningful: a map's
     // own data file is written against the library it declares first.
     //
@@ -416,6 +425,9 @@ private:
 
     MapLight     lights_[MAX_MAP_LIGHTS]{};
     u32          light_count_ = 0;
+
+    SectorFx     fx_[MAX_MAP_FX]{};
+    u32          fx_count_ = 0;
 
     // physics::MoveParams' own defaults, restated rather than included: core's
     // geometry layer does not depend on its physics layer, and a map file must

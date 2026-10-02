@@ -146,7 +146,46 @@ export function readMap (map) {
   }
   M._free(namePtr)
 
-  return { points, sectors, sides, tris, textures, lights }
+  return { points, sectors, sides, tris, textures, lights, fx: readEffects(map) }
+}
+
+/**
+ * A map's sector effects (docs/SECTOR_FX.md): [{ sector, kind, params }], every
+ * key the kind takes present -- the authored value or the kind's default, both
+ * from core's own table through the bindings. Numbers are doubles; a colour is
+ * 0xRRGGBB.
+ */
+export function readEffects (map) {
+  const core = map.core
+  const M = core.M
+  const p = map.ptr
+  if (!M._dnp_map_fx_count) return []     // a core built before effects existed
+  const n = M._dnp_map_fx_count(p)
+  if (n === 0) return []
+  const keys = M._dnp_fx_key_count()
+  const namePtr = M._malloc(32)
+  const names = [null]
+  for (let k = 1; k <= keys; k++) {
+    const len = M._dnp_fx_key_name(k, namePtr, 32)
+    names.push(new TextDecoder().decode(M.HEAPU8.subarray(namePtr, namePtr + len)))
+  }
+  M._free(namePtr)
+  const b64 = core.buf64 / 8
+  const b32 = core.buf32 / 4
+  const out = []
+  for (let i = 0; i < n; i++) {
+    M._dnp_map_fx(p, i, core.buf32)
+    const { u32 } = core.views
+    const e = { sector: u32[b32], kind: u32[b32 + 1], params: {} }
+    for (let k = 1; k <= keys; k++) {
+      if (!M._dnp_fx_takes(e.kind, k)) continue
+      M._dnp_map_fx_param(p, i, k, core.buf64)
+      const raw = core.views.i64[b64]
+      e.params[names[k]] = M._dnp_fx_key_is_color(k) ? Number(raw) : fxToFloat(raw)
+    }
+    out.push(e)
+  }
+  return out
 }
 
 // --- camera paths (design §4.1) ---------------------------------------------

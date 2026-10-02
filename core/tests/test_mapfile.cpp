@@ -8,6 +8,7 @@
 // the first collision query.
 //
 #include <cstdio>
+#include <cstring>
 #include <tuple>
 
 #include "dnp/geom/mapfile.hpp"
@@ -154,7 +155,10 @@ static void test_a_map_written_before_styles_still_loads() {
 
     // Rewrite the two render sections at an older layout, keeping everything
     // ahead of them byte for byte -- which is what makes this a test of the
-    // WINDOW rather than of a fixture somebody recorded once.
+    // WINDOW rather than of a fixture somebody recorded once. (A map with no
+    // sector effects is written as 13, so there is no version-14 field to
+    // drop: see test_sector_effects.)
+    CHECK(buf[4] == 13 && buf[5] == 0);
     const auto downgrade = [&](u16 version, size_t style_bytes, size_t side_bytes) {
         size_t m = 0;
         for (size_t i = 0; i < head; ++i) old[m++] = buf[i];
@@ -178,10 +182,11 @@ static void test_a_map_written_before_styles_still_loads() {
     // Version 11 knew no styles at all, and its sides carried no alpha.
     // Version 12 knew the styles and not the anchor. Both must load, and both
     // must hash to what this writer produces for the same map.
-    const u16 versions[2] = {11, 12};
-    const size_t style_len[2] = {0, STYLE_12};
-    const size_t side_len[2] = {23, 24};
-    for (int v = 0; v < 2; ++v) {
+    // Version 13 knew everything but effects (and so has no fx_count at all).
+    const u16 versions[3] = {11, 12, 13};
+    const size_t style_len[3] = {0, STYLE_12, STYLE_13};
+    const size_t side_len[3] = {23, 24, 24};
+    for (int v = 0; v < 3; ++v) {
         const size_t len = downgrade(versions[v], style_len[v], side_len[v]);
         ByteReader r(old, len);
         const MapLoadStatus st = load_map(r, dst);
@@ -210,9 +215,9 @@ static void test_a_map_written_before_styles_still_loads() {
     CHECK(load_map(r10, dst) == MapLoadStatus::BadVersion);
 
     // And so is one newer than this writer knows how to produce.
-    old[4] = 14;
-    ByteReader r14(old, len);
-    CHECK(load_map(r14, dst) == MapLoadStatus::BadVersion);
+    old[4] = static_cast<u8>(MAP_VERSION + 1);
+    ByteReader r15(old, len);
+    CHECK(load_map(r15, dst) == MapLoadStatus::BadVersion);
 }
 
 static void test_roundtrip() {
@@ -708,8 +713,108 @@ static void test_declared_scripts_round_trip_and_stay_inside_the_map() {
     }
 }
 
+// SECTOR EFFECTS (version 14, docs/SECTOR_FX.md): they round-trip, they are
+// hashed only when present, and everything a reader cannot understand is
+// refused -- with a CONTROL each time, a variant that must still load.
+static void test_sector_effects() {
+    std::printf("mapfile: sector effects round-trip, hash only when present, refuse nonsense\n");
+    static MapStorage src;
+    static MapStorage dst;
+    static u8 buf[16384];
+    src.clear();
+    build_reference(src);
+    const u64 bare = src.hash();
+
+    const auto key = [](const char* name) {
+        for (u8 k = 1; k <= FX_KEY_COUNT; ++k) if (std::strcmp(FX_KEYS[k - 1].name, name) == 0) return k;
+        return static_cast<u8>(0);
+    };
+    SectorFx rain;
+    rain.sector = 0; rain.kind = static_cast<u8>(FxKind::Rain);
+    rain.params[rain.count++] = { key("density"), fx::from_int(10).raw };
+    rain.params[rain.count++] = { key("windx"), fx::from_frac(6, 5).raw };
+    rain.params[rain.count++] = { key("color"), 0x9aa8c0 };
+    SectorFx fog;
+    fog.sector = 2; fog.kind = static_cast<u8>(FxKind::Fog);
+    fog.params[fog.count++] = { key("density"), fx::from_frac(7, 20).raw };
+    fog.params[fog.count++] = { key("falloff"), fx::from_frac(6, 5).raw };
+    CHECK(src.add_effect(rain) && src.add_effect(fog));
+    CHECK(src.hash() != bare);      // CONTROL for the next claim: effects ARE hashed
+
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+    const size_t n = w.size();
+    CHECK(buf[4] == 14);   // effects need 14; a map without them is written as 13
+    {
+        ByteReader r(buf, n);
+        CHECK(load_map(r, dst) == MapLoadStatus::Ok);
+        CHECK(dst.effect_count() == 2 && dst.hash() == src.hash());
+        const SectorFx& a = dst.effect(0);
+        CHECK(a.sector == 0 && a.kind == rain.kind && a.count == 3 &&
+              a.params[1].key == key("windx") && a.params[1].raw == fx::from_frac(6, 5).raw &&
+              a.params[2].raw == 0x9aa8c0);
+        CHECK(dst.effect(1).sector == 2 && dst.effect(1).params[1].key == key("falloff"));
+    }
+
+    // NO EFFECTS, NO CHANGE: a map without any hashes as it always did, and
+    // is WRITTEN as it always was -- version 13, four bytes shorter.
+    {
+        static MapStorage plain;
+        static u8 pb[16384];
+        plain.clear();
+        build_reference(plain);
+        CHECK(plain.effect_count() == 0 && plain.hash() == bare);
+        ByteWriter pw(pb, sizeof(pb));
+        CHECK(save_map(plain, pw));
+        CHECK(pb[4] == 13);
+        ByteReader pr(pb, pw.size());
+        CHECK(load_map(pr, dst) == MapLoadStatus::Ok && dst.effect_count() == 0 && dst.hash() == bare);
+    }
+
+    // Refusals. Each builds a map with one bad effect and must not load it.
+    const auto refused = [&](SectorFx bad) {
+        static MapStorage m;
+        m.clear();
+        build_reference(m);
+        m.add_effect(bad);
+        static u8 b[16384];
+        ByteWriter bw(b, sizeof(b));
+        if (!save_map(m, bw)) return false;
+        ByteReader br(b, bw.size());
+        return load_map(br, dst) != MapLoadStatus::Ok;
+    };
+    SectorFx e = fog;
+    CHECK(!refused(e));                                     // CONTROL: the good one loads
+    e = fog; e.sector = 99;                     CHECK(refused(e));   // no such sector
+    e = fog; e.kind = 9;                        CHECK(refused(e));   // no such kind
+    e = fog; e.params[0].key = key("speed");    CHECK(refused(e));   // fog takes no speed
+    e = fog; e.params[1].key = key("density");  CHECK(refused(e));   // a key twice
+    e = rain; e.params[2].raw = 0x1000000;      CHECK(refused(e));   // not a colour
+    e = rain; e.params[0].key = 0;              CHECK(refused(e));   // key 0
+    e = rain; e.params[0].key = FX_KEY_COUNT + 1; CHECK(refused(e)); // past the table
+
+    // And no single flipped bit in the file loads silently -- the effects
+    // section included, which is the last thing before the hash.
+    {
+        Rng rng(14);
+        int loaded_silently = 0;
+        static u8 bad[16384];
+        for (int trial = 0; trial < 4000; ++trial) {
+            for (size_t i = 0; i < n; ++i) bad[i] = buf[i];
+            // Half the trials aim at the effects section, the last 46 + 26 bytes.
+            const u32 span = trial % 2 ? static_cast<u32>(n) : 80u;
+            const u32 at = trial % 2 ? rng.next_below(span) : static_cast<u32>(n - 8 - 1 - rng.next_below(span - 8));
+            bad[at] = static_cast<u8>(bad[at] ^ (1u << rng.next_below(8)));
+            ByteReader r(bad, n);
+            if (load_map(r, dst) == MapLoadStatus::Ok && dst.hash() == src.hash()) ++loaded_silently;
+        }
+        CHECK(loaded_silently == 0);
+    }
+}
+
 int main() {
     std::printf("== core/geom map file suite ==\n");
+    test_sector_effects();
     test_roundtrip();
     test_matches_hardcoded_map();
     test_holes_round_trip();

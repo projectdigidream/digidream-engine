@@ -1,0 +1,39 @@
+# Sector effects (docs/SECTOR_FX.md): a courtyard in the rain, a cold room
+# where it snows, and a sunken pit full of fog -- walk the length of it.
+#
+# For client/test/sectorfx.test.js and by eye:
+#   scripts/run_stack.sh --module doom2 build/<arch>/fx.dnpm
+body radius 0.3333 height 1.1667
+texscale 48
+
+# 0: the courtyard. Tall, and raining, with a wind from the west.
+sector floor 0 ceil 10 floortex FLOOR4_8 ceiltex F_SKY1 light 200
+  fx rain density 10 windx 1.2
+  vertex  0  0 wall tex STONE2
+  vertex 16  0 neighbor 1
+  vertex 16  8 wall tex STONE2
+  vertex 16 12 neighbor 2
+  vertex 16 20 wall tex STONE2
+  vertex  0 20 wall tex STONE2
+end
+
+# 1: the cold room. Snow, slow and swaying, under a low ceiling.
+sector floor 0 ceil 4 floortex FLAT5_4 ceiltex CEIL5_1 light 170
+  fx snow density 6 windx 0.3
+  vertex 16  8 neighbor 0
+  vertex 16  0 wall tex ICKWALL1
+  vertex 28  0 wall tex ICKWALL1
+  vertex 28  8 wall tex ICKWALL1
+end
+
+# 2: the pit. Two units down, the fog lying in it to a unit over its rim,
+# thinning upward and billowing. Seen from the courtyard, it is a pool of mist.
+sector floor -2 ceil 6 floortex NUKAGE1 ceiltex CEIL5_1 light 140
+  fx fog density 0.35 top 3 falloff 1.2 noise 0.5 color 6a7a6a
+  vertex 16 20 neighbor 0
+  vertex 16 12 wall tex BROWN1
+  vertex 30 12 wall tex BROWN1
+  vertex 30 20 wall tex BROWN1
+end
+
+spawn start 4 10 1

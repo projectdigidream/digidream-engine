@@ -41,6 +41,7 @@ import { parseAtlas, pivotDisagreement } from './render/atlas.js'
 import { sweepOffset, pitchOffset, makeSwingMesh, aimSwing, readSwingShape,
          sameSwingShape, sweptSpan, SwingTrail } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
+import { SectorFx } from './render/sectorfx.js'
 import { UiView } from './render/ui.js'
 import { wantsTouch } from './touch.js'
 import { mountTouch } from './render/touchui.js'
@@ -433,6 +434,13 @@ let yaw = START_YAW
 // input is built before the camera runs, so the stick is mapped through the
 // view the player was looking at when they pushed it.
 let camViewYaw = 0
+// The home level's sector effects (render/sectorfx.js), and which map they are of.
+let sectorFx = null
+let sectorFxFor = null
+// The home level's sector effects: what was built from the map.
+dnpStats.sectorFx = () => sectorFx
+  ? { counts: sectorFx.counts, fogs: sectorFx.fogCount, meshes: sectorFx.meshes.length, fx: mapData?.fx }
+  : { none: true, fx: mapData?.fx ?? null }
 let camPathTag = -1
 let camPaths = []
 let camPathSpline = null
@@ -2678,8 +2686,28 @@ function frame (now) {
   // room between two frames.
   if (props) props.update(now / 1000, cam3.position)
 
+  // SECTOR EFFECTS (docs/SECTOR_FX.md): the home level's rain, snow and fog,
+  // rebuilt when the level is a different one and drawn where its view is.
+  // Neighbours seen over a seam draw none -- they are built from the worker's
+  // groups, which do not carry them.
+  if (sectorFxFor !== mapData) {
+    sectorFx?.dispose()
+    sectorFx = (mapData?.fx?.length ?? 0) > 0
+      ? new SectorFx({ THREE, map: mapData, touch: wantsTouch(params) })
+      : null
+    if (sectorFx) scene.add(sectorFx.root)
+    sectorFxFor = mapData
+  }
+  if (sectorFx) {
+    const o = view.root.position
+    sectorFx.setOrigin(o.x, o.y, o.z)
+    sectorFx.update(now / 1000)
+  }
+
   const tDraw = performance.now()
   renderer.render(scene, cam3)
+  // The fog pass, over the picture just drawn; a level without fog skips it.
+  if (sectorFx?.hasFog) sectorFx.renderFog(renderer, scene, cam3)
   blend('draw', performance.now() - tDraw)
 
   frames++
