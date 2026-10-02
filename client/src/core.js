@@ -68,6 +68,12 @@ export class Core {
     return Number(this.views.i64[this.buf64 / 8]) / 4294967296
   }
 
+  /** Where a first-person eye is, as a fraction of the body's height (the core's). */
+  get eyeFraction () {
+    this.M._dnp_eye_fraction(this.buf64)
+    return Number(this.views.i64[this.buf64 / 8]) / 4294967296
+  }
+
   static async load () {
     const M = await createModule()
     return new Core(M)

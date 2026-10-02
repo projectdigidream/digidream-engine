@@ -107,6 +107,11 @@ int dnp_buf32_len() { return BUF32_LEN; }
 EMSCRIPTEN_KEEPALIVE
 void dnp_interact_reach(long long* out64) { out64[0] = sim::INTERACT_REACH.raw; }
 
+// Where a first-person body's eye is, as a fraction of its height: the camera
+// sits where the core shoots from (sim::EYE_FRACTION).
+EMSCRIPTEN_KEEPALIVE
+void dnp_eye_fraction(long long* out64) { out64[0] = sim::EYE_FRACTION.raw; }
+
 // The first prop slot reserved for body mirrors (sim::MIRROR_SLOTS).
 //
 // Exported for the same reason as the buffer lengths: the client mirrors remote

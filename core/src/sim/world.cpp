@@ -135,8 +135,11 @@ World::ShotHit World::hitscan(u32 i, brad aim, fx slope, fx range) const noexcep
     ShotHit out;
     const AgentState& sh = agents_[i];
     // From the middle of the body, not its feet: a shot from ankle height is
-    // stopped by every step in the map.
-    const fx eye = sh.pos.z + params_[i].height / 2;
+    // stopped by every step in the map. A FIRST-PERSON body (move_relative,
+    // which the fps scheme sets) shoots from its eye, where its camera is, so
+    // the ray leaves along the line the player is looking down.
+    const fx eye = params_[i].move_relative ? sh.pos.z + params_[i].height * EYE_FRACTION
+                                            : sh.pos.z + params_[i].height / 2;
     const fx2 from{sh.pos.x, sh.pos.y};
     out.from = fx3{from.x, from.y, eye};
     const fx2 dir = fx_dir(aim);

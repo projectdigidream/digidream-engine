@@ -53,6 +53,12 @@ inline constexpr u32 TICK_RATE_HZ = 60;
 // 13 MB, which a server with a hundred players cannot pay.
 inline constexpr u32 MAX_AGENTS = 2048;
 
+// WHERE A FIRST-PERSON BODY'S EYE IS, as a fraction of its height: DOOM's own,
+// a 41-unit view height on a 56-unit player. The camera sits there and a
+// first-person shot leaves from there, so the ray goes where the crosshair is
+// rather than a third of a body below it.
+inline constexpr fx EYE_FRACTION = fx::from_frac(41, 56);
+
 // How many 64-bit words a swing's record of the props it has hit takes: one
 // bit per spawnable prop slot (World asserts it covers SPAWNABLE_PROPS).
 inline constexpr u32 ATTACK_HIT_PROP_WORDS = 6;

@@ -179,6 +179,8 @@ async function run (lagComp, latencyMs = LATENCY_MS, sayView = true) {
   }
 
   for (let i = 0; i < 60; i++) { await frame({ weapon: NO_WEAPON, view: 0 }); drain(); await sleep(16) }
+  const EYE_H = Number(c.world.getParamRaw(c.agent, 1)) / 4294967296 * core.eyeFraction
+  const WALKER_H = 56 / 48   // the catalogue's zombieman
   await waitFor(() => c.predictor.synced && c.walkerIndex !== undefined, 8000, 'sync and the walker')
 
   // AIM WHERE IT IS DRAWN: the walker at the newest snapshot this client holds,
@@ -189,13 +191,21 @@ async function run (lagComp, latencyMs = LATENCY_MS, sayView = true) {
     const there = c.walker.get(newest - INTERP_DELAY_TICKS)
     const me = c.predictor.state().pos
     let aim = 0
+    let pitch = 0
     if (there) {
       const a = Math.atan2(Number(there.y - me.y), Number(there.x - me.x))
       aim = Math.round((a / (2 * Math.PI)) * 4294967296) >>> 0
+      // And DOWN to its middle, from the eye a first-person shot leaves from
+      // (the core's EYE_FRACTION): the room's body is taller than a zombie.
+      const fx = (v) => Number(v) / 4294967296
+      const eye = fx(me.z) + EYE_H
+      const mid = fx(there.z) + WALKER_H / 2
+      const run = Math.hypot(fx(there.x - me.x), fx(there.y - me.y))
+      pitch = Math.round(Math.atan2(mid - eye, run) / (2 * Math.PI) * 65536)
     }
     const fire = there !== undefined && i % 30 === 15 && shots < SHOTS
     if (fire) shots++
-    await frame({ buttons: fire ? BUTTON.ATTACK_PRIMARY : 0, aim, weapon: NO_WEAPON,
+    await frame({ buttons: fire ? BUTTON.ATTACK_PRIMARY : 0, aim, pitch, weapon: NO_WEAPON,
                   view: sayView ? viewByte(newest - INTERP_DELAY_TICKS) : 0 })
     drain()
     await sleep(16)

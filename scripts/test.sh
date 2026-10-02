@@ -519,6 +519,9 @@ suite_client () {
   # The self block against the C++ encoder's own bytes, every field distinct,
   # the weapon block included, and the weapon state through the wasm world.
   node client/test/proto_self.test.js | grep -E 'FAIL|failures'
+  # The clock other bodies are drawn at: smooth and never backwards with
+  # snapshots at 30 Hz, and the formula it replaced shown to stutter.
+  node client/test/renderclock.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.

@@ -15,6 +15,7 @@
 //
 import * as THREE from 'three'
 import { Core, WEAPON_ACTION } from './core.js'
+import { RenderClock } from './render/renderclock.js'
 import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
@@ -454,6 +455,10 @@ const pendingSnapshots = []
 // down would hit the temporal dead zone on the first PARAM_UPDATE -- which is
 // to say, on a real server, immediately.
 const paramUpdates = []
+// The time the others are drawn at, in server ticks: smooth, steered by the
+// snapshots rather than stepped by them (render/renderclock.js). Up here with
+// the other things the join's callbacks may reach.
+const renderClock = new RenderClock()
 // The weapon table (WEAPON_DEFS, docs/WEAPON_PREDICTION.md): the newest bytes,
 // and the world they were last handed to -- a level change builds a new world,
 // which has to be handed them again.
@@ -924,6 +929,7 @@ let mySelfHandle = (LIVE && welcome) ? welcome.selfHandle >>> 0 : 0
 // client kept its own copy of was the agent buffer length, and the copy going
 // stale cost a day and looked like a determinism bug.
 const MIRROR_BASE = core.M._dnp_mirror_base()
+const EYE_FRACTION = core.eyeFraction
 
 // Body proportions, for maps built at a scale other than this engine's.
 //
@@ -1841,6 +1847,7 @@ function enterLevel (w, streamed) {
   pendingSnapshots.length = 0
   inputHistory = []
   newestServerTick = w.serverTick
+  renderClock.reset(w.serverTick)
   liveMapBytes = bytes
 
   const here = world.readAgent(agent)
@@ -2114,6 +2121,7 @@ function drainSnapshots () {
     if (s.self?.animationState !== undefined) selfAnimation = s.self.animationState
     if (s.self?.avatar !== undefined) selfAvatar = s.self.avatar
     newestServerTick = Math.max(newestServerTick, s.serverTick)
+    renderClock.heard(s.serverTick)
     // The newest input the SERVER says it has applied, AS IT LAST SAID IT --
     // not the highest it has ever said.
     //
@@ -2157,13 +2165,27 @@ function drainSnapshots () {
     world.applyParamUpdate(agent, m)
     predictor.paramEpoch = m.epoch
   }
+  if (paramUpdates.length) refreshBody()
   paramUpdates.length = 0
   applyWeaponDefs()
 }
 
+// THE BODY'S SIZE, as the server's parameters say it now. Read once on entering
+// a level it was whatever the world was spawned with -- in a region, a store
+// of chunks that carries no body of its own, so the engine's default 2-unit
+// one -- and the first-person eye sat 0.7 units too high until the next level.
+function refreshBody () {
+  const r = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
+  const h = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
+  if (r === bodyRadius && h === bodyHeight) return
+  bodyRadius = r
+  bodyHeight = h
+  shadows.setBody(bodyRadius, bodyHeight)
+}
+
 // One effect, as a snapshot carries it -- the server's, or one our own predicted
 // weapon produced (World::present_weapon), which arrive in identical terms.
-function drawVfx (v) {
+function drawVfx (v, muzzle = null) {
   if (!vfx) { vfxNoView++; return }
   // AN ATTACHED EMITTER READS `param` AS AN ENTITY, not as a length.
   //
@@ -2178,9 +2200,21 @@ function drawVfx (v) {
   }
   const { from, to } = tracerEnds(v, fxToFloat)
   vfx.spawn(v.kind,
-            { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
+            muzzle ?? { x: toThreeX(from.x), y: toThreeY(from.z), z: toThreeZ(from.y) },
             { x: toThreeX(to.x), y: toThreeY(to.z), z: toThreeZ(to.y) },
             performance.now() / 1000)
+}
+
+// WHERE OUR OWN SHOT IS DRAWN FROM in first person: the gun, a little below and
+// right of the eye. The ray itself leaves from the eye (World::hitscan), which
+// is right for where it lands and wrong to look at -- a line from the exact
+// centre of the view along the view is a dot. Drawing only; the end is the
+// core's.
+const MUZZLE = new THREE.Vector3(0.09, -0.11, -0.3)
+function ownMuzzle () {
+  if (!isFps() || camPathSpline) return null
+  const p = MUZZLE.clone().applyMatrix4(cam3.matrixWorld)
+  return { x: p.x, y: p.y, z: p.z }
 }
 
 // Predict our own weapon with the table the server sent, drawing the spread
@@ -2401,7 +2435,7 @@ function frame (now) {
         if (e.action === WEAPON_ACTION.HITSCAN || e.action === WEAPON_ACTION.LAUNCH ||
             e.action === WEAPON_ACTION.DAMAGE_AREA) kick = true
       }
-      for (const v of wf.vfx) drawVfx(v)
+      for (const v of wf.vfx) drawVfx(v, ownMuzzle())
       if (kick) viewModel.fire()
     }
     for (const h of ownSounds.step({
@@ -2526,7 +2560,11 @@ function frame (now) {
   if (animator) animator.update(now / 1000)
 
   if (LIVE) {
-    others.update(newestServerTick, acc / DT)
+    // On the render clock, not `newest snapshot + this client's tick fraction`:
+    // snapshots come every other tick, so that went forward, slid back and
+    // jumped two, and every remote body stuttered at 30 Hz.
+    const drawn = renderClock.advance(dt)
+    others.update(Math.floor(drawn), drawn - Math.floor(drawn))
     // performance.now(), NOT the frame's `now`. They are the same clock but not
     // the same instant: `now` is when the frame began, and the tracers being
     // faded here were spawned later in this same frame, from drainSnapshots.
@@ -2689,7 +2727,8 @@ function frame (now) {
   const wantNear = isFps() && !camPathSpline ? 0.05 : 0.5
   if (cam3.near !== wantNear) { cam3.near = wantNear; cam3.updateProjectionMatrix() }
   if (isFps() && !camPathSpline) {
-    const eyeH = (bodyHeight || 1.17) * 0.88
+    // The core's eye, where a first-person shot leaves from (EYE_FRACTION).
+    const eyeH = (bodyHeight || 1.17) * EYE_FRACTION
     const f = fpsLook.forward()
     // Simulation (x, y, z-up) to three (x, z, -y), as mapgeom.js does.
     eye.x = subject.x; eye.y = subject.y + eyeH; eye.z = subject.z
