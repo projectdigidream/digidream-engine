@@ -643,9 +643,14 @@ export function decodeSnapshot (buf) {
   snap.self.stateFlags = r.u16()
   snap.self.anchor = r.u32()
   snap.self.jumpsUsed = r.u8()
-  snap.self.dashesUsed = r.u8()
+  // IN THE ENCODER'S ORDER (core/src/proto/messages.cpp encode_self): the two
+  // swing counters sit between the jumps and the dashes. This read them as
+  // dashes, swing, cooldown -- so reconciliation adopted the swing countdown
+  // as the dash count and the dash count as the cooldown, which only ever
+  // agreed when all three were zero.
   snap.self.attackLeft = r.u8()
   snap.self.attackCooldownLeft = r.u8()
+  snap.self.dashesUsed = r.u8()
   snap.self.sector = r.i32()
   snap.self.dashTimer = r.fxraw()
   snap.self.dashCooldown = r.fxraw()
