@@ -660,6 +660,8 @@ int l_weapon_step(lua_State* L) {
     static sim::WeaponEventLog log;
     log.clear();
     // The weapon this tick's input asks for: a switch the client predicted.
+    // Its shots' auto-aim judged where this player saw the others.
+    const RewindForShot rewound(context_of(L), static_cast<u32>(a));
     sim::World& world = *context_of(L).world;
     const u32 hops = world.step_weapon(static_cast<u32>(a), c->table,
                                        world.input(static_cast<u32>(a)).weapon, tick, c->seed, log);
@@ -739,6 +741,7 @@ int l_weapon_autoaim(lua_State* L) {
     brad heading{};
     fx slope{};
     bool slope_set = false;
+    const RewindForShot rewound(context_of(L), static_cast<u32>(a));
     if (!context_of(L).world->autoaim(static_cast<u32>(a), range, b <= 0 ? 0u : static_cast<u32>(b),
                                       heading, slope, slope_set)) {
         lua_pushnil(L);

@@ -196,13 +196,30 @@ struct InputFrame {
     // the same tick. Set for the one tick a key went down -- held, it would
     // undo every switch the machine makes by itself when a weapon runs dry.
     u8   weapon  = sim::NO_WEAPON;
+    // THE TICK THIS CLIENT WAS DRAWING the others at when it sampled this frame
+    // (lag compensation, docs/WEAPON_PREDICTION.md): view_byte(tick), and 0 for
+    // none. One byte is enough because the server only ever rewinds a few
+    // ticks; it rebuilds the whole tick from its own clock (view_tick).
+    u8   view    = 0;
 };
+
+// A tick in one byte: its residue mod 255, plus one, so 0 can mean "none" --
+// which a plain low byte could not, since every value of one is a tick.
+constexpr u8 view_byte(u32 tick) noexcept { return static_cast<u8>(tick % 255u + 1u); }
+
+// The most recent tick at or before `now` that `view` names, as an age in
+// ticks (0..254), or -1 for a frame that names none.
+constexpr i32 view_age(u8 view, u32 now) noexcept {
+    if (view == 0) return -1;
+    const u32 r = static_cast<u32>(view) - 1u;
+    return static_cast<i32>((now % 255u + 255u - r) % 255u);
+}
 inline constexpr i16 MAX_PITCH = 14563;   // 80 degrees
 
 constexpr bool operator==(const InputFrame& a, const InputFrame& b) noexcept {
     return a.buttons == b.buttons && a.move_x == b.move_x &&
            a.move_y == b.move_y && a.aim == b.aim && a.pitch == b.pitch &&
-           a.weapon == b.weapon;
+           a.weapon == b.weapon && a.view == b.view;
 }
 
 struct InputBundle {

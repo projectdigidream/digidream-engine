@@ -48,7 +48,7 @@ import { mountTouch } from './render/touchui.js'
 import { parseAnimations, TextureAnimator } from './render/animtex.js'
 // The ONE button table. main.js used to keep its own, where CROUCH was 1<<6 --
 // which is proto's INTERACT bit, so pressing C sent "use".
-import { BUTTON, NO_WEAPON } from './proto.js'
+import { BUTTON, NO_WEAPON, viewByte } from './proto.js'
 import { MapAccumulator } from './maploader.js'
 import { Neighbourhood } from './seam/neighbourhood.js'
 import { buildCell } from './seam/buildcell.js'
@@ -1987,7 +1987,7 @@ function fpsInput () {
   if (touch) buttons |= touch.state.buttons(TOUCH_BITS)
   lastAim = fpsLook.aimBrad()
   lastSampled = { buttons, moveX: axis(push.x), moveY: axis(push.y), aim: lastAim, pitch: fpsLook.pitchWire(),
-                  weapon: takeWeaponWanted() }
+                  weapon: takeWeaponWanted(), view: drawnTick() }
   return lastSampled
 }
 
@@ -2041,7 +2041,7 @@ function currentInput () {
   // Held across a stop, so letting go of the keys leaves the agent facing where
   // it was walking rather than snapping east. See aimFor.
   lastAim = aimFor(wx, wy, lastAim)
-  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim, weapon: takeWeaponWanted() }
+  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim, weapon: takeWeaponWanted(), view: drawnTick() }
   return lastSampled
 }
 
@@ -2191,6 +2191,14 @@ function applyWeaponDefs () {
     report('[weapons] this build cannot read the server\'s weapon table; not predicting them', 'error')
   }
   weaponDefsWorld = world
+}
+
+// The tick the others are on screen at, for the server to judge a shot against
+// (lag compensation): what the last frame drew, to the nearest tick. 0 before
+// anything has been drawn.
+function drawnTick () {
+  const t = others?.renderTick
+  return (LIVE && t !== undefined && t > 0) ? viewByte(Math.round(t)) : 0
 }
 
 // The weapon wanted this tick, by number key, then forgotten: it is a key

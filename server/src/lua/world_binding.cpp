@@ -1425,6 +1425,8 @@ int l_dnp_hitscan(lua_State* L) {
 
     // The shot itself is the core's (World::hitscan), so a predicting client
     // asks its own world the identical question and draws the same tracer.
+    // Judged where this shooter SAW the others (lag compensation).
+    const RewindForShot rewound(ctx, static_cast<u32>(a));
     const sim::World::ShotHit hit = ctx.world->hitscan(static_cast<u32>(a), aim, slope, range);
     if (hit.entity < 0) lua_pushnil(L);
     else if (sim::World::is_prop(static_cast<u32>(hit.entity))) push_prop(L, ctx, static_cast<u32>(hit.entity));

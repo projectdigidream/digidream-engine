@@ -205,6 +205,8 @@ export class EntityView {
    */
   update (newestTick, alpha = 0) {
     const renderTick = newestTick + alpha - INTERP_DELAY_TICKS
+    // Kept: the tick a shot aimed now is aimed at (an input frame's `view`).
+    this.renderTick = renderTick
     for (const ent of this.entities.values()) {
       const s = ent.samples
       if (s.length === 0) continue

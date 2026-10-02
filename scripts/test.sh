@@ -728,6 +728,9 @@ suite_stack () {
      `# Your own weapon predicted: DOOM II's, firing and switching, zero` \
      `# mispredictions -- and a client without the table must mispredict.` \
      && node test/weapons.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Lag compensation: a shot is judged where its shooter saw the target,` \
+     `# capped; and with it off, the same shots miss.` \
+     && node test/lagcomp.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/enemies.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# WHICH entities a full snapshot spends its budget on. A datagram holds` \
      `# about 46 and a real level has more, so the choice is the whole question,` \

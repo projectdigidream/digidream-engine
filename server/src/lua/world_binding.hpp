@@ -28,6 +28,7 @@
 #include "dnp/nav/navgraph.hpp"
 #include "lua/commands.hpp"
 #include "lua/effects.hpp"
+#include "world/poses.hpp"
 
 struct lua_State;
 
@@ -193,6 +194,12 @@ struct CrossSink {
 
 struct WorldContext {
     sim::World*       world = nullptr;
+
+    // LAG COMPENSATION (world/poses.hpp): the world's recent poses, and per
+    // agent the tick its player saw the others at (0: judge as now). Null on
+    // a host that keeps none, which is every test harness.
+    const PoseHistory* poses = nullptr;
+    const u32*         rewind_tick = nullptr;
     geom::MapStorage* map_store = nullptr;
 
     // The level's sector graph, for dnp.find_path. Borrowed, not owned: the
@@ -400,6 +407,31 @@ void push_entity(lua_State* L, WorldContext& ctx, u32 index);
 // a stale handle, the one rule every verb here follows.
 WorldContext& context_of(lua_State* L);
 i32 entity_agent(lua_State* L, int idx);
+
+// For the span of one player's shot: the others where that player saw them
+// (PoseHistory), for the core's hitscan and autoaim. A no-op for a shooter with
+// no rewind tick -- a monster, or a host with lag compensation off.
+class RewindForShot {
+public:
+    RewindForShot(WorldContext& ctx, u32 shooter) : world_(ctx.world) {
+        if (ctx.poses == nullptr || ctx.rewind_tick == nullptr || shooter >= sim::MAX_AGENTS) return;
+        // A PLAYER's shot only: a slot a player left may hold a monster now,
+        // and its tick would be the last player's.
+        if (ctx.player == nullptr || ctx.player[shooter] == 0) return;
+        const u32 t = ctx.rewind_tick[shooter];
+        if (t == 0) return;
+        const PoseHistory::Slot* s = ctx.poses->at(t);
+        if (s == nullptr) return;
+        world_->set_query_poses(s->pos.data(), s->live.data(), static_cast<u32>(s->pos.size()));
+        set_ = true;
+    }
+    ~RewindForShot() { if (set_) world_->set_query_poses(nullptr, nullptr, 0); }
+    RewindForShot(const RewindForShot&) = delete;
+    RewindForShot& operator=(const RewindForShot&) = delete;
+private:
+    sim::World* world_;
+    bool set_ = false;
+};
 
 // The weapon machine's bindings (weapon_binding.cpp), onto the `dnp` table at
 // the top of the stack.

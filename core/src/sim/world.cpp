@@ -166,8 +166,9 @@ World::ShotHit World::hitscan(u32 i, brad aim, fx slope, fx range) const noexcep
     };
     for (u32 j = 0; j < agent_high_water_; ++j) {
         if (j == i || !agents_[j].active) continue;
-        const AgentState& e = agents_[j];
-        consider(fx2{e.pos.x, e.pos.y}, params_[j].radius, e.pos.z, e.pos.z + params_[j].height,
+        fx3 q{};
+        if (!query_body(j, q)) continue;
+        consider(fx2{q.x, q.y}, params_[j].radius, q.z, q.z + params_[j].height,
                  static_cast<i32>(j));
     }
     for (u32 k = 0; k < prop_high_water_; ++k) {
@@ -226,7 +227,9 @@ bool World::autoaim(u32 i, fx range, u32 cone, brad& heading, fx& slope, bool& s
     };
     for (u32 j = 0; j < agent_high_water_; ++j) {
         if (j == i || !agents_[j].active || !agents_[j].solid) continue;
-        consider(agents_[j].pos, params_[j].height);
+        fx3 q{};
+        if (!query_body(j, q)) continue;
+        consider(q, params_[j].height);
     }
     // A client's mirrored bodies: the band spawn_prop never allocates in.
     for (u32 k = SPAWNABLE_PROPS; k < prop_high_water_; ++k) {

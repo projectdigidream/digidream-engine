@@ -564,6 +564,18 @@ public:
     // same question of what each can see. False when nothing qualifies.
     bool autoaim(u32 i, fx range, u32 cone, brad& heading, fx& slope, bool& slope_set) const noexcept;
 
+    // LAG COMPENSATION (docs/WEAPON_PREDICTION.md, phase E): where the agents
+    // were when a shooter saw them. While set, hitscan and autoaim test agent
+    // j < count at pos[j] (skipping it if !live[j], a body that was not there
+    // then) instead of where it is now. Nothing else reads these: the world is
+    // never rewound, only these two questions. The caller's arrays; clear with
+    // nulls when the shot is done.
+    void set_query_poses(const fx3* pos, const u8* live, u32 count) noexcept {
+        query_pos_ = pos;
+        query_live_ = live;
+        query_count_ = count;
+    }
+
     // FOR A PREDICTING CLIENT: run agent `agent`'s weapon inside step(), with
     // this table, at the point the server runs it, drawing from the stream of
     // the server's agent `stream`. Null (the default, and the server's) runs
@@ -777,6 +789,20 @@ private:
     physics::MoveParams  params_[MAX_AGENTS]{};
     proto::InputFrame    inputs_[MAX_AGENTS]{};
     WeaponState          weapons_[MAX_AGENTS]{};
+    const fx3*           query_pos_ = nullptr;
+    const u8*            query_live_ = nullptr;
+    u32                  query_count_ = 0;
+    // Where a shot or an auto-aim finds agent j: rewound when a shooter's
+    // poses are set, else where it is. False when it was not there then.
+    bool query_body(u32 j, fx3& pos) const noexcept {
+        if (query_pos_ != nullptr && j < query_count_) {
+            if (!query_live_[j]) return false;
+            pos = query_pos_[j];
+            return true;
+        }
+        pos = agents_[j].pos;
+        return true;
+    }
     const WeaponTable*   weapon_table_ = nullptr;
     u64                  weapon_seed_ = 0;
     u32                  weapon_agent_ = MAX_AGENTS;

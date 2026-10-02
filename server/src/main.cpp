@@ -126,6 +126,11 @@ struct Host {
     // globally would excuse every client's mismatch on every scripted tick.
     u32  lua_touched_tick[sim::MAX_AGENTS]{};
 
+    // LAG COMPENSATION (world/poses.hpp): every body's recent positions, and
+    // per agent the tick its player saw the others at, set as its input is.
+    PoseHistory poses;
+    u32  rewind_tick[sim::MAX_AGENTS]{};
+
     u32  crush_reported_tick[sim::MAX_AGENTS]{};
     bool crush_seen[sim::MAX_AGENTS]{};
     u8   param_epoch[sim::MAX_AGENTS]{};
@@ -826,6 +831,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
 
     void bind_game_to(Host& H, u32 li, lua::CommandQueue* commands) {
         game_ctx.world     = &H.world;
+        game_ctx.poses     = &H.poses;
+        game_ctx.rewind_tick = H.rewind_tick;
         game_ctx.map_store = H.store;
         game_ctx.nav       = &H.nav_graph;
         game_ctx.hp        = H.hp;
@@ -2029,6 +2036,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             return false;
         }
         L.ctx.world       = &L.world;
+        L.ctx.poses       = &L.host->poses;
+        L.ctx.rewind_tick = L.host->rewind_tick;
         L.ctx.commands    = &L.commands;
         L.ctx.effects     = &L.effects;
         // The WORLD'S store: live heights, motions, joins. A region level's
@@ -2674,7 +2683,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     void tick_level(u32 li) {
         Level& L = level(li);
         for (auto& [id, s] : sessions) {
-            if (s.has_agent && s.level == li) L.world.set_input(s.agent, s.take());
+            if (s.has_agent && s.level == li) {
+                L.world.set_input(s.agent, s.take());
+                L.host->rewind_tick[s.agent] = rewind_for(L.world.input(s.agent), L.world.tick());
+            }
         }
         // Lua runs OUTSIDE world.step(), always. The client predicts by running
         // the same step; anything Lua did has to reach it as replicated state,
@@ -2703,6 +2715,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
 
         const u64 t_step0 = perf.every ? now_us() : 0;
         L.world.step();
+        L.host->poses.record(L.world);
         if (perf.every) {
             perf.step_us += now_us() - t_step0;
             perf.bp_full += L.world.broadphase_full();
@@ -3049,6 +3062,20 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
         link.send_control(s.id, bytes.data(), bytes.size());
         s.weapon_defs_sent = seed;
+    }
+
+    // THE TICK A PLAYER SAW THE OTHERS AT (lag compensation, world/poses.hpp):
+    // the one its frame says it was drawing (InputFrame::view), never more
+    // than the cap in the past. 0 is "judge as now": compensation off, or a
+    // frame that names no tick. The client says it rather than the server
+    // inferring it, so how far behind a client draws is the client's business.
+    u32 lag_comp_ticks = MAX_REWIND_TICKS;
+    u32 rewind_for(const proto::InputFrame& f, u32 now) const {
+        if (lag_comp_ticks == 0) return 0;
+        const i32 age = proto::view_age(f.view, now);
+        if (age <= 0) return 0;
+        const u32 back = static_cast<u32>(age) > lag_comp_ticks ? lag_comp_ticks : static_cast<u32>(age);
+        return now - back;
     }
 
     void send_screen(Session& s, const proto::ScreenSet& sc) {
@@ -3426,7 +3453,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
 
         for (auto& [id, s] : sessions) {
-            if (s.has_agent && in_region(s.level)) H.world.set_input(s.agent, s.take());
+            if (s.has_agent && in_region(s.level)) {
+                H.world.set_input(s.agent, s.take());
+                H.rewind_tick[s.agent] = rewind_for(H.world.input(s.agent), H.world.tick());
+            }
         }
         // The game's scripts, once for everybody in the region, bound to a
         // level somebody is in -- its queue is flushed in the loop below.
@@ -3457,6 +3487,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
         const u64 t_step0 = perf.every ? now_us() : 0;
         H.world.step();
+        H.poses.record(H.world);
         if (perf.every) {
             perf.step_us += now_us() - t_step0;
             perf.bp_full += H.world.broadphase_full();
@@ -4031,6 +4062,7 @@ int main(int argc, char** argv) {
     const char* props_path = nullptr;      // --props wins over any module
     std::vector<std::string> game_script_args;
     const char* controls_arg = nullptr;
+    const char* lag_comp_arg = nullptr;
     constexpr u32 MAX_MODULES = 16;
     const char* module_dirs[MAX_MODULES]{};
     u32 module_count = 0;
@@ -4060,6 +4092,9 @@ int main(int argc, char** argv) {
             // trust) or a copy of the library inlined into all 32 of them.
             if (script_count < MAX_SCRIPTS) script_args[script_count++] = argv[++i];
             else { std::fprintf(stderr, "[srv] too many --script arguments\n"); return 2; }
+        } else if (std::strcmp(argv[i], "--lag-comp") == 0 && i + 1 < argc) {
+            // How far back a player's shot may be judged, in ticks; 0 is off.
+            lag_comp_arg = argv[++i];
         } else if (std::strcmp(argv[i], "--controls") == 0 && i + 1 < argc) {
             // The control scheme, overriding the modules': fps or platformer.
             controls_arg = argv[++i];
@@ -4218,6 +4253,11 @@ int main(int argc, char** argv) {
     if (state_dir_arg) srv.state_dir = state_dir_arg;
     for (const auto& g : game_script_args) srv.game_scripts.push_back(g);
     if (controls_arg) srv.controls = std::strcmp(controls_arg, "fps") == 0 ? 1 : 0;
+    if (lag_comp_arg) {
+        const long n = std::strtol(lag_comp_arg, nullptr, 10);
+        srv.lag_comp_ticks = n <= 0 ? 0u : static_cast<u32>(n > static_cast<long>(PoseHistory::DEPTH) - 1
+                                                              ? PoseHistory::DEPTH - 1 : n);
+    }
     std::fprintf(stderr, "[srv] controls: %s\n", srv.controls == 1 ? "fps" : "platformer");
     std::fprintf(stderr, "[srv] persistence: levels %s, saves %s, server %s%s%s\n",
                  srv.persist_levels ? "on" : "off", srv.persist_saves ? "on" : "off",

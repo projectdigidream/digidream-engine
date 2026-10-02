@@ -137,6 +137,12 @@ export const STATE_FLAG = {
 // No weapon asked for, in an input frame's `weapon` (sim::NO_WEAPON).
 export const NO_WEAPON = 255
 
+// The tick this client is drawing the others at, in an input frame's one
+// `view` byte (lag compensation, docs/WEAPON_PREDICTION.md): its residue mod
+// 255 plus one, so 0 can mean "none". messages.hpp view_byte, which the server
+// undoes against its own clock.
+export const viewByte = (tick) => (tick >>> 0) % 255 + 1
+
 export const PROTOCOL_VERSION = 0
 export const TICK_RATE_HZ = 60
 
@@ -622,7 +628,7 @@ export function encodeUiEvent (uiId, widgetId, value) {
 
 export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) {
   const n = Math.min(frames.length, 16)
-  const w = new Writer(16 + n * 13)
+  const w = new Writer(16 + n * 14)
   w.u8(MSG.INPUT_BUNDLE).u32(clientTick).u32(ackSnapshotTick).u8(n)
   for (let i = 0; i < n; i++) {
     const f = frames[i]
@@ -634,6 +640,8 @@ export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) 
     w.i16(f.pitch ?? 0)
     // The weapon wanted this tick, NO_WEAPON for none (docs/WEAPON_PREDICTION.md).
     w.u8(f.weapon ?? NO_WEAPON)
+    // The tick it was drawing the others at, 0 for none.
+    w.u8(f.view ?? 0)
   }
   return w.done()
 }

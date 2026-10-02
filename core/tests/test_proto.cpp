@@ -7,6 +7,7 @@
 // hostile input, and check that the budget-filling encoder rolls back cleanly.
 //
 #include <cstdio>
+#include <initializer_list>
 #include <cstring>
 
 #include "dnp/math/rng.hpp"
@@ -147,6 +148,21 @@ static void test_quantisation() {
 
 // ---------------------------------------------------------------- input bundle
 
+static void test_view_tick() {
+    std::printf("input: the drawn tick in one byte comes back as its age\n");
+    // Every age the rewind could want, at clocks either side of a wrap.
+    for (u32 now : {0u, 1u, 254u, 255u, 256u, 509u, 510u, 100000u, 4294967295u}) {
+        for (u32 age = 0; age < 200 && age <= now; ++age) {
+            CHECK(view_age(view_byte(now - age), now) == static_cast<i32>(age));
+        }
+    }
+    // CONTROL: 0 is "none", and no tick encodes to it.
+    CHECK(view_age(0, 1234) == -1);
+    bool zero = false;
+    for (u32 t = 0; t < 1000; ++t) zero = zero || view_byte(t) == 0;
+    CHECK(!zero);
+}
+
 static void test_input_bundle() {
     std::printf("input: round trip, size, reserved bits, truncation\n");
     Rng rng(77);
@@ -167,15 +183,16 @@ static void test_input_bundle() {
             in.frames[i].pitch  = static_cast<i16>(rng.next_u32());
             // The weapon asked for, every byte value, NO_WEAPON included.
             in.frames[i].weapon = static_cast<u8>(rng.next_u32());
+            in.frames[i].view   = static_cast<u8>(rng.next_u32());
         }
 
         u8 buf[512];
         ByteWriter w(buf, sizeof(buf));
         encode_input_bundle(w, in);
         CHECK(w.ok());
-        // Thirteen bytes a frame: buttons, two axes, the aim, the pitch, the
-        // weapon wanted.
-        CHECK(w.size() == 1u + 4 + 4 + 1 + 13u * in.frame_count);
+        // Fourteen bytes a frame: buttons, two axes, the aim, the pitch, the
+        // weapon wanted, the tick being drawn.
+        CHECK(w.size() == 1u + 4 + 4 + 1 + 14u * in.frame_count);
 
         InputBundle out;
         ByteReader r(buf, w.size());
@@ -1133,6 +1150,7 @@ int main() {
     test_bytes();
     test_varint();
     test_quantisation();
+    test_view_tick();
     test_input_bundle();
     test_snapshot_roundtrip();
     test_snapshot_sounds();
