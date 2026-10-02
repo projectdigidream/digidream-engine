@@ -852,7 +852,15 @@ int main(int argc, char** argv) {
              "local pp = p:pos()\n"
              "target = mobs.spawn('zombieman',\n"
              "  vec3.new(pp.x + fx.frac(40,48), pp.y, pp.z))\n"
-             "hp_before_rocket = target_hp()\n", "arming the rocket launcher")) return 1;
+             "hp_before_rocket = target_hp()\n"
+             "-- Every effect the shot sends, by kind: the blast is 11 and its\n"
+             "-- smoke 13 (modules/doom2/maps/doom_monsters.lua, rocket.on_hit).\n"
+             "rocket_vfx = {}\n"
+             "local prior_vfx = dnp.vfx\n"
+             "dnp.vfx = function(style, pos, angle, len)\n"
+             "  rocket_vfx[style] = (rocket_vfx[style] or 0) + 1\n"
+             "  return prior_vfx(style, pos, angle, len)\n"
+             "end\n", "arming the rocket launcher")) return 1;
     CHECK(num("hp_before_rocket") > 0);
     server_tick(0);
     server_tick(0);
@@ -860,7 +868,11 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 40; ++i) server_tick(0);
     if (!run("local inv = weapons.get(dnp.players()[1]:index())\n"
              "rockets_after = inv.ammo.rockets\n"
-             "hp_after_rocket = target_hp()\n", "reading the result")) return 1;
+             "hp_after_rocket = target_hp()\n"
+             "blast_vfx = rocket_vfx[11] or 0\n"
+             "smoke_vfx = rocket_vfx[13] or 0\n", "reading the result")) return 1;
+    std::printf("  the rocket's impact sent %d blast and %d smoke effects\n",
+                (int)num("blast_vfx"), (int)num("smoke_vfx"));
     std::printf("  rocket launcher: %d -> %d rockets; the target went %d -> %d\n",
                 (int)num("rockets_before"), (int)num("rockets_after"),
                 (int)num("hp_before_rocket"), (int)num("hp_after_rocket"));
@@ -870,6 +882,8 @@ int main(int argc, char** argv) {
     // one that detonated correctly both reduce this -- which is why the recoil
     // test above asserts the launcher's own impulse separately.
     CHECK(num("hp_after_rocket") < num("hp_before_rocket"));
+    // AND IT WAS SEEN TO: the explosion draws itself at the impact.
+    CHECK(num("blast_vfx") == 1 && num("smoke_vfx") == 1);
 
     // ================================================================
     // THE THREE THINGS THE FLAT TABLE COULD NOT EXPRESS.

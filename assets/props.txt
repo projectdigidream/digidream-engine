@@ -146,15 +146,19 @@ vfx 10 particles count 12 life 0.5 life_var 0.25 speed 5 speed_var 3 cone 0.2 gr
 
 # A rocket going off. Big, and deliberately so: the blast it draws is 128 map
 # units across and a modest puff under it reads as a firecracker that happens to
-# kill things. Two kinds go off together -- this and the smoke below.
-vfx 11 particles count 90 life 1.1 life_var 0.5 speed 22 speed_var 12 cone 0.5 gravity 14 drag 1.1 size 0.28 size_end 0.03 colour ffeeaa colour_end 882200
+# kill things. Two kinds go off together -- this and the smoke below. Thrown
+# back out of what it hit (mobs.lua, an impact's heading is reversed): a cone of
+# 0.25 is exactly the half facing out of the wall, so none of it starts behind it.
+# A BALL, not a spray: it was 22 units a second and shrinking to specks, which
+# at any distance read as a few sparks and point-blank flew past the camera.
+vfx 11 particles count 80 life 0.7 life_var 0.3 speed 5 speed_var 3 cone 0.25 gravity -2 drag 3.5 size 0.7 size_end 0.2 colour ffe6a0 colour_end 701800
 
 # Muzzle sparkles: tight, quick, and thrown forward along the shot.
 vfx 12 particles count 7 life 0.16 life_var 0.08 speed 11 speed_var 6 cone 0.08 gravity 6 drag 3 size 0.05 size_end 0.01 colour ffffdd colour_end 996600
 
 # Smoke, and the one that is NOT additive: fading to black would be soot rather
 # than absence, so the whole burst fades on the material instead.
-vfx 13 particles count 14 life 1.8 life_var 0.7 speed 3 speed_var 2 cone 0.5 gravity -1 drag 2 size 0.3 size_end 0.9 colour 666666 colour_end 222222 blend alpha
+vfx 13 particles count 22 life 1.8 life_var 0.7 speed 1.6 speed_var 1 cone 0.25 gravity -1.2 drag 2 size 0.6 size_end 1.6 colour 5a5550 colour_end 2a2826 blend alpha
 
 # GREEN BLOOD. Doom gives some of its bestiary a colour of its own, and an imp
 # is the one this module names. Same shape as 10 -- only the colour differs,

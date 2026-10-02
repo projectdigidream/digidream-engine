@@ -1961,7 +1961,13 @@ function acts.vfx(m, a)
   -- specks all start at one point reads as a firecracker however many there
   -- are. Carried in the event's `param`, in 1/256 units, which is the same slot
   -- a tracer uses for its length.
-  dnp.vfx(a.kind, p, m.aim or 0,
+  -- AN IMPACT IS THROWN BACK OUT, the way the missile came. The heading it
+  -- flew is into whatever it hit, and a blast cast along it went into the
+  -- wall: half its fireball and most of its smoke drawn on the far side,
+  -- where nobody standing on this side could see them.
+  local ang = m.aim or 0
+  if at == "impact" and m.impact ~= nil then ang = wrap_brad(ang + 2147483648) end
+  dnp.vfx(a.kind, p, ang,
           a.radius and math.floor((a.radius * fx.int(256)).int) or 0)
 end
 

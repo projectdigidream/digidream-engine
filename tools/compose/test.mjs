@@ -236,13 +236,13 @@ for (const [map, lua] of [['map01', 'map01.lua'], ['map12', 'map12.lua']]) {
 }
 
 // A BARE-NAMED SCRIPT THAT DESCRIBES NO MAP IS COPIED, NOT REWRITTEN, and it
-// has to be: editor_mobs.lua is the same file for all thirty-two levels and
+// has to be: weapons_doom2.lua is the same file for all thirty-two levels and
 // they all land in one directory, so a per-map rewrite would leave whichever
 // map was written last. (A declaration with a directory in it is not compose's
 // business at all -- mapc flattens it and copies the source beside the .dnpm.)
-check(existsSync(join(out, 'editor_mobs.lua')) &&
-      readFileSync(join(out, 'editor_mobs.lua'), 'utf8') ===
-      readFileSync(join(SRC, 'editor_mobs.lua'), 'utf8'),
+check(existsSync(join(out, 'weapons_doom2.lua')) &&
+      readFileSync(join(out, 'weapons_doom2.lua'), 'utf8') ===
+      readFileSync(join(SRC, 'weapons_doom2.lua'), 'utf8'),
       'a shared script is copied byte for byte')
 
 console.log(`compose: ${pass} passed, ${fail} failed`)

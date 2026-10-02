@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { softDisc } from '../src/render/vfx.js'
 import { parseVfx, tracerEnds, fade, VfxView, emitBurst, stepParticles,
          rampColour } from '../src/render/vfx.js'
 
@@ -400,6 +401,30 @@ console.log('\n--- an attached emitter follows the body it came from ---')
   check(v3.emitterCount === 1, 'fifty triggers on one body are one emitter')
   v3.attach(20, 8, 0, 1)
   check(v3.emitterCount === 2, 'CONTROL: a different body gets its own')
+}
+
+// --- the soft sprite, and a blast thrown out of the wall --------------------------
+{
+  const n = 32
+  const px = softDisc(n)
+  const alphaAt = (x, y) => px[(y * n + x) * 4 + 3]
+  check(alphaAt(16, 16) > 240 && alphaAt(0, 0) === 0 && alphaAt(0, 16) < 20,
+        `a particle is a soft disc: opaque in the middle, nothing at the corners (${alphaAt(16, 16)}, ${alphaAt(0, 0)})`)
+  let mono = true
+  for (let x = 16; x < n - 1; x++) if (alphaAt(x + 1, 16) > alphaAt(x, 16)) mono = false
+  check(mono, 'and it only fades outward')
+  // The rocket's blast, with the cone the catalogue gives it, thrown back the
+  // way the rocket came (mobs.lua reverses an impact's heading): heading west
+  // into a wall at x = 0 means a burst heading east, and nothing goes behind.
+  const cat = parseVfx(readFileSync(join(HERE, '..', '..', 'assets', 'props.txt'), 'utf8'))
+  const blast = cat.kinds.get(11)
+  const parts = emitBurst(blast, { x: 0, y: 1, z: 0 }, 0, 2)   // heading 0 turns: +x
+  const behind = parts.filter((p) => p.x < -1e-9 || p.vx < -1e-9).length
+  check(parts.length === blast.count && behind === 0,
+        `the rocket's blast starts and flies on the open side only (${behind} of ${parts.length} behind)`)
+  const sphere = emitBurst({ ...blast, cone: 0.5 }, { x: 0, y: 1, z: 0 }, 0, 2)
+  check(sphere.filter((p) => p.vx < 0).length > sphere.length / 4,
+        'CONTROL: with the old full-sphere cone, a good part went into the wall')
 }
 
 console.log(`\nvfx: ${checks} checks, ${fails} failures`)

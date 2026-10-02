@@ -299,9 +299,39 @@ export function rampColour (from, to, t) {
  * firefight is a few dozen tracers a second, and building a geometry for each
  * would make the garbage collector part of the frame budget.
  */
+/**
+ * A SOFT ROUND SPRITE, the alpha every particle is drawn through: 1 in the
+ * middle, falling smoothly to 0 at the rim. Without it a point is a hard
+ * square, invisible on a blood speck and a grey tile on a puff of smoke.
+ * Pure: the RGBA bytes, `n` pixels square.
+ */
+export function softDisc (n = 32) {
+  const px = new Uint8Array(n * n * 4)
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      const dx = (x + 0.5) / n * 2 - 1
+      const dy = (y + 0.5) / n * 2 - 1
+      const r = Math.min(1, Math.hypot(dx, dy))
+      const a = (1 - r * r) * (1 - r * r)        // smooth to the rim
+      const k = (y * n + x) * 4
+      px[k] = 255; px[k + 1] = 255; px[k + 2] = 255; px[k + 3] = Math.round(255 * a)
+    }
+  }
+  return px
+}
+
 export class VfxView {
   constructor ({ THREE, scene, catalogue, poolSize = 48 }) {
     this.THREE = THREE
+    // One texture for every particle material, made once. Optional: a stub
+    // THREE without textures (a test) draws square points, as before.
+    this.disc = null
+    if (THREE.DataTexture) {
+      this.disc = new THREE.DataTexture(softDisc(32), 32, 32, THREE.RGBAFormat)
+      this.disc.magFilter = THREE.LinearFilter
+      this.disc.minFilter = THREE.LinearFilter
+      this.disc.needsUpdate = true
+    }
     this.scene = scene
     this.kinds = catalogue?.kinds ?? new Map()
     this.live = []          // { mesh, born, life }
@@ -407,6 +437,7 @@ export class VfxView {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(parts.length * 3), 3))
     const mat = new THREE.PointsMaterial({
       size: def.size ?? 0.1,
+      ...(this.disc ? { map: this.disc } : {}),
       vertexColors: true,
       transparent: true,
       depthWrite: false,
@@ -452,6 +483,7 @@ export class VfxView {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(cap * 3), 3))
     const mat = new THREE.PointsMaterial({
       size: def.size ?? 0.1,
+      ...(this.disc ? { map: this.disc } : {}),
       vertexColors: true,
       transparent: true,
       depthWrite: false,
