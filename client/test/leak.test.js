@@ -104,9 +104,16 @@ if (ws) {
     if (m.method === 'Runtime.consoleAPICalled') consoleLines.push(m.params.args.map((a) => a.value ?? '').join(' '))
   }
 }
-const send = (method, params = {}) => new Promise((resolve) => {
+// NEVER UNBOUNDED. A DevTools call Chrome never answers -- a wedged renderer,
+// a page that never came up -- used to hold the whole suite for over an hour
+// with nothing on screen. Thirty seconds is far beyond any real call here.
+const send = (method, params = {}) => new Promise((resolve, reject) => {
   const id = ++seq
-  pending.set(id, resolve)
+  const timer = setTimeout(() => {
+    pending.delete(id)
+    reject(new Error(`DevTools did not answer ${method} in 30 s`))
+  }, 30000)
+  pending.set(id, (m) => { clearTimeout(timer); resolve(m) })
   ws.send(JSON.stringify({ id, method, params }))
 })
 const evaluate = async (expression) => {
