@@ -11,6 +11,9 @@ set -euo pipefail
 
 ARCH="${1:-arm64}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 OUT="$ROOT/build/$ARCH"
 mkdir -p "$OUT"
 

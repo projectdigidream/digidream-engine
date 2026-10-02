@@ -25,7 +25,10 @@ if ! command -v em++ >/dev/null 2>&1; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/studio/wasm/dist"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
+OUT="$REPO/studio/wasm/dist"
 mkdir -p "$OUT"
 
 # `read` in a loop rather than `mapfile`: macOS ships bash 3.2.

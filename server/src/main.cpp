@@ -4108,8 +4108,13 @@ int main(int argc, char** argv) {
             if (f) std::fclose(f);
             return f != nullptr;
         };
+        // From the engine (engine/, where every script and stack runs) the
+        // modules are beside it, one up; a packaged app or phone keeps its
+        // own modules/ right here, so that is tried first.
         if (!is_module(given) && is_module("modules/" + given)) {
             given = "modules/" + given;
+        } else if (!is_module(given) && is_module("../modules/" + given)) {
+            given = "../modules/" + given;
         }
         module_resolved.push_back(given);
     }

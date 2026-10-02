@@ -1395,7 +1395,7 @@ static void test_the_document_and_the_vocabulary_agree() {
     // document is what an author reads and the table is what the runtime and
     // the editor obey; a name in one and not the other is a feature that either
     // does not exist or cannot be found.
-    const std::string path = g_root + "/docs/TRIGGERS.md";
+    const std::string path = g_root + "/../docs/TRIGGERS.md";
     std::FILE* fp = std::fopen(path.c_str(), "rb");
     if (fp == nullptr) {
         std::printf("  FAIL cannot open %s\n", path.c_str());

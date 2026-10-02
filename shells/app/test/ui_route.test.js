@@ -14,7 +14,10 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startStatic } from '../static.js'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 let checks = 0
 let fails = 0
 const check = (ok, label) => {

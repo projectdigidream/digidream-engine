@@ -9,6 +9,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 # WHERE THE BINARY GOES.
 #
 # `build/server` by default, which is what scripts/run_stack.sh runs. The test

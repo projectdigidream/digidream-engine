@@ -25,7 +25,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="$ROOT/vscode-extension"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
+SRC="$REPO/vscode-extension"
 STAGE="$ROOT/build/vsix/src"
 
 VERSION="$(node -p "require('$SRC/package.json').version")"
@@ -36,7 +39,7 @@ mkdir -p "$STAGE" "$(dirname "$OUT")"
 
 # Exactly the files the extension is made of, plus the one it borrows.
 cp "$SRC/package.json" "$SRC/extension.cjs" "$SRC/host.js" "$SRC/README.md" "$STAGE/"
-cp "$ROOT/tools/engineroot.js" "$STAGE/engineroot.js"
+cp "$REPO/editor/engineroot.js" "$STAGE/engineroot.js"
 # No LICENSE file: the repository has none and the manifest says UNLICENSED,
 # which is what a private package is. --skip-license below stops vsce asking.
 

@@ -173,7 +173,7 @@ int main() {
         "maps/scripts/mob_vocab.lua",
         "maps/scripts/mobs.lua",
         "maps/mobs/doom_monsters.lua",
-        "modules/shootrange/scripts/range.lua",
+        "../modules/shootrange/scripts/range.lua",
     };
     std::printf("  [6] scripts\n");
     for (const char* s : scripts) {

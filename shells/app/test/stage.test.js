@@ -23,7 +23,10 @@ import { readdirSync, statSync } from 'node:fs'
 import { dirname, join, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 const OUT = join(ROOT, 'build', 'app-test')
 
 let checks = 0
@@ -95,7 +98,7 @@ check(doomMaps.some((f) => extname(f) === '.lua'),
 // SOUND (docs/SOUNDS.md): the engine, where the client's worklet imports it,
 // and the module's bank, which travels with the module. Only when the engine
 // has been built -- staging says so out loud when it has not.
-if (existsSync(join(ROOT, 'sound', 'tool', 'dist', 'dsound.mjs'))) {
+if (existsSync(join(REPO, 'sound', 'tool', 'dist', 'dsound.mjs'))) {
   check(existsSync(join(doom, 'sfx', 'dsound.mjs')), 'the sound engine is staged at sfx/')
 } else {
   console.log('  (sound/tool/dist/dsound.mjs not built; the sound engine check is skipped)')
@@ -149,7 +152,7 @@ check(/^vfx\s/m.test(engineCat),
 // staged again with the studio.
 console.log('\n--- the studio ---')
 check(!existsSync(join(range, 'studio')), 'CONTROL: without --studio the app has no studio in it')
-if (!existsSync(join(ROOT, 'studio', 'wasm', 'dist', 'mapc.mjs'))) {
+if (!existsSync(join(REPO, 'studio', 'wasm', 'dist', 'mapc.mjs'))) {
   console.log('  (studio wasm not built -- scripts/build_mapc_wasm.sh -- staging with --studio is not checked)')
 } else {
   stage(['--module', 'shootrange', '--studio', '--out', 'build/app-test'])
@@ -171,7 +174,7 @@ console.log('\n--- what it refuses ---')
   catch { threw = true }
   check(threw, 'a module that does not exist is refused')
 
-  const empty = join(ROOT, 'modules', '__stagetest_empty')
+  const empty = join(REPO, 'modules', '__stagetest_empty')
   rmSync(empty, { recursive: true, force: true })
   mkdirSync(join(empty, 'maps'), { recursive: true })
   writeFileSync(join(empty, 'module.txt'), 'name Empty\nid __stagetest_empty\n')

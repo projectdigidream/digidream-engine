@@ -24,6 +24,9 @@ LUAJIT_COMMIT="${LUAJIT_COMMIT:-fbfc558aacd57a54623df0ced4c31a28f81f8ff2}"
 LUAJIT_REPO="${LUAJIT_REPO:-https://github.com/openresty/luajit2.git}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 DEST="$ROOT/third_party/luajit"
 
 mkdir -p "$ROOT/third_party"

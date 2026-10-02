@@ -17,6 +17,9 @@ set -euo pipefail
 
 TICKS="${TICKS:-10000}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 WORK="$ROOT/build/determinism"
 mkdir -p "$WORK"
 

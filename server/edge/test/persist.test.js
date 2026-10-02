@@ -34,6 +34,9 @@ import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 const CERTS = join(HERE, '..', 'certs')
 const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34496)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34570)
@@ -68,7 +71,7 @@ const certHash = Buffer.from(
 async function start (persist, stateDir) {
   const args = ['--port', String(LINK_PORT), '--map', MAP,
                 '--script', join(ROOT, 'maps', 'scripts', 'persist_test.lua'),
-                '--props', join(ROOT, 'modules', 'doom2', 'assets', 'props.txt'),
+                '--props', join(REPO, 'modules', 'doom2', 'assets', 'props.txt'),
                 '--persist', persist, '--state-dir', stateDir]
   const server = spawn(serverBin, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
   const run = { server, log: '' }

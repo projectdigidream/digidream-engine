@@ -33,6 +33,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 MODULES=()
@@ -77,15 +80,15 @@ step () { echo; echo "=== $* ==="; }
 # first -- which is a step everyone forgets once and then reads a "em++ not
 # found" that looks like a broken install.
 if ! command -v em++ >/dev/null 2>&1; then
-  if [[ -f emsdk/emsdk_env.sh ]]; then
+  if [[ -f ../emsdk/emsdk_env.sh ]]; then
     step "emsdk"
     # shellcheck disable=SC1091
-    source emsdk/emsdk_env.sh >/dev/null 2>&1 || true
+    source ../emsdk/emsdk_env.sh >/dev/null 2>&1 || true
   fi
 fi
 command -v em++ >/dev/null 2>&1 || {
   echo "em++ not found. Run ./scripts/setup_emsdk.sh first -- it vendors a" >&2
-  echo "pinned Emscripten into emsdk/, which is gitignored and one-time." >&2
+  echo "pinned Emscripten into ../emsdk/, which is gitignored and one-time." >&2
   exit 1; }
 
 # --- the client's wasm core --------------------------------------------------
@@ -97,7 +100,7 @@ else
 fi
 
 # --- the studio's map compiler, as wasm --------------------------------------
-if [[ $STUDIO -eq 1 && ( $FORCE -eq 1 || ! -f studio/wasm/dist/mapc.mjs ) ]]; then
+if [[ $STUDIO -eq 1 && ( $FORCE -eq 1 || ! -f ../studio/wasm/dist/mapc.mjs ) ]]; then
   step "studio map compiler (wasm)"
   ./scripts/build_mapc_wasm.sh
 elif [[ $STUDIO -eq 1 ]]; then
@@ -117,7 +120,7 @@ fi
 # OPTIONAL, and loudly so. An app with no synth starts, plays and is silent, and
 # a silent game that nobody warned you about reads as a bug in the music code.
 if [[ -d midisynth ]]; then
-  if [[ $FORCE -eq 1 || ! -f midisynth/tool/dist/midisynth.mjs ]]; then
+  if [[ $FORCE -eq 1 || ! -f ../midisynth/tool/dist/midisynth.mjs ]]; then
     step "synth wasm"
     ./midisynth/scripts/build_wasm.sh || {
       echo "[make] WARNING: the synth failed to build; the app will have no music" >&2; }

@@ -14,6 +14,9 @@ import { parseAnimations, animFrameAt, TextureAnimator } from '../src/render/ani
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 let checks = 0
 let fails = 0
@@ -30,7 +33,7 @@ console.log('anim: textures that move')
 // than in the engine's assets/ (docs/MODULES.md). The engine ships no animated
 // textures of its own yet, which is why this reads the module's file.
 const cat = parseAnimations(
-  readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'animations.txt'), 'utf8'))
+  readFileSync(join(REPO, 'modules', 'doom2', 'assets', 'animations.txt'), 'utf8'))
 check(cat.groups.length > 0, `the catalogue describes ${cat.groups.length} sequences`)
 check(cat.warnings.length === 0, `and parses clean (${cat.warnings.length} warnings)`)
 
@@ -105,7 +108,7 @@ const fakeMaterial = () => ({ uniforms: { map: { value: null } } })
 // extracted. This is the check that would have caught FWATER shipping with
 // frames 1 and 4 and nothing in between.
 {
-  const dir = join(ROOT, 'modules', 'doom2', 'assets', 'textures')
+  const dir = join(REPO, 'modules', 'doom2', 'assets', 'textures')
   let complete = 0
   let partial = []
   for (const g of cat.groups) {

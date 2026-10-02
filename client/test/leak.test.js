@@ -29,6 +29,9 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 const HTTP = Number(process.env.DNP_LEAK_HTTP_PORT ?? 8191)
 const WT = Number(process.env.DNP_LEAK_WT_PORT ?? 34733)
 const LINK = Number(process.env.DNP_LEAK_LINK_PORT ?? 34700)
@@ -62,7 +65,7 @@ if (!chromeBin) {
 }
 
 // --- the stack ----------------------------------------------------------------
-const maps = ['map01.dnpm', 'map02.dnpm'].map((m) => join('modules', 'doom2', 'maps', m))
+const maps = ['map01.dnpm', 'map02.dnpm'].map((m) => join(REPO, 'modules', 'doom2', 'maps', m))
 const stack = spawn('bash', [join(ROOT, 'scripts', 'run_stack.sh'), '--module', 'doom2',
                              ...maps.flatMap((m) => ['--map', m]), '--persist', 'none'], {
   cwd: ROOT,

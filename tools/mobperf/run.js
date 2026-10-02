@@ -34,6 +34,9 @@ import { encodeHello, encodeInputBundle, axisFromNumber } from '../../client/src
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 const args = process.argv.slice(2)
 const arg = (name, fallback) => {
@@ -56,7 +59,7 @@ const arch = process.arch === 'x64' ? 'x86_64' : 'arm64'
 const MAP = join(ROOT, 'build', arch, 'mobperf.dnpm')
 const LUA = join(ROOT, 'build', arch, 'mobperf.lua')
 const SERVER = process.env.DNP_SERVER_BIN ?? join(ROOT, 'build', 'server', 'dnp-server')
-const PROPS = join(ROOT, 'modules', 'doom2', 'assets', 'props.txt')
+const PROPS = join(REPO, 'modules', 'doom2', 'assets', 'props.txt')
 
 for (const [what, p] of [['map', MAP], ['script', LUA], ['server', SERVER], ['props', PROPS]]) {
   if (!existsSync(p)) {

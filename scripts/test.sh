@@ -17,6 +17,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 HOST_ARCH="$(uname -m)"
 
@@ -49,7 +52,7 @@ need_maps () {
   # The studio's starter module, written by the studio's own emitter from its
   # documents (docs/STUDIO.md): if this map stops baking, the studio's .map
   # writer has drifted from mapc's grammar.
-  "./build/$HOST_ARCH/mapc" modules/starter/maps/first.map "build/$HOST_ARCH/starter_first.dnpm"
+  "./build/$HOST_ARCH/mapc" ../modules/starter/maps/first.map "build/$HOST_ARCH/starter_first.dnpm"
 
   "./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
   # The same map, its behaviour written as triggers instead of as Doom line
@@ -209,7 +212,7 @@ suite_tools () {
   # and written back out, bakes to a .dnpm with the same content hash. It needs
   # mapc and nothing else, so it runs here rather than behind the stack's
   # preconditions where a missing certificate would silently skip it.
-  node editor/test/mapfmt.test.js   | tail -2
+  node ../editor/test/mapfmt.test.js   | tail -2
   # Beside it, for the same reason: tools/compose writes maps with that emitter
   # AND rewrites the Lua that travels with them. Its coordinates and its side
   # indices both move, and one of the two moved silently -- monsters placed in the
@@ -223,32 +226,32 @@ suite_tools () {
   # The ground cut to meet a level's edge: pieces that tile the ring exactly, each
   # edge exactly one thing (another piece, one tile edge, one wall of the level).
   node tools/compose/apron.test.mjs | tail -1
-  node editor/test/entities.test.js | tail -2
-  node editor/test/server.test.js   | tail -2
+  node ../editor/test/entities.test.js | tail -2
+  node ../editor/test/server.test.js   | tail -2
   # Neighbour inference, against the whole corpus. The assertion is a negative
   # one: OPENING a map must not edit it. The first version of that code re-derived
   # every link after every drag, could not pair a hole's rim with the sector
   # inside it, and sealed a pit in maps/doom/map01.map shut -- which surfaced much
   # later as "sector 51 partially overlaps sector 26".
-  node editor/test/topology.test.js | tail -2
+  node ../editor/test/topology.test.js | tail -2
   # Undo, which here is parse(emit(doc)) -- so it rides on the same fixed point
   # the corpus above proves, and this adds the case that one does not have: the
   # shapes the EDITOR draws, whose numbers no author ever typed.
-  node editor/test/history.test.js  | tail -2
+  node ../editor/test/history.test.js  | tail -2
   # Which way round a sector goes. The renderer takes counter-clockwise as fact
   # and derives both the outward normal and the direction u runs from it, so a
   # sector drawn the other way has its walls facing into the void with mirrored
   # textures. Physics does not care, which is why it is invisible until you look
   # at the wall from the other side.
-  node editor/test/winding.test.js  | tail -2
+  node ../editor/test/winding.test.js  | tail -2
   # Deleting sectors, corners and pits. A sector is named by its POSITION in the
   # file, so removing one renumbers every reference after it -- and a pit is two
   # things, a hole and the sector standing in it, which have to go together.
-  node editor/test/edit.test.js     | tail -2
+  node ../editor/test/edit.test.js     | tail -2
   # The prop catalogue. assets/props.txt is one file that two programs read, so
   # the check is that after a round trip through the editor the CLIENT's own
   # parser sees exactly the same catalogue -- not that the text looks similar.
-  node editor/test/props.test.js    | tail -2
+  node ../editor/test/props.test.js    | tail -2
   # Its VISUAL half: the sprite lines, and the frames they name. Regenerated from
   # parsed fields now rather than carried as text, so every catalogue in the repo
   # has to come back byte-identical -- column alignment included, or one edit
@@ -259,28 +262,28 @@ suite_tools () {
   # report 128 problems on a catalogue that works, and the oracle is what says
   # which of the two is wrong. What survives is real -- three projectiles whose
   # impact bursts have never drawn.
-  node editor/test/propart.test.js  | tail -2
+  node ../editor/test/propart.test.js  | tail -2
   # What a map says about itself: scripts, body, spawns, lamps. Each has a way of
   # being wrong that the map still compiles with -- a script mapc cannot find is
   # printed and then baked anyway -- so the checks are about what the records
   # MEAN, and each ends at mapc.
-  node editor/test/globals.test.js  | tail -2
+  node ../editor/test/globals.test.js  | tail -2
   # Which panel the inspector shows. A state machine rather than a DOM: the two
   # menus could once only be left by pressing the button that opened them, so
   # picking a tool did the thing and left the menu up, and the editor looked stuck
   # when one variable was.
-  node editor/test/mode.test.js     | tail -2
+  node ../editor/test/mode.test.js     | tail -2
   # The mob window's file surgery. A mob file is Lua with helper functions, so the
   # editor substitutes characters at a known offset rather than reading it -- and
   # the control is that a write which lands one character out is refused, which
   # comparing field NAMES cannot see and comparing the VALUE can.
-  node editor/test/mobfile.test.js  | tail -2
+  node ../editor/test/mobfile.test.js  | tail -2
   # Mobs AUTHORED in the editor, checked by the loader that will read them. The
   # emitter has an ORACLE -- tools/mobcheck/check.lua under LuaJIT, the real one
   # -- so the claim is "the loader accepts it", not "the Lua looks right". It
   # caught a default graph the editor called clean and the loader refused, and an
   # argument name the vocabulary does not have. Skips loudly without LuaJIT.
-  node editor/test/mobgraph.test.js | tail -2
+  node ../editor/test/mobgraph.test.js | tail -2
   # ONE LIST out of the two files that define a kind. A mob is a prop with a
   # brain, so the entity window shows one row per kind and behaviour is a
   # property of the row -- it used to be two lists in that window plus the
@@ -293,7 +296,7 @@ suite_tools () {
   # Every one has its control, and the load-bearing one is that with no
   # catalogue fetched yet NOTHING is accused -- the window renders before that
   # lands, so reading it unconditionally would flag the whole module on open.
-  node editor/test/entitylist.test.js | tail -2
+  node ../editor/test/entitylist.test.js | tail -2
   # Where the boxes go in the AI graph. Pure arithmetic, which is the half of a
   # visual editor that can be checked at all -- the claims are that the picture is
   # deterministic, that it draws every edge the RUNTIME follows, and that it
@@ -302,7 +305,7 @@ suite_tools () {
   # Its oracle is maps/scripts/mobs.lua's own reachability walk, which counts
   # `goto` actions and exempts pain and death. Without that the first version
   # called both halves of a correct monster broken and drew no goto arrow at all.
-  node editor/test/graphlayout.test.js | tail -2
+  node ../editor/test/graphlayout.test.js | tail -2
   # Walking round a monster in the 3D preview. A rot8 sprite names only a BASE
   # and the renderer picks one of eight views from the angle, so the check is that
   # a full orbit reaches all eight -- if it did not, the preview would show some of
@@ -311,7 +314,7 @@ suite_tools () {
   # It calls the CLIENT's rotationFor() and asserts they agree at every angle.
   # props.js says this renderer "has now shipped two mirrored angle conventions";
   # a preview with one of its own would be the third.
-  node editor/test/orbit.test.js | tail -2
+  node ../editor/test/orbit.test.js | tail -2
   # The URLs the editor fetches art at, against a server that has to serve them.
   # The art lives in modules now, and the viewport was still using
   # loadRealTextures's default of /textures -- the ENGINE's directory -- so every
@@ -321,31 +324,31 @@ suite_tools () {
   #
   # It starts the real server and fetches what editor/src/assets.js builds, with
   # the control that the old path still 404s.
-  node editor/test/assets.test.js | tail -2
+  node ../editor/test/assets.test.js | tail -2
   # Where the engine is. The editor server's root used to be fixed to its own
   # parent, which meant it could only ever be tested against the real repository
   # -- the browser tests build a throwaway module inside modules/ for exactly that
   # reason. The decisive check here is ISOLATION: a server pointed at a scratch
   # tree lists that tree's maps and none of the real ones. The same resolver is
   # what a VS Code extension will read a dnp.engineRoot setting into.
-  node editor/test/engineroot.test.js | tail -2
+  node ../editor/test/engineroot.test.js | tail -2
   # POST /api/newmap, the command palette's New map. The claim that matters is the
   # oracle: what it writes, mapc BAKES -- one sector, one spawn -- so Test works
   # before a wall has been drawn. Against a scratch engine through
   # DNP_ENGINE_ROOT; nothing touches the real maps/. It found the route creating
   # modules/nosuch/ for a module that did not exist, on its first run.
-  node editor/test/newmap.test.js | tail -2
+  node ../editor/test/newmap.test.js | tail -2
   # The VS Code extension, driven without VS Code: a stub host, and a REAL editor
   # server underneath. Double-click a map and the claim is that the tab would have
   # shown a live editor pointed at the right module -- read off the path -- and
   # that deactivate() takes the server down. It found a server bug on its first
   # run: IS_MAIN compared a URL to argv[1], and a symlinked script exited 0.
-  node editor/test/extension.test.js | tail -2
+  node ../editor/test/extension.test.js | tail -2
   # The INSTALLABLE form: build the .vsix with the real script, unpack it where no
   # tools/ is anywhere near, and drive that extension.cjs the same way. The
   # in-place test cannot make this claim -- the sibling it needs is always there.
   # Needs the network once for npx to fetch vsce; skips out loud without it.
-  node editor/test/vsix.test.js | tail -2
+  node ../editor/test/vsix.test.js | tail -2
 }
 
 # The Lua runtime: VM, triggers, both mob runtimes, weapons, game scripts (needs LuaJIT).
@@ -411,25 +414,25 @@ suite_lua () {
     # it. It runs here rather than beside the other editor tests because its
     # oracle is build/lua/triggercheck, which is built one line above -- and a
     # test whose oracle is missing skips loudly rather than passing.
-    node editor/test/triggerlua.test.js | tail -2
+    node ../editor/test/triggerlua.test.js | tail -2
     # And where a map's triggers live: the sidecar is the source, the map's .lua
     # holds a generated block. Same oracle -- what it splices into that file has
     # to load in the real runtime, not merely look like Lua.
-    node editor/test/triggerstore.test.js | tail -2
+    node ../editor/test/triggerstore.test.js | tail -2
     # The trigger panel's operations. The panel itself is DOM and is covered by
     # the browser smoke test; this is everything its buttons DO -- and the last
     # assertion runs the resulting graph through the runtime, so "the editor can
     # build it" means the engine takes it.
-    node editor/test/triggeredit.test.js | tail -2
+    node ../editor/test/triggeredit.test.js | tail -2
     # The studio's trigger writer and its presets, through the same runtime: a
     # door, a lift, a switch, a teleport, an ambush, an exit and a crusher must
     # all load, and the control strips the staleness guards the emitter writes
     # beside every side index -- the runtime must then refuse the table.
-    node studio/test/lua_emit.test.js | tail -2
+    node ../studio/test/lua_emit.test.js | tail -2
     # And its monsters, through tools/mobcheck: a brain the cards wrote loads,
     # and a corpse with no death state is refused by the studio and the runtime
     # alike. The body half is read back by the client's own catalogue parser.
-    node studio/test/mobs.test.js | tail -2
+    node ../studio/test/mobs.test.js | tail -2
   else
     echo "  skip lua tests (run: scripts/setup_luajit.sh)"
   fi
@@ -557,47 +560,47 @@ suite_studio () {
   if command -v em++ >/dev/null 2>&1; then
     ./scripts/build_mapc_wasm.sh >/dev/null
   fi
-  node studio/test/bake.test.js | tail -2
-  node studio/test/topology.test.js | tail -2
-  node studio/test/mapfmt.test.js | tail -2
-  node studio/test/pack.test.js | tail -2
+  node ../studio/test/bake.test.js | tail -2
+  node ../studio/test/topology.test.js | tail -2
+  node ../studio/test/mapfmt.test.js | tail -2
+  node ../studio/test/pack.test.js | tail -2
   # A .tsprite composed by ThreeSprite's own runtime (vendored) into the atlas
   # the client draws: checked by the client's parser and by tools/tsprite's
   # project-versus-atlas comparison.
-  node studio/test/sheets.test.js | tail -2
+  node ../studio/test/sheets.test.js | tail -2
   # The brain as a graph: every way the runtime leaves a state is an arrow,
   # and the automatic arrangement places every state, initial first.
-  node studio/test/graph.test.js | tail -2
+  node ../studio/test/graph.test.js | tail -2
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
-  node studio/test/props.test.js | tail -2
+  node ../studio/test/props.test.js | tail -2
   # Camera paths: what the studio draws is what mapc bakes, and the curve
   # length it shows is the one a cutscene is timed against.
-  node studio/test/paths.test.js | tail -2
+  node ../studio/test/paths.test.js | tail -2
   # The arsenal the studio writes, loaded by the real weapon runtime, and the
   # particle kinds and player art read back by the client's own parsers.
-  node studio/test/weapons.test.js | tail -2
+  node ../studio/test/weapons.test.js | tail -2
   # How a flat is painted and what you can see through, against mapc and the
   # runtime's own loader -- including that a map saying nothing still bakes to
   # the bytes it always did, which is what keeps an older module's soundtrack.
-  node studio/test/surfaces.test.js | tail -2
+  node ../studio/test/surfaces.test.js | tail -2
   # The player: the parameter names held against the engine's own header, and
   # the merged module file chaining hooks two of its parts both define.
-  node studio/test/player.test.js | tail -2
+  node ../studio/test/player.test.js | tail -2
   # A map's music is filed under the hash the client computes for it, and a
   # cue that names a missing track is said, not silently dropped.
-  node studio/test/music.test.js | tail -2
+  node ../studio/test/music.test.js | tail -2
   # modules/starter is generated from its documents; a checked-in copy that
   # the emitter would write differently is a stale one.
-  node studio/tools/emit_module.mjs modules/starter --check | tail -1
+  node ../studio/tools/emit_module.mjs ../modules/starter --check | tail -1
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
-  node editor/test/build.test.js | tail -2
+  node ../editor/test/build.test.js | tail -2
   # Rooms, platforms and pits: each must bake, and must bake into what the
   # format means by that word. A platform whose edges came out `wall` looks
   # completely correct and plays as a room with a thick floor.
-  node editor/test/shapes.test.js | tail -2
+  node ../editor/test/shapes.test.js | tail -2
 }
 
 # The desktop app: staging a module, its writable tree, its routes, its transport.
@@ -619,15 +622,15 @@ suite_app () {
   # relay, framing and client modules the packaged game uses, with only
   # Electron's IPC pipe stubbed. See app/test/local_transport.test.js for why
   # that is the right seam.
-  node app/test/stage.test.js | tail -2
+  node shells/app/test/stage.test.js | tail -2
   # The studio's writable game tree: files land under it and nowhere else --
   # seven escaping paths are the control -- and seeding the bundled modules
   # never touches one the user made.
-  node app/test/studio_files.test.js | tail -2
+  node shells/app/test/studio_files.test.js | tail -2
   # /ui/index.json merged across modules by the asset rule (first wins), in the
   # app and the devserver, and each file served from the module that named it.
-  node app/test/ui_route.test.js | tail -2
-  node app/test/local_transport.test.js 2>/dev/null | tail -2
+  node shells/app/test/ui_route.test.js | tail -2
+  node shells/app/test/local_transport.test.js 2>/dev/null | tail -2
 }
 
 # Headless Chrome: the client page and its leaks, the seam camera, the editor page and leaks.
@@ -669,12 +672,12 @@ suite_browser () {
   node client/test/leak.test.js | grep -E 'FAIL|failures'
   # The studio in a real browser: opt-in (DNP_STUDIO_PAGE_TEST=1 with a dev
   # server up), skipped loudly otherwise.
-  node studio/test/page.test.js | tail -2
+  node ../studio/test/page.test.js | tail -2
   # The page itself, in a real browser. Opt-in: three headless launches with
   # software rasterisation is minutes of CPU for a check the pure tests mostly
   # cover, and a suite everybody waits four minutes for is one people stop
   # running. DNP_EDITOR_PAGE_TEST=1 includes it.
-  node editor/test/page.test.js | tail -2
+  node ../editor/test/page.test.js | tail -2
   # Does the editor leak? Asked of Chrome: a repeated stimulus, a forced GC, a
   # metrics read after each round -- a leak grows every round, churn plateaus.
   # The two stimuli are the two that leaked: a render per keystroke in the mob
@@ -682,12 +685,12 @@ suite_browser () {
   # a full rebuild in the viewport (+450 nodes per eight opens, one <img> per
   # stranded texture). Both zero now. Opt-in with the page test above; self-
   # gated, so it says so and exits clean without DNP_EDITOR_PAGE_TEST=1.
-  node editor/test/leak.test.js | tail -2
+  node ../editor/test/leak.test.js | tail -2
   # And the app under a REAL Electron. Opt-in (DNP_APP_LAUNCH_TEST=1): it is a
   # window, a GPU process and a ~150 MB dependency. Worth having anyway --
   # nothing else in the suite ever loads app/main.js under Electron, and the
   # first time anybody did, it failed on its first line.
-  node app/test/launch.test.js | tail -2
+  node shells/app/test/launch.test.js | tail -2
 }
 
 # The edge and the server end to end, every control case, and prediction against the server.
@@ -823,7 +826,7 @@ suite_stack () {
     echo "--- prediction under simulated network conditions ---"
     node tools/netsim/matrix.js --quick 2>/dev/null | tail -8
   else
-    echo "  skip (emsdk not active -- source emsdk/emsdk_env.sh)"
+    echo "  skip (emsdk not active -- source ../emsdk/emsdk_env.sh)"
     echo "  NOTE: this is the test that verifies client and server agree bit-for-bit."
   fi
 }

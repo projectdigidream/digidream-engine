@@ -62,6 +62,9 @@ import { arch } from 'node:os'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 const ARCH = arch() === 'arm64' ? 'arm64' : 'x86_64'
 const SERVER = process.env.DNP_SERVER_BIN ?? join(ROOT, 'build', 'server', 'dnp-server')
 
@@ -70,7 +73,7 @@ const arg = (name, dflt) => {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt
 }
 const MAP = arg('map', join(ROOT, 'build', ARCH, 'monsters.dnpm'))
-const PROPS = arg('props', join(ROOT, 'modules', 'doom2', 'assets', 'props.txt'))
+const PROPS = arg('props', join(REPO, 'modules', 'doom2', 'assets', 'props.txt'))
 const TICKS = Number(arg('ticks', 900))
 const EVERY = Number(arg('every', 1))
 

@@ -17,6 +17,9 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 LUAJIT=third_party/luajit/src/luajit
@@ -65,8 +68,8 @@ check_one() {
 }
 
 echo "vocab docs: the generated reference sections are current"
-check_one docs/MOBS.md    maps/scripts/mob_vocab.lua    mob_vocab
-check_one docs/WEAPONS.md maps/scripts/weapon_vocab.lua weapon_vocab
+check_one ../docs/MOBS.md    maps/scripts/mob_vocab.lua    mob_vocab
+check_one ../docs/WEAPONS.md maps/scripts/weapon_vocab.lua weapon_vocab
 
 # THE CONTROL. A checker that compared nothing would report every document clean,
 # and so would one pointed at a file that does not exist. This asserts the diff

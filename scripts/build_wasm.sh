@@ -15,6 +15,9 @@ if ! command -v em++ >/dev/null 2>&1; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 OUT="$ROOT/client/wasm/dist"
 mkdir -p "$OUT"
 

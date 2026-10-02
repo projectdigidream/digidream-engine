@@ -32,6 +32,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
+# PATHS AS TYPED, from wherever this was run. The stack runs in the engine
+# folder, so a map or module path given relative to the caller -- the usual
+# `engine/scripts/run_stack.sh --module doom2 modules/doom2/maps/map07.dnpm`
+# from the checkout -- is made absolute before the cd, or it would be looked
+# for under engine/.
+CALLER="$PWD"
+TYPED=()
+for a in "$@"; do
+  if [[ "$a" != /* && "$a" != -* && -e "$CALLER/$a" ]]; then TYPED+=("$CALLER/$a"); else TYPED+=("$a"); fi
+done
 cd "$ROOT"
 
 ARCH="$(uname -m)"
@@ -47,7 +60,7 @@ ARCH="$(uname -m)"
 MODULE_ARGS=()
 REST=()
 i=0
-ARGV=("$@")
+ARGV=(${TYPED[@]+"${TYPED[@]}"})
 while [[ $i -lt ${#ARGV[@]} ]]; do
   if [[ "${ARGV[$i]}" == "--module" && $((i + 1)) -lt ${#ARGV[@]} ]]; then
     MODULE_ARGS+=(--module "${ARGV[$((i + 1))]}")

@@ -26,10 +26,13 @@ import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseMap, attr } from '../../editor/src/mapfmt.js'
+import { parseMap, attr } from '../../../editor/src/mapfmt.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..')
-const SRC = join(ROOT, 'modules/doom2/maps')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
+const SRC = join(REPO, 'modules/doom2/maps')
 let pass = 0, fail = 0
 const check = (ok, what) => { ok ? ++pass : (++fail, console.log(`  FAIL ${what}`)) }
 
@@ -38,7 +41,7 @@ const check = (ok, what) => { ok ? ++pass : (++fail, console.log(`  FAIL ${what}
 // minute of anybody's suite.
 const out = mkdtempSync(join(tmpdir(), 'compose-'))
 execFileSync('node', [join(ROOT, 'tools/compose/compose.mjs'),
-  '--metamap', join(ROOT, 'modules/doomworld/metamap.txt'),
+  '--metamap', join(REPO, 'modules/doomworld/metamap.txt'),
   '--maps', SRC, '--seams', out, '--prefix', 'dw_', '--only', '6,2,7,2'],
   { stdio: 'pipe' })
 

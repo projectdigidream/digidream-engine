@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
         "maps/mobs/doom_monsters.lua",
         "maps/scripts/weapon_vocab.lua",
         "maps/scripts/weapons.lua",
-        "modules/doom2/maps/weapons_doom2.lua",
+        "../modules/doom2/maps/weapons_doom2.lua",
     };
     for (const char* s : scripts) {
         if (!vm.run_file(s, s)) {
@@ -1474,7 +1474,7 @@ int main(int argc, char** argv) {
     // 3. docs/WEAPONS.md documents exactly the vocabulary.
     {
         std::string doc;
-        if (FILE* fp = std::fopen("docs/WEAPONS.md", "rb")) {
+        if (FILE* fp = std::fopen("../docs/WEAPONS.md", "rb")) {
             char buf[4096];
             size_t n;
             while ((n = std::fread(buf, 1, sizeof(buf), fp)) > 0) doc.append(buf, n);

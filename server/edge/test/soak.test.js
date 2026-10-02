@@ -28,6 +28,9 @@ import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 const CERTS = join(HERE, '..', 'certs')
 const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34496)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34570)
@@ -226,7 +229,7 @@ async function phase (name, args, rounds, play, describe) {
 // VM keeping the player's inventory and forgetting it, the panel and the
 // sounds that come with it.
 {
-  const maps = ['map01.dnpm', 'map02.dnpm'].map((m) => join(ROOT, 'modules', 'doom2', 'maps', m))
+  const maps = ['map01.dnpm', 'map02.dnpm'].map((m) => join(REPO, 'modules', 'doom2', 'maps', m))
   const args = ['--port', String(LINK_PORT), '--module', 'doom2', ...maps.flatMap((m) => ['--map', m])]
   if (CONTROL) args.push('--game-script', join(ROOT, 'maps', 'scripts', 'leak_test.lua'))
   const { lives } = await phase('doom', args, ROUNDS, () => life(3000),

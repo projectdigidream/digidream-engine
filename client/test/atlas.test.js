@@ -20,6 +20,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 let checks = 0
 let fails = 0
@@ -239,7 +242,7 @@ console.log('\n--- the sheet the module actually ships ---')
   // which is a different failure: a manifest this cannot draw would pass every
   // fixture and still ship a level of invisible monsters. Skipped loudly rather
   // than failed when the module is not present, the way mapmesh.test.js does.
-  const SHEET = join(ROOT, 'modules', 'doom2', 'assets', 'sprites', 'SPIR.json')
+  const SHEET = join(REPO, 'modules', 'doom2', 'assets', 'sprites', 'SPIR.json')
   if (!existsSync(SHEET)) {
     console.log('  (skipped: modules/doom2/assets/sprites/SPIR.json is not here)')
   } else {
@@ -272,7 +275,7 @@ console.log('\n--- the sheet the module actually ships ---')
     // The catalogue names animations in this sheet, and a typo there draws
     // nothing at all -- silently, because a missing animation is warned once
     // and then skipped.
-    const cat = parseProps(readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'props.txt'), 'utf8'))
+    const cat = parseProps(readFileSync(join(REPO, 'modules', 'doom2', 'assets', 'props.txt'), 'utf8'))
     for (const [, def] of cat.kinds) {
       if (def.type !== 'atlas' || def.sheet !== a.sprite) continue
       for (const [stateId, st] of def.states) {

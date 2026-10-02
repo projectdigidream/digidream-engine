@@ -24,6 +24,9 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 MODULE="doom2"
@@ -40,9 +43,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 STUDIO="${STUDIO:-0}"
-MODULE_DIR="$ROOT/modules/$MODULE"
+MODULE_DIR="$REPO/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[apk] no such module: modules/$MODULE" >&2; exit 2; }
-[[ $STUDIO -eq 0 || -f "$ROOT/studio/wasm/dist/mapc.mjs" ]] || {
+[[ $STUDIO -eq 0 || -f "$REPO/studio/wasm/dist/mapc.mjs" ]] || {
   echo "[apk] --studio needs the map compiler as wasm: run scripts/build_mapc_wasm.sh" >&2; exit 2; }
 # No --map: the module's first baked map, in name order -- which is the level
 # the server starts a progression on anyway.
@@ -179,7 +182,7 @@ cp -R "$ROOT/client/wasm/." "$W/wasm/"
 # THE SHELL'S HOOK. client/shell.js is empty on purpose and says why; this is
 # the file it makes room for. Staged over it rather than edited into the page,
 # because the page is the browser's and stays the browser's.
-cp "$ROOT/android/web/shell.js" "$W/shell.js"
+cp "$ROOT/shells/android/web/shell.js" "$W/shell.js"
 # The link framing, COPIED from the edge rather than reimplemented -- exactly
 # as scripts/build_app.sh copies it into the desktop shell. One function, three
 # runtimes; see android/web/shell.js.
@@ -206,17 +209,17 @@ cp "$MODULE_DIR/maps/"*.dnpm "$W/maps/" 2>/dev/null || true
 
 # The synth and its instruments, when they are built. Optional: a module with
 # no soundtrack is a module, and a missing synth must not fail the build.
-if [[ -d "$ROOT/midisynth/tool" ]]; then
+if [[ -d "$REPO/midisynth/tool" ]]; then
   mkdir -p "$W/synth" "$W/synth-content"
-  cp -R "$ROOT/midisynth/tool/." "$W/synth/" 2>/dev/null || true
-  cp -R "$ROOT/midisynth/content/." "$W/synth-content/" 2>/dev/null || true
+  cp -R "$REPO/midisynth/tool/." "$W/synth/" 2>/dev/null || true
+  cp -R "$REPO/midisynth/content/." "$W/synth-content/" 2>/dev/null || true
 fi
 # The sound-effects engine (docs/SOUNDS.md): one file, served at /sfx/. Optional
 # like the synth -- without it the game has music and no sound effects -- and
 # said, because silence is what a missing sound file looks like.
-if [[ -f "$ROOT/sound/tool/dist/dsound.mjs" ]]; then
+if [[ -f "$REPO/sound/tool/dist/dsound.mjs" ]]; then
   mkdir -p "$W/sfx"
-  cp "$ROOT/sound/tool/dist/dsound.mjs" "$W/sfx/"
+  cp "$REPO/sound/tool/dist/dsound.mjs" "$W/sfx/"
 else
   echo "[apk] NO SOUND ENGINE: sound/tool/dist/dsound.mjs is missing; build it with" >&2
   echo "      sound/scripts/build_wasm.sh, or this APK has no sound effects" >&2
@@ -267,10 +270,10 @@ EOF
 # web/studio/, which is where the page fetches them from (docs/STUDIO.md).
 if [[ $STUDIO -eq 1 ]]; then
   mkdir -p "$W/studio/wasm/dist" "$W/studio/runtime"
-  cp "$ROOT/studio/index.html" "$W/studio/"
-  cp -R "$ROOT/studio/src" "$W/studio/src"
-  cp -R "$ROOT/studio/vendor" "$W/studio/vendor"
-  cp "$ROOT/studio/wasm/dist/mapc.mjs" "$ROOT/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
+  cp "$REPO/studio/index.html" "$W/studio/"
+  cp -R "$REPO/studio/src" "$W/studio/src"
+  cp -R "$REPO/studio/vendor" "$W/studio/vendor"
+  cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua trigger_vocab.json mob_vocab.json; do
     cp "$ROOT/maps/scripts/$f" "$W/studio/runtime/"
   done
@@ -319,7 +322,7 @@ echo "[apk] res      compiling"
 
 "$BT/aapt2" link \
   -I "$PLATFORM_JAR" \
-  --manifest "$ROOT/android/AndroidManifest.xml" \
+  --manifest "$ROOT/shells/android/AndroidManifest.xml" \
   --java "$OUT/gen" \
   --min-sdk-version 26 --target-sdk-version 34 \
   -o "$OUT/base.apk" \
@@ -330,7 +333,7 @@ mkdir -p "$OUT/gen"
 
 echo "[apk] java     compiling"
 mkdir -p "$OUT/gen"
-find "$ROOT/android/java" "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
+find "$ROOT/shells/android/java" "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
 # SOURCE AND TARGET 8, against android.jar as the bootclasspath.
 #
 # Not a preference: a modern JDK refuses `-bootclasspath` for any target above

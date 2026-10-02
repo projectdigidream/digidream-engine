@@ -15,6 +15,9 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 # AND THAT THE COPY IS THE SOURCE.
@@ -32,7 +35,7 @@ missing=0
 stale=0
 checked=0
 reported=
-for map in maps/*.map modules/*/maps/*.map; do
+for map in maps/*.map ../modules/*/maps/*.map; do
   [[ -f "$map" ]] || continue
   baked="${map%.map}.dnpm"
   # Only maps that have actually been baked in place. Maps built into build/
@@ -70,7 +73,7 @@ done
 # in module.txt names a file in the module's maps/ directory, which is the copy
 # a packaged game carries -- so it must be there, and where maps/scripts has a
 # file of the same name, it must be that file.
-for mt in modules/*/module.txt; do
+for mt in ../modules/*/module.txt; do
   [[ -f "$mt" ]] || continue
   mdir="$(dirname "$mt")/maps"
   while read -r _ gfile; do

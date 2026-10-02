@@ -23,16 +23,19 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const WASM = join(ROOT, 'midisynth', 'tool', 'dist', 'midisynth.mjs')
-const BANK = join(ROOT, 'midisynth', 'content', 'patches', 'gm_bank.json')
-const KIT = join(ROOT, 'midisynth', 'content', 'drums', 'gm_kit.json')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
+const WASM = join(REPO, 'midisynth', 'tool', 'dist', 'midisynth.mjs')
+const BANK = join(REPO, 'midisynth', 'content', 'patches', 'gm_bank.json')
+const KIT = join(REPO, 'midisynth', 'content', 'drums', 'gm_kit.json')
 // DOOM's own MAP01 music, converted out of the WAD by tools/wad/mus2mid.js and
 // baked by tools/wad/music_all.js. The engine's assets/music/swan_lake.mstk is
 // the fallback the module overrides, and testing the module's track is testing
 // what a player actually hears.
-const TRACK = join(ROOT, 'modules', 'doom2', 'assets', 'music', 'd_runnin.mstk')
-const INDEX = join(ROOT, 'modules', 'doom2', 'assets', 'music', 'index.json')
-const MAPS = join(ROOT, 'modules', 'doom2', 'maps')
+const TRACK = join(REPO, 'modules', 'doom2', 'assets', 'music', 'd_runnin.mstk')
+const INDEX = join(REPO, 'modules', 'doom2', 'assets', 'music', 'index.json')
+const MAPS = join(REPO, 'modules', 'doom2', 'maps')
 
 let checks = 0
 let fails = 0
@@ -119,7 +122,7 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
 // it. The volume dip around it is a master-volume ramp and cannot affect
 // whether the transport is running, which is what this asserts.
 {
-  const next = readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'music', 'd_stalks.mstk'))
+  const next = readFileSync(join(REPO, 'modules', 'doom2', 'assets', 'music', 'd_stalks.mstk'))
   const rep = load(next)
   synth.setLoop(true)
   synth.play()
@@ -212,7 +215,7 @@ check(peak > 100, `and the output is not silence (peak ${peak} of 32767)`)
 
     // THE CONTROL. A track baked separately is not a sibling, and the warning
     // is the only thing that says so -- which is why a map change swaps.
-    const stranger = readFileSync(join(ROOT, 'modules', 'doom2', 'assets', 'music', 'd_stalks.mstk'))
+    const stranger = readFileSync(join(REPO, 'modules', 'doom2', 'assets', 'music', 'd_stalks.mstk'))
     put(stranger)
     const alien = JSON.parse(synth.crossfadeTrackFromBuffer(600))
     check((alien.warnings ?? []).some((w) => /different content/.test(w)),
@@ -348,7 +351,7 @@ if (existsSync(INDEX) && existsSync(MAPS)) {
   let danglingCues = []
   for (const [key, cues] of Object.entries(index)) {
     for (const [name, file] of Object.entries(cues)) {
-      if (!existsSync(join(ROOT, 'modules', 'doom2', 'assets', 'music', file))) {
+      if (!existsSync(join(REPO, 'modules', 'doom2', 'assets', 'music', file))) {
         danglingCues.push(`${key}/${name} -> ${file}`)
       }
     }
@@ -361,7 +364,7 @@ if (existsSync(INDEX) && existsSync(MAPS)) {
   // `default` is where it starts -- an entry without one starts silent, which
   // looks exactly like no entry at all.
   const names = []
-  for (const dir of [MAPS, join(ROOT, 'modules', 'doomworld', 'maps')]) {
+  for (const dir of [MAPS, join(REPO, 'modules', 'doomworld', 'maps')]) {
     if (!existsSync(dir)) continue
     for (const f of readdirSync(dir)) if (f.endsWith('.dnpm')) names.push(f.slice(0, -5))
   }

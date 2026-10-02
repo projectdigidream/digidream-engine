@@ -22,7 +22,7 @@
 //
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { parseMap, emitMap, numFrom, attr, setAttr, setInt, setNum } from '../../editor/src/mapfmt.js'
+import { parseMap, emitMap, numFrom, attr, setAttr, setInt, setNum } from '../../../editor/src/mapfmt.js'
 import { heightAt, waterAt, TILE } from './terrain.mjs'
 import { outerOutlines, apronPieces, edgeKey, key as ptKey, polygonArea } from './apron.mjs'
 

@@ -22,9 +22,12 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { emitMobLua, emptyMobs, problemsIn } from '../../editor/src/mobgraph.js'
+import { emitMobLua, emptyMobs, problemsIn } from '../../../editor/src/mobgraph.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 // --- the helpers, reimplemented exactly --------------------------------------
 //
@@ -387,8 +390,8 @@ if (problems.length) {
   console.log('problemsIn(): clean')
 }
 
-const sidecar = join(ROOT, 'modules/doom2/mobs.editor.json')
-const lua = join(ROOT, 'modules/doom2/maps/editor_mobs.lua')
+const sidecar = join(REPO, 'modules/doom2/mobs.editor.json')
+const lua = join(REPO, 'modules/doom2/maps/editor_mobs.lua')
 mkdirSync(dirname(sidecar), { recursive: true })
 writeFileSync(sidecar, JSON.stringify(doc, null, 2) + '\n')
 writeFileSync(lua, emitMobLua(doc, { module: 'doom2' }))

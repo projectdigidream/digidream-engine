@@ -39,8 +39,8 @@ int main(int argc, char** argv) {
     // The two modules the tree always has; the port is one nothing else in
     // the suite uses.
     const char* root = argc > 1 ? argv[1] : ".";
-    std::string a = std::string(root) + "/modules/shootrange";
-    std::string b = std::string(root) + "/modules/starter";
+    std::string a = std::string(root) + "/../modules/shootrange";
+    std::string b = std::string(root) + "/../modules/starter";
     std::string doom = std::string(root) + "/modules/doom2";   // shootrange borrows its catalogue
 
     const char* run1[] = {"dnp-server", "--port", "34598", "--module", doom.c_str(), "--module", a.c_str(), "--spawn", "start"};

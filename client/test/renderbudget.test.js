@@ -25,6 +25,9 @@ import { followMovers } from '../src/mapmovers.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 let checks = 0
 let fails = 0
@@ -155,7 +158,7 @@ check(baked.rebuilds > real.rebuilds,
 // than deriving the whole map. If the split ever stops paying, this says so,
 // and a ratio survives being run on different hardware where a threshold would
 // not.
-const MAP = join(ROOT, 'modules', 'doom2', 'maps', 'map14.dnpm')
+const MAP = join(REPO, 'modules', 'doom2', 'maps', 'map14.dnpm')
 if (!existsSync(MAP)) {
   console.log('\n  (skipping the real-map budget: no modules/doom2/maps/map14.dnpm)')
 } else {

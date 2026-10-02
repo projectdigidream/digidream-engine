@@ -12,11 +12,14 @@
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, join, normalize, extname } from 'node:path'
+import { dirname, join, normalize, extname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 const PORT = Number(process.env.DNP_HTTP_PORT ?? 8080)
 
 const TYPES = {
@@ -56,10 +59,10 @@ for (let i = 2; i < process.argv.length; i++) {
     //
     // The path form is not a mistake anybody has to make deliberately: shell
     // completion produces it.
-    const candidates = [join(ROOT, 'modules', given), join(ROOT, given)]
+    const candidates = isAbsolute(given) ? [given] : [join(REPO, 'modules', given), join(REPO, given), join(ROOT, given)]
     const root = candidates.find((p) => existsSync(p))
     if (!root) {
-      // LOUDLY, AND FATAL. `join(ROOT, 'modules', 'modules/doom2')` is a
+      // LOUDLY, AND FATAL. `join(REPO, 'modules', 'modules/doom2')` is a
       // perfectly good path that simply does not exist, and serving from it
       // fails one file at a time: every texture and every track 404s, the game
       // still runs, and it looks like the renderer lost its textures. That cost
@@ -115,8 +118,8 @@ const MOUNTS = [
   // tool/ rather than a copy of the two files in it, because synth-worklet.js
   // imports './dist/midisynth.mjs' RELATIVELY: the worklet and the wasm module
   // have to stay siblings or the import resolves to nothing.
-  ['/synth/', join(ROOT, 'midisynth', 'tool')],
-  ['/synth-content/', join(ROOT, 'midisynth', 'content')],
+  ['/synth/', join(REPO, 'midisynth', 'tool')],
+  ['/synth-content/', join(REPO, 'midisynth', 'content')],
   // Baked .mstk tracks. A FALLBACK, not the only place: a module ships its own
   // soundtrack (modules/doom2/assets/music) and the per-file rule above finds
   // it first, exactly as it does for sprites.
@@ -124,7 +127,7 @@ const MOUNTS = [
   // The sound-effects engine (sound/, DigidreamSound): its single-file wasm
   // module, which client/src/audio/sfx-worklet.js imports. Only dist/ -- the
   // rest of tool/ is the sound editor's.
-  ['/sfx/', join(ROOT, 'sound', 'tool', 'dist')],
+  ['/sfx/', join(REPO, 'sound', 'tool', 'dist')],
   // Sound banks, by module like music (modules/doom2/assets/sounds).
   ['/sounds/', join(ROOT, 'assets', 'sounds')],
   // UI layouts (docs/UI_LAYOUT.md), by module; /ui/index.json is merged above.
@@ -133,7 +136,7 @@ const MOUNTS = [
   // bakes and validates against. The runtime mount comes first because the
   // studio mount would otherwise claim the prefix.
   ['/studio/runtime/', join(ROOT, 'maps', 'scripts')],
-  ['/studio/', join(ROOT, 'studio')],
+  ['/studio/', join(REPO, 'studio')],
   // NOTE: /maps/ is NOT a plain mount -- see findMap below.
   ['/', join(ROOT, 'client')]
 ]

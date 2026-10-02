@@ -16,6 +16,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 export const serverBin = process.env.DNP_SERVER_BIN ??
                          join(ROOT, 'build', 'server', 'dnp-server')
@@ -30,7 +33,7 @@ export const serverBin = process.env.DNP_SERVER_BIN ??
 // These tests spawn barrels and keys and zombiemen, so they want the module's
 // file. They pass it with --props rather than --module because the MAPS they
 // run are the engine's own; only the catalogue comes from Doom.
-export const doomProps = join(ROOT, 'modules', 'doom2', 'assets', 'props.txt')
+export const doomProps = join(REPO, 'modules', 'doom2', 'assets', 'props.txt')
 
 /**
  * The catalogue AS THE CLIENT SEES IT: the engine's, then each module's.
@@ -46,7 +49,7 @@ export const doomProps = join(ROOT, 'modules', 'doom2', 'assets', 'props.txt')
 export function catalogueText (modules = ['doom2']) {
   const parts = [readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8')]
   for (const m of modules) {
-    parts.push(readFileSync(join(ROOT, 'modules', m, 'assets', 'props.txt'), 'utf8'))
+    parts.push(readFileSync(join(REPO, 'modules', m, 'assets', 'props.txt'), 'utf8'))
   }
   return parts.join('\n')
 }

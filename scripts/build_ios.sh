@@ -20,6 +20,9 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 MODULE="starter"
@@ -41,7 +44,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-MODULE_DIR="$ROOT/modules/$MODULE"
+MODULE_DIR="$REPO/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[ios] no such module: modules/$MODULE" >&2; exit 2; }
 if [[ -z "$MAP" ]]; then
   MAP="$(ls "$MODULE_DIR/maps/"*.dnpm 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null || true)"
@@ -63,7 +66,7 @@ SWIFTC="$(xcrun --sdk "$SDK_NAME" -f swiftc)"
 AR="$(xcrun --sdk "$SDK_NAME" -f ar)"
 [[ -f "$ROOT/third_party/luajit/src/luajit.h" ]] || { echo "[ios] run scripts/setup_luajit.sh first" >&2; exit 2; }
 [[ -f "$ROOT/client/wasm/dist/dnp_core.wasm" ]] || { echo "[ios] no wasm core -- run scripts/build_wasm.sh" >&2; exit 2; }
-[[ $STUDIO -eq 0 || -f "$ROOT/studio/wasm/dist/mapc.mjs" ]] || { echo "[ios] --studio needs scripts/build_mapc_wasm.sh" >&2; exit 2; }
+[[ $STUDIO -eq 0 || -f "$REPO/studio/wasm/dist/mapc.mjs" ]] || { echo "[ios] --studio needs scripts/build_mapc_wasm.sh" >&2; exit 2; }
 grep -q 'int dnp_server_run' "$ROOT/server/src/main.cpp" || {
   echo "[ios] server/src/main.cpp does not export dnp_server_run yet: the in-process" >&2
   echo "      entry point (docs/IOS.md). Nothing to link the shell against until it does." >&2
@@ -119,12 +122,12 @@ done
 # --- 3. the shell ----------------------------------------------------------------
 echo "[ios] shell    compiling Shell.swift"
 "$SWIFTC" -O -target "$TARGET" -sdk "$SDK" \
-  -import-objc-header "$ROOT/ios/dnp_bridge.h" \
-  "$ROOT/ios/Shell.swift" \
+  -import-objc-header "$ROOT/shells/ios/dnp_bridge.h" \
+  "$ROOT/shells/ios/Shell.swift" \
   "$STAGE/libdnpserver.a" "$LUA_IOS/src/libluajit.a" \
   -lc++ -framework UIKit -framework WebKit -framework Network \
   -o "$APP/Digidream"
-cp "$ROOT/ios/Info.plist" "$APP/Info.plist"
+cp "$ROOT/shells/ios/Info.plist" "$APP/Info.plist"
 
 # --- 4. the web tree, laid out the way it is served -------------------------------
 W="$APP/web"
@@ -133,9 +136,9 @@ cp -R "$ROOT/client/index.html" "$ROOT/client/src" "$W/"
 cp -R "$ROOT/client/node_modules/three/build/." "$W/vendor/three/"
 cp -R "$ROOT/client/wasm/." "$W/wasm/"
 # THE SAME shell.js AS ANDROID, over the dnpNative shim native.js provides.
-cp "$ROOT/android/web/shell.js" "$W/shell.js"
+cp "$ROOT/shells/android/web/shell.js" "$W/shell.js"
 cp "$ROOT/server/edge/src/framing.js" "$W/framing.js"
-cp "$ROOT/ios/web/native.js" "$APP/native.js"
+cp "$ROOT/shells/ios/web/native.js" "$APP/native.js"
 for kind in textures sprites music sounds ui; do
   mkdir -p "$W/$kind"
   [[ -d "$ROOT/assets/$kind" ]] && cp -R "$ROOT/assets/$kind/." "$W/$kind/" 2>/dev/null || true
@@ -147,24 +150,24 @@ for f in props.txt animations.txt; do
   [[ -f "$MODULE_DIR/assets/$f" ]] && { printf '\n# --- %s ---\n' "$MODULE" >> "$W/$f"; cat "$MODULE_DIR/assets/$f" >> "$W/$f"; }
 done
 cp "$MODULE_DIR/maps/"*.dnpm "$W/maps/" 2>/dev/null || true
-if [[ -f "$ROOT/midisynth/tool/dist/midisynth.mjs" ]]; then
+if [[ -f "$REPO/midisynth/tool/dist/midisynth.mjs" ]]; then
   mkdir -p "$W/synth" "$W/synth-content"
-  cp -R "$ROOT/midisynth/tool/." "$W/synth/"
-  cp -R "$ROOT/midisynth/content/." "$W/synth-content/"
+  cp -R "$REPO/midisynth/tool/." "$W/synth/"
+  cp -R "$REPO/midisynth/content/." "$W/synth-content/"
 fi
 # The sound-effects engine (docs/SOUNDS.md), served at /sfx/; optional like the synth.
-if [[ -f "$ROOT/sound/tool/dist/dsound.mjs" ]]; then
+if [[ -f "$REPO/sound/tool/dist/dsound.mjs" ]]; then
   mkdir -p "$W/sfx"
-  cp "$ROOT/sound/tool/dist/dsound.mjs" "$W/sfx/"
+  cp "$REPO/sound/tool/dist/dsound.mjs" "$W/sfx/"
 else
   echo "[ios] NO SOUND ENGINE: sound/tool/dist/dsound.mjs is missing; no sound effects" >&2
 fi
 if [[ $STUDIO -eq 1 ]]; then
   mkdir -p "$W/studio/wasm/dist" "$W/studio/runtime"
-  cp "$ROOT/studio/index.html" "$W/studio/"
-  cp -R "$ROOT/studio/src" "$W/studio/src"
-  cp -R "$ROOT/studio/vendor" "$W/studio/vendor"
-  cp "$ROOT/studio/wasm/dist/mapc.mjs" "$ROOT/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
+  cp "$REPO/studio/index.html" "$W/studio/"
+  cp -R "$REPO/studio/src" "$W/studio/src"
+  cp -R "$REPO/studio/vendor" "$W/studio/vendor"
+  cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua trigger_vocab.json mob_vocab.json; do
     cp "$ROOT/maps/scripts/$f" "$W/studio/runtime/"
   done

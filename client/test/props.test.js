@@ -13,6 +13,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// The repository: the engine is ROOT, and modules, docs, the studio and the
+// synth are beside it.
+const REPO = join(ROOT, '..')
 
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps
 
@@ -35,7 +38,7 @@ const check = (ok, label) => {
 // an empty catalogue is exactly the case a parser is least likely to have been
 // tried on.
 const ENGINE_CATALOGUE = join(ROOT, 'assets', 'props.txt')
-const CATALOGUE = join(ROOT, 'modules', 'doom2', 'assets', 'props.txt')
+const CATALOGUE = join(REPO, 'modules', 'doom2', 'assets', 'props.txt')
 
 console.log('--- the shipped catalogue ---')
 {
@@ -477,7 +480,7 @@ console.log('\n--- which record draws a player ---')
 {
   // Against the REAL shipped catalogue, because an avatar that resolves in a
   // fixture and not in what ships is the failure worth catching.
-  const real = parseProps(readFileSync(join(ROOT, 'modules/doom2/assets/props.txt'), 'utf8'))
+  const real = parseProps(readFileSync(join(REPO, 'modules/doom2/assets/props.txt'), 'utf8'))
   const a = real.avatars.get(0)
   check(a !== undefined, 'doom2 declares avatar 0')
   check(real.kinds.has(a.kind), `and it names kind ${a.kind}, which the catalogue declares`)

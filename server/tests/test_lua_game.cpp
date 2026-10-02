@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
         if (!level_vm.run_file(s, s)) { std::printf("  FAIL loading %s: %s\n", s, level_vm.last_error()); return 1; }
     }
     for (const char* s : {"maps/scripts/weapon_vocab.lua", "maps/scripts/weapons.lua",
-                          "modules/doom2/maps/weapons_doom2.lua"}) {
+                          "../modules/doom2/maps/weapons_doom2.lua"}) {
         if (!game_vm.run_file(s, s)) { std::printf("  FAIL loading %s: %s\n", s, game_vm.last_error()); return 1; }
     }
 

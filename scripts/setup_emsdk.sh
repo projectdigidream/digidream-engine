@@ -13,6 +13,9 @@ set -euo pipefail
 
 EMSDK_VERSION="${EMSDK_VERSION:-6.0.8}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The repository. The engine is $ROOT; modules, the studio, the synth and
+# the rest are beside it, here.
+REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -d emsdk ]]; then
@@ -30,7 +33,7 @@ emsdk $EMSDK_VERSION installed.
 
 Activate it in your shell with:
 
-    source "$ROOT/emsdk/emsdk_env.sh"
+    source "$REPO/emsdk/emsdk_env.sh"
 
 then re-run scripts/check_determinism.sh -- it will pick up em++ automatically
 and bring wasm32 under the gate.
