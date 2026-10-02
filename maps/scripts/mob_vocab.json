@@ -957,6 +957,39 @@
       "name": "lua"
     }
   ],
+  "drop_choice_fields": [
+    {
+      "doc": "A catalogue name, or absent for nothing.",
+      "name": "item",
+      "optional": true,
+      "type": "string"
+    },
+    {
+      "doc": "Its share against the others' weights, at least 1.",
+      "name": "weight",
+      "type": "int"
+    }
+  ],
+  "drop_fields": [
+    {
+      "doc": "A catalogue name (assets/props.txt): placed at the body, every time.",
+      "name": "item",
+      "optional": true,
+      "type": "string"
+    },
+    {
+      "doc": "How many of it, or of what `one_of` picks. Defaults to 1; spread round the body so they do not stack in one spot.",
+      "name": "count",
+      "optional": true,
+      "type": "int"
+    },
+    {
+      "doc": "A list of weighted choices (see drop_choice_fields), ONE of which drops. A choice with no `item` is nothing, which is how a drop is made a chance: { {item = 'medikit', weight = 1}, {weight = 3} } is a medikit one time in four.",
+      "name": "one_of",
+      "optional": true,
+      "type": "table"
+    }
+  ],
   "missile_fields": [
     {
       "doc": "Which catalogue record this missile is drawn from, and whose radius it hits with. Defaults to the missile's own name, as a mob's does.",
@@ -1119,6 +1152,12 @@
       "name": "corpse",
       "optional": true,
       "type": "bool"
+    },
+    {
+      "doc": "What this mob leaves where it dies: a LIST of entries (see drop_fields), each either an `item` that always drops or a `one_of` weighted choice, which can include nothing. Rolled on the server the moment it dies, so every client sees one outcome. An item is a catalogue name, picked up like any other: a dropped clip gives a clip's worth, not Doom's half.",
+      "name": "drops",
+      "optional": true,
+      "type": "table"
     }
   ],
   "state_fields": [

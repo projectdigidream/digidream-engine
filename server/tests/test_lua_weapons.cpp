@@ -75,7 +75,7 @@ struct WeaponProps final : public server::lua::PropCatalogueView {
     struct Entry { const char* name; u16 kind; fx radius; fx height; fx speed; };
     static constexpr fx du(i64 n) { return fx::from_frac(n, 48); }
 
-    Entry table[7] = {
+    Entry table[9] = {
         {"zombieman",  20, du(20), du(56), du(8 * 35)},
         // The one monster in the shipped bestiary whose bite SWEEPS, so the
         // monster half of this file has something real to drive.
@@ -85,6 +85,9 @@ struct WeaponProps final : public server::lua::PropCatalogueView {
         {"ammo_shells", 8, du(10), du(16), fx::zero()},
         {"rocket",     53, du(11), du(16), du(20 * 35)},
         {"arachno_plasma", 52, du(13), du(8), du(25 * 35)},
+        // What Doom's humans drop (doom_monsters.lua `drops`).
+        {"ammo_clip",  80, du(10), du(16), fx::zero()},
+        {"w_chaingun", 73, du(10), du(16), fx::zero()},
     };
 
     const Entry* find(u16 kind) const {
@@ -2016,6 +2019,99 @@ int main(int argc, char** argv) {
     // it gains exactly what it travelled: a rocket that stored the slope and
     // never spent it would read 0 here and pass every other check in the file.
     CHECK(up_rise > 0);
+
+    // ================================================================
+    // DROPS (mob_vocab.lua `drops`): what a monster leaves where it dies.
+    {
+        if (!run(R"LUA(
+          local p = dnp.players()[1]
+          for _, e in ipairs(dnp.entities()) do if e:index() ~= p:index() then e:despawn() end end
+          for _, pr in ipairs(dnp.props()) do pr:despawn() end
+          mobs.reset()
+          local pp = p:pos()
+          local z = mobs.spawn('zombieman', vec3.new(pp.x + fx.int(6), pp.y, pp.z))
+          drop_at = z:pos()
+          mobs.hurt(z, 1000, nil)
+          drop_clips, drop_others, drop_far = 0, 0, 0
+          for _, pr in ipairs(dnp.props()) do
+            if pr:name() == 'ammo_clip' then
+              drop_clips = drop_clips + 1
+              if dnp.length(vec3.new(pr:pos().x - drop_at.x, pr:pos().y - drop_at.y, fx.int(0))) > fx.int(1) then
+                drop_far = drop_far + 1
+              end
+            else drop_others = drop_others + 1 end
+          end
+        )LUA", "a zombieman dies")) return 1;
+        std::printf("  a zombieman killed left %d clip(s), %d other prop(s)\n",
+                    (int)num("drop_clips"), (int)num("drop_others"));
+        CHECK(num("drop_clips") == 1);
+        CHECK(num("drop_far") == 0);      // at the body
+        CHECK(num("drop_others") == 0);   // CONTROL: and nothing else
+
+        // THE WEIGHTED CHOICE, by the numbers: a medikit one time in four.
+        // Counted by standing in for dnp.spawn_prop, so 800 rolls do not fill
+        // the prop table.
+        if (!run(R"LUA(
+          local p = dnp.players()[1]
+          local real = dnp.spawn_prop
+          local seen = {}
+          dnp.spawn_prop = function(name, at) seen[#seen + 1] = { name = name, at = at } return nil end
+          local rec = { e = p, def = { name = 'test', drops = {
+            { one_of = { { item = 'medikit', weight = 1 }, { weight = 3 } } } } } }
+          for _ = 1, 800 do mobs.drop_loot(rec) end
+          drop_medikits = #seen
+          -- CONTROL: the weight is what decides -- three to one the other way.
+          seen = {}
+          rec.def.drops = { { one_of = { { item = 'medikit', weight = 3 }, { weight = 1 } } } }
+          for _ = 1, 800 do mobs.drop_loot(rec) end
+          drop_medikits_heavy = #seen
+          -- COUNT: three of a thing are three places, round the body.
+          seen = {}
+          rec.def.drops = { { item = 'ammo_clip', count = 3 } }
+          mobs.drop_loot(rec)
+          drop_three = #seen
+          local spots = {}
+          for _, s in ipairs(seen) do spots[tostring(s.at.x.raw) .. ',' .. tostring(s.at.y.raw)] = true end
+          drop_spots = 0
+          for _ in pairs(spots) do drop_spots = drop_spots + 1 end
+          dnp.spawn_prop = real
+        )LUA", "rolling the choice")) return 1;
+        std::printf("  a medikit at 1:3 dropped %d times in 800, at 3:1 %d; three clips in %d spots\n",
+                    (int)num("drop_medikits"), (int)num("drop_medikits_heavy"), (int)num("drop_spots"));
+        CHECK(num("drop_medikits") > 140 && num("drop_medikits") < 260);
+        CHECK(num("drop_medikits_heavy") > 540 && num("drop_medikits_heavy") < 660);
+        CHECK(num("drop_three") == 3 && num("drop_spots") == 3);
+
+        // REFUSED AT LOAD, each with a complaint, and the bad entry not kept.
+        if (!run(R"LUA(
+          local before = #mobs.problems
+          local function check(drops)
+            local d = { drops = drops }
+            mobs.check_drops(d, 'mob test')
+            return d.drops
+          end
+          drop_bad = 0
+          local cases = {
+            { { } },                                          -- neither item nor one_of
+            { { item = 'ammo_clip', one_of = { { weight = 1 } } } }, -- both
+            { { item = 'no_such_thing' } },                   -- not in the catalogue
+            { { item = 'ammo_clip', cuont = 2 } },            -- a typo
+            { { one_of = { { item = 'medikit', weight = 0 } } } }, -- weight 0
+            { { one_of = { } } },                             -- an empty choice
+          }
+          for _, c in ipairs(cases) do if check(c) == nil then drop_bad = drop_bad + 1 end end
+          drop_complaints = #mobs.problems - before
+          -- CONTROL: a good table is kept whole, with no complaint.
+          local before_good = #mobs.problems
+          local good = check({ { item = 'ammo_clip' }, { one_of = { { item = 'medikit', weight = 2 }, { weight = 1 } } } })
+          drop_good = (good ~= nil and #good == 2 and #mobs.problems == before_good) and 1 or 0
+        )LUA", "refusing bad drops")) return 1;
+        std::printf("  %d of 6 bad drop tables refused, with %d complaints\n",
+                    (int)num("drop_bad"), (int)num("drop_complaints"));
+        CHECK(num("drop_bad") == 6);
+        CHECK(num("drop_complaints") >= 6);
+        CHECK(num("drop_good") == 1);
+    }
 
     // ================================================================
     // PARITY: THE TWO MACHINES, TICK BY TICK (docs/WEAPON_PREDICTION.md).

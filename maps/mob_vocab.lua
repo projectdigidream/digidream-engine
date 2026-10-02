@@ -149,6 +149,37 @@ mob_vocab = {
     { name = "corpse", type = "bool", optional = true,
       doc = "Whether the body stays after the death state's sequence ends. " ..
             "Corpses are capped and recycled oldest-first by the runtime." },
+    { name = "drops", type = "table", optional = true,
+      doc = "What this mob leaves where it dies: a LIST of entries (see " ..
+            "drop_fields), each either an `item` that always drops or a " ..
+            "`one_of` weighted choice, which can include nothing. Rolled on " ..
+            "the server the moment it dies, so every client sees one outcome. " ..
+            "An item is a catalogue name, picked up like any other: a dropped " ..
+            "clip gives a clip's worth, not Doom's half." },
+  },
+
+  -- ---------------------------------------------------------------- drops
+  --
+  -- One entry of a mob's `drops`. Exactly one of `item` and `one_of`.
+  drop_fields = {
+    { name = "item", type = "string", optional = true,
+      doc = "A catalogue name (assets/props.txt): placed at the body, every time." },
+    { name = "count", type = "int", optional = true,
+      doc = "How many of it, or of what `one_of` picks. Defaults to 1; spread " ..
+            "round the body so they do not stack in one spot." },
+    { name = "one_of", type = "table", optional = true,
+      doc = "A list of weighted choices (see drop_choice_fields), ONE of which " ..
+            "drops. A choice with no `item` is nothing, which is how a drop " ..
+            "is made a chance: { {item = 'medikit', weight = 1}, {weight = 3} } " ..
+            "is a medikit one time in four." },
+  },
+
+  -- One choice of a `one_of`.
+  drop_choice_fields = {
+    { name = "item", type = "string", optional = true,
+      doc = "A catalogue name, or absent for nothing." },
+    { name = "weight", type = "int",
+      doc = "Its share against the others' weights, at least 1." },
   },
 
   -- ---------------------------------------------------------------- swing

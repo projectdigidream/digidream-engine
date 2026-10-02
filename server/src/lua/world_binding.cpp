@@ -1248,6 +1248,19 @@ int l_dnp_side(lua_State* L) {
 // By NAME, resolved through the catalogue the operator ships. A script naming a
 // prop that is not installed gets nil and a line in the log, rather than a
 // silent slot-zero entity -- "the key did not appear" should say which key.
+// dnp.prop_kind(name) -> the catalogue kind of a record by name, or nil. For a
+// loader that wants to refuse a misspelt item when it reads the table rather
+// than when the first one fails to spawn.
+int l_dnp_prop_kind(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    size_t len = 0;
+    const char* name = luaL_checklstring(L, 1, &len);
+    const u16 kind = (ctx.props == nullptr || ctx.props->empty()) ? 0 : ctx.props->kind_by_name(name, len);
+    if (kind == 0) lua_pushnil(L);
+    else lua_pushnumber(L, kind);
+    return 1;
+}
+
 int l_dnp_spawn_prop(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     // HELD BACK while a level is restored: whatever its scripts place as they
@@ -2883,6 +2896,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"sectors", l_dnp_sectors},
     {"sector", l_dnp_sector},
     {"spawn_prop", l_dnp_spawn_prop},
+    {"prop_kind", l_dnp_prop_kind},
     {"spawn_enemy", l_dnp_spawn_enemy},
     {"hitscan", l_dnp_hitscan},
     {"can_see", l_dnp_can_see},

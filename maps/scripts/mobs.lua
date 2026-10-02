@@ -97,6 +97,8 @@ local ACT = index_by_name(vocab.actions)
 local STATE_FIELD = index_by_name(vocab.state_fields)
 local MOB_FIELD = index_by_name(vocab.mob_fields)
 local SWING_FIELD = index_by_name(vocab.swing_fields)
+local DROP_FIELD = index_by_name(vocab.drop_fields or {})
+local DROP_CHOICE_FIELD = index_by_name(vocab.drop_choice_fields or {})
 local MISSILE_FIELD = index_by_name(vocab.missile_fields)
 
 -- THE CONTROL FOR THE VOCABULARY ITSELF.
@@ -357,6 +359,73 @@ end
 -- refused loudly rather than discovered when somebody walks into a room. The
 -- server logs each problem on its own line; the editor shows them next to the
 -- field.
+-- A mob's `drops` (mob_vocab.lua drop_fields): a list of entries, each exactly
+-- one of an `item` and a `one_of` list of weighted choices. Items are checked
+-- against the catalogue when there is one to ask (a test harness may not).
+local function check_drops(d, where)
+  local dwhere = where .. " drops"
+  if type(d.drops) ~= "table" or #d.drops == 0 then
+    complain("%s: must be a list of entries, each {item = ...} or {one_of = {...}}", dwhere)
+    d.drops = nil
+    return
+  end
+  local function known(item, at)
+    if type(item) ~= "string" then
+      complain("%s: `item` must be a catalogue name", at)
+      return false
+    end
+    if dnp ~= nil and dnp.prop_kind ~= nil and dnp.prop_kind(item) == nil then
+      complain("%s: `item` '%s' is not in the catalogue", at, item)
+      return false
+    end
+    return true
+  end
+  local kept = {}
+  for i, e in ipairs(d.drops) do
+    local ewhere = ("%s entry %d"):format(dwhere, i)
+    local ok = type(e) == "table"
+    if not ok then complain("%s: must be a table", ewhere) end
+    if ok then
+      for k in pairs(e) do
+        if DROP_FIELD[k] == nil then complain("%s: has no field named `%s`", ewhere, k); ok = false end
+      end
+    end
+    if ok and (e.item ~= nil) == (e.one_of ~= nil) then
+      complain("%s: needs exactly one of `item` and `one_of`", ewhere)
+      ok = false
+    end
+    if ok and e.count ~= nil and (type(e.count) ~= "number" or e.count < 1 or e.count ~= math.floor(e.count)) then
+      complain("%s: `count` must be a whole number, at least 1", ewhere)
+      ok = false
+    end
+    if ok and e.item ~= nil then ok = known(e.item, ewhere) end
+    if ok and e.one_of ~= nil then
+      if type(e.one_of) ~= "table" or #e.one_of == 0 then
+        complain("%s: `one_of` must be a list of {item = ..., weight = n}", ewhere)
+        ok = false
+      else
+        for j, c in ipairs(e.one_of) do
+          local cwhere = ("%s choice %d"):format(ewhere, j)
+          if type(c) ~= "table" then complain("%s: must be a table", cwhere); ok = false
+          else
+            for k in pairs(c) do
+              if DROP_CHOICE_FIELD[k] == nil then complain("%s: has no field named `%s`", cwhere, k); ok = false end
+            end
+            if type(c.weight) ~= "number" or c.weight < 1 or c.weight ~= math.floor(c.weight) then
+              complain("%s: `weight` must be a whole number, at least 1", cwhere)
+              ok = false
+            end
+            if c.item ~= nil and not known(c.item, cwhere) then ok = false end
+          end
+        end
+      end
+    end
+    -- A broken entry is dropped from the table, not half-run at a death.
+    if ok then kept[#kept + 1] = e end
+  end
+  d.drops = (#kept > 0) and kept or nil
+end
+
 function M.load(data)
   if type(data) ~= "table" then
     error("mobs.load: expected a table of { missiles = ..., mobs = ... }")
@@ -472,6 +541,12 @@ function M.load(data)
         end
       end
     end
+
+    -- THE DROPS: a list of entries, each an item or a weighted choice. Checked
+    -- here, at load, so a misspelt item is a complaint now rather than a
+    -- monster that silently leaves nothing -- or a raise in the middle of
+    -- somebody's death, which is worse.
+    if d.drops ~= nil then check_drops(d, where) end
 
     defs[name] = d
   end
@@ -2184,6 +2259,59 @@ end
 -- something, that a ray ended on somebody. What that COSTS is here. `by` is
 -- the mob that did it, or nil for a player, and it is what makes infighting
 -- and pain attribution possible at all.
+-- WHAT A MOB LEAVES WHERE IT DIES (mob_vocab.lua drops): each entry's item, or
+-- one roll of a weighted choice, from the server's own stream so the outcome is
+-- one fact every client then sees. Several items are spread round the body on a
+-- golden-angle ring, so a drop of three is three things to walk over rather than
+-- one sprite with two more hidden inside it.
+local DROP_SPREAD = fx.frac(1, 2)
+local GOLDEN_BRAD = 1640531527          -- 2^32 / phi^2: successive items never line up
+local drop_failures = {}
+local function drop_loot(m)
+  local list = m.def.drops
+  if list == nil or not m.e:valid() then return end
+  local p = m.e:pos()
+  local placed = 0
+  local function place(item, count)
+    for _ = 1, count do
+      local at = p
+      if placed > 0 then
+        local d = dnp.dir((placed * GOLDEN_BRAD) % 4294967296)
+        at = vec3.new(p.x + d.x * DROP_SPREAD, p.y + d.y * DROP_SPREAD, p.z)
+      end
+      -- Protected: an item the catalogue lost since load is a complaint, not a
+      -- raise in the middle of a death.
+      local ok, err = pcall(dnp.spawn_prop, item, at)
+      if not ok and not drop_failures[item] then
+        drop_failures[item] = true
+        print(("mobs: %s could not drop '%s': %s"):format(m.def.name, item, tostring(err)))
+      end
+      placed = placed + 1
+    end
+  end
+  for _, entry in ipairs(list) do
+    local n = entry.count or 1
+    if entry.item ~= nil then
+      place(entry.item, n)
+    else
+      local total = 0
+      for _, c in ipairs(entry.one_of) do total = total + c.weight end
+      local r = dnp.random(1, total)
+      for _, c in ipairs(entry.one_of) do
+        r = r - c.weight
+        if r <= 0 then
+          if c.item ~= nil then place(c.item, n) end
+          break
+        end
+      end
+    end
+  end
+end
+M.drop_loot = drop_loot
+-- For a test: the drops checker, which otherwise only M.load reaches (and
+-- M.load refuses a second call).
+M.check_drops = function(d, where) return check_drops(d, where) end
+
 function hurt(target, amount, by)
   if target == nil or not target:valid() then return end
   local m = live[target:index()]
@@ -2287,6 +2415,8 @@ function hurt(target, amount, by)
     for _, a in ipairs((dst and dst.sequence) or {}) do
       if (a.at or 0) == 0 and acts[a.action] then acts[a.action](m, a) end
     end
+    -- What it leaves, at the body, before the body may go.
+    drop_loot(m)
     if m.def.corpse then
       corpses[#corpses + 1] = m
     elseif m.e:valid() then
