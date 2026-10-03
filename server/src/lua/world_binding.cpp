@@ -2189,7 +2189,7 @@ int l_dnp_sweep(lua_State* L) {
     return 2;
 }
 
-// dnp.sweep_hit(from, dir, distance, radius, [ignore_a], [ignore_b])
+// dnp.sweep_hit(from, dir, distance, radius, [ignore_a], [ignore_b], [slope])
 //   -> nil                     nothing in reach
 //   -> false, impact           the map stopped it
 //   -> entity, impact          an entity stopped it
@@ -2202,6 +2202,10 @@ int l_dnp_sweep(lua_State* L) {
 //
 // The three returns are distinguishable without a flag: nil is nothing,
 // `false` is a wall, an entity is an entity.
+//
+// `slope`, a missile's climb per unit: given, a step, a ceiling or the floor
+// stops it too (World::sweep_entities), and the impact is at the height it met
+// them. A rocket fired at your feet bursts there instead of sinking through.
 int l_dnp_sweep_hit(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const fx3 from = ctx.to_world(check_vec3(L, 1));
@@ -2230,8 +2234,9 @@ int l_dnp_sweep_hit(lua_State* L) {
     const i32 ignore_b = any_handle(6);
 
     const fx2 dir = normalize(fx2{dir3.x, dir3.y});
+    const fx slope = lua_isnoneornil(L, 7) ? physics::RAY_NO_HEIGHT : check_fx(L, 7);
     const sim::World::SweepHit hit =
-        ctx.world->sweep_entities(from, dir, dist, radius, ignore_a, ignore_b, -1);
+        ctx.world->sweep_entities(from, dir, dist, radius, ignore_a, ignore_b, -1, slope);
 
     if (!hit.hit) { lua_pushnil(L); return 1; }
 
@@ -2245,7 +2250,9 @@ int l_dnp_sweep_hit(lua_State* L) {
     // for the same reason.
     const fx back = fx::from_frac(1, 10);
     const fx d = hit.distance > back ? hit.distance - back : fx::zero();
-    push_vec3(L, ctx.to_local(fx3{from.x + dir.x * d, from.y + dir.y * d, from.z}));
+    // The height is the hit's: the start's for a flat sweep, and on a sloped
+    // one where the line met what stopped it (on the floor, for a floor).
+    push_vec3(L, ctx.to_local(fx3{from.x + dir.x * d, from.y + dir.y * d, hit.point.z}));
     return 2;
 }
 

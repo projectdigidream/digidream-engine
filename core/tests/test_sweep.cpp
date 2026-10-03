@@ -347,6 +347,69 @@ static void test_only_solid_things_stop_it() {
     CHECK(h3.entity_hit && h3.entity == pickup);
 }
 
+// Two rooms OPEN to each other at x = 40, the east one's floor a step of 2
+// higher: a flat missile at height 1 meets the step's face.
+struct Stepped {
+    MapStorage store;
+    MapData    view{};
+    Stepped() {
+        const fx2 west[] = {{F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}};
+        const fx2 east[] = {{F(40), F(0)}, {F(80), F(0)}, {F(80), F(40)}, {F(40), F(40)}};
+        store.add_sector(west, 4, F(0), F(40), 1);
+        store.add_sector(east, 4, F(2), F(40), 1);
+        for (u16 i = 0; i < 4; ++i)
+            store.add_side(0, i, static_cast<u16>((i + 1) % 4), i == 1 ? 1 : NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i)
+            store.add_side(1, i, static_cast<u16>((i + 1) % 4), i == 3 ? 0 : NO_SECTOR, 0);
+    }
+    void attach(World& w) {
+        view = store.view();
+        w.set_map(&view);
+        w.set_map_storage(&store);
+    }
+};
+
+// A MISSILE FALLS. Fired down it meets the floor, up the ceiling, and flat into
+// a higher room the step -- each where its line meets it.
+static void test_a_sloped_missile_meets_the_planes() {
+    std::printf("sweep: a sloped missile stops on the floor, the ceiling and a step\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    // Down at 1 in 4 from height 2: the floor is 8 along.
+    const auto down = w.sweep_entities(fx3{F(10), F(20), F(2)}, EAST, F(20), Ff(1, 8),
+                                       -1, -1, -1, Ff(-1, 4));
+    CHECK(down.hit && !down.entity_hit);
+    CHECK(down.distance > F(7) && down.distance < F(9));
+    CHECK(down.point.z == F(0));
+    // CONTROL: the same sweep flat (no slope given) reaches the far wall.
+    const auto flat = w.sweep_entities(fx3{F(10), F(20), F(2)}, EAST, F(20), Ff(1, 8), -1, -1, -1);
+    CHECK(!flat.hit);
+    // CONTROL: and with a step short of the floor it is still flying.
+    const auto shortstep = w.sweep_entities(fx3{F(10), F(20), F(2)}, EAST, F(4), Ff(1, 8),
+                                            -1, -1, -1, Ff(-1, 4));
+    CHECK(!shortstep.hit);
+    // Up at 1 in 1 from 30: the ceiling at 40 is 10 along, and it is met there.
+    const auto up = w.sweep_entities(fx3{F(10), F(20), F(30)}, EAST, F(20), Ff(1, 8),
+                                     -1, -1, -1, F(1));
+    CHECK(up.hit && up.point.z == F(40));
+    CHECK(up.distance > F(9) && up.distance < F(11));
+
+    static Stepped st;
+    static World w2;
+    w2.reset();
+    st.attach(w2);
+    const auto step = w2.sweep_entities(fx3{F(30), F(20), F(1)}, EAST, F(20), Ff(1, 8),
+                                        -1, -1, -1, fx::zero());
+    CHECK(step.hit && step.distance <= F(10) + Ff(1, 4));
+    // CONTROL: over the step it flies on.
+    const auto over = w2.sweep_entities(fx3{F(30), F(20), F(3)}, EAST, F(20), Ff(1, 8),
+                                        -1, -1, -1, fx::zero());
+    CHECK(!over.hit);
+}
+
 // A sphere of nonzero size hits things a zero-width ray would slip past. That
 // is the whole difference between this and a raycast, so it is worth an
 // assertion rather than an assumption.
@@ -490,6 +553,7 @@ int main() {
     test_the_shooter_is_skipped();
     test_both_ignores_are_needed();
     test_only_solid_things_stop_it();
+    test_a_sloped_missile_meets_the_planes();
     test_the_radius_matters();
     test_the_point_is_on_the_ray();
     test_degenerate_casts();

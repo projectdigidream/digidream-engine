@@ -722,7 +722,8 @@ unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned
 
 // A sphere moving through this world (World::sweep_entities): what a missile
 // meets, the question the server's flight asks of its world. In: from xyz,
-// heading xy (a unit vector), distance, radius as i64. Out: the distance and
+// heading xy (a unit vector), distance, radius, slope as i64 -- the slope at
+// INT64_MIN for a flat sweep, as RAY_NO_HEIGHT. Out: the distance and
 // the point as i64; hit, entity hit, entity as words. Returns whether it hit.
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long long* out64,
@@ -730,7 +731,8 @@ int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long
     const fx3 from{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
     const fx2 dir{fx::from_raw(in64[3]), fx::from_raw(in64[4])};
     const sim::World::SweepHit h = w->sweep_entities(from, dir, fx::from_raw(in64[5]),
-                                                     fx::from_raw(in64[6]), ignore, -1, -1);
+                                                     fx::from_raw(in64[6]), ignore, -1, -1,
+                                                     fx::from_raw(in64[7]));
     out64[0] = h.distance.raw;
     out64[1] = h.point.x.raw; out64[2] = h.point.y.raw; out64[3] = h.point.z.raw;
     out32[0] = h.hit ? 1u : 0u; out32[1] = h.entity_hit ? 1u : 0u; out32[2] = h.entity;

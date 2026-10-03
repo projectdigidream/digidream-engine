@@ -1804,7 +1804,11 @@ function acts.damage_area(m, a)
   -- one level up.
   local p = m.impact or m.e:pos()
   for _, e in ipairs(dnp.entities() or {}) do
-    if e:valid() and (a.hurts_owner ~= false or e:index() ~= m.idx) then
+    -- The owner is in it unless `hurts_owner = false`; with `shoves_owner`
+    -- too, it is SHOVED and never hurt -- a rocket jump.
+    local own = e:valid() and e:index() == m.idx
+    local spared = own and a.hurts_owner == false
+    if e:valid() and (not spared or a.shoves_owner) then
       local q = e:pos()
       local dx, dy, dz = q.x - p.x, q.y - p.y, q.z - p.z
       local d2 = dx * dx + dy * dy + dz * dz
@@ -1823,7 +1827,7 @@ function acts.damage_area(m, a)
           share = (a.radius - d) / a.radius
           dmg = (fx.int(a.damage) * share).int
         end
-        if dmg > 0 then hurt(e, dmg, m) end
+        if dmg > 0 and not spared then hurt(e, dmg, m) end
         -- Knockback and slow apply whether or not the damage rounded to zero at
         -- the edge of the falloff: being on the fringe of a blast still shoves
         -- you, and a wave that pushes without hurting is a real thing to write.
@@ -2760,9 +2764,15 @@ local function update_missiles(tick)
       -- ITSELF and its owner. The missile is an entity sitting exactly at
       -- `p`, so skipping only the owner stops it at distance zero on the tick
       -- it is fired; skipping only itself bursts it on the mob that threw it.
+      -- AT ITS SLOPE, so the floor, a ceiling and a step stop it where its
+      -- line meets them: a rocket fired at your feet bursts there, rather than
+      -- sinking through the floor until a wall turned up. Gravity is part of
+      -- the line for the tick, as the move below adds it.
+      local climb = s.slope or ZERO
+      if def.gravity and def.gravity ~= ZERO and step > ZERO then climb = climb + def.gravity / step end
       local what, at = dnp.sweep_hit(p, s.dir, step,
                                      s.radius or def.radius or du(11),
-                                     s.p, s.owner and s.owner.e or nil)
+                                     s.p, s.owner and s.owner.e or nil, climb)
       local hit = (what ~= nil and what ~= false) and what or nil
       local blocked = what ~= nil
       local nx, ny = p.x + s.dir.x * step, p.y + s.dir.y * step

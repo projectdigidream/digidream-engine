@@ -10,9 +10,16 @@ let fails = 0
 const check = (ok, label) => { checks++; if (!ok) { fails++; console.log(`  FAIL ${label}`) } }
 const FX = (n) => BigInt(Math.round(n * 4294967296))
 
-// A wall at x = 10: a sweep along +x stops there.
+// A wall at x = 10: a sweep along +x stops there. And a floor at z = 0,
+// which a sloped sweep meets where its line does (World::sweep_entities).
 const world = {
-  sweep (from, dir, dist, radius) {
+  sweep (from, dir, dist, radius, ignore, slope = null) {
+    if (slope !== null && slope < 0n) {
+      const along = (from.z << 32n) / -slope
+      if (along <= dist) {
+        return { distance: along, point: { x: from.x + ((dir.x * along) >> 32n), y: from.y, z: 0n }, entity: null }
+      }
+    }
     const wall = FX(10)
     if (dir.x <= 0n) return null
     const room = wall - from.x - radius
@@ -82,6 +89,22 @@ for (let i = 0; i < 3; i++) g3.tick()
 check(g3.hides('2101/2', 53, { x: 1.5, y: -20 }), 'the next rocket in the same slot is judged afresh, and is ours')
 check(!g3.hides('2101/1', 53, { x: 1.5, y: -20 }),
       'CONTROL: keyed by the slot alone it would still be tied to the first ghost, and shown')
+
+// FIRED AT THE FLOOR: a rocket aimed down bursts on it, at its height, well
+// short of the wall -- the rocket jump's half of the flight.
+{
+  const before = drawn.bursts.length
+  const g4 = new GhostMissiles({ world, agent: 0, draw, now: () => t })
+  g4.launch({ pos: { x: FX(1), y: FX(5), z: FX(1) }, dir: { x: FX(1), y: 0n }, slope: FX(-1), aim: 0, missile })
+  for (let i = 0; i < 20; i++) g4.tick()
+  check(drawn.bursts.length === before + 1, 'a rocket fired down bursts')
+  check(drawn.at.z === 0 && drawn.at.x < 2.1, `on the floor, a unit along (${drawn.at.x.toFixed(2)}, ${drawn.at.z})`)
+  // CONTROL: flat, from the same place, it flies on to the wall.
+  const g5 = new GhostMissiles({ world, agent: 0, draw, now: () => t })
+  g5.launch({ pos: { x: FX(1), y: FX(5), z: FX(1) }, dir: { x: FX(1), y: 0n }, slope: 0n, aim: 0, missile })
+  for (let i = 0; i < 20; i++) g5.tick()
+  check(drawn.at.x > 4 && drawn.at.z === 1, 'CONTROL: flat, it is still flying above the floor')
+}
 
 console.log(`ghostmissiles: ${checks} checks, ${fails} failures`)
 process.exit(fails ? 1 : 0)

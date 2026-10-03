@@ -471,8 +471,13 @@ public:
         fx3  point{};             // where it stopped
         fx   distance{};          // how far along `dir` that was
     };
+    // `slope`, when given, is a MISSILE's: it climbs `slope` per unit along
+    // `dir`, and the map stops it where that line meets a step, a ceiling or
+    // the floor -- `point.z` is then where it met it. Left out, the sweep is
+    // flat and only walls stop it, as for every caller before missiles fell.
     SweepHit sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
-                            i32 ignore_a, i32 ignore_b, i32 sector) const noexcept;
+                            i32 ignore_a, i32 ignore_b, i32 sector,
+                            fx slope = physics::RAY_NO_HEIGHT) const noexcept;
 
     u32 tick() const noexcept { return tick_; }
 

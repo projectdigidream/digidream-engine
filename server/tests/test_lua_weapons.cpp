@@ -2041,12 +2041,13 @@ int main(int argc, char** argv) {
               m.impact = c
               mobs.acts.damage_area(m, { damage = 1, radius = fx.int(3), falloff = true,
                                           hurts_owner = false, )LUA") +
-                (knockback ? "knockback = fx.int(12)" : "knockback = fx.int(0)") + R"LUA( })
+                (knockback ? "knockback = fx.int(12), lift = fx.int(6)" : "knockback = fx.int(0)") + R"LUA( })
               m.impact = nil
             )LUA";
             if (!run(src.c_str(), "a blast between two bodies")) return false;
             commands.apply(world, [](u32) {});
-            if (!run("shove_vz = dnp.length(shove_z:vel()); shove_vd = dnp.length(shove_d:vel())",
+            if (!run("shove_up = shove_z:vel().z.raw / 4294967296\n"
+                     "shove_vz = dnp.length(shove_z:vel()); shove_vd = dnp.length(shove_d:vel())",
                      "their velocities")) return false;
             for (int i = 0; i < 30; ++i) server_tick(0);
             return run("shove_mz = dnp.length(vec3.new(shove_z:pos().x - shove_z0.x, shove_z:pos().y - shove_z0.y, fx.int(0)))\n"
@@ -2056,14 +2057,56 @@ int main(int argc, char** argv) {
         };
         if (!shove(true)) return 1;
         const double vz = num("shove_vz"), vd = num("shove_vd"), mz = num("shove_mz"), md = num("shove_md");
+        const double up = num("shove_up");
         if (!shove(false)) return 1;
-        const double mz0 = num("shove_mz");
+        const double mz0 = num("shove_mz"), up0 = num("shove_up");
+        std::printf("  and up: the zombieman at %.2f (no knockback or lift: %.2f)\n", up, up0);
+        CHECK(up > 0.5);                          // a blast lifts a monster too
+        CHECK(up0 < 0.01);                        // CONTROL: without lift it does not rise
         std::printf("  a blast: zombieman thrown at %.2f, demon at %.2f; after half a second %.2f and %.2f "
                     "units (with no knockback: %.2f)\n", vz, vd, mz, md, mz0);
         CHECK(vz > 0.5 && vd > 0.1);
         CHECK(vz > vd * 3.5 && vz < vd * 4.5);   // mass 100 against 400
         CHECK(mz > md * 2);                       // and it went further
         CHECK(mz > mz0 + 0.3);                    // CONTROL: the shove is what moved it
+    }
+
+    // ================================================================
+    // A ROCKET JUMP: the real rocket, fired at the floor at your own feet.
+    // It bursts ON the floor (it used to sink through it until it met a wall),
+    // and its blast throws its owner up and never hurts it (`shoves_owner`).
+    // CONTROL: the same rocket fired level flies away, and nobody rises.
+    {
+        const auto jump = [&](const char* slope) {
+            const std::string src = std::string(R"LUA(
+              local p = dnp.players()[1]
+              for _, e in ipairs(dnp.entities()) do if e:index() ~= p:index() then e:despawn() end end
+              for _, pr in ipairs(dnp.props()) do pr:despawn() end
+              mobs.reset()
+              p:set_hp(100)
+              rj_z0 = p:pos().z
+              rj_top = rj_z0
+              rj_owner = mobs.launch_from(p, 'rocket', p:facing(), fx.frac(1, 2), )LUA") + slope + R"LUA()
+            )LUA";
+            if (!run(src.c_str(), "a rocket at the floor")) return false;
+            for (int i = 0; i < 40; ++i) {
+                server_tick(0);
+                if (!run("local p = dnp.players()[1]; if p:pos().z > rj_top then rj_top = p:pos().z end",
+                         "how high")) return false;
+            }
+            return run("local p = dnp.players()[1]\n"
+                       "rj_rose = (rj_top - rj_z0).raw / 4294967296\n"
+                       "rj_hp = p:hp()", "the jump");
+        };
+        if (!jump("fx.int(-2)")) return 1;
+        const double rose = num("rj_rose"), hp = num("rj_hp");
+        if (!jump("fx.int(0)")) return 1;
+        const double rose0 = num("rj_rose");
+        std::printf("  a rocket at your feet: rose %.2f units, hp %d (fired level: rose %.2f)\n",
+                    rose, (int)hp, rose0);
+        CHECK(rose > 1.0);            // thrown up
+        CHECK(hp == 100);             // and not hurt
+        CHECK(rose0 < 0.05);          // CONTROL: level, it flew away and nothing happened
     }
 
     // ================================================================

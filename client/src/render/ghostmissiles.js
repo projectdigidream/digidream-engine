@@ -63,12 +63,14 @@ export class GhostMissiles {
       g.age++
       if (g.age > g.m.life) { g.burstLeft = 0; g.expired = true; continue }
       const step = g.m.speed / 60n
-      const hit = this.world.sweep(g.pos, g.dir, step, g.m.radius, this.agent)
+      // At its slope, as mobs.lua's flight sweeps: the floor, a ceiling and
+      // a step stop it where its line meets them.
+      const hit = this.world.sweep(g.pos, g.dir, step, g.m.radius, this.agent, g.slope)
       if (hit) {
-        // mobs.lua: stop a tenth short of what it met, at the flight's height.
+        // dnp.sweep_hit: a tenth short of what it met, at the height it met it.
         const back = FX_ONE / 10n
         const d = hit.distance > back ? hit.distance - back : 0n
-        g.pos = { x: g.pos.x + mul(g.dir.x, d), y: g.pos.y + mul(g.dir.y, d), z: g.pos.z }
+        g.pos = { x: g.pos.x + mul(g.dir.x, d), y: g.pos.y + mul(g.dir.y, d), z: hit.point.z }
         this.#burst(g)
       } else {
         g.pos = { x: g.pos.x + mul(g.dir.x, step), y: g.pos.y + mul(g.dir.y, step),

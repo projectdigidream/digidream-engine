@@ -648,7 +648,10 @@ mob_vocab = {
                { name = "slow", type = "fx", optional = true },
                { name = "slow_ticks", type = "int", optional = true },
                { name = "falloff", type = "bool", optional = true },
-               { name = "hurts_owner", type = "bool", optional = true } },
+               { name = "hurts_owner", type = "bool", optional = true },
+               { name = "shoves_owner", type = "bool", optional = true,
+                 doc = "With `hurts_owner` false: the owner is still shoved " ..
+                       "and lifted, never hurt -- a rocket jump." } },
       doc = "A blast. `hurts_owner` false is a rocket that does not kill the " ..
             "cyberdemon that fired it." },
 

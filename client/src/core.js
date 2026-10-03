@@ -678,17 +678,20 @@ export class WasmWorld {
 
   /**
    * A sphere through this world (World::sweep_entities), all in fx raw
-   * BigInts: from {x,y,z}, a unit heading {x,y}, a distance and a radius.
-   * Returns null, or { distance, point, entity } -- entity null for a wall.
+   * BigInts: from {x,y,z}, a unit heading {x,y}, a distance and a radius --
+   * and a missile's `slope`, given which the floor, a ceiling and a step stop
+   * it too and `point.z` is where it met them.
+   * Returns null, or { distance, point, entity } -- entity null for the map.
    */
-  sweep (from, dir, dist, radius, ignore = -1) {
+  sweep (from, dir, dist, radius, ignore = -1, slope = null) {
     const c = this.core
     const M = c.M
-    if (!c.sweep64) { c.sweep64 = M._malloc(7 * 8); c.sweepOut64 = M._malloc(4 * 8); c.sweepOut32 = M._malloc(3 * 4) }
+    if (!c.sweep64) { c.sweep64 = M._malloc(8 * 8); c.sweepOut64 = M._malloc(4 * 8); c.sweepOut32 = M._malloc(3 * 4) }
     const i = c.views.i64
     const b = c.sweep64 / 8
     i[b] = from.x; i[b + 1] = from.y; i[b + 2] = from.z
     i[b + 3] = dir.x; i[b + 4] = dir.y; i[b + 5] = dist; i[b + 6] = radius
+    i[b + 7] = slope ?? -(1n << 63n)          // RAY_NO_HEIGHT: flat
     if (!M._dnp_world_sweep(this.ptr, c.sweep64, ignore, c.sweepOut64, c.sweepOut32)) return null
     const o = c.sweepOut64 / 8
     const u = c.views.u32

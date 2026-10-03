@@ -307,6 +307,12 @@
           "name": "hurts_owner",
           "optional": true,
           "type": "bool"
+        },
+        {
+          "doc": "With `hurts_owner` false: the owner is still shoved and lifted, never hurt -- a rocket jump.",
+          "name": "shoves_owner",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "doc": "A blast. `hurts_owner` false is a rocket that does not kill the cyberdemon that fired it.",

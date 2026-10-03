@@ -1708,7 +1708,7 @@ u64 World::hash() const noexcept {
 // a radius, which are small. Same answer, and it does not saturate.
 World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
                                       i32 ignore_a, i32 ignore_b,
-                                      i32 sector) const noexcept {
+                                      i32 sector, fx slope) const noexcept {
     SweepHit out;
     if (dist <= fx::zero()) return out;
 
@@ -1720,14 +1720,42 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
         const i32 s = sector >= 0
             ? sector
             : geom::find_sector_at(*map_, fx2{from.x, from.y}, from.z, radius);
-        const physics::RayHit wall =
-            physics::raycast(*map_, s, fx2{from.x, from.y}, dir, dist, 0);
+        // A sloped missile's line is tested at the height it crosses each
+        // boundary, so a step, a balcony or a low ceiling stops it.
+        const bool sloped = slope != physics::RAY_NO_HEIGHT;
+        const physics::RayHit wall = sloped
+            ? physics::raycast(*map_, s, fx2{from.x, from.y}, dir, dist, 0,
+                               from.z, from.z + slope * dist)
+            : physics::raycast(*map_, s, fx2{from.x, from.y}, dir, dist, 0);
         if (wall.blocked && wall.distance >= fx::zero() && wall.distance < limit) {
             limit = wall.distance;
             out.hit = true;
             out.distance = wall.distance;
-            out.point = fx3{from.x + dir.x * wall.distance,
-                            from.y + dir.y * wall.distance, from.z};
+            out.point = fx3{from.x + dir.x * wall.distance, from.y + dir.y * wall.distance,
+                            sloped ? from.z + slope * wall.distance : from.z};
+        }
+        // AND THE FLOOR AND CEILING OF WHERE IT ENDS UP. The boundaries are
+        // the cast's; inside one sector only the planes can stop it -- which
+        // is the rocket fired at your own feet, and without this it went down
+        // through the floor and on until it met a wall.
+        if (sloped && slope != fx::zero()) {
+            const fx2 end{from.x + dir.x * limit, from.y + dir.y * limit};
+            const fx end_z = from.z + slope * limit;
+            const i32 es = geom::find_sector(*map_, end);
+            if (es >= 0) {
+                const geom::Sector& sec = map_->sector(static_cast<u32>(es));
+                const fx plane = slope < fx::zero() ? sec.floor_z : sec.ceil_z;
+                const bool through = slope < fx::zero() ? end_z < plane : end_z > plane;
+                if (through) {
+                    fx t = (plane - from.z) / slope;
+                    if (t < fx::zero()) t = fx::zero();
+                    if (t > limit) t = limit;
+                    limit = t;
+                    out.hit = true;
+                    out.distance = t;
+                    out.point = fx3{from.x + dir.x * t, from.y + dir.y * t, plane};
+                }
+            }
         }
     }
 
@@ -1767,7 +1795,8 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
         out.entity_hit = true;
         out.entity = entity;
         out.distance = t;
-        out.point = fx3{from.x + dir.x * t, from.y + dir.y * t, from.z};
+        out.point = fx3{from.x + dir.x * t, from.y + dir.y * t,
+                        slope != physics::RAY_NO_HEIGHT ? from.z + slope * t : from.z};
     };
 
     const auto skipped = [&](u32 e) {
