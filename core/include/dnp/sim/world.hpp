@@ -196,7 +196,10 @@ struct PropEvent {
     PropEventKind kind = PropEventKind::Touch;
 };
 
-inline constexpr u32 MAX_PROP_EVENTS = 64;
+// Room for a crowd: on DOOMWORLD a hundred monsters stand on items every tick,
+// and at 64 the log was full before a player's own touch was reached -- a
+// pickup that silently did not happen.
+inline constexpr u32 MAX_PROP_EVENTS = 1024;
 
 class PropEventLog {
 public:

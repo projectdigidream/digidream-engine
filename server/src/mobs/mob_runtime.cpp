@@ -43,6 +43,16 @@ namespace dnp::server::mobs {
 // tick would have most of them silently refused. Spread by index.
 constexpr u32 REPATH_TICKS = 30;
 
+// A monster's search stops after this many sectors, and one that found no
+// route waits REPATH_FAILED_TICKS before asking again (steering straight at its
+// target meanwhile). On DOOMWORLD -- nine levels, one graph of 7000 sectors --
+// monsters that could not reach the player searched the WHOLE graph every half
+// second, a thousand times in thirty seconds, and dozens landing on one tick
+// made ticks of 40-90 ms. A route that needs more than this is across the
+// region, and steering at the target is as good an answer as any.
+constexpr u32 MAX_EXPAND = 2048;
+constexpr u32 REPATH_FAILED_TICKS = 240;
+
 // A route is followed sector by sector and re-planned every REPATH_TICKS, so a
 // cap this far out is never reached by anything that is still following it.
 // Counted when it is, because a silent truncation is a monster that walks
@@ -277,9 +287,16 @@ bool steer_target(MobRuntime& rt, const sim::World& w, const nav::NavGraph* grap
         // giving up while this one did not.
         m.route_len = 0;
         if (rt.ctx != nullptr && !rt.ctx->take_path_budget(tick)) return true;
+        const u32 was_cap = q.max_expand;
+        q.max_expand = MAX_EXPAND;
         const nav::PathResult r =
             nav::find_path(*w.map(), *graph, q, static_cast<u32>(here),
                            static_cast<u32>(there), body, path, nav::MAX_NAV_NODES, jumps);
+        q.max_expand = was_cap;
+        if (r.status == nav::PathStatus::Unreachable || r.status == nav::PathStatus::GaveUp) {
+            m.repath_at = tick + REPATH_FAILED_TICKS + (m.entity % REPATH_TICKS);
+            ++rt.routes_failed;
+        }
         if (r.status == nav::PathStatus::Ok || r.status == nav::PathStatus::SameSector) {
             u32 n = r.length;
             if (n > MAX_ROUTE) { n = MAX_ROUTE; ++rt.routes_truncated; }

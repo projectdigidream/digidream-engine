@@ -180,6 +180,7 @@ struct MobRuntime {
     u32 thought = 0;          // mobs that took a decision this tick
     u32 lua_actions = 0;      // actions handed back to Lua this tick
     u32 routes_truncated = 0;
+    u32 routes_failed = 0;     // searches that found no route (or gave up), each backing off
 
     void reset() {
         mobs.clear();

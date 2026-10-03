@@ -30,6 +30,8 @@
 //                       which callback, rather than leaving it to be guessed.
 //
 #include <cstddef>
+#include <string>
+#include <unordered_map>
 
 #include "dnp/math/fixed.hpp"
 
@@ -176,6 +178,17 @@ private:
     // Allocator accounting. Members rather than statics so a second Vm in a
     // test does not inherit the first one's usage.
     size_t bytes_ = 0;
+
+    // DNP_LUA_PROFILE=1: a sampling profile of every slow tick, printed with
+    // its warning. Each hook call charges the time since the previous one to
+    // where the script is now -- so time in a binding or the collector lands
+    // on the Lua line that called it, which is the line worth reading.
+    bool profile_ = false;
+    int  hook_step_ = 10000;
+    u64  prof_last_us_ = 0;
+    std::unordered_map<std::string, u64> prof_;
+    void profile_sample(lua_State* L);
+    void profile_dump();
 
     // Budget state, read by the hook.
     u32  used_this_tick_ = 0;

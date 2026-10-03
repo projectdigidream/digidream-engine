@@ -1618,26 +1618,82 @@ void World::resolve_attack(u32 agent) noexcept {
 // "picked up once" is a decision a script makes by removing the prop -- and a
 // key that vanishes is self-limiting in a way an engine-side edge trigger would
 // only duplicate.
+//
+// THROUGH A GRID, and with the same answer as the loop it replaced. That was
+// every prop against every agent, every tick: on DOOMWORLD -- thousands of
+// props, hundreds of monsters in one shared world -- the single largest cost
+// in a server tick, measured. Agents are bucketed by where they stand NOW, and
+// each prop asks only the cells its reach covers; the candidates are put back
+// in ascending index order, so the events come out prop by prop and agent by
+// agent exactly as before. A prop so wide its reach spans too many cells, or a
+// cell crowded past the candidate cap, falls back to the full loop for that
+// prop: the fallback is the definition, so it only ever costs time.
 void World::detect_prop_events() noexcept {
+    // The widest body, so a prop's reach is stated rather than assumed.
+    fx max_radius{};
+    for (u32 a = 0; a < agent_high_water_; ++a) {
+        if (agents_[a].active && params_[a].radius > max_radius) max_radius = params_[a].radius;
+    }
+    // Every active agent at its settled position -- the solid-only grid the
+    // collision pass built is from the tick's start, and is not this question.
+    for (u32 b = 0; b < AGRID_BUCKETS; ++b) agrid_head_[b] = static_cast<u16>(AGRID_EMPTY);
+    for (u32 n = agent_high_water_; n-- > 0;) {
+        if (!agents_[n].active) continue;
+        const fx3 q = agents_[n].pos;
+        const u32 bk = agrid_bucket(q.x.raw >> AGRID_SHIFT, q.y.raw >> AGRID_SHIFT);
+        agrid_next_[n] = agrid_head_[bk];
+        agrid_head_[bk] = static_cast<u16>(n);
+    }
+
+    const auto touch = [&](u32 pi, const PropState& p, u32 a) {
+        const fx3& ap = agents_[a].pos;
+        const fx a_top = ap.z + params_[a].height;
+        if (a_top < p.pos.z) return;
+        if (ap.z > p.pos.z + p.height) return;
+        const fx dx = ap.x - p.pos.x;
+        const fx dy = ap.y - p.pos.y;
+        const fx r = params_[a].radius + p.radius;
+        const i128 d_sq = static_cast<i128>(dx.raw) * dx.raw + static_cast<i128>(dy.raw) * dy.raw;
+        const i128 r_sq = static_cast<i128>(r.raw) * r.raw;
+        if (d_sq > r_sq) return;
+        prop_events_.push(PropEvent{a, MAX_AGENTS + pi, PropEventKind::Touch});
+    };
+
+    u16 cand[AGRID_MAX_CAND];
     for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
         if (!p.active) continue;
-        for (u32 a = 0; a < agent_high_water_; ++a) {
-            if (!agents_[a].active) continue;
-            const fx3& ap = agents_[a].pos;
-
-            const fx a_top = ap.z + params_[a].height;
-            if (a_top < p.pos.z) continue;
-            if (ap.z > p.pos.z + p.height) continue;
-
-            const fx dx = ap.x - p.pos.x;
-            const fx dy = ap.y - p.pos.y;
-            const fx r = params_[a].radius + p.radius;
-            const i128 d_sq = static_cast<i128>(dx.raw) * dx.raw + static_cast<i128>(dy.raw) * dy.raw;
-            const i128 r_sq = static_cast<i128>(r.raw) * r.raw;
-            if (d_sq > r_sq) continue;
-
-            prop_events_.push(PropEvent{a, MAX_AGENTS + pi, PropEventKind::Touch});
+        const fx reach = p.radius + max_radius;
+        const i64 x0 = (p.pos.x - reach).raw >> AGRID_SHIFT;
+        const i64 x1 = (p.pos.x + reach).raw >> AGRID_SHIFT;
+        const i64 y0 = (p.pos.y - reach).raw >> AGRID_SHIFT;
+        const i64 y1 = (p.pos.y + reach).raw >> AGRID_SHIFT;
+        u32 n_cand = 0;
+        bool full = (x1 - x0 + 1) * (y1 - y0 + 1) > AGRID_MAX_CELLS;
+        for (i64 cy = y0; cy <= y1 && !full; ++cy) {
+            for (i64 cx = x0; cx <= x1 && !full; ++cx) {
+                for (u32 i = agrid_head_[agrid_bucket(cx, cy)]; i != AGRID_EMPTY; i = agrid_next_[i]) {
+                    if (n_cand >= AGRID_MAX_CAND) { full = true; break; }
+                    cand[n_cand++] = static_cast<u16>(i);
+                }
+            }
+        }
+        if (full) {
+            for (u32 a = 0; a < agent_high_water_; ++a) if (agents_[a].active) touch(pi, p, a);
+            continue;
+        }
+        // Ascending, and each agent once: two cells can share a bucket.
+        for (u32 k = 1; k < n_cand; ++k) {
+            const u16 v = cand[k];
+            u32 m = k;
+            while (m > 0 && cand[m - 1] > v) { cand[m] = cand[m - 1]; --m; }
+            cand[m] = v;
+        }
+        u32 last = AGRID_EMPTY;
+        for (u32 k = 0; k < n_cand; ++k) {
+            if (cand[k] == last) continue;
+            last = cand[k];
+            touch(pi, p, cand[k]);
         }
     }
 }

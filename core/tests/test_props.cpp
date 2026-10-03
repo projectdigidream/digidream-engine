@@ -841,7 +841,77 @@ static void test_a_minimum_reach_makes_a_ring_rather_than_a_wedge() {
     CHECK(hits_at(F(3), fx::zero()));
 }
 
+// A CROWD, through the grid: on DOOMWORLD every prop was tested against every
+// agent every tick, the largest single cost in a tick. The grid has to report
+// exactly what that loop did -- the same touches in the same order -- so the
+// test computes the loop's answer itself and compares the lists. Over 64 of
+// them, which is where the old log silently dropped the rest; and one prop wide
+// enough to send its query down the full-loop fallback.
+static void test_a_crowd_is_reported_as_the_full_loop_would() {
+    std::printf("props: a crowd's touches, through the grid, match the full loop\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+
+    u32 seed = 12345;
+    const auto rnd = [&](i64 lo, i64 hi) {
+        seed = seed * 1103515245u + 12345u;
+        return lo + static_cast<i64>((seed >> 8) % static_cast<u32>(hi - lo));
+    };
+    u32 agents[300];
+    for (u32 i = 0; i < 300; ++i) {
+        agents[i] = w.spawn(fx3{fx::from_frac(rnd(40, 1560), 40), fx::from_frac(rnd(40, 1560), 40), F(0)});
+    }
+    u32 props[400];
+    for (u32 i = 0; i < 400; ++i) {
+        props[i] = w.spawn_prop(1, fx3{fx::from_frac(rnd(40, 1560), 40), fx::from_frac(rnd(40, 1560), 40), F(0)});
+    }
+    // One enormous prop: its reach covers more cells than the grid will walk.
+    w.prop_mut(props[0]).radius = F(30);
+
+    w.step();
+
+    // The loop the grid replaced, verbatim, on the settled positions.
+    u32 want_agent[4096], want_prop[4096];
+    u32 want = 0;
+    for (u32 pi = 0; pi < 400; ++pi) {
+        const PropState& p = w.prop(props[pi]);
+        for (u32 ai = 0; ai < 300; ++ai) {
+            const u32 a = agents[ai];
+            const fx3 ap = w.agent(a).pos;
+            if (ap.z + w.params(a).height < p.pos.z || ap.z > p.pos.z + p.height) continue;
+            const fx dx = ap.x - p.pos.x, dy = ap.y - p.pos.y;
+            const fx rr = w.params(a).radius + p.radius;
+            const i128 d_sq = static_cast<i128>(dx.raw) * dx.raw + static_cast<i128>(dy.raw) * dy.raw;
+            if (d_sq > static_cast<i128>(rr.raw) * rr.raw) continue;
+            if (want < 4096) { want_agent[want] = a; want_prop[want] = props[pi]; }
+            ++want;
+        }
+    }
+    const PropEventLog& got = w.prop_events();
+    u32 touches = 0;
+    bool same = true;
+    for (u32 i = 0; i < got.count(); ++i) {
+        const PropEvent& e = got.at(i);
+        if (e.kind != PropEventKind::Touch) continue;
+        if (touches >= want || e.agent != want_agent[touches] || e.prop != want_prop[touches]) same = false;
+        ++touches;
+    }
+    std::printf("  %u touches, %u expected, %u dropped\n", touches, want, got.dropped());
+    CHECK(want > 64);                 // CONTROL: more than the old log held
+    CHECK(touches == want);
+    CHECK(same);                      // the same touches, in the same order
+    CHECK(got.dropped() == 0);
+    // CONTROL: the wide prop really was touched by many -- its fallback ran.
+    u32 wide = 0;
+    for (u32 i = 0; i < got.count(); ++i) if (got.at(i).prop == props[0]) ++wide;
+    CHECK(wide > 100);
+}
+
 int main() {
+    test_a_crowd_is_reported_as_the_full_loop_would();
     test_props_share_the_entity_index_space();
     test_a_weapon_can_decline_to_swing();
     test_aim_can_snap_to_a_number_of_directions();

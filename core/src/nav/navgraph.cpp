@@ -11,6 +11,7 @@ const char* path_status_text(PathStatus s) noexcept {
         case PathStatus::BadSector:   return "sector index outside the map";
         case PathStatus::Unreachable: return "no walkable route";
         case PathStatus::PathTooLong: return "route does not fit in the caller's buffer";
+        case PathStatus::GaveUp:      return "search gave up at its expansion limit";
     }
     return "unknown";
 }
@@ -422,6 +423,10 @@ PathResult find_path(const MapData& map, const NavGraph& g, NavQuery& q,
         ++r.expanded;
 
         if (cur == to) { found = true; break; }
+        if (q.max_expand != 0 && r.expanded >= q.max_expand) {
+            r.status = PathStatus::GaveUp;
+            return r;
+        }
 
         const NavNode& node = g.node(cur);
         for (u32 k = 0; k < node.edge_count; ++k) {

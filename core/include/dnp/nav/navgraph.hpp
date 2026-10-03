@@ -162,6 +162,7 @@ enum class PathStatus : u8 {
     BadSector,       // an index outside the map
     Unreachable,     // the graph is connected differently, or not at all
     PathTooLong,     // a route exists but does not fit in the caller's buffer
+    GaveUp,          // the search ran out of the caller's `max_expand`
 };
 
 const char* path_status_text(PathStatus s) noexcept;
@@ -185,6 +186,12 @@ struct NavQuery {
     u8   opened[MAX_NAV_NODES]{};
     u32  heap[MAX_NAV_EDGES + MAX_NAV_NODES]{};
     u32  heap_size = 0;
+    // At most this many nodes expanded, then GaveUp; 0 is no limit. For a
+    // caller asking on a schedule -- a monster -- on a graph as big as a whole
+    // region: a target that cannot be reached otherwise costs a search of
+    // EVERY node, every time it is asked (measured on DOOMWORLD: 7000 nodes,
+    // over a thousand times in half a minute, ticks of 40-90 ms).
+    u32  max_expand = 0;
 };
 
 // A* over the sector graph.

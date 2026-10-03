@@ -844,7 +844,33 @@ static void test_the_route_says_where_to_jump() {
     CHECK(!jump[1]);
 }
 
+// A SEARCH CAN BE TOLD TO STOP. A monster asking for a route across a whole
+// region graph it cannot cross searched every node, every time it asked; with
+// `max_expand` it stops and says so (GaveUp), rather than failing slowly.
+static void test_a_search_gives_up_at_its_limit() {
+    std::printf("nav: a search with an expansion limit gives up rather than searching on\n");
+
+    static Grid grid;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
+    g.build(grid.view);
+    const NavBody body;
+
+    const PathResult full = find_path(grid.view, g, g_query, 0, 3, body, g_path, MAX_NAV_NODES);
+    CHECK(full.status == PathStatus::Ok && full.expanded > 1);
+    g_query.max_expand = 1;
+    const PathResult capped = find_path(grid.view, g, g_query, 0, 3, body, g_path, MAX_NAV_NODES);
+    CHECK(capped.status == PathStatus::GaveUp);
+    CHECK(capped.expanded == 1);
+    // CONTROL: a limit the search does not reach changes nothing.
+    g_query.max_expand = full.expanded + 1;
+    const PathResult roomy = find_path(grid.view, g, g_query, 0, 3, body, g_path, MAX_NAV_NODES);
+    CHECK(roomy.status == PathStatus::Ok && roomy.length == full.length && roomy.cost == full.cost);
+    g_query.max_expand = 0;
+}
+
 int main() {
+    test_a_search_gives_up_at_its_limit();
     test_the_graph_is_the_map();
     test_walkability_is_the_movers_walkability();
     test_routes_and_tie_breaking();

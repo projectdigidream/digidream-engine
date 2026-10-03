@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
 #include <vector>
 
 extern "C" {
@@ -133,8 +134,9 @@ void Vm::count_hook(lua_State* L, lua_Debug* /*ar*/) {
     lua_pop(L, 1);
     if (!vm) return;
 
-    vm->used_this_call_ += HOOK_GRANULARITY;
-    vm->used_this_tick_ += HOOK_GRANULARITY;
+    vm->used_this_call_ += static_cast<u32>(vm->hook_step_);
+    vm->used_this_tick_ += static_cast<u32>(vm->hook_step_);
+    if (vm->profile_) vm->profile_sample(L);
 
     const bool over_call = vm->used_this_call_ > vm->cfg_.budget_per_call;
     const bool over_tick = vm->used_this_tick_ > vm->cfg_.budget_per_tick;
@@ -210,8 +212,44 @@ bool Vm::open(const VmConfig& cfg) {
     // and does not start here.
     luaJIT_setmode(L_, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_OFF);
 
-    lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
+    const char* prof = std::getenv("DNP_LUA_PROFILE");
+    profile_ = prof != nullptr && prof[0] == '1';
+    hook_step_ = profile_ ? 1000 : HOOK_GRANULARITY;
+    lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, hook_step_);
     return true;
+}
+
+// Where the script is, two frames deep, charged with the time since the last
+// sample. Diagnostic only, behind DNP_LUA_PROFILE.
+void Vm::profile_sample(lua_State* L) {
+    const u64 now = now_us();
+    const u64 dt = prof_last_us_ != 0 && now > prof_last_us_ ? now - prof_last_us_ : 0;
+    prof_last_us_ = now;
+    if (dt == 0) return;
+    std::string key;
+    lua_Debug ar;
+    for (int level = 0; level < 3 && lua_getstack(L, level, &ar); ++level) {
+        if (!lua_getinfo(L, "Sln", &ar)) break;
+        const char* src = ar.short_src;
+        const char* slash = std::strrchr(src, '/');
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "%s%s:%d(%s)", level ? " <- " : "", slash ? slash + 1 : src,
+                      ar.currentline, ar.name ? ar.name : "?");
+        key += buf;
+    }
+    prof_[key] += dt;
+}
+
+void Vm::profile_dump() {
+    std::vector<std::pair<u64, const std::string*>> top;
+    u64 total = 0;
+    for (const auto& [k, v] : prof_) { top.push_back({v, &k}); total += v; }
+    std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::fprintf(stderr, "[lua-profile] %llu us sampled\n", static_cast<unsigned long long>(total));
+    for (size_t i = 0; i < top.size() && i < 8; ++i) {
+        std::fprintf(stderr, "[lua-profile]   %6llu us  %s\n",
+                     static_cast<unsigned long long>(top[i].first), top[i].second->c_str());
+    }
 }
 
 void Vm::install_environment() {
@@ -335,7 +373,8 @@ void Vm::begin_tick() {
     worst_call_what_[0] = '\0';
     script_us_this_tick_ = 0;
     tick_start_us_ = now_us();
-    if (L_) lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
+    prof_.clear();
+    if (L_) lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, hook_step_);
 }
 
 void Vm::end_tick(u32 tick) {
@@ -371,6 +410,7 @@ void Vm::end_tick(u32 tick) {
                      static_cast<unsigned long long>(worst_call_us_),
                      worst_call_what_[0] ? worst_call_what_ : "(no callback)",
                      static_cast<unsigned long long>(spent), cfg_.stall_warn_us);
+        if (profile_) profile_dump();
     }
 }
 
@@ -485,7 +525,7 @@ void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
     // still cannot blow the frame.
     used_this_call_ = 0;
     killed_ = false;
-    lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, HOOK_GRANULARITY);
+    lua_sethook(L_, &Vm::count_hook, LUA_MASKCOUNT, hook_step_);
 
     ++stats_.callbacks_run;
     // Timed per CALL, not per tick.
@@ -497,6 +537,7 @@ void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
     // that names the wrong thing is worse than none: it is a wrong answer that
     // reads like a measurement.
     const u64 call_start = now_us();
+    prof_last_us_ = call_start;
     if (lua_pcall(L_, nargs, 0, 0) != 0) {
         ++stats_.errors;
         const char* msg = lua_tostring(L_, -1);
