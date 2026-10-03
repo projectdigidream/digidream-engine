@@ -11,6 +11,9 @@
 // freeze at stale positions with no error anywhere.
 //
 #include "dnp/proto/messages.hpp"
+#include <algorithm>
+#include <vector>
+
 #include "dnp/sim/world.hpp"
 
 namespace dnp::server {
@@ -47,10 +50,18 @@ struct SnapshotRecord {
     EntitySample entities[sim::MAX_ENTITIES]{};
 };
 
+// ON THE HEAP. A record holds a sample per possible entity, and the ring is
+// thirty-two of them: about 12.6 MB at 8192 entities. Held inline, a Session --
+// which the server builds as a local before storing it -- was more than the
+// main thread's 8 MB stack, and the server died the moment anybody connected.
+// Records are cleared in place for the same reason: assigning a fresh one
+// builds a 400 KB temporary on the stack first.
 class SnapshotHistory {
 public:
+    SnapshotHistory() : ring_(SNAPSHOT_RING) {}
+
     void reset() noexcept {
-        for (u32 i = 0; i < SNAPSHOT_RING; ++i) ring_[i] = SnapshotRecord{};
+        for (SnapshotRecord& r : ring_) clear(r);
         next_ = 0;
     }
 
@@ -66,7 +77,7 @@ public:
         // so the server falls back to full snapshots precisely when bandwidth is
         // scarcest.
         SnapshotRecord& r = ring_[next_++ % SNAPSHOT_RING];
-        r = SnapshotRecord{};
+        clear(r);
         r.tick = tick;
         r.valid = true;
         return r;
@@ -91,8 +102,13 @@ public:
     }
 
 private:
-    SnapshotRecord ring_[SNAPSHOT_RING]{};
-    u32            next_ = 0;
+    static void clear(SnapshotRecord& r) noexcept {
+        r.tick = 0;
+        r.valid = false;
+        std::fill(std::begin(r.entities), std::end(r.entities), EntitySample{});
+    }
+    std::vector<SnapshotRecord> ring_;
+    u32                         next_ = 0;
 };
 
 /** Which fields of `now` differ from `was`. Zero means "omit this entity". */

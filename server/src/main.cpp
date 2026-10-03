@@ -2159,10 +2159,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     }
 
     void on_open(u32 id) {
-        Session s;
+        // Built in place: a copy would duplicate its snapshot history (12 MB).
+        Session& s = sessions[id];
         s.reset();
         s.id = id;
-        sessions[id] = s;
         std::fprintf(stderr, "[srv] session %u opened\n", id);
     }
 
