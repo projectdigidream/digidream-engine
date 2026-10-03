@@ -168,7 +168,9 @@ if [[ $STUDIO -eq 1 ]]; then
   cp -R "$REPO/studio/src" "$W/studio/src"
   cp -R "$REPO/studio/vendor" "$W/studio/vendor"
   cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
-  for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua trigger_vocab.json mob_vocab.json; do
+  for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
+           graph_vocab.lua graphs.lua player_sounds.lua \
+           trigger_vocab.json mob_vocab.json weapon_vocab.json graph_vocab.json; do
     cp "$ROOT/maps/scripts/$f" "$W/studio/runtime/"
   done
 fi

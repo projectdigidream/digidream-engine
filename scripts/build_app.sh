@@ -233,7 +233,9 @@ if [[ $STUDIO -eq 1 ]]; then
   cp -R ../studio/src "$OUT/studio/src"
   cp -R ../studio/vendor "$OUT/studio/vendor"
   cp ../studio/wasm/dist/mapc.mjs ../studio/wasm/dist/mapc.wasm "$OUT/studio/wasm/dist/"
-  for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua trigger_vocab.json mob_vocab.json; do
+  for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
+           graph_vocab.lua graphs.lua player_sounds.lua \
+           trigger_vocab.json mob_vocab.json weapon_vocab.json graph_vocab.json; do
     cp "maps/scripts/$f" "$OUT/studio/runtime/"
   done
   echo "[app] studio staged"
