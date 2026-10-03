@@ -93,8 +93,9 @@
         }
       ],
       "data_in": [],
+      "data_in_args": true,
       "data_out": [],
-      "doc": "A trigger condition, asked about the event this run started from.",
+      "doc": "A trigger condition, asked about the event this run started from. Each of its arguments of a pinnable type is also a data input of the same name: linked, it takes the value at run time; a value that does not fit the argument skips the verb (false), said once.",
       "exec_in": [
         "in"
       ],
@@ -113,8 +114,9 @@
         }
       ],
       "data_in": [],
+      "data_in_args": true,
       "data_out": [],
-      "doc": "A trigger action, done for the event this run started from.",
+      "doc": "A trigger action, done for the event this run started from. Its arguments of a pinnable type are data inputs too, as a condition's; a value that does not fit skips the action, said once.",
       "exec_in": [
         "in"
       ],
@@ -122,6 +124,63 @@
         "then"
       ],
       "name": "action"
+    },
+    {
+      "args": [
+        {
+          "doc": "Which call: what a `call` node names.",
+          "name": "name",
+          "type": "string"
+        }
+      ],
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "value"
+      ],
+      "doc": "Where a run starts when a `call` names it: from the game's graphs to a level's, from a level's to the game's, or within one VM. Its outputs are what the call sent.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "on_call"
+    },
+    {
+      "args": [
+        {
+          "doc": "The game's graphs, or the graphs of the level `entity` is in.",
+          "name": "to",
+          "type": "enum",
+          "values": [
+            "game",
+            "level"
+          ]
+        },
+        {
+          "doc": "The `on_call` nodes it starts.",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "doc": "What it sends; used when nothing is linked to `value`.",
+          "name": "value",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "value",
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Start the `on_call` nodes of that name, now, and carry on. The entity is the linked one, or the event's; a call to a level needs one, to know which. Calls nest at most four deep.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "call"
     },
     {
       "args": [
@@ -420,6 +479,15 @@
       "exec_out": [],
       "name": "random"
     }
+  ],
+  "pinnable_types": [
+    "int",
+    "fx",
+    "string",
+    "bool",
+    "enum",
+    "sector",
+    "value"
   ],
   "version": 1
 }

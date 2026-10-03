@@ -413,6 +413,47 @@ int main(int argc, char** argv) {
     if (!run(GV, "bullets3 = weapons.get(key).ammo.bullets", "reading the ammunition")) return 1;
     CHECK(num(GV, "bullets3") == 48);
 
+    // ================================================================
+    // GRAPHS CALL ACROSS (docs/GRAPHS.md, `call` / `on_call`): a level's graph
+    // calls the game's with a value; the game's adds one and calls back into
+    // the level the player is in. Both ends are graphs.lua, in two VMs.
+    std::printf("-- graphs call between the level and the game --\n");
+    for (const char* f : {"maps/scripts/trigger_vocab.lua", "maps/scripts/triggers.lua",
+                          "maps/scripts/graph_vocab.lua", "maps/scripts/graphs.lua"}) {
+        if (!level_vm.run_file(f, f) || !game_vm.run_file(f, f)) {
+            std::printf("  FAIL loading %s\n", f); return 1;
+        }
+    }
+    CHECK(run(LV, R"LUA(
+      gl_ok = graphs.load({ graph = 1, name = "lvl", vars = { back = 0 },
+        nodes = {
+          { id = "t",  type = "event", event = "on_touch" },
+          { id = "up", type = "call", to = "game", name = "from_level", value = 7 },
+          { id = "in", type = "on_call", name = "from_game" },
+          { id = "s",  type = "set_var", var = "back" } },
+        links = { { "t.then", "up.in" }, { "in.then", "s.in" }, { "in.value", "s.value" } } }, "lvl")
+    )LUA", "the level's graph"));
+    CHECK(run(GV, R"LUA(
+      gg_ok = graphs.load({ graph = 1, name = "game", vars = { got = 0 },
+        nodes = {
+          { id = "in",   type = "on_call", name = "from_level" },
+          { id = "s",    type = "set_var", var = "got" },
+          { id = "one",  type = "literal", value = 1 },
+          { id = "plus", type = "math", op = "+" },
+          { id = "down", type = "call", to = "level", name = "from_game" } },
+        links = { { "in.then", "s.in" }, { "in.value", "s.value" }, { "s.then", "down.in" },
+                  { "in.value", "plus.a" }, { "one.value", "plus.b" },
+                  { "plus.value", "down.value" }, { "in.entity", "down.entity" } } }, "game")
+    )LUA", "the game's graph"));
+    CHECK(truthy(LV, "gl_ok") && truthy(GV, "gg_ok"));
+    CHECK(run(LV, "graphs.fire('on_touch', { entity = dnp.players()[1] })", "touching"));
+    CHECK(run(GV, "x_got = graphs.var('game', 'got')", "reading the game"));
+    CHECK(run(LV, "x_back = graphs.var('lvl', 'back')", "reading the level"));
+    std::printf("  the game heard %g from the level; the level heard %g back\n",
+                num(GV, "x_got"), num(LV, "x_back"));
+    CHECK(num(GV, "x_got") == 7);
+    CHECK(num(LV, "x_back") == 8);
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

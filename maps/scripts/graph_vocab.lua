@@ -23,6 +23,11 @@
 graph_vocab = {
   version = 1,
 
+  -- The argument types a verb's argument may take from a DATA LINK rather than
+  -- its literal field (a node with `data_in_args`). The rest -- action lists,
+  -- functions, trigger names -- are structure, not values.
+  pinnable_types = { "int", "fx", "string", "bool", "enum", "sector", "value" },
+
   -- The file's own top level.
   graph_fields = {
     { name = "graph", type = "int",
@@ -70,15 +75,40 @@ graph_vocab = {
                { name = "negate", type = "bool", optional = true,
                  doc = "Take the other exit." } },
       exec_in = { "in" }, exec_out = { "true", "false" },
-      data_in = {}, data_out = {},
-      doc = "A trigger condition, asked about the event this run started from." },
+      data_in = {}, data_out = {}, data_in_args = true,
+      doc = "A trigger condition, asked about the event this run started from. " ..
+            "Each of its arguments of a pinnable type is also a data input of " ..
+            "the same name: linked, it takes the value at run time; a value " ..
+            "that does not fit the argument skips the verb (false), said once." },
     { name = "action",
       args = { { name = "a", type = "string",
                  doc = "A trigger_vocab.lua action; its arguments are this " ..
                        "node's fields." } },
       exec_in = { "in" }, exec_out = { "then" },
-      data_in = {}, data_out = {},
-      doc = "A trigger action, done for the event this run started from." },
+      data_in = {}, data_out = {}, data_in_args = true,
+      doc = "A trigger action, done for the event this run started from. " ..
+            "Its arguments of a pinnable type are data inputs too, as a " ..
+            "condition's; a value that does not fit skips the action, said once." },
+    { name = "on_call",
+      args = { { name = "name", type = "string",
+                 doc = "Which call: what a `call` node names." } },
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity", "value" },
+      doc = "Where a run starts when a `call` names it: from the game's graphs " ..
+            "to a level's, from a level's to the game's, or within one VM. " ..
+            "Its outputs are what the call sent." },
+    { name = "call",
+      args = { { name = "to", type = "enum", values = { "game", "level" },
+                 doc = "The game's graphs, or the graphs of the level `entity` is in." },
+               { name = "name", type = "string",
+                 doc = "The `on_call` nodes it starts." },
+               { name = "value", type = "value", optional = true,
+                 doc = "What it sends; used when nothing is linked to `value`." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "value", "entity" }, data_out = {},
+      doc = "Start the `on_call` nodes of that name, now, and carry on. The " ..
+            "entity is the linked one, or the event's; a call to a level needs " ..
+            "one, to know which. Calls nest at most four deep." },
 
     -- --------------------------------------------------------------- flow
     { name = "branch",

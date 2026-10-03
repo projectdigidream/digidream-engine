@@ -331,6 +331,121 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ================================================================
+    // DATA PINS ON VERB ARGUMENTS: a computed value reaches the world. `by` is
+    // linked to 3 * 2; a condition's required `value` is linked, so the loader
+    // must not ask for its literal; a fraction into an int is skipped, said.
+    std::printf("-- verb arguments take data links --\n");
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "pins", "vars": { "n": 3 },
+      "nodes": [
+        { "id": "go",   "type": "event", "event": "on_tick" },
+        { "id": "one",  "type": "once" },
+        { "id": "n",    "type": "get_var", "var": "n" },
+        { "id": "two",  "type": "literal", "value": 2 },
+        { "id": "six",  "type": "math", "op": "*" },
+        { "id": "add",  "type": "action", "a": "counter_add", "counter": "pinned" },
+        { "id": "half", "type": "math", "op": "/", "a": 1, "b": 2 },
+        { "id": "bad",  "type": "action", "a": "counter_add", "counter": "pinned_bad" },
+        { "id": "at",   "type": "condition", "c": "counter_at_least", "counter": "pinned" },
+        { "id": "yes",  "type": "action", "a": "counter_add", "counter": "cond_yes" },
+        { "id": "no",   "type": "action", "a": "counter_add", "counter": "cond_no" }
+      ],
+      "links": [
+        ["go.then", "one.in"], ["one.then", "add.in"], ["add.then", "bad.in"], ["bad.then", "at.in"],
+        ["at.true", "yes.in"], ["at.false", "no.in"],
+        ["n.value", "six.a"], ["two.value", "six.b"], ["six.value", "add.by"],
+        ["half.value", "bad.by"], ["six.value", "at.value"]
+      ]
+    })"));
+    ticks(2);
+    CHECK(run("p_pinned = triggers.counter('pinned'); p_bad = triggers.counter('pinned_bad');"
+              "p_yes = triggers.counter('cond_yes'); p_no = triggers.counter('cond_no')", "reading"));
+    std::printf("  pinned %g, misfit %g, condition yes %g no %g\n",
+                num("p_pinned"), num("p_bad"), num("p_yes"), num("p_no"));
+    CHECK(num("p_pinned") == 6);     // 3 * 2 reached counter_add's `by`
+    CHECK(num("p_bad") == 0);        // 0.5 is not an int: skipped, not defaulted to 1
+    CHECK(num("p_yes") == 1 && num("p_no") == 0);   // pinned 6 <= counter 6
+    // CONTROL: a link into a pin the verb does not have is refused at load.
+    CHECK(run("before_pin = graphs.count()", "counting"));
+    CHECK(!load_graph(R"({
+      "graph": 1, "name": "badpin",
+      "nodes": [ { "id": "go", "type": "event", "event": "on_tick" },
+                 { "id": "k", "type": "literal", "value": 1 },
+                 { "id": "add", "type": "action", "a": "counter_add", "counter": "x" } ],
+      "links": [ ["go.then", "add.in"], ["k.value", "add.nonsense"] ]
+    })"));
+    CHECK(run("after_pin = graphs.count()", "counting"));
+    CHECK(num("after_pin") == num("before_pin"));
+
+    // ================================================================
+    // CALLS: a `call` starts the on_call nodes of its name, with what it sent;
+    // one that calls itself stops at four deep.
+    std::printf("-- calls --\n");
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "calls", "vars": { "got": 0, "depth": 0 },
+      "nodes": [
+        { "id": "go",    "type": "event", "event": "on_tick" },
+        { "id": "one",   "type": "once" },
+        { "id": "ping",  "type": "call", "to": "level", "name": "ping", "value": 5 },
+        { "id": "loop",  "type": "call", "to": "level", "name": "loop" },
+        { "id": "hear",  "type": "on_call", "name": "ping" },
+        { "id": "keep",  "type": "set_var", "var": "got" },
+        { "id": "again", "type": "on_call", "name": "loop" },
+        { "id": "deep",  "type": "add_var", "var": "depth", "value": 1 },
+        { "id": "self",  "type": "call", "to": "level", "name": "loop" },
+        { "id": "nobody","type": "call", "to": "level", "name": "nobody_listens" }
+      ],
+      "links": [
+        ["go.then", "one.in"], ["one.then", "ping.in"], ["ping.then", "loop.in"], ["loop.then", "nobody.in"],
+        ["hear.then", "keep.in"], ["hear.value", "keep.value"],
+        ["again.then", "deep.in"], ["deep.then", "self.in"]
+      ]
+    })"));
+    ticks(2);
+    CHECK(run("c_got = graphs.var('calls', 'got'); c_depth = graphs.var('calls', 'depth')", "reading"));
+    std::printf("  ping carried %g; a self-call ran %g deep\n", num("c_got"), num("c_depth"));
+    CHECK(num("c_got") == 5);
+    CHECK(num("c_depth") == 4);      // bounded, and it did recurse (CONTROL: > 1)
+
+    // ================================================================
+    // SAVED WITH THE GAME: variables and passed `once` nodes, by graph file.
+    std::printf("-- graphs persist --\n");
+    const char* keep_json = R"({
+      "graph": 1, "name": "keep", "vars": { "score": 1, "label": "start" },
+      "nodes": [
+        { "id": "go",   "type": "event", "event": "on_tick" },
+        { "id": "one",  "type": "once" },
+        { "id": "set",  "type": "set_var", "var": "score", "value": 9 },
+        { "id": "mark", "type": "action", "a": "counter_add", "counter": "keep_once" }
+      ],
+      "links": [ ["go.then", "one.in"], ["one.then", "set.in"], ["set.then", "mark.in"] ]
+    })";
+    CHECK(load_graph(keep_json));
+    ticks(2);
+    std::string saved, perr;
+    CHECK(server::lua::persist_capture(L, saved, perr));
+    // A fresh start: the graphs forgotten and loaded again from their files.
+    CHECK(run("graphs.reset()", "reset"));
+    CHECK(load_graph(keep_json));
+    CHECK(run("k_fresh = graphs.var('keep', 'score')", "reading"));
+    CHECK(num("k_fresh") == 1);      // CONTROL: a fresh load really starts over
+    CHECK(server::lua::persist_restore(L, saved, perr));
+    CHECK(run("k_score = graphs.var('keep', 'score'); k_once = triggers.counter('keep_once')", "reading"));
+    ticks(2);
+    CHECK(run("k_once2 = triggers.counter('keep_once')", "reading"));
+    std::printf("  restored score %g; the once ran %g time(s) before and %g after\n",
+                num("k_score"), num("k_once"), num("k_once2"));
+    CHECK(num("k_score") == 9);
+    CHECK(num("k_once2") == num("k_once"));   // its `once` stays passed
+    // A variable the graph now holds as another type is dropped, not forced in.
+    CHECK(run("graphs.reset()", "reset"));
+    CHECK(load_graph(R"({ "graph": 1, "name": "keep", "vars": { "score": "nine" },
+                          "nodes": [], "links": [] })"));
+    CHECK(server::lua::persist_restore(L, saved, perr));
+    CHECK(run("k_type = graphs.var('keep', 'score') == 'nine'", "reading"));
+    CHECK(truthy("k_type"));
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

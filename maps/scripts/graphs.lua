@@ -21,6 +21,7 @@ local V = graph_vocab
 
 local MAX_STEPS = 256
 local MAX_REPORTS = 20
+local MAX_CALL_DEPTH = 4
 
 local function say(fmt, ...) print(("[graphs] " .. fmt):format(...)) end
 
@@ -48,10 +49,70 @@ end
 
 local loaded = {}      -- graphs in load order
 local timers = {}      -- { tick, graph, node, pin, ev }
+local call_depth = 0
+
+-- A verb's argument specs, by kind and name, from the trigger vocabulary.
+local verb_specs = nil
+local function verb_spec(kind, name)
+  if trigger_vocab == nil then return nil end
+  if verb_specs == nil then
+    verb_specs = { condition = {}, action = {} }
+    for _, c in ipairs(trigger_vocab.conditions or {}) do verb_specs.condition[c.name] = c end
+    for _, a in ipairs(trigger_vocab.actions or {}) do verb_specs.action[a.name] = a end
+  end
+  return verb_specs[kind][name]
+end
+local PINNABLE = {}
+for _, t in ipairs(V.pinnable_types or {}) do PINNABLE[t] = true end
+
+-- Does a value linked at run time fit a verb argument? The literal checks the
+-- trigger loader makes, for a value nobody could check at load.
+local function fits(arg, v)
+  local t = arg.type
+  if t == "int" or t == "sector" then
+    return type(v) == "number" and v == math.floor(v) and (t ~= "sector" or v >= 0)
+  end
+  if t == "fx" then
+    -- Never a fractional double: 0.1 is not 0.1 in Q32.32. A whole number, an
+    -- exact decimal string, or {numerator, denominator}.
+    if type(v) == "number" then return v == math.floor(v) end
+    if type(v) == "string" then return (pcall(fx.parse, v)) end
+    return type(v) == "table" and type(v[1]) == "number" and type(v[2]) == "number" and v[2] ~= 0
+  end
+  if t == "string" then return type(v) == "string" end
+  if t == "bool" then return type(v) == "boolean" end
+  if t == "enum" then for _, x in ipairs(arg.values) do if v == x then return true end end return false end
+  if t == "value" then return type(v) == "number" or type(v) == "string" or type(v) == "boolean" end
+  return false
+end
+
+-- The verb's entry for this run: its literal fields, and the linked arguments'
+-- values. Nil (and said once) when a linked value does not fit.
+local function verb_entry(g, n, pull)
+  if n.linked == nil then return n.entry end
+  local e = {}
+  for k, v in pairs(n.entry) do e[k] = v end
+  for name, arg in pairs(n.linked) do
+    local v = pull(name)
+    if not fits(arg, v) then
+      g.misfit = g.misfit or {}
+      if not g.misfit[n.id] then
+        g.misfit[n.id] = true
+        say("%s: node '%s' was given %s for '%s', which is not a %s -- skipped",
+            g.name, n.id, tostring(v), name, arg.type)
+      end
+      return nil
+    end
+    e[name] = v
+  end
+  return e
+end
 
 -- Pure nodes: a value from their inputs. `pull(pin)` reads an input.
 local PURE = {}
 function PURE.event(g, n, ev, pull, pin) return ev[pin] end
+-- An on_call's outputs are what the call sent, carried as its run's event.
+PURE.on_call = PURE.event
 function PURE.get_var(g, n) return g.vars[n.var] end
 function PURE.literal(g, n) return n.value end
 function PURE.compare(g, n, ev, pull)
@@ -85,8 +146,40 @@ function PURE.random(g, n) return dnp.random(n.lo, n.hi) end
 -- Exec nodes: do something and say which exit to take, or nil to stop this
 -- path. `go(pin)` continues later through an exit (sequence, delay).
 local EXEC = {}
-function EXEC.condition(g, n, ev) return triggers.verbs.condition(n.entry, ev) and "true" or "false" end
-function EXEC.action(g, n, ev) triggers.verbs.action(n.entry, ev) return "then" end
+function EXEC.condition(g, n, ev, pull)
+  local e = verb_entry(g, n, pull)
+  if e == nil then return "false" end
+  return triggers.verbs.condition(e, ev) and "true" or "false"
+end
+function EXEC.action(g, n, ev, pull)
+  local e = verb_entry(g, n, pull)
+  if e ~= nil then triggers.verbs.action(e, ev) end
+  return "then"
+end
+-- on_call starts runs; it is never stepped INTO.
+function EXEC.on_call() return "then" end
+local fire_call
+function EXEC.call(g, n, ev, pull)
+  local entity = pull("entity")
+  if entity == nil then entity = ev.entity end
+  local value = pull("value")
+  local game = dnp ~= nil and dnp.is_game ~= nil and dnp.is_game()
+  if n.to == "game" then
+    if game or dnp == nil or dnp.call_game == nil then fire_call(n.name, entity, value)
+    elseif dnp.game_has("graph_call") then dnp.call_game("graph_call", n.name, value, entity) end
+  else
+    if not game then fire_call(n.name, entity, value)
+    elseif entity ~= nil and dnp.call_level ~= nil then dnp.call_level(entity, "graph_call", n.name, value)
+    else
+      g.misfit = g.misfit or {}
+      if not g.misfit[n.id] then
+        g.misfit[n.id] = true
+        say("%s: node '%s' calls a level with no entity to say which -- skipped", g.name, n.id)
+      end
+    end
+  end
+  return "then"
+end
 function EXEC.branch(g, n, ev, pull) local v = pull("cond") return (v ~= nil and v ~= false) and "true" or "false" end
 function EXEC.sequence(g, n, ev, pull, go)
   for i = n.count - 1, 1, -1 do go(tostring(i)) end   -- run after 0, in order
@@ -153,6 +246,66 @@ local function fire(event, ev)
   end
 end
 M.fire = fire
+
+-- The on_call nodes of `name`, in every graph of this VM, in load order.
+-- Bounded in depth: a call that leads back to itself stops, and says so.
+fire_call = function(name, entity, value)
+  if call_depth >= MAX_CALL_DEPTH then
+    say("a call to '%s' is %d deep -- stopped (calls that call each other?)", tostring(name), call_depth)
+    return
+  end
+  call_depth = call_depth + 1
+  local ok, err = pcall(function()
+    for _, g in ipairs(loaded) do
+      for _, id in ipairs(g.by_call[name] or {}) do run(g, id, "then", { entity = entity, value = value }) end
+    end
+  end)
+  call_depth = call_depth - 1
+  if not ok then error(err, 0) end
+end
+M.call = function(name, entity, value) fire_call(name, entity, value) end
+
+-- Reachable from the other side: the game calls a level's graphs through
+-- dnp.call_level(e, "graph_call", name, value), which hands the export (e,
+-- name, value); a level calls the game's through dnp.call_game("graph_call",
+-- name, value, entity).
+if dnp ~= nil and dnp.export ~= nil then
+  if dnp.is_game ~= nil and dnp.is_game() then
+    dnp.export("graph_call", function(name, value, entity) fire_call(name, entity, value) end)
+  else
+    dnp.export("graph_call", function(e, name, value) fire_call(name, e, value) end)
+  end
+end
+
+-- SAVED with the game (docs/SAVING.md): each graph's variables and which of
+-- its `once` nodes have been passed, by the graph's file. Not its pending
+-- delays -- a save keeps state, not what was in the middle of happening. A
+-- variable a later version of the graph no longer has, or now holds as a
+-- different type, is dropped rather than forced in.
+if dnp ~= nil and dnp.persist ~= nil then
+  dnp.persist("graphs", function()
+    local out = {}
+    for _, g in ipairs(loaded) do
+      local spent = {}
+      for id in pairs(g.spent) do spent[#spent + 1] = id end
+      table.sort(spent)
+      out[g.label] = { vars = g.vars, spent = spent }
+    end
+    return out
+  end, function(t)
+    for _, g in ipairs(loaded) do
+      local s = t and t[g.label]
+      if type(s) == "table" then
+        for k, v in pairs(s.vars or {}) do
+          if g.vars[k] ~= nil and type(g.vars[k]) == type(v) then g.vars[k] = v end
+        end
+        for _, id in ipairs(s.spent or {}) do
+          if g.by_id[id] ~= nil and g.by_id[id].type == "once" then g.spent[id] = true end
+        end
+      end
+    end
+  end)
+end
 
 local function drain_timers(now)
   if #timers == 0 then return end
@@ -265,6 +418,9 @@ function M.load(data, label)
         for k in pairs(NODE_FIELD) do fields[k] = true end
         for _, a in ipairs(spec.args) do fields[a.name] = true end
         local verb = n.type == "condition" or n.type == "action"
+        if n.type == "on_call" and type(n.name) == "string" and n.name == "" then
+          bad("%s: an on_call needs a `name`", where)
+        end
         if not verb then
           for k in pairs(n) do if not fields[k] then bad("%s: a %s has no field '%s'", where, n.type, tostring(k)) end end
           for _, a in ipairs(spec.args) do
@@ -319,6 +475,13 @@ function M.load(data, label)
         local fs, ts = SPEC[f.type], SPEC[t.type]
         local f_exec, f_data = set_of(fs.exec_out), set_of(fs.data_out)
         local t_exec, t_data = set_of(ts.exec_in), set_of(ts.data_in)
+        -- A verb's arguments of a pinnable type are data inputs too.
+        if ts.data_in_args then
+          local vs = verb_spec(t.type, t.type == "condition" and t.c or t.a)
+          for _, a in ipairs(vs and vs.args or {}) do
+            if PINNABLE[a.type] then t_data[a.name] = true end
+          end
+        end
         if f.type == "sequence" and f_exec[fpin] and tonumber(fpin) >= (f.count or 0) then f_exec[fpin] = nil end
         if f_exec[fpin] and t_exec[tpin] then
           exec_next[fid] = exec_next[fid] or {}
@@ -330,6 +493,20 @@ function M.load(data, label)
           else data_src[tid][tpin] = { fid, fpin } end
         else
           bad("%s: '%s' -> '%s' does not join an output to an input of the same kind", where, l[1], l[2])
+        end
+      end
+    end
+  end
+
+  -- WHICH VERB ARGUMENTS ARE LINKED: those take their value at run time, so
+  -- the loader checks the rest and does not ask for a literal they replace.
+  for _, n in ipairs(order) do
+    if n.entry ~= nil and data_src[n.id] ~= nil then
+      local vs = verb_spec(n.type, n.type == "condition" and n.c or n.a)
+      for _, a in ipairs(vs and vs.args or {}) do
+        if data_src[n.id][a.name] ~= nil then
+          n.linked = n.linked or {}
+          n.linked[a.name] = a
         end
       end
     end
@@ -377,9 +554,16 @@ function M.load(data, label)
         for e in pairs(reached[n.id] or {}) do evs[#evs + 1] = e end
         table.sort(evs)
         if #evs == 0 then evs = { false } end
+        -- Checked without the linked arguments, and not asked for them.
+        local entry = n.entry
+        if n.linked ~= nil then
+          entry = {}
+          for k, v in pairs(n.entry) do if n.linked[k] == nil then entry[k] = v end end
+        end
         for _, e in ipairs(evs) do
-          for _, p in ipairs(triggers.verbs.check(kind, n.entry, e or nil, ("%s node '%s'"):format(label, n.id))) do
-            problems[#problems + 1] = p
+          for _, p in ipairs(triggers.verbs.check(kind, entry, e or nil, ("%s node '%s'"):format(label, n.id))) do
+            local missing = p:match("needs an argument '([^']+)'")
+            if not (missing and n.linked and n.linked[missing]) then problems[#problems + 1] = p end
           end
         end
       end
@@ -400,8 +584,15 @@ function M.load(data, label)
       table.insert(by_event[n.event], n.id)
     end
   end
+  local by_call = {}
+  for _, n in ipairs(order) do
+    if n.type == "on_call" then
+      by_call[n.name] = by_call[n.name] or {}
+      table.insert(by_call[n.name], n.id)
+    end
+  end
   local g = { name = data.name, label = label, vars = vars, by_id = by_id, exec_next = exec_next,
-              data_src = data_src, by_event = by_event, spent = {} }
+              data_src = data_src, by_event = by_event, by_call = by_call, spent = {} }
   loaded[#loaded + 1] = g
   say("%s: %d nodes, %d links", label, #order, #data.links)
   return true
