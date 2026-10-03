@@ -2021,6 +2021,52 @@ int main(int argc, char** argv) {
     CHECK(up_rise > 0);
 
     // ================================================================
+    // A BLAST SHOVES, by mass (mob_vocab.lua `mass`, Doom's thrust): one rocket
+    // blast between a zombieman (100) and a demon (400), the same distance
+    // either side. The zombie is thrown four times as hard -- and, measured
+    // over the next half second, it really went further.
+    {
+        const auto shove = [&](bool knockback) {
+            const std::string src = std::string(R"LUA(
+              local p = dnp.players()[1]
+              for _, e in ipairs(dnp.entities()) do if e:index() ~= p:index() then e:despawn() end end
+              for _, pr in ipairs(dnp.props()) do pr:despawn() end
+              mobs.reset()
+              local pp = p:pos()
+              local c = vec3.new(pp.x + fx.int(10), pp.y, pp.z)
+              shove_z = mobs.spawn('zombieman', vec3.new(c.x, c.y + fx.int(1), c.z))
+              shove_d = mobs.spawn('demon',     vec3.new(c.x, c.y - fx.int(1), c.z))
+              shove_z0, shove_d0 = shove_z:pos(), shove_d:pos()
+              local m = mobs.synthetic_owner(p, p:facing())
+              m.impact = c
+              mobs.acts.damage_area(m, { damage = 1, radius = fx.int(3), falloff = true,
+                                          hurts_owner = false, )LUA") +
+                (knockback ? "knockback = fx.int(12)" : "knockback = fx.int(0)") + R"LUA( })
+              m.impact = nil
+            )LUA";
+            if (!run(src.c_str(), "a blast between two bodies")) return false;
+            commands.apply(world, [](u32) {});
+            if (!run("shove_vz = dnp.length(shove_z:vel()); shove_vd = dnp.length(shove_d:vel())",
+                     "their velocities")) return false;
+            for (int i = 0; i < 30; ++i) server_tick(0);
+            return run("shove_mz = dnp.length(vec3.new(shove_z:pos().x - shove_z0.x, shove_z:pos().y - shove_z0.y, fx.int(0)))\n"
+                       "shove_md = dnp.length(vec3.new(shove_d:pos().x - shove_d0.x, shove_d:pos().y - shove_d0.y, fx.int(0)))\n"
+                       "shove_vz, shove_vd = shove_vz.raw / 4294967296, shove_vd.raw / 4294967296\n"
+                       "shove_mz, shove_md = shove_mz.raw / 4294967296, shove_md.raw / 4294967296", "how far they went");
+        };
+        if (!shove(true)) return 1;
+        const double vz = num("shove_vz"), vd = num("shove_vd"), mz = num("shove_mz"), md = num("shove_md");
+        if (!shove(false)) return 1;
+        const double mz0 = num("shove_mz");
+        std::printf("  a blast: zombieman thrown at %.2f, demon at %.2f; after half a second %.2f and %.2f "
+                    "units (with no knockback: %.2f)\n", vz, vd, mz, md, mz0);
+        CHECK(vz > 0.5 && vd > 0.1);
+        CHECK(vz > vd * 3.5 && vz < vd * 4.5);   // mass 100 against 400
+        CHECK(mz > md * 2);                       // and it went further
+        CHECK(mz > mz0 + 0.3);                    // CONTROL: the shove is what moved it
+    }
+
+    // ================================================================
     // DROPS (mob_vocab.lua `drops`): what a monster leaves where it dies.
     {
         if (!run(R"LUA(

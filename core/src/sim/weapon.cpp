@@ -367,6 +367,15 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                 w.i32v(s.jitter); w.u8v(s.count); w.i32v(s.spread); w.i32v(s.arc); w.i32v(s.angle);
                 w.fxraw(s.range); w.u16v(s.effect); w.u32v(s.sound);
                 w.u8v(static_cast<u8>((s.predicted ? 1 : 0) | (s.attach ? 2 : 0)));
+                if (s.action == WAct::Launch) {
+                    const WMissile& m = s.missile;
+                    w.u16v(m.kind); w.fxraw(m.speed); w.fxraw(m.radius); w.fxraw(m.z_offset);
+                    w.fxraw(m.offset); w.u16v(m.life); w.u16v(m.burst_anim); w.u16v(m.burst_ticks);
+                    w.u8v(m.vfx_count);
+                    for (u32 v = 0; v < m.vfx_count && v < MAX_MISSILE_VFX; ++v) {
+                        w.u16v(m.vfx_kind[v]); w.fxraw(m.vfx_radius[v]);
+                    }
+                }
             }
             w.u8v(ph.transition_count);
             for (u32 k = 0; k < ph.transition_count; ++k) {
@@ -450,6 +459,15 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                 if (s.action == WAct::Goto && s.phase >= d.phase_count) return false;
                 s.towards = static_cast<WTowards>(tw);
                 s.predicted = flags & 1; s.attach = (flags & 2) != 0;
+                if (s.action == WAct::Launch) {
+                    WMissile& m = s.missile;
+                    m.kind = r.u16v(); m.speed = r.fxraw(); m.radius = r.fxraw(); m.z_offset = r.fxraw();
+                    m.offset = r.fxraw(); m.life = r.u16v(); m.burst_anim = r.u16v(); m.burst_ticks = r.u16v();
+                    m.vfx_count = r.u8v();
+                    if (!r.ok() || m.vfx_count > MAX_MISSILE_VFX) return false;
+                    for (u32 v = 0; v < m.vfx_count; ++v) { m.vfx_kind[v] = r.u16v(); m.vfx_radius[v] = r.fxraw(); }
+                    if (!r.ok()) return false;
+                }
             }
             ph.transition_count = r.u8v();
             if (!r.ok() || ph.transition_count > MAX_PHASE_TRANSITIONS) return false;

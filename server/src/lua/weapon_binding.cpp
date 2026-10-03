@@ -125,6 +125,10 @@ i32 index_in(const std::vector<std::string>& v, const char* s) {
 struct Reader {
     lua_State* L;
     std::string err;
+    // For a launch: the missile definitions by name (a stack index, 0 for
+    // none) and the catalogue that names their bodies.
+    int missiles = 0;
+    const PropCatalogueView* props = nullptr;
 
     bool fail(const std::string& where, const std::string& what) {
         if (err.empty()) err = where + ": " + what;
@@ -320,7 +324,7 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
             if (!r.int_at(e, "tracer", where, 0, 65535, v)) return false;
             s.effect = static_cast<u16>(v);
             break;
-        case WAct::Launch:
+        case WAct::Launch: {
             if (!r.int_at(e, "count", where, 1, sim::MAX_PELLETS, v, &has)) return false;
             s.count = has ? static_cast<u8>(v) : 1;
             if (!r.int_at(e, "arc", where, -360, 360, v)) return false;
@@ -328,7 +332,62 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
             v = 0;
             if (!r.int_at(e, "angle", where, -360, 360, v)) return false;
             s.angle = static_cast<i32>(v);
+            // THE MISSILE, as a predicting client needs it to fly it itself. A
+            // missile nobody described (kind 0) is simply not predicted.
+            sim::WMissile& m = s.missile;
+            if (!r.fx_at(e, "offset", where, m.offset)) return false;
+            const std::string name = r.str_at(e, "missile");
+            lua_State* L = r.L;
+            if (r.missiles != 0 && !name.empty()) {
+                lua_getfield(L, r.missiles, name.c_str());
+                if (lua_istable(L, -1)) {
+                    const int d = lua_gettop(L);
+                    const std::string mw = where + " missile '" + name + "'";
+                    std::string prop = r.str_at(d, "prop");
+                    if (prop.empty()) prop = name;
+                    m.kind = r.props ? r.props->kind_by_name(prop.c_str(), prop.size()) : 0;
+                    bool ok = r.fx_at(d, "speed", mw, m.speed) && r.fx_at(d, "z_offset", mw, m.z_offset);
+                    bool has_radius = false;
+                    ok = ok && r.fx_at(d, "radius", mw, m.radius, &has_radius);
+                    if (!has_radius) m.radius = fx::from_frac(11, 48);   // mobs.lua's default
+                    i64 n = 300;
+                    ok = ok && r.int_at(d, "life", mw, 1, 65535, n);
+                    m.life = static_cast<u16>(n);
+                    bool has_burst = false;
+                    n = 0;
+                    ok = ok && r.int_at(d, "anim_burst", mw, 0, 65534, n, &has_burst);
+                    m.burst_anim = has_burst ? static_cast<u16>(n) : sim::NO_ANIM;
+                    n = 20;
+                    ok = ok && r.int_at(d, "burst_ticks", mw, 0, 65535, n);
+                    m.burst_ticks = static_cast<u16>(n);
+                    // Its impact effects: on_hit's `vfx` entries drawn at the impact.
+                    lua_getfield(L, d, "on_hit");
+                    if (ok && lua_istable(L, -1)) {
+                        const int oh = lua_gettop(L);
+                        const size_t cnt = lua_objlen(L, oh);
+                        for (size_t i = 1; i <= cnt && m.vfx_count < sim::MAX_MISSILE_VFX; ++i) {
+                            lua_rawgeti(L, oh, static_cast<int>(i));
+                            const int a = lua_gettop(L);
+                            if (lua_istable(L, a) && r.str_at(a, "action") == "vfx" && r.str_at(a, "at") == "impact") {
+                                i64 k = 0;
+                                fx rad{};
+                                if (r.int_at(a, "kind", mw, 0, 65535, k) && r.fx_at(a, "radius", mw, rad)) {
+                                    m.vfx_kind[m.vfx_count] = static_cast<u16>(k);
+                                    m.vfx_radius[m.vfx_count] = rad;
+                                    ++m.vfx_count;
+                                }
+                            }
+                            lua_pop(L, 1);
+                        }
+                    }
+                    lua_pop(L, 1);   // on_hit
+                    if (!ok) { lua_pop(L, 1); return false; }
+                    if (m.speed <= fx::zero()) m.kind = 0;   // nothing to fly
+                }
+                lua_pop(L, 1);   // the def
+            }
             break;
+        }
         case WAct::Sound: {
             r.bool_at(e, "predicted", s.predicted);
             // By the wire's own hash, which is what a client plays by.
@@ -501,7 +560,7 @@ void push_names(lua_State* L, const std::vector<std::string>& names, const char*
     lua_setfield(L, into, list);
 }
 
-// dnp.weapons_compile(defs, ammo [, initial_weapons [, autoaim]]) -> index | nil, why
+// dnp.weapons_compile(defs, ammo [, initial_weapons [, autoaim [, missiles]]]) -> index | nil, why
 //
 // `defs` is weapons.defs and `ammo` weapons.ammo, AFTER weapons.load has
 // validated them. ALL OR NOTHING: a weapon the core cannot run (one using
@@ -520,6 +579,8 @@ int l_weapons_compile(lua_State* L) {
     auto c = std::make_unique<Compiled>();
     sim::WeaponTable& t = c->table;
     Reader r{L, {}};
+    if (lua_istable(L, 5)) r.missiles = 5;
+    r.props = context_of(L).props;
 
     const std::vector<std::string> pools = sorted_keys(L, 2);
     const std::vector<std::string> weapons = sorted_keys(L, 1);

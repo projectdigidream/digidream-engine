@@ -1154,6 +1154,12 @@
       "type": "bool"
     },
     {
+      "doc": "How hard this mob is to shove, Doom's way: a knockback is divided by mass / 100, so 100 (the default, a zombieman or a player) takes it whole and a baron's 1000 a tenth of it.",
+      "name": "mass",
+      "optional": true,
+      "type": "int"
+    },
+    {
       "doc": "What this mob leaves where it dies: a LIST of entries (see drop_fields), each either an `item` that always drops or a `one_of` weighted choice, which can include nothing. Rolled on the server the moment it dies, so every client sees one outcome. An item is a catalogue name, picked up like any other: a dropped clip gives a clip's worth, not Doom's half.",
       "name": "drops",
       "optional": true,

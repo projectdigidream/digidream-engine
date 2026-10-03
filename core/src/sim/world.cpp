@@ -123,6 +123,19 @@ void World::present_weapon(u32 i, const WeaponTable& t) noexcept {
                 push(st.effect, fx3{a.pos.x, a.pos.y, hit.at.z - rise}, dir,
                      static_cast<u32>(r) * 65536u + static_cast<u32>(n));
             }
+        } else if (e.action == WAct::Launch && st.missile.kind != 0) {
+            // mobs.lua's launch(): ahead of the body by `offset` along the
+            // missile's own heading, `z_offset` above its feet.
+            const fx slope = e.slope_set ? e.slope : fx{};
+            for (u32 p = 0; p < e.count && weapon_launch_count_ < MAX_PELLETS; ++p) {
+                WeaponLaunch& l = weapon_launches_[weapon_launch_count_++];
+                l.weapon = e.weapon; l.phase = e.phase; l.step = e.step;
+                l.aim = e.aim + brad(static_cast<u32>(e.offsets[p]));
+                l.dir = fx_dir(l.aim);
+                l.pos = fx3{a.pos.x + l.dir.x * st.missile.offset, a.pos.y + l.dir.y * st.missile.offset,
+                            a.pos.z + st.missile.z_offset};
+                l.slope = slope;
+            }
         } else if (e.action == WAct::Vfx && st.effect != 0) {
             // At the body, along its facing; an attached one names the body by
             // its index on the server, which is what a client follows.
@@ -751,6 +764,7 @@ void World::step() noexcept {
     attacks_.clear();
     weapon_events_.clear();
     weapon_vfx_count_ = 0;
+    weapon_launch_count_ = 0;
 
     // A PREDICTING CLIENT's own weapon, first: where the server's weapon
     // runtime steps it, in on_tick, before the flush and the step -- with this
@@ -1761,13 +1775,17 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
                (ignore_b >= 0 && static_cast<u32>(ignore_b) == e);
     };
 
+    // SOLID THINGS ONLY, as Doom's missiles: a rocket flies through a corpse
+    // and over a medikit on the floor rather than bursting on them. It used to
+    // stop on both -- and a predicting client, which mirrors only solid bodies,
+    // could never have agreed with it about where.
     for (u32 i = 0; i < agent_high_water_; ++i) {
-        if (!agents_[i].active || skipped(i)) continue;
+        if (!agents_[i].active || !agents_[i].solid || skipped(i)) continue;
         consider(i, agents_[i].pos, params_[i].radius, params_[i].height);
     }
     for (u32 pi = 0; pi < prop_high_water_; ++pi) {
         const PropState& p = props_[pi];
-        if (!p.active) continue;
+        if (!p.active || (p.flags & prop_flag::SOLID) == 0) continue;
         const u32 entity = MAX_AGENTS + pi;
         if (skipped(entity)) continue;
         consider(entity, p.pos, p.radius, p.height);

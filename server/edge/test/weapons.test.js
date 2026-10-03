@@ -21,6 +21,10 @@
 //             it otherwise does not, so they are never drawn twice:
 //   no echo   a second run, the ordinary way: the shooter is sent none of its
 //             own predicted effects.
+//   rockets   a third run with every weapon given (DNP_GIVE_ALL=1): our
+//             rockets flown here (render/ghostmissiles.js) burst where the
+//             server's do, and the server's blast and rocket are recognised
+//             as copies of ours so neither is drawn twice.
 //   control   the same client without the table -- its machine does not run --
 //             mispredicts as soon as it fires. Without this, zero would only
 //             say the weapon state is not being compared at all.
@@ -36,6 +40,7 @@ import { Core } from '../../../client/src/core.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
 import { Predictor } from '../../../client/src/predictor.js'
 import { parseProps } from '../../../client/src/render/props.js'
+import { GhostMissiles } from '../../../client/src/render/ghostmissiles.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   numberToFx, MSG, BUTTON, NO_WEAPON, ENT_FIELD
@@ -88,10 +93,10 @@ const vfxKey = (v) => `${v.kind}/${q(v.pos.x)}/${q(v.pos.y)}/${q(v.pos.z)}/${v.d
 // SERVER, whose random stream the spread is drawn from) and with other bodies
 // (mirrored, so a predicted shot stops where the server's does).
 
-async function session ({ echo }) {
+async function session ({ echo, giveAll = false }) {
   const args = ['--port', String(LINK_PORT), '--module', 'doom2', '--map', MAP]
   if (FPS) args.push('--controls', 'fps')
-  const env = { ...process.env, DNP_ECHO_PREDICTED: echo ? '1' : '0' }
+  const env = { ...process.env, DNP_ECHO_PREDICTED: echo ? '1' : '0', DNP_GIVE_ALL: giveAll ? '1' : '0' }
   const server = spawn(serverBin, args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let log = ''
   server.stdout.on('data', (d) => { log += d.toString() })
@@ -171,6 +176,15 @@ async function session ({ echo }) {
   for (const m of c.params.splice(0)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
   c.applyDefs = () => { c.defsOk = c.world.setWeapons(c.defs, c.agent, c.serverAgent) }
   if (c.defs) c.applyDefs()
+  // Our rockets, flown as main.js flies them; what they drew, with when.
+  c.ghostBlasts = []
+  c.ghosts = new GhostMissiles({
+    world: c.world,
+    agent: c.agent,
+    draw: { make: () => ({}), place () {}, burst () {}, remove () {},
+            blast: (v) => c.ghostBlasts.push({ v, at: Date.now() }) }
+  })
+  c.launches = 0
 
   c.frame = async (input) => {
     let f = {
@@ -184,6 +198,8 @@ async function session ({ echo }) {
     if (FPS) f = { ...fpsFrame(f), weapon: f.weapon }
     c.predictor.step(f)
     for (const v of c.predictor.weapon?.vfx ?? []) c.predictedVfx.push(v)
+    c.ghosts.tick()
+    for (const l of c.predictor.weapon?.launches ?? []) { c.ghosts.launch(l); c.launches++ }
     c.history.unshift(f)
     c.history = c.history.slice(0, 12)
     await c.dg.write(encodeInputBundle({
@@ -202,6 +218,7 @@ async function session ({ echo }) {
         ENT_FIELD, handleIndex: (h) => (h & 0x00ffffff) - 1
       })
       c.predictor.reconcile(s)
+      c.onSnapshot?.(s)
     }
   }
   c.zero = () => {
@@ -328,6 +345,75 @@ const firing = (slots) => (i) => {
   console.log(`  no echo: ${c.predictedVfx.length} predicted effects, ${echoed} sent back`)
   check(c.predictedVfx.length > 5, `the client drew its own shots (${c.predictedVfx.length})`)
   check(echoed === 0, `the server sent none of them back to be drawn twice (${echoed})`)
+  await c.close()
+}
+
+// ======================================================= run 3: rockets
+
+{
+  const c = await session({ echo: false, giveAll: true })
+  const rocketKind = [...catalogue.kinds.entries()].find(([, d]) => d.name === 'rocket')?.[0]
+  check(rocketKind !== undefined, `the catalogue has a rocket (${rocketKind})`)
+  // Which slot launches one: switch to each and press once.
+  let launcher = null
+  for (const w of c.slots) {
+    await c.play(40, (i) => ({ weapon: i === 0 ? w : NO_WEAPON }))
+    const before = c.launches
+    await c.play(30, (i) => ({ buttons: i < 2 ? BUTTON.ATTACK_PRIMARY : 0 }))
+    if (c.launches > before) { launcher = w; break }
+  }
+  check(launcher !== null, `a weapon in hand predicts a launch (${launcher})`)
+
+  // Fired at the room in eight directions, one rocket each, and every server
+  // effect and rocket the session sees kept with when it arrived.
+  const served = []
+  const rockets = new Map()      // server entity (its handle) -> { hidden, seen }
+  c.onSnapshot = (s) => {
+    for (const v of s.vfx ?? []) served.push({ v, at: Date.now(), swallowed: c.ghosts.swallow(v) })
+    for (const e of s.entities ?? []) {
+      const index = (e.handle & 0x00ffffff) - 1
+      if (c.kinds.get(index) !== rocketKind || !(e.mask & ENT_FIELD.POS)) continue
+      const key = e.handle >>> 0
+      const r = rockets.get(key) ?? { hidden: 0, seen: 0 }
+      r.seen++
+      if (c.ghosts.hides(key, rocketKind, { x: Number(e.pos.x) / 4294967296, y: Number(e.pos.y) / 4294967296 })) r.hidden++
+      rockets.set(key, r)
+    }
+  }
+  c.ghostBlasts.length = 0
+  const launched = c.launches
+  for (let k = 0; k < 8; k++) {
+    const aim = (k * 536870912) >>> 0
+    await c.play(70, (i) => ({ buttons: i < 2 ? BUTTON.ATTACK_PRIMARY : 0, aim }))
+  }
+  await c.play(120, () => ({}))
+  const fired = c.launches - launched
+  const ours = c.ghostBlasts.filter((b) => b.v.kind === c.ghostBlasts[0]?.v.kind)
+  console.log(`  rockets: ${fired} launched here, ${ours.length} burst here, ` +
+              `${served.length} effects served (${served.filter((x) => x.swallowed).length} swallowed), ` +
+              `${rockets.size} server rockets seen`)
+  check(fired >= 6, `rockets were launched by the prediction (${fired})`)
+  check(ours.length >= fired - 1, `and burst here, on their own (${ours.length} of ${fired})`)
+  // WHERE: each ghost blast has a served blast of the same kind beside it.
+  const near = (a, b) => Math.hypot(Number(a.pos.x - b.pos.x), Number(a.pos.y - b.pos.y),
+                                     Number(a.pos.z - b.pos.z)) / 4294967296
+  let agreed = 0
+  let earlier = 0
+  for (const g of ours) {
+    const m = served.find((x) => x.v.kind === g.v.kind && near(x.v, g.v) < 0.5)
+    if (m) { agreed++; if (g.at <= m.at) earlier++ }
+  }
+  check(agreed >= ours.length * 0.75, `they burst where the server's did (${agreed} of ${ours.length} within half a unit)`)
+  check(earlier >= agreed * 0.75, `and no later than the server's blast arrived (${earlier} of ${agreed})`)
+  // NEVER TWICE: the served copies were swallowed, the server's rockets hidden.
+  const swallowed = served.filter((x) => x.swallowed && x.v.kind === ours[0]?.v.kind).length
+  check(swallowed >= agreed * 0.75, `the server's copies of those blasts were swallowed (${swallowed})`)
+  const hidden = [...rockets.values()].filter((r) => r.hidden === r.seen).length
+  check(rockets.size > 0 && hidden >= rockets.size * 0.75,
+        `the server's rockets were recognised as ours and hidden (${hidden} of ${rockets.size})`)
+  // CONTROL: a blast somewhere else is not swallowed.
+  const far = ours[0] ? { ...ours[0].v, pos: { ...ours[0].v.pos, x: ours[0].v.pos.x + (40n << 32n) } } : null
+  check(far !== null && !c.ghosts.swallow(far), 'CONTROL: a blast forty units away is not taken for ours')
   await c.close()
 }
 

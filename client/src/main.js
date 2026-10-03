@@ -16,6 +16,7 @@
 import * as THREE from 'three'
 import { Core, WEAPON_ACTION } from './core.js'
 import { RenderClock } from './render/renderclock.js'
+import { GhostMissiles } from './render/ghostmissiles.js'
 import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
@@ -1655,6 +1656,35 @@ const others = new EntityView({
   onPropGone: (index) => world.removeProp(index)
 })
 
+// OUR OWN MISSILES, flown here the server's way from the tick they are fired
+// (render/ghostmissiles.js), so a rocket leaves the barrel and bursts when it
+// does rather than a snapshot later. The server's copies are hidden below.
+const ghosts = new GhostMissiles({
+  world,
+  agent,
+  draw: {
+    make: (kind) => {
+      const m = props?.make(kind) ?? null
+      if (m) scene.add(m)
+      return m
+    },
+    place: (m, p, turns) => {
+      if (!m) return
+      m.position.set(toThreeX(p.x), toThreeY(p.z) + (m.userData.yOffset ?? 0), toThreeZ(p.y))
+      m.userData.facingTurns = turns
+    },
+    burst: (m, state) => { if (m) props?.setState(m, state, performance.now() / 1000) },
+    // As EntityView removes a prop: never a shared material, never the texture.
+    remove: (m) => {
+      if (!m) return
+      scene.remove(m)
+      m.geometry?.dispose?.()
+      if (m.material && !m.material.userData?.shared) m.material.dispose?.()
+    },
+    blast: (v) => drawVfx(v)
+  }
+})
+
 /**
  * Take up residence in a new level, mid-session.
  *
@@ -1844,6 +1874,9 @@ function enterLevel (w, streamed) {
   // Other players in the level just left are not other players here, and the
   // snapshots still queued describe the old world.
   others.clear()
+  ghosts.clear()
+  ghosts.world = world
+  ghosts.agent = agent
   pendingSnapshots.length = 0
   inputHistory = []
   newestServerTick = w.serverTick
@@ -2144,6 +2177,8 @@ function drainSnapshots () {
       // renderer threw them away (an unknown kind, a zero length); both non-zero
       // means they are on screen and something else is wrong.
       vfxSeen++
+      // The blast of a rocket of ours that already burst here.
+      if (ghosts.swallow(v)) continue
       drawVfx(v)
     }
     // SOUNDS (docs/protocol.md §5.7). One this client PREDICTED -- its own
@@ -2309,6 +2344,10 @@ function frame (now) {
       const before = world.readAgent(agent)
       predictor.step(f)
       if (predictor.weapon) ownWeapon.push(predictor.weapon)
+      // Flown one step per NEW tick, then this tick's launches added -- the
+      // server's order: a missile spawned this tick first moves on the next.
+      ghosts.tick()
+      for (const l of predictor.weapon?.launches ?? []) ghosts.launch(l)
       const after = world.readAgent(agent)
       if (!region && before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
         // AND STOPPED, not merely put back.
@@ -2565,6 +2604,12 @@ function frame (now) {
     // jumped two, and every remote body stuttered at 30 Hz.
     const drawn = renderClock.advance(dt)
     others.update(Math.floor(drawn), drawn - Math.floor(drawn))
+    // The server's copy of a rocket we are already flying is not drawn twice.
+    for (const [index, ent] of others.entities) {
+      if (!ent.kind) continue
+      ent.mesh.visible = !ghosts.hides(`${index}/${ent.generation}`, ent.kind,
+                                       { x: ent.mesh.position.x, y: -ent.mesh.position.z })
+    }
     // performance.now(), NOT the frame's `now`. They are the same clock but not
     // the same instant: `now` is when the frame began, and the tracers being
     // faded here were spawned later in this same frame, from drainSnapshots.
@@ -2597,6 +2642,7 @@ function frame (now) {
       // Billboarding is yaw only, and derived rather than guessed. See
       // billboardYaw -- the first version had the sign of yaw backwards.
       const bb = billboardYaw(camViewYaw)
+      for (const g of ghosts.flying) if (g.mesh) g.mesh.rotation.y = bb
       for (const ent of others.entities.values()) {
         ent.mesh.rotation.y = bb
         // Which way the thing is POINTING, kept on the mesh for the eight-view

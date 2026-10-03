@@ -598,6 +598,17 @@ public:
     // draws everybody else's.
     u32 weapon_vfx_count() const noexcept { return weapon_vfx_count_; }
     const PendingVfx& weapon_vfx(u32 k) const noexcept { return weapon_vfx_[k]; }
+    // And each missile it launched, where the server's launch() puts it: for a
+    // client to fly its own rocket from the tick it fired (WMissile says how).
+    struct WeaponLaunch {
+        u8   weapon = 0, phase = 0, step = 0;
+        fx3  pos{};
+        fx2  dir{};
+        brad aim{};
+        fx   slope{};
+    };
+    u32 weapon_launch_count() const noexcept { return weapon_launch_count_; }
+    const WeaponLaunch& weapon_launch(u32 k) const noexcept { return weapon_launches_[k]; }
 
     // Wire-format state flags for an agent, assembled in one place so the
     // server and the wasm client cannot disagree about what "grounded" means.
@@ -813,6 +824,8 @@ private:
     WeaponEventLog       weapon_events_{};
     PendingVfx           weapon_vfx_[MAX_PELLETS + 8]{};
     u32                  weapon_vfx_count_ = 0;
+    WeaponLaunch         weapon_launches_[MAX_PELLETS]{};
+    u32                  weapon_launch_count_ = 0;
     void present_weapon(u32 i, const WeaponTable& table) noexcept;
     u32                  tick_ = 0;
 };

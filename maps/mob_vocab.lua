@@ -149,6 +149,10 @@ mob_vocab = {
     { name = "corpse", type = "bool", optional = true,
       doc = "Whether the body stays after the death state's sequence ends. " ..
             "Corpses are capped and recycled oldest-first by the runtime." },
+    { name = "mass", type = "int", optional = true,
+      doc = "How hard this mob is to shove, Doom's way: a knockback is divided " ..
+            "by mass / 100, so 100 (the default, a zombieman or a player) takes " ..
+            "it whole and a baron's 1000 a tenth of it." },
     { name = "drops", type = "table", optional = true,
       doc = "What this mob leaves where it dies: a LIST of entries (see " ..
             "drop_fields), each either an `item` that always drops or a " ..

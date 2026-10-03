@@ -426,6 +426,19 @@ local function check_drops(d, where)
   d.drops = (#kept > 0) and kept or nil
 end
 
+-- THE MISSILES, told to the game VM when the weapons run game-wide
+-- (docs/WEAPON_PREDICTION.md): its compiled weapon table carries each launch's
+-- missile -- speed, size, burst -- so a predicting client can fly its own
+-- rocket, and the definitions live here, in the level, where monsters fire them
+-- too. A game without weapons there has no such export and hears nothing.
+local function publish_missiles()
+  if dnp == nil or dnp.is_game == nil or dnp.is_game() then return end
+  if dnp.game_has == nil or not dnp.game_has("weapon_missiles") then return end
+  pcall(dnp.call_game, "weapon_missiles", missiles)
+end
+--- The missile definitions by name, for weapons.lua's compiler in this VM.
+function M.missile_defs() return missiles end
+
 function M.load(data)
   if type(data) ~= "table" then
     error("mobs.load: expected a table of { missiles = ..., mobs = ... }")
@@ -701,6 +714,7 @@ function M.load(data)
     for i = 1, #M.lua_path_why do print("mobs: " .. M.lua_path_why[i]) end
   end
 
+  publish_missiles()
   return #problems == 0, problems
 end
 
@@ -1709,17 +1723,45 @@ end
 -- stack, which already recomputes from base every tick and so cannot drift.
 -- Tagged by the attacker, so hitting the same target twice REPLACES rather than
 -- stacking to a standstill.
-function M.apply_hit(target, origin, a)
+--
+-- `share` scales the shove: for a blast, the fraction of its damage this target
+-- took (fx; whole when absent). And it is divided by the target's MASS, as
+-- Doom's thrust is (damage * 12.5 / mass): a baron is not moved by what throws
+-- an imp across the room.
+-- How fast a shoved body comes to rest, in units/s^2, and the least shove
+-- worth a slide. About Doom's friction: a 100-mass body thrown at a rocket's
+-- 11.7 units/s slides some seven units before it has its feet again.
+local KNOCK_DECEL = fx.int(10)
+local KNOCK_MIN = fx.frac(1, 2)
+local KNOCK_MAX_TICKS = 90
+
+function M.apply_hit(target, origin, a, share)
   if target == nil or not target:valid() then return end
-  if a.knockback and a.knockback ~= 0 then
+  -- A PROP is not shoved: it has no velocity to shove (and no add_impulse --
+  -- a barrel in a blast raised here once knockback became common).
+  if a.knockback and a.knockback ~= 0 and target.add_impulse ~= nil then
     local p = target:pos()
     local dx, dy = p.x - origin.x, p.y - origin.y
     -- Straight up when the target is exactly on the origin: a blast centred on
     -- somebody's feet has no direction to throw them, and zero is worse.
     local ang = (dx.raw == 0 and dy.raw == 0) and 0 or aim_at(origin, p)
     local d = dnp.dir(wrap_brad(ang))
-    target:add_impulse(vec3.new(d.x * a.knockback, d.y * a.knockback,
-                                a.lift or ZERO))
+    local who = live[target:index()]
+    local mass = (who and who.def and who.def.mass) or 100
+    local k = (share or fx.int(1)) * fx.frac(100, mass)
+    local kb = a.knockback * k
+    target:add_impulse(vec3.new(d.x * kb, d.y * kb, (a.lift or ZERO) * k))
+    -- AND THE SHOVE IS KEPT, as Doom keeps it: momentum that friction wears
+    -- down, not something the body's own walking cancels in a tenth of a
+    -- second. Steering at 80 units/s^2 ate an 8 units/s blast within six
+    -- ticks, so a zombie hit by a rocket barely moved. While shoved, the body
+    -- steers and brakes at KNOCK_DECEL instead -- for as long as that takes to
+    -- bring the shove to rest, and no longer.
+    if kb > KNOCK_MIN then
+      local t = math.min(KNOCK_MAX_TICKS, math.ceil((kb / KNOCK_DECEL).raw / 4294967296 * 60))
+      M.tagged_effect(target, "knock_accel", "ground_accel", "set", KNOCK_DECEL, t)
+      M.tagged_effect(target, "knock_friction", "friction", "set", KNOCK_DECEL, t)
+    end
   end
   if a.slow and a.slow_ticks then
     M.tagged_effect(target, "hitslow", "move_speed", "mul", a.slow, a.slow_ticks)
@@ -1768,6 +1810,7 @@ function acts.damage_area(m, a)
       local d2 = dx * dx + dy * dy + dz * dz
       if d2 <= a.radius * a.radius then
         local dmg = a.damage
+        local share = nil
         if a.falloff then
           -- Linear in distance, not in distance squared: a blast at full
           -- strength until the last inch and then nothing reads as a bug.
@@ -1777,13 +1820,14 @@ function acts.damage_area(m, a)
           -- with a number -- which the real fx userdata refuses outright, so
           -- it would have raised on the first rocket anybody fired.
           local d = dnp.length(vec3.new(dx, dy, dz))
-          dmg = (fx.int(a.damage) * (a.radius - d) / a.radius).int
+          share = (a.radius - d) / a.radius
+          dmg = (fx.int(a.damage) * share).int
         end
         if dmg > 0 then hurt(e, dmg, m) end
         -- Knockback and slow apply whether or not the damage rounded to zero at
         -- the edge of the falloff: being on the fringe of a blast still shoves
         -- you, and a wave that pushes without hurting is a real thing to write.
-        M.apply_hit(e, p, a)
+        M.apply_hit(e, p, a, share)
       end
     end
   end
@@ -2643,6 +2687,7 @@ function M.add_missiles(t)
       added = added + 1
     end
   end
+  if added > 0 then publish_missiles() end
   return added, clashed
 end
 

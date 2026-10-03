@@ -80,6 +80,26 @@ struct WTransition {
     u8       to = NO_PHASE;
 };
 
+// What a `launch` fires, as much as a predicting client needs to fly it itself
+// (docs/WEAPON_PREDICTION.md): its body, how it moves, and what its impact
+// draws. The server's own flight is mobs.lua's, from the same numbers. A kind of
+// 0 is a missile nobody described, which a client does not predict.
+inline constexpr u32 MAX_MISSILE_VFX = 2;
+inline constexpr u16 NO_ANIM = 0xFFFF;
+struct WMissile {
+    u16 kind = 0;                 // the catalogue prop it is drawn as
+    fx  speed{};                  // units a second
+    fx  radius{};                 // what it sweeps
+    fx  z_offset{};               // above the shooter's feet
+    fx  offset{};                 // ahead of the shooter (the launch's `offset`)
+    u16 life = 0;                 // ticks before it expires
+    u16 burst_anim = NO_ANIM;     // the state it bursts in
+    u16 burst_ticks = 0;
+    u8  vfx_count = 0;            // on_hit's impact effects
+    u16 vfx_kind[MAX_MISSILE_VFX]{};
+    fx  vfx_radius[MAX_MISSILE_VFX]{};
+};
+
 // One sequence entry. Only what the CORE reads is resolved here; a reported
 // action's other arguments stay in the Lua table, which the server reads by the
 // (weapon, phase, step) the event names.
@@ -107,6 +127,7 @@ struct WStep {
     u32  sound = 0;        // sound: the name's hash, as the wire carries it
     bool predicted = false;
     bool attach = false;   // vfx
+    WMissile missile{};    // launch
 };
 
 // What a swing replaces in the agent's attack parameters, field by field.

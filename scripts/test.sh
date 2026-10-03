@@ -531,6 +531,9 @@ suite_client () {
   # The clock other bodies are drawn at: smooth and never backwards with
   # snapshots at 30 Hz, and the formula it replaced shown to stutter.
   node client/test/renderclock.test.js | grep -E 'FAIL|failures'
+  # Our own rockets, flown here: the server's flight, the burst at the wall,
+  # and the server's copies of the rocket and its blast not drawn twice.
+  node client/test/ghostmissiles.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.

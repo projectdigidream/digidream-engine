@@ -636,7 +636,65 @@ export class WasmWorld {
       vfx.push({ kind: u32[b32], pos: { x: i64[b64], y: i64[b64 + 1], z: i64[b64 + 2] },
                  dir: u32[b32 + 1], param: u32[b32 + 2] })
     }
-    return { events, vfx }
+    // And the missiles it launched, with what flies them (core WMissile).
+    if (!c.wlaunch64) {
+      c.wlaunch64 = M._malloc(WEAPON_EVENTS_MAX * 6 * 8)
+      c.wlaunch32 = M._malloc(WEAPON_EVENTS_MAX * 4 * 4)
+    }
+    const nl = M._dnp_world_weapon_launches(this.ptr, c.wlaunch64, c.wlaunch32, WEAPON_EVENTS_MAX)
+    const launches = []
+    for (let k = 0; k < nl; k++) {
+      const v64 = c.views.i64
+      const v32 = c.views.u32
+      const b64 = c.wlaunch64 / 8 + k * 6
+      const b32 = c.wlaunch32 / 4 + k * 4
+      const l = {
+        pos: { x: v64[b64], y: v64[b64 + 1], z: v64[b64 + 2] },
+        dir: { x: v64[b64 + 3], y: v64[b64 + 4] }, slope: v64[b64 + 5],
+        weapon: v32[b32], phase: v32[b32 + 1], step: v32[b32 + 2], aim: v32[b32 + 3]
+      }
+      l.missile = this.missileSpec(l.weapon, l.phase, l.step)
+      if (l.missile) launches.push(l)
+    }
+    return { events, vfx, launches }
+  }
+
+  /** What a launch step fires (core WMissile), or null if nobody described it. */
+  missileSpec (weapon, phase, step) {
+    const c = this.core
+    const M = c.M
+    if (!c.wmis64) { c.wmis64 = M._malloc(6 * 8); c.wmis32 = M._malloc(6 * 4) }
+    const kind = M._dnp_world_weapon_missile(this.ptr, weapon, phase, step, c.wmis64, c.wmis32)
+    if (!kind) return null
+    const i = c.views.i64
+    const u = c.views.u32
+    const b64 = c.wmis64 / 8
+    const b32 = c.wmis32 / 4
+    const vfx = []
+    for (let v = 0; v < u[b32 + 3]; v++) vfx.push({ kind: u[b32 + 4 + v], radius: i[b64 + 4 + v] })
+    return { kind, speed: i[b64], radius: i[b64 + 1], zOffset: i[b64 + 2], offset: i[b64 + 3],
+             life: u[b32], burstAnim: u[b32 + 1], burstTicks: u[b32 + 2], vfx }
+  }
+
+  /**
+   * A sphere through this world (World::sweep_entities), all in fx raw
+   * BigInts: from {x,y,z}, a unit heading {x,y}, a distance and a radius.
+   * Returns null, or { distance, point, entity } -- entity null for a wall.
+   */
+  sweep (from, dir, dist, radius, ignore = -1) {
+    const c = this.core
+    const M = c.M
+    if (!c.sweep64) { c.sweep64 = M._malloc(7 * 8); c.sweepOut64 = M._malloc(4 * 8); c.sweepOut32 = M._malloc(3 * 4) }
+    const i = c.views.i64
+    const b = c.sweep64 / 8
+    i[b] = from.x; i[b + 1] = from.y; i[b + 2] = from.z
+    i[b + 3] = dir.x; i[b + 4] = dir.y; i[b + 5] = dist; i[b + 6] = radius
+    if (!M._dnp_world_sweep(this.ptr, c.sweep64, ignore, c.sweepOut64, c.sweepOut32)) return null
+    const o = c.sweepOut64 / 8
+    const u = c.views.u32
+    const v = c.views.i64
+    return { distance: v[o], point: { x: v[o + 1], y: v[o + 2], z: v[o + 3] },
+             entity: u[c.sweepOut32 / 4 + 1] ? u[c.sweepOut32 / 4 + 2] : null }
   }
 
   /** The weapon in display slot `n` (1-based, by the table's order), or 255. */

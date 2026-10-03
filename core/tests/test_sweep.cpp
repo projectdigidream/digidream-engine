@@ -284,8 +284,10 @@ static void test_both_ignores_are_needed() {
     const u32 owner = w.spawn(fx3{F(20), F(20), F(0)});
     const u32 target = w.spawn(fx3{F(30), F(20), F(0)});
     // The missile itself, a prop at the owner's own position, which is where
-    // it is on the tick it appears.
+    // it is on the tick it appears. SOLID here, so the control below can show
+    // a sweep stopping on it -- a sweep passes through anything that is not.
     const u32 missile = w.spawn_prop(PropKind{0}, fx3{F(20), F(20), Ff(1, 2)});
+    w.prop_mut(missile).flags = prop_flag::SOLID;
 
     const fx3 from{F(20), F(20), Ff(1, 2)};
 
@@ -309,6 +311,40 @@ static void test_both_ignores_are_needed() {
     CHECK(only_self.entity_hit);
     CHECK(only_self.entity == owner);
     CHECK(only_self.distance == fx::zero());
+}
+
+// SOLID THINGS ONLY: a missile flies through a corpse and over a pickup, as
+// Doom's do, and stops on the solid body behind them.
+static void test_only_solid_things_stop_it() {
+    std::printf("sweep: a corpse and a pickup are flown through, a body is not\n");
+
+    static Room r;
+    static World w;
+    w.reset();
+    r.attach(w);
+
+    const u32 owner = w.spawn(fx3{F(2), F(20), F(0)});
+    const u32 corpse = w.spawn(fx3{F(10), F(20), F(0)});
+    w.agent_mut(corpse).solid = false;
+    const u32 pickup = w.spawn_prop(PropKind{0}, fx3{F(15), F(20), F(0)});
+    w.prop_mut(pickup).radius = Ff(1, 2);
+    w.prop_mut(pickup).height = F(1);
+    const u32 body = w.spawn(fx3{F(25), F(20), F(0)});
+
+    const auto hit = w.sweep_entities(fx3{F(2), F(20), Ff(1, 2)}, EAST, F(60), Ff(1, 8),
+                                      static_cast<i32>(owner), -1, -1);
+    CHECK(hit.entity_hit && hit.entity == body);
+    // CONTROL: the corpse made solid again stops it first.
+    w.agent_mut(corpse).solid = true;
+    const auto h2 = w.sweep_entities(fx3{F(2), F(20), Ff(1, 2)}, EAST, F(60), Ff(1, 8),
+                                     static_cast<i32>(owner), -1, -1);
+    CHECK(h2.entity_hit && h2.entity == corpse);
+    // CONTROL: and so does the pickup, made solid, once the corpse is gone.
+    w.agent_mut(corpse).solid = false;
+    w.prop_mut(pickup).flags = prop_flag::SOLID;
+    const auto h3 = w.sweep_entities(fx3{F(2), F(20), Ff(1, 2)}, EAST, F(60), Ff(1, 8),
+                                     static_cast<i32>(owner), -1, -1);
+    CHECK(h3.entity_hit && h3.entity == pickup);
 }
 
 // A sphere of nonzero size hits things a zero-width ray would slip past. That
@@ -453,6 +489,7 @@ int main() {
     test_height_is_respected();
     test_the_shooter_is_skipped();
     test_both_ignores_are_needed();
+    test_only_solid_things_stop_it();
     test_the_radius_matters();
     test_the_point_is_on_the_ray();
     test_degenerate_casts();

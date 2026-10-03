@@ -683,6 +683,60 @@ unsigned dnp_world_weapon_events(const sim::World* w, unsigned* out32, unsigned 
     return n;
 }
 
+// The missiles the predicted weapon launched on the last step, where the
+// server's launch() puts them (World::weapon_launch): per launch six i64 --
+// position xyz, heading xy, slope -- and four words -- weapon, phase, step and
+// the heading as a brad. At most `cap`.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_weapon_launches(const sim::World* w, long long* out64, unsigned* out32, unsigned cap) {
+    const u32 n = w->weapon_launch_count() < cap ? w->weapon_launch_count() : cap;
+    for (u32 k = 0; k < n; ++k) {
+        const sim::World::WeaponLaunch& l = w->weapon_launch(k);
+        out64[k * 6 + 0] = l.pos.x.raw; out64[k * 6 + 1] = l.pos.y.raw; out64[k * 6 + 2] = l.pos.z.raw;
+        out64[k * 6 + 3] = l.dir.x.raw; out64[k * 6 + 4] = l.dir.y.raw; out64[k * 6 + 5] = l.slope.raw;
+        out32[k * 4 + 0] = l.weapon; out32[k * 4 + 1] = l.phase; out32[k * 4 + 2] = l.step;
+        out32[k * 4 + 3] = l.aim.raw;
+    }
+    return n;
+}
+
+// The missile a launch step fires (sim::WMissile), for flying it: its kind
+// (returned; 0 for one nobody described), and six i64 -- speed, radius,
+// z_offset, offset, and the two impact effects' radii -- and six words --
+// life, burst state, burst ticks, effect count, the two effect kinds.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned phase, unsigned step,
+                                  long long* out64, unsigned* out32) {
+    auto it = weapon_tables().find(w);
+    if (it == weapon_tables().end()) return 0;
+    const sim::WeaponTable& t = *it->second;
+    if (weapon >= t.weapon_count || phase >= t.weapons[weapon].phase_count ||
+        step >= t.weapons[weapon].phases[phase].step_count) return 0;
+    const sim::WMissile& m = t.weapons[weapon].phases[phase].steps[step].missile;
+    out64[0] = m.speed.raw; out64[1] = m.radius.raw; out64[2] = m.z_offset.raw; out64[3] = m.offset.raw;
+    out64[4] = m.vfx_radius[0].raw; out64[5] = m.vfx_radius[1].raw;
+    out32[0] = m.life; out32[1] = m.burst_anim; out32[2] = m.burst_ticks; out32[3] = m.vfx_count;
+    out32[4] = m.vfx_kind[0]; out32[5] = m.vfx_kind[1];
+    return m.kind;
+}
+
+// A sphere moving through this world (World::sweep_entities): what a missile
+// meets, the question the server's flight asks of its world. In: from xyz,
+// heading xy (a unit vector), distance, radius as i64. Out: the distance and
+// the point as i64; hit, entity hit, entity as words. Returns whether it hit.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long long* out64,
+                    unsigned* out32) {
+    const fx3 from{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
+    const fx2 dir{fx::from_raw(in64[3]), fx::from_raw(in64[4])};
+    const sim::World::SweepHit h = w->sweep_entities(from, dir, fx::from_raw(in64[5]),
+                                                     fx::from_raw(in64[6]), ignore, -1, -1);
+    out64[0] = h.distance.raw;
+    out64[1] = h.point.x.raw; out64[2] = h.point.y.raw; out64[3] = h.point.z.raw;
+    out32[0] = h.hit ? 1u : 0u; out32[1] = h.entity_hit ? 1u : 0u; out32[2] = h.entity;
+    return h.hit ? 1 : 0;
+}
+
 // The effects the predicted weapon would have been sent on the last step
 // (World::weapon_vfx), as a snapshot's vfx: per entry three i64 -- the
 // position -- and three words -- kind, direction, param. At most `cap`.

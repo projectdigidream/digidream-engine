@@ -514,9 +514,16 @@ end
 -- module loaded after this file still affects it.
 W.initial_weapons = nil
 
+-- DNP_GIVE_ALL=1: everybody starts with every weapon and full pools. For a
+-- test that needs a rocket in hand, and for trying one on a dev stack, without
+-- walking a map to find it.
+local GIVE_ALL = os ~= nil and os.getenv ~= nil and os.getenv("DNP_GIVE_ALL") == "1"
+
 local function fresh()
   local have = {}
-  if W.initial_weapons then
+  if GIVE_ALL then
+    for n in pairs(W.defs) do have[n] = true end
+  elseif W.initial_weapons then
     for _, n in ipairs(W.initial_weapons) do have[n] = true end
   else
     -- The lowest-order weapon, which is the one that always works. Without a
@@ -535,7 +542,9 @@ local function fresh()
       current = n
     end
   end
-  return { have = have, ammo = starting_ammo(), armour = 0, current = current }
+  local ammo = starting_ammo()
+  if GIVE_ALL then for name, def in pairs(W.ammo) do ammo[name] = def.max or ammo[name] end end
+  return { have = have, ammo = ammo, armour = 0, current = current }
 end
 
 --- The inventory for an agent, created on demand.
@@ -1163,6 +1172,20 @@ local FORCE_LUA = os ~= nil and os.getenv ~= nil and os.getenv("DNP_WEAPONS_LUA"
 -- the 48-to-a-unit scale the converted maps use).
 W.autoaim_range = fx.frac(2048, 48)
 W.autoaim_h = 5.625
+-- Every missile definition this VM can see, by name, for the compiler: the
+-- weapons' own, the ones levels published (weapon_missiles below), and the mob
+-- runtime's when it shares this VM.
+W.missile_defs = {}
+local function missile_defs()
+  local all = {}
+  if mobs ~= nil and mobs.missile_defs ~= nil then
+    for k, v in pairs(mobs.missile_defs()) do all[k] = v end
+  end
+  for k, v in pairs(W.missile_defs) do all[k] = v end
+  for k, v in pairs(W.missiles) do all[k] = v end
+  return all
+end
+
 local function autoaim_knobs()
   local m = mobs
   return { range = (m and m.autoaim_range) or W.autoaim_range,
@@ -1189,7 +1212,8 @@ local function core_index()
     core_stale = true
     W.core_why = "no weapons"
   else
-    local idx, why = dnp.weapons_compile(W.defs, W.ammo, W.initial_weapons or false, autoaim_knobs())
+    local idx, why = dnp.weapons_compile(W.defs, W.ammo, W.initial_weapons or false, autoaim_knobs(),
+                                         missile_defs())
     W.core, W.core_why = idx, why
     if idx == nil then
       print(("weapons: the machine runs in Lua -- %s"):format(tostring(why)))
@@ -1630,6 +1654,17 @@ if GAME then
   -- And asked from the level a swing connected in, when the weapons are the
   -- game's (mobs.lua's on_attack).
   dnp.export("weapon_swing", function(attacker) return W.swing_damage(attacker) end)
+
+  -- A level's missile definitions (mobs.lua publish_missiles), so the table a
+  -- predicting client flies its rockets by knows them. A new one means a new
+  -- table, which every client is sent again.
+  dnp.export("weapon_missiles", function(t)
+    local changed = false
+    for k, v in pairs(t or {}) do
+      if W.missile_defs[k] == nil then W.missile_defs[k] = v; changed = true end
+    end
+    if changed then W.core_stale() end
+  end)
 
   -- A body in a new world: none of the parameters the weapon wrote are on it,
   -- so the weapon is drawn again -- the inventory and the panel are untouched.
