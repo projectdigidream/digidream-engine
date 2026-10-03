@@ -2363,6 +2363,12 @@ M.drop_loot = drop_loot
 -- M.load refuses a second call).
 M.check_drops = function(d, where) return check_drops(d, where) end
 
+-- Told to the graph runtime when it is loaded (graphs.lua's when_hurt and
+-- when_dies): who, by whom, how much, and what kind of monster.
+local function tell_graphs(what, target, by, amount, kind)
+  if graphs ~= nil and graphs.notify ~= nil then graphs.notify(what, target, by and by.e or nil, amount, kind) end
+end
+
 function hurt(target, amount, by)
   if target == nil or not target:valid() then return end
   local m = live[target:index()]
@@ -2402,6 +2408,7 @@ function hurt(target, amount, by)
     -- (M.player_sounds = { pain = name, death = name }); nil is silence.
     local ps = M.player_sounds
     local hp = (target:hp() or 100) - amount
+    tell_graphs("hurt", target, by, amount, nil)
     if hp > 0 then
       target:set_hp(hp)
       if ps and ps.pain then dnp.sound(ps.pain, target) end
@@ -2423,6 +2430,7 @@ function hurt(target, amount, by)
     local home = home_of[target:index()]
     if home ~= nil then target:teleport(home) end
     if M.on_player_death then M.on_player_death(target, by) end
+    tell_graphs("dies", target, by, amount, nil)
     return
   end
   if m.dead then return end
@@ -2448,6 +2456,7 @@ function hurt(target, amount, by)
     dnp.mob_set(m.idx, "hp", m.hp)
     dnp.mob_set(m.idx, "hurt", by ~= nil)
   end
+  tell_graphs("hurt", target, by, amount, m.def and m.def.name or m.kind)
 
   if m.hp <= 0 then
     m.dead = true
@@ -2474,6 +2483,7 @@ function hurt(target, amount, by)
       m.e:despawn()
     end
     if M.on_death then M.on_death(m, by) end
+    tell_graphs("dies", target, by, amount, m.def and m.def.name or m.kind)
     return
   end
 
@@ -2667,6 +2677,23 @@ end
 --- Is this missile name known? For a loader in another file that wants to
 --- refuse a typo at LOAD rather than fire nothing at runtime.
 function M.has_missile(name) return missiles[name] ~= nil end
+--- Is `kind` a monster this level defines? (graphs.lua's `spawn` asks.)
+function M.has(kind) return defs[kind] ~= nil end
+--- A monster's health, from its record -- the engine's hp slot is a player's.
+--- Nil for anything that is not a live monster here.
+function M.health(e)
+  local m = e ~= nil and e.valid ~= nil and e:valid() and live[e:index()] or nil
+  if m == nil or m.dead then return m and 0 or nil end
+  return m.hp
+end
+--- Set a live monster's health (graphs.lua's `heal`), capped at its maximum.
+function M.set_health(e, hp)
+  local m = e ~= nil and e:valid() and live[e:index()] or nil
+  if m == nil or m.dead then return false end
+  m.hp = math.max(1, math.min(m.max_hp or hp, math.floor(hp)))
+  if m.cpp and dnp.mob_set ~= nil then dnp.mob_set(m.idx, "hp", m.hp) end   -- as hurt mirrors it
+  return true
+end
 
 -- Register more missile kinds after load.
 --

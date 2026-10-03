@@ -302,6 +302,1166 @@
     {
       "args": [
         {
+          "doc": "A catalogue name: only that kind of prop. Any prop without it.",
+          "name": "prop",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "prop"
+      ],
+      "doc": "Somebody pressed use on a prop: a lever, a terminal, a crate.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_prop_used",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "prop",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "prop"
+      ],
+      "doc": "Somebody walked into a prop: once when they reach it, not again until they have left it.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_prop_touched",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "The wall, picked on the map. Any without it.",
+          "name": "side",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "sector"
+      ],
+      "doc": "Somebody pressed use on a wall: a switch, a button, a door.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_wall_used",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "Picked on the map.",
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Or any sector with this tag.",
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "sector"
+      ],
+      "doc": "Somebody came into a sector -- walking, falling or flying in.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_sector_entered",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "sector"
+      ],
+      "doc": "Somebody went out of a sector.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_sector_left",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        },
+        {
+          "doc": "Seconds: fire again for as long as they stay on it -- a floor that hurts every second. Once without it.",
+          "name": "repeat_every",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "sector"
+      ],
+      "doc": "Somebody is standing on a sector's floor: landed on it or stepped onto it, not passing over it in the air. A pressure plate, slime.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_floor_touched",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "The spot, picked on the map.",
+          "name": "x",
+          "type": "number"
+        },
+        {
+          "name": "y",
+          "type": "number"
+        },
+        {
+          "doc": "Units. Defaults to 2.",
+          "name": "radius",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "Somebody came within `radius` of a spot (`near`), or went back out of it (`away`).",
+      "exec_in": [],
+      "exec_out": [
+        "near",
+        "away"
+      ],
+      "level_only": true,
+      "name": "when_near",
+      "starts": true
+    },
+    {
+      "args": [],
+      "category": "events",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Once, when the level first runs.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_level_starts",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "seconds",
+          "type": "number"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Again and again, this many seconds apart.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "every",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "seconds",
+          "type": "number"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Once, this many seconds after the level (or the game) starts.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "after",
+      "starts": true
+    },
+    {
+      "args": [],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "A player came into the level -- or, in a game graph, into the game.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_player_arrives",
+      "starts": true
+    },
+    {
+      "args": [],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "A player went out of the level (or the game). `entity` may already be gone.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_player_leaves",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "Defaults to monsters.",
+          "name": "what",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        },
+        {
+          "doc": "Only this monster, by name.",
+          "name": "kind",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "by"
+      ],
+      "doc": "Something died. `by` is whoever killed it, when anybody did.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_dies",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "Defaults to anyone.",
+          "name": "what",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        },
+        {
+          "name": "kind",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "by",
+        "amount"
+      ],
+      "doc": "Something was hurt, and by how much.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_hurt",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "x",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "y",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "z",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "to",
+        "x",
+        "y",
+        "z"
+      ],
+      "data_out": [],
+      "doc": "Put an entity somewhere: onto the entity linked to `to`, or at x, y, z (the map's units; an axis not given stays as it is).",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "teleport"
+    },
+    {
+      "args": [
+        {
+          "doc": "Which way: the way the entity faces, the other way, away from or toward the entity linked to `from`, straight up, or at `angle` degrees (0 is east, 90 north).",
+          "name": "direction",
+          "type": "enum",
+          "values": [
+            "forward",
+            "backward",
+            "away",
+            "toward",
+            "up",
+            "angle"
+          ]
+        },
+        {
+          "doc": "Units a second. Defaults to 10.",
+          "name": "strength",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Added lift, units a second.",
+          "name": "up",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "angle",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "from",
+        "strength",
+        "up",
+        "angle"
+      ],
+      "data_out": [],
+      "doc": "Shove an entity: a knock it slides from, as a blast gives.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "push"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Stop an entity where it is: no velocity left.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "stop"
+    },
+    {
+      "args": [
+        {
+          "doc": "Defaults to 10.",
+          "name": "amount",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "amount"
+      ],
+      "data_out": [],
+      "doc": "Hurt an entity, as a weapon does: a monster feels pain and dies, and drops what it carries.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "damage"
+    },
+    {
+      "args": [
+        {
+          "doc": "Defaults to 25.",
+          "name": "amount",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Not above this. Defaults to 100.",
+          "name": "max",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "amount"
+      ],
+      "data_out": [],
+      "doc": "Give an entity health back.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "heal"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Kill an entity outright -- it dies as if shot.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "kill"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Take an entity out of the world, with no death.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "remove"
+    },
+    {
+      "args": [
+        {
+          "doc": "A monster's name, or a catalogue prop's (an item, a barrel).",
+          "name": "what",
+          "type": "string"
+        },
+        {
+          "name": "x",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "y",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "z",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "at"
+      ],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "Bring something into the world: on the entity linked to `at`, or at x, y, z. Its `entity` output is what appeared (nil if nothing could).",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "spawn"
+    },
+    {
+      "args": [
+        {
+          "doc": "2 is twice as fast, 0.5 half. Defaults to 2.",
+          "name": "factor",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Defaults to 5.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "factor"
+      ],
+      "data_out": [],
+      "doc": "Make an entity move faster or slower, for a while.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "speed_up"
+    },
+    {
+      "args": [
+        {
+          "doc": "A sound's name.",
+          "name": "sound",
+          "type": "string"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "A sound, from an entity -- the event's when nothing is linked.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "play_sound"
+    },
+    {
+      "args": [
+        {
+          "doc": "Picked on the map.",
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Or every sector with this tag.",
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        },
+        {
+          "doc": "Seconds before it shuts again; none, it stays open.",
+          "name": "close_after",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Open a door: its ceiling rises to just under the lowest ceiling beside it, as DOOM's do.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "open_door"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Shut a door: its ceiling comes down to its floor.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "close_door"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Up or down by `amount`, to the next floor up beside it, the lowest or highest floor beside it, or back where it started.",
+          "name": "to",
+          "type": "enum",
+          "values": [
+            "up_by",
+            "down_by",
+            "next_higher",
+            "lowest_nearby",
+            "highest_nearby",
+            "original"
+          ]
+        },
+        {
+          "doc": "Units, for up_by and down_by.",
+          "name": "amount",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector",
+        "amount"
+      ],
+      "data_out": [],
+      "doc": "Raise or lower a floor: a lift, a step, a rising platform.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "move_floor"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "to",
+          "type": "enum",
+          "values": [
+            "up_by",
+            "down_by",
+            "lowest_nearby",
+            "highest_nearby",
+            "original"
+          ]
+        },
+        {
+          "name": "amount",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector",
+        "amount"
+      ],
+      "data_out": [],
+      "doc": "Raise or lower a ceiling: a crusher, a reveal.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "move_ceiling"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Seconds at the bottom. Defaults to 3.",
+          "name": "wait",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "A DOOM lift: down to the lowest floor beside it, a wait, and back up.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "lift"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Units along the map's x.",
+          "name": "dx",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Units along the map's y.",
+          "name": "dy",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        },
+        {
+          "doc": "Keep going there and back.",
+          "name": "back_and_forth",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Move a whole sector sideways: a sliding platform, a bridge.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "slide_sector"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Defaults to 360.",
+          "name": "degrees",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "speed",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "slow",
+            "normal",
+            "fast"
+          ]
+        },
+        {
+          "name": "forever",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Turn a sector about its middle: a rotating platform.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "spin_sector"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Stop a sector where it is.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "stop_sector"
+    },
+    {
+      "args": [
+        {
+          "doc": "The wall, picked on the map.",
+          "name": "side",
+          "type": "int"
+        },
+        {
+          "doc": "Defaults to middle.",
+          "name": "part",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "upper",
+            "middle",
+            "lower"
+          ]
+        },
+        {
+          "name": "texture",
+          "type": "string"
+        }
+      ],
+      "category": "wall",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Change what a wall shows: a switch flipped, a screen lit.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "set_wall_texture"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "x",
+        "y",
+        "z"
+      ],
+      "doc": "Where an entity is, in the map's units.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "position_of"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "An entity's health.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "health_of"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "a",
+        "b"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "How far apart two entities are, in units.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "distance"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "to"
+      ],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "The player nearest the entity linked to `to` (the event's when nothing is), or nil when there are none.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "nearest_player"
+    },
+    {
+      "args": [],
+      "category": "sector",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "sector"
+      ],
+      "doc": "The sector an entity stands in -- for opening the door a player is at.",
+      "exec_in": [],
+      "exec_out": [],
+      "level_only": true,
+      "name": "sector_of"
+    },
+    {
+      "args": [
+        {
           "doc": "A name in the graph's `vars`.",
           "name": "var",
           "type": "string"

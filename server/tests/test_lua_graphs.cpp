@@ -43,10 +43,19 @@ static fx F(i64 n) { return fx::from_int(n); }
 struct Room {
     geom::MapStorage store;
     geom::MapData    view{};
+    // The room (0), a DOOR east of it (1, shut: its ceiling on its floor, as
+    // DOOM stores one) and a PLATFORM west of it (2), for the world's nodes.
     Room() {
         const fx2 p[] = {{-F(20), -F(20)}, {F(20), -F(20)}, {F(20), F(20)}, {-F(20), F(20)}};
+        const fx2 d[] = {{F(20), -F(20)}, {F(24), -F(20)}, {F(24), F(20)}, {F(20), F(20)}};
+        const fx2 w[] = {{-F(24), -F(20)}, {-F(20), -F(20)}, {-F(20), F(20)}, {-F(24), F(20)}};
         store.add_sector(p, 4, fx::zero(), F(10), 1);
-        for (u16 i = 0; i < 4; ++i) store.add_side(0, i, static_cast<u16>((i + 1) % 4), geom::NO_SECTOR, 0);
+        store.add_sector(d, 4, fx::zero(), fx::zero(), 2);
+        store.add_sector(w, 4, fx::zero(), F(10), 3);
+        for (u16 i = 0; i < 4; ++i)
+            store.add_side(0, i, static_cast<u16>((i + 1) % 4), i == 1 ? 1 : (i == 3 ? 2 : geom::NO_SECTOR), 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), i == 3 ? 0 : geom::NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(2, i, static_cast<u16>((i + 1) % 4), i == 1 ? 0 : geom::NO_SECTOR, 0);
         view = store.view();
     }
 };
@@ -97,8 +106,15 @@ static bool load_graph(const char* json) {
 // A server tick as the server runs one: the hooks, then the step, so dnp.tick()
 // moves -- a delay is measured against it.
 static sim::World* g_world = nullptr;
+static server::lua::CommandQueue* g_commands = nullptr;
 static void ticks(int n) {
-    for (int i = 0; i < n; ++i) { vm.call_hook("on_tick", g_world->tick()); g_world->step(); }
+    for (int i = 0; i < n; ++i) {
+        vm.call_hook("on_tick", g_world->tick());
+        // The flush point, as the server's: what scripts asked for (a teleport,
+        // a push) lands before the step.
+        if (g_commands) g_commands->apply(*g_world, [](u32) {});
+        g_world->step();
+    }
 }
 
 int main(int argc, char** argv) {
@@ -116,6 +132,7 @@ int main(int argc, char** argv) {
     g_world = &world;
 
     static server::lua::CommandQueue commands;
+    g_commands = &commands;
     static server::lua::EffectStack effects;
     static server::lua::WorldContext ctx;
     static i32 hp[sim::MAX_AGENTS];
@@ -445,6 +462,135 @@ int main(int argc, char** argv) {
     CHECK(server::lua::persist_restore(L, saved, perr));
     CHECK(run("k_type = graphs.var('keep', 'score') == 'nine'", "reading"));
     CHECK(truthy("k_type"));
+
+    // ================================================================
+    // THE WORLD'S NODES: doors, floors, entities, by what they are -- no
+    // indices beyond the one a map pick would fill in.
+    std::printf("-- the world's nodes --\n");
+    CHECK(run("w_shut = dnp.sector(1):ceil().raw", "the door before"));
+    CHECK(num("w_shut") == 0);
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "world", "vars": { "px": 0, "py": 0, "where": -1 },
+      "nodes": [
+        { "id": "go",    "type": "event", "event": "on_tick" },
+        { "id": "one",   "type": "once" },
+        { "id": "door",  "type": "open_door", "sector": 1, "speed": "fast" },
+        { "id": "up",    "type": "move_floor", "sector": 2, "to": "up_by", "amount": 2, "speed": "fast" },
+        { "id": "tp",    "type": "teleport", "x": 5, "y": 6 },
+        { "id": "pos",   "type": "position_of" },
+        { "id": "keepx", "type": "set_var", "var": "px" },
+        { "id": "keepy", "type": "set_var", "var": "py" },
+        { "id": "sec",   "type": "sector_of" },
+        { "id": "keeps", "type": "set_var", "var": "where" },
+        { "id": "shove", "type": "push", "direction": "angle", "angle": 0, "strength": 4 }
+      ],
+      "links": [
+        ["go.then", "one.in"], ["one.then", "door.in"], ["door.then", "up.in"], ["up.then", "tp.in"],
+        ["tp.then", "shove.in"], ["shove.then", "keepx.in"], ["keepx.then", "keepy.in"], ["keepy.then", "keeps.in"],
+        ["pos.x", "keepx.value"], ["pos.y", "keepy.value"], ["sec.sector", "keeps.value"]
+      ]
+    })"));
+    CHECK(run("graphs.fire('on_tick', { entity = dnp.players()[1] })", "the run, with a player"));
+    ticks(1);
+    CHECK(run("w_vx = dnp.players()[1]:vel().x.raw / 4294967296", "the push"));
+    ticks(239);
+    CHECK(run("w_door = dnp.sector(1):ceil().raw / 4294967296\n"
+              "w_floor = dnp.sector(2):floor().raw / 4294967296\n"
+              "local p = dnp.players()[1]:pos(); w_x = p.x.raw / 4294967296; w_y = p.y.raw / 4294967296\n"
+              "w_px = graphs.var('world', 'px'); w_where = graphs.var('world', 'where')", "reading the world"));
+    std::printf("  door ceiling %.3f, platform floor %.3f, player at %.2f,%.2f (read back %.2f), in sector %g\n",
+                num("w_door"), num("w_floor"), num("w_x"), num("w_y"), num("w_px"), num("w_where"));
+    CHECK(num("w_door") > 9.9 && num("w_door") < 10);   // the room's ceiling, less DOOM's four units
+    CHECK(num("w_floor") == 2);                          // up by exactly 2
+    CHECK(num("w_x") > 5 && num("w_x") < 6 && num("w_y") == 6);   // teleported to 5,6, then pushed east
+    CHECK(num("w_px") == 0);                             // read in the same run: before the flush, as documented
+    CHECK(num("w_vx") > 0);                              // and the push, east, moved it
+    CHECK(num("w_where") == 0);                          // standing in the room
+    // CONTROL: a door told to close after a second shuts again; the first stays.
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "shuts",
+      "nodes": [ { "id": "go", "type": "event", "event": "on_tick" }, { "id": "one", "type": "once" },
+                 { "id": "lift", "type": "lift", "sector": 2, "wait": 1, "speed": "fast" },
+                 { "id": "door", "type": "open_door", "sector": 1, "speed": "fast", "close_after": 1 } ],
+      "links": [ ["go.then", "one.in"], ["one.then", "door.in"], ["door.then", "lift.in"] ]
+    })"));
+    ticks(30);
+    CHECK(run("s_low = dnp.sector(2):floor().raw / 4294967296", "the lift going down"));
+    ticks(400);
+    CHECK(run("s_door = dnp.sector(1):ceil().raw / 4294967296; s_back = dnp.sector(2):floor().raw / 4294967296", "after"));
+    std::printf("  close_after: door ceiling %.3f; the lift went down to %.2f and came back to %.2f\n",
+                num("s_door"), num("s_low"), num("s_back"));
+    CHECK(num("s_door") == 0);
+    CHECK(num("s_low") < 2);                 // down toward the lowest floor beside it (the room's 0)
+    CHECK(num("s_back") == 0);               // and back to where it was authored
+    // A sector node with nothing to act on is refused; so is a sector the map lacks.
+    CHECK(!load_graph(R"({ "graph": 1, "name": "nosec",
+      "nodes": [ { "id": "go", "type": "event", "event": "on_tick" }, { "id": "d", "type": "open_door" } ],
+      "links": [ ["go.then", "d.in"] ] })"));
+    CHECK(!load_graph(R"({ "graph": 1, "name": "nosuch",
+      "nodes": [ { "id": "go", "type": "event", "event": "on_tick" }, { "id": "d", "type": "open_door", "sector": 99 } ],
+      "links": [ ["go.then", "d.in"] ] })"));
+
+    // ================================================================
+    // WHEN THINGS HAPPEN: start nodes that fire once for the moment they name.
+    std::printf("-- when things happen --\n");
+    CHECK(run("graphs.reset(); dnp.players()[1]:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))", "a clean slate"));
+    ticks(2);
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "when",
+      "nodes": [
+        { "id": "start", "type": "when_level_starts" },
+        { "id": "c0",    "type": "action", "a": "counter_add", "counter": "w_started" },
+        { "id": "ent",   "type": "when_sector_entered", "sector": 2 },
+        { "id": "c1",    "type": "action", "a": "counter_add", "counter": "w_entered" },
+        { "id": "door",  "type": "when_sector_entered", "sector": 1 },
+        { "id": "c2",    "type": "action", "a": "counter_add", "counter": "w_door" },
+        { "id": "left",  "type": "when_sector_left", "sector": 0 },
+        { "id": "c3",    "type": "action", "a": "counter_add", "counter": "w_left" },
+        { "id": "plate", "type": "when_floor_touched", "sector": 2, "repeat_every": 0.5 },
+        { "id": "c4",    "type": "action", "a": "counter_add", "counter": "w_floor" },
+        { "id": "near",  "type": "when_near", "x": -22, "y": 0, "radius": 1 },
+        { "id": "c5",    "type": "action", "a": "counter_add", "counter": "w_near" },
+        { "id": "c6",    "type": "action", "a": "counter_add", "counter": "w_away" },
+        { "id": "tick",  "type": "every", "seconds": 0.5 },
+        { "id": "c7",    "type": "action", "a": "counter_add", "counter": "w_every" },
+        { "id": "once",  "type": "after", "seconds": 1 },
+        { "id": "c8",    "type": "action", "a": "counter_add", "counter": "w_after" },
+        { "id": "touch", "type": "when_prop_touched", "prop": "medikit" },
+        { "id": "c9",    "type": "action", "a": "counter_add", "counter": "w_touch" }
+      ],
+      "links": [ ["start.then", "c0.in"], ["ent.then", "c1.in"], ["door.then", "c2.in"], ["left.then", "c3.in"],
+                 ["plate.then", "c4.in"], ["near.near", "c5.in"], ["near.away", "c6.in"],
+                 ["tick.then", "c7.in"], ["once.then", "c8.in"], ["touch.then", "c9.in"] ]
+    })"));
+    ticks(5);
+    // Onto the platform: out of the room, into sector 2, onto its floor, near the spot.
+    CHECK(run("dnp.players()[1]:teleport(vec3.new(fx.int(-22), fx.int(0), fx.int(0)))", "onto the platform"));
+    ticks(95);                                         // 100 ticks since loading
+    // A touch held for three ticks is one touch; after a gap, another.
+    CHECK(run("local p = dnp.players()[1]\n"
+              "local kit = { index = function() return 4321 end, name = function() return 'medikit' end }\n"
+              "local now = dnp.tick()\n"
+              "graphs.touched(p, kit)", "touch 1"));
+    ticks(1); CHECK(run("graphs.touched(dnp.players()[1], { index = function() return 4321 end, name = function() return 'medikit' end })", "held")); 
+    ticks(1); CHECK(run("graphs.touched(dnp.players()[1], { index = function() return 4321 end, name = function() return 'medikit' end })", "held"));
+    ticks(5); CHECK(run("graphs.touched(dnp.players()[1], { index = function() return 4321 end, name = function() return 'medikit' end })", "again"));
+    CHECK(run("dnp.players()[1]:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))", "back to the room"));
+    ticks(3);
+    CHECK(run("local c = triggers.counter\n"
+              "w = { c('w_started'), c('w_entered'), c('w_door'), c('w_left'), c('w_floor'), c('w_near'), c('w_away'),"
+              "      c('w_every'), c('w_after'), c('w_touch') }", "reading"));
+    CHECK(run("w1, w2, w3, w4, w5, w6, w7, w8, w9, w10 = unpack(w)", "unpacking"));
+    std::printf("  started %g, entered %g (door %g), left %g, floor %g, near %g away %g, every %g, after %g, touched %g\n",
+                num("w1"), num("w2"), num("w3"), num("w4"), num("w5"), num("w6"), num("w7"), num("w8"), num("w9"), num("w10"));
+    CHECK(num("w1") == 1);                      // once
+    CHECK(num("w2") == 1 && num("w4") == 1);    // into the platform, out of the room
+    CHECK(num("w3") == 0);                      // CONTROL: not the door
+    CHECK(num("w5") >= 3);                      // landed, then again every half second while on it
+    CHECK(num("w6") == 1 && num("w7") == 1);    // came near once, went away once
+    CHECK(num("w8") >= 3 && num("w8") <= 4);    // ~110 ticks at every 30
+    CHECK(num("w9") == 1);                      // after a second, once
+    CHECK(num("w10") == 2);                     // held touches are one; a later one is another
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

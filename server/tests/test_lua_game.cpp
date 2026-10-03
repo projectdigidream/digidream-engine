@@ -493,6 +493,62 @@ int main(int argc, char** argv) {
                   "table.remove(graph_vocab.game.actions)", "a bad game list"));
     CHECK(num(GV, "g_wrong") == 1);
 
+    // ================================================================
+    // THE WORLD'S NODES ON MONSTERS: spawn one by name where the player is,
+    // hurt it through the mob runtime (so it feels it), read its health, kill
+    // it. And a sector node in a game graph is refused (level_only).
+    std::printf("-- the world's nodes on a monster --\n");
+    CHECK(run(LV, R"LUA(
+      d_ok = graphs.load({ graph = 1, name = "deaths",
+        nodes = {
+          { id = "h",  type = "when_hurt", what = "monsters", kind = "zombieman" },
+          { id = "hc", type = "action", a = "counter_add", counter = "z_hurt" },
+          { id = "d",  type = "when_dies", kind = "zombieman" },
+          { id = "dc", type = "action", a = "counter_add", counter = "z_died" },
+          { id = "i",  type = "when_dies", kind = "imp" },
+          { id = "ic", type = "action", a = "counter_add", counter = "imp_died" } },
+        links = { { "h.then", "hc.in" }, { "d.then", "dc.in" }, { "i.then", "ic.in" } } }, "deaths")
+    )LUA", "a graph listening for deaths"));
+    CHECK(run(LV, R"LUA(
+      m_ok = graphs.load({ graph = 1, name = "mon", vars = { hp_after = -1, hp_dead = -1 },
+        nodes = {
+          { id = "t",    type = "event", event = "on_touch" },
+          { id = "make", type = "spawn", what = "zombieman" },
+          { id = "hit",  type = "damage", amount = 5 },
+          { id = "hp",   type = "health_of" },
+          { id = "keep", type = "set_var", var = "hp_after" },
+          { id = "end",  type = "kill" },
+          { id = "hp2",  type = "health_of" },
+          { id = "keep2",type = "set_var", var = "hp_dead" } },
+        links = { { "t.then", "make.in" }, { "make.then", "hit.in" }, { "hit.then", "keep.in" },
+                  { "keep.then", "end.in" }, { "end.then", "keep2.in" },
+                  { "make.entity", "hit.entity" }, { "make.entity", "hp.entity" }, { "hp.value", "keep.value" },
+                  { "make.entity", "end.entity" }, { "make.entity", "hp2.entity" }, { "hp2.value", "keep2.value" } } }, "mon")
+      graphs.fire("on_touch", { entity = dnp.players()[1] })
+      m_after = graphs.var("mon", "hp_after"); m_dead = graphs.var("mon", "hp_dead")
+    )LUA", "a monster's graph"));
+    std::printf("  spawned a zombieman: after 5 damage its health read %g; killed, %g\n",
+                num(LV, "m_after"), num(LV, "m_dead"));
+    CHECK(truthy(LV, "m_ok"));
+    CHECK(run(LV, "z_hurt = triggers.counter('z_hurt'); z_died = triggers.counter('z_died'); imp_died = triggers.counter('imp_died')", "reading deaths"));
+    std::printf("  when_hurt fired %g, when_dies %g (imp: %g)\n", num(LV, "z_hurt"), num(LV, "z_died"), num(LV, "imp_died"));
+    CHECK(truthy(LV, "d_ok"));
+    CHECK(num(LV, "z_hurt") >= 1);       // the 5 damage, and the killing blow
+    CHECK(num(LV, "z_died") == 1);
+    CHECK(num(LV, "imp_died") == 0);     // CONTROL: filtered by kind
+    CHECK(num(LV, "m_after") == 15);       // DOOM's zombieman has 20
+    CHECK(num(LV, "m_dead") <= 0);
+    CHECK(run(GV, R"LUA(
+      g_doorw = graphs.load({ graph = 1, name = "gdoor",
+        nodes = { { id = "t", type = "event", event = "on_touch" }, { id = "d", type = "open_door", sector = 0 } },
+        links = { { "t.then", "d.in" } } }, "gdoor")
+      g_pushw = graphs.load({ graph = 1, name = "gpush",
+        nodes = { { id = "t", type = "event", event = "on_touch" }, { id = "p", type = "push", direction = "up", up = 3 } },
+        links = { { "t.then", "p.in" } } }, "gpush")
+    )LUA", "game graphs with world nodes"));
+    CHECK(!truthy(GV, "g_doorw"));         // a door is a level's
+    CHECK(truthy(GV, "g_pushw"));          // CONTROL: a push is anybody's
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }
