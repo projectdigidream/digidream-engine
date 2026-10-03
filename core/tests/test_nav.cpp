@@ -869,7 +869,49 @@ static void test_a_search_gives_up_at_its_limit() {
     g_query.max_expand = 0;
 }
 
+// HEIGHTS MOVED: the cheap refresh must leave exactly what a full build makes,
+// or refuse. A floor moved under declared boundaries changes no edge; a ledge's
+// far side raised out of reach can change derived ones.
+static void test_a_height_refresh_matches_a_full_build() {
+    std::printf("nav: refreshing moved heights matches a full build, or refuses\n");
+
+    static Grid a;
+    const auto g_owned = std::make_unique<NavGraph>();
+    NavGraph& g = *g_owned;
+    g.build(a.view);
+    a.set_floor(3, F(1));
+    const u32 moved[] = {3};
+    CHECK(g.refresh_heights(a.view, moved, 1));
+    const auto full_owned = std::make_unique<NavGraph>();
+    NavGraph& full = *full_owned;
+    CHECK(full.build(a.view));
+    CHECK(g.hash() == full.hash());
+
+    // Derived edges: the east room of an open pair, raised far out of reach.
+    static OpenPair p(F(3));
+    const auto h_owned = std::make_unique<NavGraph>();
+    NavGraph& h = *h_owned;
+    h.build(p.view);
+    const u64 was = h.hash();
+    p.store.sector_mut(1).floor_z = F(60);
+    p.store.sector_mut(1).ceil_z = F(80);
+    p.refresh();
+    const u32 east[] = {1};
+    const bool ok = h.refresh_heights(p.view, east, 1);
+    const auto f2_owned = std::make_unique<NavGraph>();
+    NavGraph& f2 = *f2_owned;
+    CHECK(f2.build(p.view));
+    std::printf("  ledge raised: refresh %s; full build %s the graph\n",
+                ok ? "kept it" : "refused", f2.hash() == was ? "kept" : "changed");
+    // Whatever it decided, never a graph a full build would not make.
+    CHECK(!ok || h.hash() == f2.hash());
+    // CONTROL: a sector outside the graph is refused, not ignored.
+    const u32 bad[] = {100000};
+    CHECK(!g.refresh_heights(a.view, bad, 1));
+}
+
 int main() {
+    test_a_height_refresh_matches_a_full_build();
     test_a_search_gives_up_at_its_limit();
     test_the_graph_is_the_map();
     test_walkability_is_the_movers_walkability();

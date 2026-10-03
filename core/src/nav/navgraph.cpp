@@ -47,138 +47,161 @@ void NavGraph::compute_node(const MapData& map, u32 s) noexcept {
     }
 }
 
+// One sector's edges, in the order build has always produced them: declared
+// neighbours, then the edges derived across its ledges, then its portals.
+// Written to `out` (at most `cap`); `overflow` set if they did not fit.
+// Shared by build and refresh_heights, so the two cannot describe one map two
+// ways.
+u32 NavGraph::node_edges(const MapData& map, u32 s, NavEdge* out, u32 cap, bool* overflow) const noexcept {
+    const Sector& sec = map.sector(s);
+    u32 n = 0;
+    *overflow = false;
+
+    for (u16 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        const Side& sd = map.side(si);
+        if (sd.neighbor == NO_SECTOR) continue;
+        if (static_cast<u32>(sd.neighbor) >= node_count_) continue;
+        if (n >= cap) { *overflow = true; return n; }
+
+        NavEdge& e = out[n++];
+        e = NavEdge{};
+        e.to = static_cast<u32>(sd.neighbor);
+        e.side = static_cast<i32>(si);
+        e.width = distance(map.point(sd.a), map.point(sd.b));
+        e.cost = distance(nodes_[s].centroid, nodes_[e.to].centroid);
+    }
+
+    for (u16 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        const Side& sd = map.side(si);
+        if (sd.neighbor != NO_SECTOR) continue;          // already has one
+        if (!(sd.flags & side_flag::LEDGE)) continue;    // a wall stays a wall
+        if (sd.flags & side_flag::BLOCKING) continue;
+
+        const fx2 a = map.point(sd.a);
+        const fx2 b = map.point(sd.b);
+        const fx2 along{b.x - a.x, b.y - a.y};
+        const fx len = length(along);
+        if (len <= fx::from_frac(1, 1024)) continue;     // a degenerate side
+
+        const fx2 outward{along.y / len, -(along.x / len)};
+        const fx step = fx::from_frac(1, 64);
+        const fx feet = sec.floor_z;
+
+        const fx frac[3] = {fx::from_frac(1, 4), fx::from_frac(1, 2),
+                            fx::from_frac(3, 4)};
+        for (u32 f = 0; f < 3; ++f) {
+            const fx2 at{a.x + along.x * frac[f], a.y + along.y * frac[f]};
+            for (i32 sign = 1; sign >= -1; sign -= 2) {
+                const fx off = sign > 0 ? step : -step;
+                const fx2 probe{at.x + outward.x * off, at.y + outward.y * off};
+                const i32 found =
+                    geom::find_sector_at(map, probe, feet, fx::zero());
+                if (found < 0 || static_cast<u32>(found) >= node_count_) continue;
+                if (static_cast<u32>(found) == s) continue;
+
+                bool already = false;
+                for (u32 q = 0; q < n; ++q) {
+                    if (out[q].to == static_cast<u32>(found)) { already = true; break; }
+                }
+                if (already) continue;
+                if (n >= cap) { *overflow = true; return n; }
+
+                NavEdge& e = out[n++];
+                e = NavEdge{};
+                e.to = static_cast<u32>(found);
+                e.side = static_cast<i32>(si);
+                e.derived = true;
+                e.width = len;
+                e.cost = distance(nodes_[s].centroid, nodes_[e.to].centroid);
+            }
+        }
+    }
+
+    for (u32 p = 0; p < portal_count_; ++p) {
+        if (portals_[p].from != s) continue;
+        if (n >= cap) { *overflow = true; return n; }
+
+        NavEdge& e = out[n++];
+        e = NavEdge{};
+        e.to = portals_[p].to;
+        e.side = -1;
+        e.width = fx::zero();
+        e.cost = fx::zero();
+    }
+    return n;
+}
+
 bool NavGraph::build_edges(const MapData& map) noexcept {
     edge_count_ = 0;
     for (u32 s = 0; s < node_count_; ++s) {
-        const Sector& sec = map.sector(s);
         nodes_[s].first_edge = edge_count_;
-        nodes_[s].edge_count = 0;
+        bool overflow = false;
+        const u32 n = node_edges(map, s, &edges_[edge_count_], MAX_NAV_EDGES - edge_count_, &overflow);
+        nodes_[s].edge_count = n;
+        edge_count_ += n;
+        if (overflow) return false;
+    }
+    return true;
+}
 
-        // Sides first, in side order, then this sector's portals in the order
-        // they were linked. Fixed and reproducible: A* explores edges in array
-        // order, and a route that depended on iteration order would differ
-        // between two servers running the same map.
-        for (u16 k = 0; k < sec.side_count; ++k) {
-            const u32 si = sec.first_side + k;
-            const Side& sd = map.side(si);
-            if (sd.neighbor == NO_SECTOR) continue;
-            if (static_cast<u32>(sd.neighbor) >= node_count_) continue;
-            if (edge_count_ >= MAX_NAV_EDGES) return false;
-
-            NavEdge& e = edges_[edge_count_++];
-            e.to = static_cast<u32>(sd.neighbor);
-            e.side = static_cast<i32>(si);
-            e.width = distance(map.point(sd.a), map.point(sd.b));
-            e.cost = distance(nodes_[s].centroid, nodes_[e.to].centroid);
-            ++nodes_[s].edge_count;
+// FLOORS AND CEILINGS MOVED, and nothing else (a door, a lift): only the edges
+// derived across ledges can depend on a height, and only for a sector whose
+// probes can land in a moved one -- the moved sectors themselves, and any
+// sector with a ledge whose footprint touches one of theirs. Those are
+// re-derived; if each has the same number of edges as before, they are written
+// in place and the graph is exactly what a full build would make. If any
+// differs, nothing is written and the caller builds in full.
+//
+// On DOOMWORLD a full build is ~15 ms (8000 sectors), and the server did one
+// every quarter second for as long as any door or lift in the region moved.
+bool NavGraph::refresh_heights(const MapData& map, const u32* moved, u32 moved_count) noexcept {
+    if (map.sector_count != node_count_) return false;
+    const auto bbox = [&](u32 s, fx2& lo, fx2& hi) {
+        const Sector& sec = map.sector(s);
+        lo = fx2{fx::max(), fx::max()};
+        hi = fx2{fx::min(), fx::min()};
+        for (u16 k = 0; k < sec.point_count; ++k) {
+            const fx2& p = map.point(sec.first_point + k);
+            if (p.x < lo.x) lo.x = p.x;
+            if (p.y < lo.y) lo.y = p.y;
+            if (p.x > hi.x) hi.x = p.x;
+            if (p.y > hi.y) hi.y = p.y;
         }
-
-        // ADJACENCY THE MAP DOES NOT SPELL OUT.
-        //
-        // A side is `wall`, `neighbor N`, or `open`. Only `neighbor` names the
-        // sector on the other side, and hand-authored maps increasingly do not
-        // use it: maps/mylevel.map is five sectors, every edge `open`, and
-        // under the neighbour-only rule its graph had ZERO edges. Every sector
-        // an island, and nothing could path anywhere.
-        //
-        // `open` means the sector ENDS at that edge -- walk off and you fall.
-        // What is on the other side is a question about the geometry, so ask
-        // the geometry: step a hair past the edge and see which sector is
-        // there. find_sector_at answers it through the broadphase grid, and it
-        // is the same function the mover uses to decide where a body IS, so
-        // nav cannot disagree with movement about what is next to what.
-        //
-        // WALLS ARE LEFT ALONE, deliberately. `wall` and `open` are both
-        // explicit in the format precisely because the difference is invisible
-        // in the geometry and total in play -- one is a barrier, the other is a
-        // fall. Deriving a route through a wall because a room happens to be on
-        // the far side would be the nav graph overruling the author.
-        //
-        // Whether a derived edge can actually be CROSSED is not decided here.
-        // That stays where it was, in edge_is_open, asked of the same
-        // sector_admits the mover asks -- so a three-unit drop off a platform
-        // is walkable downward and not upward, and nothing here needs to know
-        // that. An edge is a candidate; walkability is a query-time answer,
-        // because a lift connects two rooms at one end of its travel and not
-        // at the other.
-        for (u16 k = 0; k < sec.side_count; ++k) {
-            const u32 si = sec.first_side + k;
-            const Side& sd = map.side(si);
-            if (sd.neighbor != NO_SECTOR) continue;          // already has one
-            if (!(sd.flags & side_flag::LEDGE)) continue;    // a wall stays a wall
-            if (sd.flags & side_flag::BLOCKING) continue;
-
-            const fx2 a = map.point(sd.a);
-            const fx2 b = map.point(sd.b);
-            const fx2 along{b.x - a.x, b.y - a.y};
-            const fx len = length(along);
-            if (len <= fx::from_frac(1, 1024)) continue;     // a degenerate side
-
-            // The perpendicular. WHICH WAY IS OUT is not knowable from the
-            // winding: core/src/geom/map.cpp is explicit that point order is
-            // not normalised, and a map with inconsistent winding is meant to
-            // render oddly rather than misbehave. So try both and discard the
-            // one that lands back inside the sector we started in.
-            const fx2 out{along.y / len, -(along.x / len)};
-            const fx step = fx::from_frac(1, 64);
-            const fx feet = sec.floor_z;
-
-            // Three points along the side, because one long `open` edge can
-            // run past two different sectors and the midpoint alone would find
-            // whichever it happened to touch.
-            const fx frac[3] = {fx::from_frac(1, 4), fx::from_frac(1, 2),
-                                fx::from_frac(3, 4)};
-            for (u32 f = 0; f < 3; ++f) {
-                const fx2 at{a.x + along.x * frac[f], a.y + along.y * frac[f]};
-                for (i32 sign = 1; sign >= -1; sign -= 2) {
-                    const fx off = sign > 0 ? step : -step;
-                    const fx2 probe{at.x + out.x * off, at.y + out.y * off};
-                    const i32 found =
-                        geom::find_sector_at(map, probe, feet, fx::zero());
-                    if (found < 0 || static_cast<u32>(found) >= node_count_) continue;
-                    if (static_cast<u32>(found) == s) continue;
-
-                    // One edge per neighbouring sector. Explicit edges are NOT
-                    // deduplicated -- two doorways between the same rooms are
-                    // two real routes and the narrower one must not shadow the
-                    // wider -- but a derived edge carries no such information,
-                    // and three probes along one side would otherwise add the
-                    // same sector three times.
-                    bool already = false;
-                    for (u32 q = 0; q < nodes_[s].edge_count; ++q) {
-                        if (edges_[nodes_[s].first_edge + q].to ==
-                            static_cast<u32>(found)) { already = true; break; }
-                    }
-                    if (already) continue;
-                    if (edge_count_ >= MAX_NAV_EDGES) return false;
-
-                    NavEdge& e = edges_[edge_count_++];
-                    e.to = static_cast<u32>(found);
-                    e.side = static_cast<i32>(si);
-                    e.derived = true;
-                    e.width = len;
-                    e.cost = distance(nodes_[s].centroid, nodes_[e.to].centroid);
-                    ++nodes_[s].edge_count;
-                }
+    };
+    static fx2 mlo[64], mhi[64];
+    if (moved_count > 64) return false;
+    for (u32 i = 0; i < moved_count; ++i) {
+        if (moved[i] >= node_count_) return false;
+        bbox(moved[i], mlo[i], mhi[i]);
+    }
+    const fx pad = fx::from_frac(1, 32);
+    static NavEdge scratch[MAX_NAV_EDGES];
+    for (u32 s = 0; s < node_count_; ++s) {
+        bool affected = false;
+        for (u32 i = 0; i < moved_count && !affected; ++i) affected = moved[i] == s;
+        if (!affected) {
+            const Sector& sec = map.sector(s);
+            bool ledge = false;
+            for (u16 k = 0; k < sec.side_count && !ledge; ++k) {
+                const Side& sd = map.side(sec.first_side + k);
+                ledge = sd.neighbor == NO_SECTOR && (sd.flags & side_flag::LEDGE) &&
+                        !(sd.flags & side_flag::BLOCKING);
             }
+            if (!ledge) continue;
+            fx2 lo, hi;
+            bbox(s, lo, hi);
+            for (u32 i = 0; i < moved_count && !affected; ++i) {
+                affected = !(hi.x + pad < mlo[i].x || mhi[i].x + pad < lo.x ||
+                             hi.y + pad < mlo[i].y || mhi[i].y + pad < lo.y);
+            }
+            if (!affected) continue;
         }
-
-        for (u32 p = 0; p < portal_count_; ++p) {
-            if (portals_[p].from != s) continue;
-            if (edge_count_ >= MAX_NAV_EDGES) return false;
-
-            NavEdge& e = edges_[edge_count_++];
-            e.to = portals_[p].to;
-            e.side = -1;
-            // No geometric gate: a portal is an entity or a sector trigger, not
-            // a doorway, so nothing about its width or the floor on the far
-            // side decides whether a body fits through it. The width is left at
-            // zero because edge_is_open() never reads it -- a large sentinel
-            // here would look like a value someone had chosen.
-            e.width = fx::zero();
-            e.cost = fx::zero();
-            ++nodes_[s].edge_count;
-        }
+        bool overflow = false;
+        const u32 n = node_edges(map, s, scratch, MAX_NAV_EDGES, &overflow);
+        if (overflow || n != nodes_[s].edge_count) return false;
+        for (u32 q = 0; q < n; ++q) edges_[nodes_[s].first_edge + q] = scratch[q];
     }
     return true;
 }

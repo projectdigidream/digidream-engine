@@ -359,7 +359,13 @@ struct SectorRender {
 // it loaded, so a map can ask for a script that ships with it and cannot reach
 // anywhere else on the host. mapc copies each declared file next to its output,
 // which is what makes that resolution find anything.
-inline constexpr u32 MAX_MAP_SCRIPTS = 8;
+// SIXTEEN. It was eight, and a level built from the engine's runtimes spends
+// them two at a time -- mobs, triggers, graphs: six before the module or the
+// map has said anything of its own -- so a studio map with monsters, a trigger
+// table and a graph could not also carry its module's Lua and its own. Raising
+// it changes no file that exists: the count is a u32 on disk, and a map of
+// eight or fewer reads the same on every build.
+inline constexpr u32 MAX_MAP_SCRIPTS = 16;
 inline constexpr u32 MAX_SCRIPT_NAME = 48;
 
 struct ScriptName {

@@ -117,6 +117,14 @@ public:
     // silently rebuilding a graph that no longer describes the map.
     bool rebuild_sector(const geom::MapData& map, u32 s) noexcept;
 
+    // Floors and ceilings of `moved` sectors changed and nothing else did (a
+    // door, a lift): re-derive only the edges that can depend on a height. True
+    // when the graph is now exactly what build() would make; false when the
+    // edge structure itself changed, and the caller must build in full (what
+    // was rewritten by then is correct for the map, the rest is not yet). At
+    // most 64 sectors.
+    bool refresh_heights(const geom::MapData& map, const u32* moved, u32 moved_count) noexcept;
+
     // A directed link between two sectors that share no boundary (design
     // §3.2.4, "in-map portals as edges"). Recorded and then folded into the
     // edge array by a full rebuild, so a query never has to consider two kinds
@@ -144,6 +152,7 @@ public:
 
 private:
     bool build_edges(const geom::MapData& map) noexcept;
+    u32  node_edges(const geom::MapData& map, u32 s, NavEdge* out, u32 cap, bool* overflow) const noexcept;
     void compute_node(const geom::MapData& map, u32 s) noexcept;
 
     NavNode nodes_[MAX_NAV_NODES]{};

@@ -181,6 +181,10 @@ struct MobRuntime {
     u32 lua_actions = 0;      // actions handed back to Lua this tick
     u32 routes_truncated = 0;
     u32 routes_failed = 0;     // searches that found no route (or gave up), each backing off
+    // This tick's route searching, for the slow-tick report (mob_binding.cpp).
+    u32 paths_this_tick = 0;
+    u32 expanded_this_tick = 0;
+    u64 path_us_this_tick = 0;
 
     void reset() {
         mobs.clear();

@@ -669,6 +669,29 @@ static void test_declared_scripts_round_trip_and_stay_inside_the_map() {
     CHECK(dst.script_count() == 2);
     CHECK(dst.hash() == src.hash());
 
+    // ROOM FOR A WHOLE STUDIO LEVEL: three runtimes at two scripts apiece, the
+    // graph, the module's file and the map's own -- and more -- up to sixteen,
+    // and they survive the file. The seventeenth is refused.
+    {
+        static MapStorage many;
+        build_reference(many);
+        char name[16];
+        for (u32 i = 0; i < MAX_MAP_SCRIPTS; ++i) {
+            const int n = std::snprintf(name, sizeof(name), "s%02u.lua", i);
+            CHECK(many.add_script(name, static_cast<u32>(n)));
+        }
+        CHECK(many.script_count() == 16);
+        CHECK(!many.add_script("one_more.lua", 12));
+        u8 b3[16384];
+        ByteWriter w3(b3, sizeof(b3));
+        CHECK(save_map(many, w3));
+        static MapStorage back;
+        ByteReader r3(b3, w3.size());
+        CHECK(load_map(r3, back) == MapLoadStatus::Ok);
+        CHECK(back.script_count() == 16 && back.hash() == many.hash());
+        CHECK(back.script(15).name[1] == '1' && back.script(15).name[2] == '5');
+    }
+
     // Every shape of "somewhere else" is refused.
     static MapStorage bad;
     build_reference(bad);

@@ -15,7 +15,9 @@ extern "C" {
 #include "lua.h"
 }
 
+#include <chrono>
 #include <cstdio>
+#include <string>
 #include <cstring>
 #include <cstdlib>
 #include <map>
@@ -71,6 +73,12 @@ struct LuaActions : ActionSink {
     lua_State* L = nullptr;
     u32 tick = 0;
     u64 errors = 0;
+    // Where a slow tick went (the report in l_mobs_tick).
+    u32 actions = 0;
+    u64 action_us = 0;
+    u64 worst_us = 0;
+    std::string worst;
+    u16 worst_seq = 0;
 
     void run(u32 entity, const char* state_name, u16 seq_index) override {
         lua_getglobal(L, "mobs");
@@ -85,7 +93,14 @@ struct LuaActions : ActionSink {
         // -- which is the failure mobs.lua already names, where a typo in one
         // monster's hitscan killed on_tick and froze every projectile on the
         // level.
-        if (lua_pcall(L, 3, 0, 0) != 0) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const int rc = lua_pcall(L, 3, 0, 0);
+        const u64 us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t0).count());
+        ++actions;
+        action_us += us;
+        if (us > worst_us) { worst_us = us; worst = state_name; worst_seq = seq_index; }
+        if (rc != 0) {
             ++errors;
             std::fprintf(stderr, "[mobs] action %s[%u]: %s\n",
                          state_name, seq_index, lua_tostring(L, -1));
@@ -337,7 +352,24 @@ int l_mobs_tick(lua_State* L) {
     LuaActions sink;
     sink.L = L;
     sink.tick = rt.world->tick();
+    rt.paths_this_tick = 0;
+    rt.expanded_this_tick = 0;
+    rt.path_us_this_tick = 0;
+    const auto t0 = std::chrono::steady_clock::now();
     tick_mobs(rt, rt.world->tick(), &sink);
+    const u64 us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - t0).count());
+    // A SLOW TICK SAYS WHERE IT WENT. The VM's warning can only name on_tick,
+    // and most of this is native: routes, and the actions handed back to Lua.
+    if (us >= 4000) {
+        std::fprintf(stderr, "[mobs] tick %u: %llu us -- %u thought; routes %u (%u expanded, %llu us); "
+                     "lua actions %u (%llu us, worst %llu us in %s[%u])\n",
+                     sink.tick, static_cast<unsigned long long>(us), rt.thought, rt.paths_this_tick,
+                     rt.expanded_this_tick, static_cast<unsigned long long>(rt.path_us_this_tick),
+                     sink.actions, static_cast<unsigned long long>(sink.action_us),
+                     static_cast<unsigned long long>(sink.worst_us),
+                     sink.worst.empty() ? "-" : sink.worst.c_str(), sink.worst_seq);
+    }
     lua_pushnumber(L, rt.thought);
     lua_pushnumber(L, rt.lua_actions);
     return 2;

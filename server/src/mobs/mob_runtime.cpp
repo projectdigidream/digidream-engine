@@ -31,6 +31,7 @@
 
 #include "dnp/math/trig.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include "lua/world_binding.hpp"
@@ -289,10 +290,15 @@ bool steer_target(MobRuntime& rt, const sim::World& w, const nav::NavGraph* grap
         if (rt.ctx != nullptr && !rt.ctx->take_path_budget(tick)) return true;
         const u32 was_cap = q.max_expand;
         q.max_expand = MAX_EXPAND;
+        const auto t0 = std::chrono::steady_clock::now();
         const nav::PathResult r =
             nav::find_path(*w.map(), *graph, q, static_cast<u32>(here),
                            static_cast<u32>(there), body, path, nav::MAX_NAV_NODES, jumps);
         q.max_expand = was_cap;
+        ++rt.paths_this_tick;
+        rt.expanded_this_tick += r.expanded;
+        rt.path_us_this_tick += static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t0).count());
         if (r.status == nav::PathStatus::Unreachable || r.status == nav::PathStatus::GaveUp) {
             m.repath_at = tick + REPATH_FAILED_TICKS + (m.entity % REPATH_TICKS);
             ++rt.routes_failed;

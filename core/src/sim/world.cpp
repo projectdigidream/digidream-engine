@@ -755,6 +755,7 @@ void World::step_idle() noexcept {
 }
 
 void World::step() noexcept {
+    phase(0);
     // Events describe the tick about to run, so the previous tick's are dropped
     // here rather than at the end -- a caller reading them after step() sees
     // exactly what this tick raised.
@@ -782,10 +783,14 @@ void World::step() noexcept {
     // the new position, not the other way round -- resolving the agent first
     // would leave it a tick behind the platform, which reads as the platform
     // sliding out from under it every frame.
+    phase(1);
     if (store_) motions_.apply(*store_, tick_);
+    phase(2);
 
     carry_anchored();
+    phase(3);
     sweep_moving_sectors();
+    phase(4);
 
     // Where every body was before anything moved. Both resolutions read it --
     // see the declaration.
@@ -798,14 +803,18 @@ void World::step() noexcept {
         if (agents_[i].active && !agents_[i].asleep) step_agent(i);
     }
 
+    phase(5);
     resolve_agent_collisions();
+    phase(6);
 
     // Last, on settled positions. Running it before the agents moved would
     // report a crush on an agent that was about to walk out from under the
     // ceiling in the same tick, and miss one that walked in.
 
     detect_vertical_crush();
+    phase(7);
     detect_prop_events();
+    phase(8);
 
     ++tick_;
 }

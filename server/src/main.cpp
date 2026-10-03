@@ -560,6 +560,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     };
     Perf perf{};
 
+    // This thread's CPU time, for telling work from waiting.
+    static u64 thread_cpu_us() {
+        timespec ts{};
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+        return static_cast<u64>(ts.tv_sec) * 1000000ull + static_cast<u64>(ts.tv_nsec) / 1000ull;
+    }
+
     static u64 now_us() {
         using namespace std::chrono;
         return static_cast<u64>(
@@ -2699,6 +2706,27 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
 
         if (fp == L.nav_heights) return;
 
+        // THE CHEAP PATH FIRST. Heights moving can only change the edges
+        // derived across ledges, near the moving sectors; re-derive those and,
+        // when the graph's structure is unchanged -- nearly always, since a
+        // door's boundary is declared -- that is the whole update, every time
+        // the fingerprint moves. A full build was ~15 ms on DOOMWORLD, every
+        // quarter second for as long as any door in the region moved.
+        {
+            u32 moved[64];
+            u32 n = 0;
+            bool fits = true;
+            for (u32 i = 0; i < ms.count(); ++i) {
+                if (!ms.active(i)) continue;
+                if (n >= 64) { fits = false; break; }
+                moved[n++] = ms.at(i).sector;
+            }
+            if (fits && L.nav_graph.refresh_heights(*L.host->view, moved, n)) {
+                L.nav_heights = fp;
+                return;
+            }
+        }
+
         const u32 now = L.world.tick();
         if (L.nav_built_tick != 0 && now - L.nav_built_tick < NAV_REBUILD_TICKS) return;
 
@@ -3482,8 +3510,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     }
 
     // ONE TICK OF THE REGION: every level's script around one step of one world.
+    u64 step_phases_[9]{};
+
     void tick_region() {
         Host& H = *region_;
+        // WHERE A SLOW TICK WENT, by stage -- the VMs' warnings each span the
+        // whole shared tick, so they cannot say which part was slow.
+        const u64 st0 = now_us();
+        const u64 cpu0 = thread_cpu_us();
         compute_region_awake();
         u32 first = NO_OWNER;
         for (u32 li = 0; li < levels.size(); ++li) {
@@ -3507,8 +3541,12 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
         // The game's scripts, once for everybody in the region, bound to a
         // level somebody is in -- its queue is flushed in the loop below.
+        const u64 st_pre = now_us();
         const u32 game_li = region_player_level();
         if (game_li != NO_OWNER) game_tick_hook(game_li);
+        const u64 st_game = now_us();
+        u64 worst_on_tick = 0;
+        u32 worst_li = 0;
 
         bool any = false;
         for (u32 li = 0; li < levels.size(); ++li) {
@@ -3516,15 +3554,20 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             any = true;
             Level& L = level(li);
             const u64 t_lua0 = perf.every ? now_us() : 0;
+            const u64 st_l0 = now_us();
             if (L.vm.is_open()) {
                 L.vm.begin_tick();
                 L.vm.call_hook("on_tick", H.world.tick());
             }
+            const u64 st_l = now_us() - st_l0;
+            if (st_l > worst_on_tick) { worst_on_tick = st_l; worst_li = li; }
             if (perf.every) perf.lua_us += now_us() - t_lua0;
             drive_param_test(li);
             flush_lua_commands(L);
         }
+        const u64 st_lua = now_us();
         refresh_effect_params(first);
+        const u64 st_params = now_us();
 
         if (!any) {
             // Nobody near anything: the clock and the map, as an empty level.
@@ -3533,13 +3576,19 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             return;
         }
         const u64 t_step0 = perf.every ? now_us() : 0;
+        H.world.set_phase_hook([](void* ctx, u32 p) {
+            if (p < 9) static_cast<u64*>(ctx)[p] = now_us();
+        }, step_phases_);
         H.world.step();
+        H.world.set_phase_hook(nullptr, nullptr);
         H.poses.record(H.world);
         if (perf.every) {
             perf.step_us += now_us() - t_step0;
             perf.bp_full += H.world.broadphase_full();
         }
+        const u64 st_step = now_us();
         refresh_nav_if_stale(first);
+        const u64 st_nav = now_us();
         report_crushes(level(first));
         if (game_li != NO_OWNER) dispatch_game_events(game_li);
         for (u32 li = 0; li < levels.size(); ++li) {
@@ -3556,6 +3605,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             H.prop_epoch_seen = H.world.prop_epoch();
             H.props_changed_tick = H.world.tick() + 1;
         }
+        const u64 st_events = now_us();
         for (u32 li = 0; li < levels.size(); ++li) {
             if (!in_region(li) || !levels[li].live || !region_awake_[li]) continue;
             Level& L = level(li);
@@ -3563,6 +3613,26 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 L.vm.end_tick(H.world.tick());
                 L.vm.gc_step();
             }
+        }
+        const u64 st_end = now_us();
+        if (st_end - st0 >= 12000) {
+            const auto d = [](u64 a, u64 b) { return static_cast<unsigned long long>(b - a); };
+            // CPU against wall: a tick that burned little CPU and took long was
+            // WAITING -- the process was not scheduled (a niced server, a busy
+            // machine) -- and no change to the code will make it faster.
+            std::fprintf(stderr, "[srv] slow region tick %u: %llu us (%llu us of CPU) -- awake %llu, game %llu, "
+                         "on_tick %llu (worst level %u: %llu), params %llu, step %llu, nav %llu, "
+                         "events+post %llu, end+gc %llu\n",
+                         H.world.tick(), d(st0, st_end),
+                         static_cast<unsigned long long>(thread_cpu_us() - cpu0), d(st0, st_pre), d(st_pre, st_game),
+                         d(st_game, st_lua), worst_li, static_cast<unsigned long long>(worst_on_tick),
+                         d(st_lua, st_params), d(st_params, st_step), d(st_step, st_nav),
+                         d(st_nav, st_events), d(st_events, st_end));
+            const u64* p = step_phases_;
+            std::fprintf(stderr, "[srv]   step: weapon %llu, motions %llu, carry %llu, sweep %llu, "
+                         "agents %llu, collisions %llu, crush %llu, prop events %llu\n",
+                         d(p[0], p[1]), d(p[1], p[2]), d(p[2], p[3]), d(p[3], p[4]),
+                         d(p[4], p[5]), d(p[5], p[6]), d(p[6], p[7]), d(p[7], p[8]));
         }
     }
 
@@ -4081,7 +4151,7 @@ int main(int argc, char** argv) {
     u32 map_count = 0;
     const char* spawn_tag_arg = nullptr;
     bool want_param_test = false;
-    constexpr u32 MAX_SCRIPTS = 8;
+    constexpr u32 MAX_SCRIPTS = 16;   // as a map may declare (MAX_MAP_SCRIPTS)
     const char* script_args[MAX_SCRIPTS]{};
     u32 script_count = 0;
     bool strict_scripts = false;

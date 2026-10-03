@@ -484,6 +484,13 @@ public:
 
     u32 tick() const noexcept { return tick_; }
 
+    // A DIAGNOSTIC SEAM: called between the stages of step() with the stage
+    // just finished (0 = start, then 1..8). The core has no clock and keeps
+    // none; a host that wants to know where a slow step went times these.
+    // Null is the default and costs a comparison per stage.
+    using PhaseHook = void (*)(void* ctx, u32 phase);
+    void set_phase_hook(PhaseHook hook, void* ctx) noexcept { phase_hook_ = hook; phase_ctx_ = ctx; }
+
     // Last tick's agent-vs-agent resolution: how many bodies the broadphase
     // served, and how many fell back to the full sweep. A report, not state --
     // neither is hashed, and neither affects the answer.
@@ -727,6 +734,10 @@ private:
     // claim anyone can check. One bool, read once per body rather than once per
     // pair, which is why it costs nothing worth measuring.
     bool agrid_off_ = false;
+
+    PhaseHook phase_hook_ = nullptr;
+    void*     phase_ctx_ = nullptr;
+    void phase(u32 p) noexcept { if (phase_hook_) phase_hook_(phase_ctx_, p); }
 
     static u32 agrid_bucket(i64 cx, i64 cy) noexcept {
         // Unsigned throughout: signed overflow is undefined, and a hash that is
