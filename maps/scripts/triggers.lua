@@ -1537,3 +1537,96 @@ function M.is_spent(name)
   local t = by_name[name]
   return t ~= nil and t.spent == true
 end
+
+-- --------------------------------------------------- THE VERBS, FOR GRAPHS
+--
+-- docs/GRAPHS.md: a graph's conditions and actions ARE this file's, run by the
+-- same implementations so a door a graph opens and a door a trigger opens are
+-- one `sector_move`. Additive and read-only with respect to everything above:
+-- it checks an entry with the loader's own checker, and runs one against an
+-- event the caller supplies -- saving and restoring the event in flight, so a
+-- graph run from inside a trigger's `lua` action does not clobber the trigger's.
+--
+-- An entry is shaped as a trigger's is: { c = "side_is", side = 4, ... } or
+-- { a = "sector_move", ... }, its arguments as literal fields.
+local function index_sectors_once()
+  if loaded or next(sectors_by_tag) ~= nil then return end
+  for _, s in ipairs(dnp.sectors()) do
+    local tag = s:tag()
+    if tag ~= nil then
+      sectors_by_tag[tag] = sectors_by_tag[tag] or {}
+      local q = sectors_by_tag[tag]
+      q[#q + 1] = s:index()
+    end
+  end
+end
+
+local function with_event(ev, fn, entry)
+  local saved = {}
+  for k, v in pairs(EV) do saved[k] = v end
+  clear_event()
+  if ev ~= nil then
+    EV.entity, EV.target, EV.side, EV.sector = ev.entity, ev.target, ev.side, ev.sector
+    EV.crush_kind, EV.ui_id, EV.widget_id, EV.value = ev.crush_kind, ev.ui_id, ev.widget_id, ev.value
+    EV.running = ev.running
+  end
+  local ok, result = pcall(fn, entry)
+  clear_event()
+  for k, v in pairs(saved) do EV[k] = v end
+  if not ok then error(result, 0) end
+  return result
+end
+
+M.verbs = {}
+
+--- Problems with one entry, as the loader would report them: unknown name,
+--- arguments, geometry, and a condition used on an event it reads nothing
+--- from. `kind` is "condition" or "action"; `event` may be nil.
+function M.verbs.check(kind, entry, event, where)
+  local _, cond_v, act_v = index_vocab()
+  local problems = {}
+  has_map = #dnp.sectors() > 0
+  if kind == "condition" then
+    local spec = cond_v[entry.c]
+    if spec == nil then
+      problems[#problems + 1] = ("%s: no condition named '%s'"):format(where, tostring(entry.c))
+      return problems
+    end
+    check_args(spec, entry, where, problems)
+    check_geometry(spec, entry, where, problems)
+    if spec.events ~= nil and event ~= nil then
+      local ok = false
+      for _, e in ipairs(spec.events) do if e == event then ok = true end end
+      if not ok then
+        problems[#problems + 1] = ("%s: condition '%s' reads something %s does not carry")
+                                  :format(where, spec.name, event)
+      end
+    end
+  elseif kind == "action" then
+    local spec = act_v[entry.a]
+    if spec == nil then
+      problems[#problems + 1] = ("%s: no action named '%s'"):format(where, tostring(entry.a))
+      return problems
+    end
+    check_args(spec, entry, where, problems)
+    check_geometry(spec, entry, where, problems)
+    if spec.name == "lua" then compile_custom(entry, where, problems) end
+  else
+    problems[#problems + 1] = ("%s: '%s' is not a kind of verb"):format(where, tostring(kind))
+  end
+  return problems
+end
+
+--- Does condition `entry` hold for event `ev` ({entity, target, side, ...})?
+function M.verbs.condition(entry, ev)
+  index_sectors_once()
+  local ok = with_event(ev, COND[entry.c], entry)
+  if entry.negate then ok = not ok end
+  return ok and true or false
+end
+
+--- Run action `entry` for event `ev`. Returns whether it did something.
+function M.verbs.action(entry, ev)
+  index_sectors_once()
+  return with_event(ev, ACT[entry.a], entry) and true or false
+end

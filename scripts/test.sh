@@ -59,6 +59,8 @@ need_maps () {
   # actions. Both are baked and both are driven, so the two implementations are
   # compared rather than one replacing the other.
   "./build/$HOST_ARCH/mapc" maps/doors_trig.map "build/$HOST_ARCH/doors_trig.dnpm"
+  # A map whose behaviour is a graph (docs/GRAPHS.md), declared as a script is.
+  "./build/$HOST_ARCH/mapc" maps/graph_test.map "build/$HOST_ARCH/graph_test.dnpm"
   "./build/$HOST_ARCH/mapc" maps/monsters.map "build/$HOST_ARCH/monsters.dnpm"
   # The scaling fixture: 144 generated sectors and a script that fills them with
   # as many monsters as it is asked for. Used by the snapshot-ordering test below
@@ -370,6 +372,13 @@ suite_lua () {
     # server, and it is where docs/TRIGGERS.md is checked against the vocabulary
     # it is written from.
     "./build/lua/test_lua_triggers"
+    # Graphs (docs/GRAPHS.md): the JSON decoder, the runtime, the trigger verbs
+    # it runs through triggers.verbs, its bound, and every refusal at load.
+    "./build/lua/test_lua_graphs" .
+    # And a map's graph through a real server: decoded, loaded, and a broken one
+    # refused by name.
+    need_server
+    ./scripts/check_graph_server.sh
     # The mob graph as C++ compiles it, walked against the tables it came from.
     # Everything the C++ mob runtime will decide rests on those arrays saying
     # what mobs.lua's `defs` said, and this walks the two together in the

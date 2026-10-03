@@ -1,0 +1,425 @@
+{
+  "graph_fields": [
+    {
+      "doc": "The format version. 1.",
+      "name": "graph",
+      "type": "int"
+    },
+    {
+      "doc": "What the graph is called in messages and in the studio.",
+      "name": "name",
+      "type": "string"
+    },
+    {
+      "doc": "The graph's variables, by name, with their starting values: numbers, strings or booleans.",
+      "name": "vars",
+      "optional": true,
+      "type": "table"
+    },
+    {
+      "doc": "The nodes, as an ARRAY: its order is the order event nodes for the same event run in.",
+      "name": "nodes",
+      "type": "table"
+    },
+    {
+      "doc": "The links, each [\"<node>.<pin>\", \"<node>.<pin>\"], from an output to an input.",
+      "name": "links",
+      "type": "table"
+    },
+    {
+      "doc": "The editor's, never read by the runtime: layout, comments.",
+      "name": "meta",
+      "optional": true,
+      "type": "table"
+    }
+  ],
+  "node_fields": [
+    {
+      "doc": "Unique in the graph; what links and messages name it by.",
+      "name": "id",
+      "type": "string"
+    },
+    {
+      "doc": "One of the node types below.",
+      "name": "type",
+      "type": "string"
+    },
+    {
+      "doc": "The editor's: position, colour, comment. Never read by the runtime.",
+      "name": "meta",
+      "optional": true,
+      "type": "table"
+    }
+  ],
+  "nodes": [
+    {
+      "args": [
+        {
+          "doc": "A trigger_vocab.lua event, or on_player_enter / on_player_leave in a module's graph.",
+          "name": "event",
+          "type": "string"
+        }
+      ],
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "target",
+        "side",
+        "sector",
+        "crush_kind",
+        "ui_id",
+        "widget_id",
+        "value"
+      ],
+      "doc": "Where a run starts: when the event happens. Its data outputs are what the event carried -- nil for what it did not.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "event"
+    },
+    {
+      "args": [
+        {
+          "doc": "A trigger_vocab.lua condition; its arguments are this node's fields, checked by the trigger runtime's checker.",
+          "name": "c",
+          "type": "string"
+        },
+        {
+          "doc": "Take the other exit.",
+          "name": "negate",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "data_in": [],
+      "data_out": [],
+      "doc": "A trigger condition, asked about the event this run started from.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "true",
+        "false"
+      ],
+      "name": "condition"
+    },
+    {
+      "args": [
+        {
+          "doc": "A trigger_vocab.lua action; its arguments are this node's fields.",
+          "name": "a",
+          "type": "string"
+        }
+      ],
+      "data_in": [],
+      "data_out": [],
+      "doc": "A trigger action, done for the event this run started from.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "action"
+    },
+    {
+      "args": [
+        {
+          "doc": "Used when nothing is linked to the `cond` input.",
+          "name": "cond",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "cond"
+      ],
+      "data_out": [],
+      "doc": "One way or the other on a value: anything but false and nil is true.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "true",
+        "false"
+      ],
+      "name": "branch"
+    },
+    {
+      "args": [
+        {
+          "doc": "How many exits, 2 to 8, named 0, 1, ...",
+          "name": "count",
+          "type": "int"
+        }
+      ],
+      "data_in": [],
+      "data_out": [],
+      "doc": "Each exit in turn, in the same tick: 0, then 1, and so on.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+      ],
+      "name": "sequence"
+    },
+    {
+      "args": [
+        {
+          "doc": "How long, at 60 a second. At least 1.",
+          "name": "ticks",
+          "type": "int"
+        }
+      ],
+      "data_in": [],
+      "data_out": [],
+      "doc": "The rest of the run, later, with the same event.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "delay"
+    },
+    {
+      "args": [],
+      "data_in": [],
+      "data_out": [],
+      "doc": "Through the first time, never again.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "once"
+    },
+    {
+      "args": [
+        {
+          "doc": "A name in the graph's `vars`.",
+          "name": "var",
+          "type": "string"
+        }
+      ],
+      "data_in": [],
+      "data_out": [
+        "value"
+      ],
+      "doc": "A variable's value.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "get_var"
+    },
+    {
+      "args": [
+        {
+          "doc": "A name in the graph's `vars`.",
+          "name": "var",
+          "type": "string"
+        },
+        {
+          "doc": "Used when nothing is linked to the `value` input.",
+          "name": "value",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "value"
+      ],
+      "data_out": [],
+      "doc": "Set a variable.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_var"
+    },
+    {
+      "args": [
+        {
+          "doc": "A numeric variable.",
+          "name": "var",
+          "type": "string"
+        },
+        {
+          "doc": "How much; used when nothing is linked to `value`.",
+          "name": "value",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "value"
+      ],
+      "data_out": [],
+      "doc": "Add to a numeric variable: a counter.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "add_var"
+    },
+    {
+      "args": [
+        {
+          "doc": "A number, a string or a boolean.",
+          "name": "value",
+          "type": "value"
+        }
+      ],
+      "data_in": [],
+      "data_out": [
+        "value"
+      ],
+      "doc": "A constant.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "literal"
+    },
+    {
+      "args": [
+        {
+          "name": "op",
+          "type": "enum",
+          "values": [
+            "==",
+            "~=",
+            "<",
+            "<=",
+            ">",
+            ">="
+          ]
+        },
+        {
+          "name": "a",
+          "optional": true,
+          "type": "value"
+        },
+        {
+          "name": "b",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "a",
+        "b"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "a op b, a boolean. Ordering a number against a non-number is false.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "compare"
+    },
+    {
+      "args": [
+        {
+          "name": "op",
+          "type": "enum",
+          "values": [
+            "+",
+            "-",
+            "*",
+            "/",
+            "min",
+            "max"
+          ]
+        },
+        {
+          "name": "a",
+          "optional": true,
+          "type": "value"
+        },
+        {
+          "name": "b",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "a",
+        "b"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "a op b on numbers. Division by zero is zero, not a crash.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "math"
+    },
+    {
+      "args": [
+        {
+          "name": "op",
+          "type": "enum",
+          "values": [
+            "and",
+            "or",
+            "not"
+          ]
+        },
+        {
+          "name": "a",
+          "optional": true,
+          "type": "value"
+        },
+        {
+          "name": "b",
+          "optional": true,
+          "type": "value"
+        }
+      ],
+      "data_in": [
+        "a",
+        "b"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "Boolean logic; `not` reads only `a`.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "logic"
+    },
+    {
+      "args": [
+        {
+          "name": "lo",
+          "type": "int"
+        },
+        {
+          "name": "hi",
+          "type": "int"
+        }
+      ],
+      "data_in": [],
+      "data_out": [
+        "value"
+      ],
+      "doc": "A whole number from lo to hi, from the level's own stream, so a replayed level draws the same. Once per run: two readers see one draw.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "random"
+    }
+  ],
+  "version": 1
+}

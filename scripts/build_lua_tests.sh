@@ -36,7 +36,7 @@ SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
 # point of it -- four bugs this phase came from a stub being more generous than
 # the engine, and every one of them raised the first time a real server ran.
 RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp"
-            "$ROOT/server/src/lua/weapon_binding.cpp"
+            "$ROOT/server/src/lua/weapon_binding.cpp" "$ROOT/server/src/lua/json.cpp"
             "$ROOT/server/src/mobs/mob_compile.cpp"
             "$ROOT/server/src/mobs/mob_eval.cpp"
             "$ROOT/server/src/mobs/mob_runtime.cpp"
@@ -73,7 +73,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # answer to all of it. Needs core, which the graph test does not.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/lua/world_binding.cpp" \
-        "$ROOT/server/src/lua/weapon_binding.cpp" \
+        "$ROOT/server/src/lua/weapon_binding.cpp" "$ROOT/server/src/lua/json.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
         "$ROOT/server/src/mobs/mob_runtime.cpp" \
@@ -84,7 +84,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # and gets back, against the real bindings.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
         "$ROOT/server/src/lua/world_binding.cpp" \
-        "$ROOT/server/src/lua/weapon_binding.cpp" \
+        "$ROOT/server/src/lua/weapon_binding.cpp" "$ROOT/server/src/lua/json.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
         "$ROOT/server/src/mobs/mob_runtime.cpp" \
@@ -113,6 +113,12 @@ clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
 clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
         "$ROOT/server/tests/test_lua_weapons.cpp" "${LINK[@]}" \
         -o "$OUT/test_lua_weapons"
+# Graphs (docs/GRAPHS.md): the JSON a graph arrives as, the runtime that walks
+# it, and the trigger verbs it runs -- against the real bindings, because the
+# verbs are the triggers' own and act on a real world.
+clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_graphs.cpp" "${LINK[@]}" \
+        -o "$OUT/test_lua_graphs"
 # Game scripts (docs/MODULES.md): the weapons in a game VM and the monsters
 # in a level's, one world under both -- the bridge between two lua_States can
 # only be tested where there are two.

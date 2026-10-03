@@ -1,0 +1,23 @@
+{
+  "graph": 1,
+  "name": "graph_test",
+  "vars": { "ticks": 0 },
+  "nodes": [
+    { "id": "tick",  "type": "event",   "event": "on_tick" },
+    { "id": "count", "type": "add_var", "var": "ticks", "value": 1 },
+    { "id": "now",   "type": "get_var", "var": "ticks" },
+    { "id": "sixty", "type": "compare", "op": ">=", "b": 60 },
+    { "id": "if",    "type": "branch" },
+    { "id": "once",  "type": "once" },
+    { "id": "say",   "type": "action",  "a": "log", "text": "the graph has run for a second" }
+  ],
+  "links": [
+    ["tick.then", "count.in"],
+    ["count.then", "if.in"],
+    ["now.value", "sixty.a"],
+    ["sixty.value", "if.cond"],
+    ["if.true", "once.in"],
+    ["once.then", "say.in"]
+  ],
+  "meta": { "note": "a fixture; the studio would keep its layout here" }
+}

@@ -85,6 +85,13 @@ local function entries(title, list)
     w("")
     if e.doc then w(wrap(e.doc)); w("") end
     if e.args and #e.args > 0 then bullets(e.args) else w("No arguments.") end
+    -- A graph node's PINS (graph_vocab.lua): what it can be linked by.
+    if e.exec_in ~= nil then
+      local function pins(list) return #list > 0 and ("`" .. table.concat(list, "`, `") .. "`") or "none" end
+      w("")
+      w(("Exec in: %s. Exec out: %s. Data in: %s. Data out: %s."):format(
+        pins(e.exec_in), pins(e.exec_out or {}), pins(e.data_in or {}), pins(e.data_out or {})))
+    end
     w("")
   end
 end
@@ -106,6 +113,9 @@ local SECTIONS = {
   { "ammo_fields",    "Ammunition fields" },
   { "pickup_fields",  "Pickup fields" },
   { "health_fields",  "Health" },
+  { "graph_fields",   "Graph fields" },
+  { "node_fields",    "Every node" },
+  { "nodes",          "Nodes",       entries },
 }
 
 for _, sec in ipairs(SECTIONS) do

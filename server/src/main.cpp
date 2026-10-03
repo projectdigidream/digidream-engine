@@ -33,6 +33,7 @@
 #include "lua/vm.hpp"
 #include "props.hpp"
 #include "lua/world_binding.hpp"
+#include "lua/json.hpp"
 #include "world/metamap.hpp"
 
 // For the event dispatch below, which pushes plain Lua values (a side index, a
@@ -934,6 +935,32 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
 
     // Bring the game VM up and load the module's game scripts; then, if there
     // is a kept game state, put it back. False only when a script failed.
+    // A GRAPH (docs/GRAPHS.md), declared where a script would be: decoded here
+    // and handed to graphs.load, so no script needs a way to read a file.
+    static bool is_graph(const std::string& path) {
+        const std::string tail = ".graph.json";
+        return path.size() > tail.size() && path.compare(path.size() - tail.size(), tail.size(), tail) == 0;
+    }
+    static bool load_graph(lua::Vm& vm, const std::string& path, std::string& err) {
+        lua_State* T = vm.state();
+        const int top = lua_gettop(T);
+        lua_getglobal(T, "graphs");
+        if (!lua_istable(T, -1)) { lua_settop(T, top); err = "graphs.lua is not loaded before it"; return false; }
+        lua_getfield(T, -1, "load");
+        if (!lua_isfunction(T, -1)) { lua_settop(T, top); err = "graphs.load is missing"; return false; }
+        if (!lua::push_json_file(T, path, err)) { lua_settop(T, top); return false; }
+        lua_pushstring(T, base_name(path).c_str());
+        if (lua_pcall(T, 2, 1, 0) != 0) {
+            err = lua_tostring(T, -1) ? lua_tostring(T, -1) : "graphs.load raised";
+            lua_settop(T, top);
+            return false;
+        }
+        const bool ok = lua_toboolean(T, -1) != 0;
+        lua_settop(T, top);
+        if (!ok) err = "its problems are listed above";
+        return ok;
+    }
+
     bool start_game(const std::string* restore) {
         if (game_scripts.empty() || !scripts_enabled) return true;
         if (!game_vm.open(vm_config)) {
@@ -955,6 +982,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.restoring = restore != nullptr;
         lua::open_world(game_vm.state(), &game_ctx);
         for (const auto& p : game_scripts) {
+            if (is_graph(p)) {
+                std::string err;
+                if (!load_graph(game_vm, p, err)) {
+                    std::fprintf(stderr, "[srv] game graph %s failed: %s\n", p.c_str(), err.c_str());
+                    game_vm.close();
+                    return false;
+                }
+                std::fprintf(stderr, "[srv] game: %s (a graph, for the whole game)\n", p.c_str());
+                continue;
+            }
             if (!game_vm.run_file(p.c_str(), p.c_str())) {
                 std::fprintf(stderr, "[srv] game script %s failed: %s\n", p.c_str(), game_vm.last_error());
                 game_vm.close();
@@ -2097,6 +2134,16 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             // would be a second inventory and a second panel.
             if (runs_game_wide(path)) {
                 std::fprintf(stderr, "[srv] level %u: %s runs game-wide, not per level\n", li, path.c_str());
+                continue;
+            }
+            if (is_graph(path)) {
+                std::string err;
+                if (!load_graph(L.vm, path, err)) {
+                    std::fprintf(stderr, "[srv] %s asked for graph %s and it failed: %s\n",
+                                 levels[li].path.c_str(), path.c_str(), err.c_str());
+                    return false;
+                }
+                std::fprintf(stderr, "[srv] level %u: %s (a graph, declared by the map)\n", li, path.c_str());
                 continue;
             }
             if (!L.vm.run_file(path.c_str(), path.c_str())) {

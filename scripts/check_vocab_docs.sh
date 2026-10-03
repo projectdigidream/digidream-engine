@@ -70,6 +70,7 @@ check_one() {
 echo "vocab docs: the generated reference sections are current"
 check_one ../docs/MOBS.md    maps/scripts/mob_vocab.lua    mob_vocab
 check_one ../docs/WEAPONS.md maps/scripts/weapon_vocab.lua weapon_vocab
+check_one ../docs/GRAPHS.md  maps/scripts/graph_vocab.lua  graph_vocab
 
 # THE CONTROL. A checker that compared nothing would report every document clean,
 # and so would one pointed at a file that does not exist. This asserts the diff

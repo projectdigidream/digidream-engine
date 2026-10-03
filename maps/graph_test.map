@@ -1,0 +1,19 @@
+# GRAPHS' FIXTURE (docs/GRAPHS.md): one room and a graph, declared as a script
+# is. scripts/check_graph_server.sh starts a real server on it and waits for
+# the graph to say it ran -- the path a map's .graph.json takes through mapc,
+# start_scripts, the JSON decoder and graphs.load, end to end.
+
+sector floor 0 ceil 8 tag 1 light 160 floortex FLOOR1 ceiltex CEIL1
+  vertex  0  0   wall tex WALL1
+  vertex 12  0   wall tex WALL1
+  vertex 12 12   wall tex WALL1
+  vertex  0 12   wall tex WALL1
+end
+
+script scripts/trigger_vocab.lua
+script scripts/triggers.lua
+script scripts/graph_vocab.lua
+script scripts/graphs.lua
+script graph_test.graph.json
+
+spawn start 6 6 1
