@@ -118,7 +118,7 @@ const vfxKey = (v) => `${v.kind}/${q(v.pos.x)}/${q(v.pos.y)}/${q(v.pos.z)}/${v.d
 // SERVER, whose random stream the spread is drawn from) and with other bodies
 // (mirrored, so a predicted shot stops where the server's does).
 
-async function session ({ echo, giveAll = false, fps = false }) {
+async function session ({ echo, giveAll = false, fps = false, netsim = null }) {
   const args = ['--port', String(LINK_PORT), '--module', 'doom2', '--map', MAP]
   if (FPS || fps) args.push('--controls', 'fps')
   if (process.env.DIV) args.push('--snapshot-divisor', process.env.DIV)
@@ -133,7 +133,8 @@ async function session ({ echo, giveAll = false, fps = false }) {
     port: WT_PORT, host: '127.0.0.1', path: '/dnp', upstreamPort: LINK_PORT,
     cert: readFileSync(join(CERTS, 'cert.pem')),
     privKey: readFileSync(join(CERTS, 'key.pem')),
-    log: () => {}
+    log: () => {},
+    netsim: netsim ?? undefined
   })
   await edge.start()
   await waitFor(() => log.includes('edge connected'), 8000, 'edge link')
@@ -342,32 +343,35 @@ async function session ({ echo, giveAll = false, fps = false }) {
 const DT = 1000 / 60
 const med = (xs) => xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : NaN
 
-// One run: a 15-tick burst ahead, then `secs` at 60 Hz, steering or not. The
-// margin the server reports and the input-to-its-snapshot time, over the last
-// second.
-async function run (steer) {
-  const c = await session({ echo: false })
-  for (let i = 0; i < 15; i++) await c.frame({})       // the hitch's catch-up burst
+// One run: optionally a 15-tick burst ahead, then `ticks` at 60 Hz, paced as
+// main.js paces it, steering or not, against a given target.
+// Reported over the last second (margin, latency) and over the whole run
+// (ticks the server repeated because our input was late: starvation).
+async function run ({ steer = true, target = 2, burst = 15, ticks = 180, netsim = null } = {}) {
+  const c = await session({ echo: false, netsim })
+  c.predictor.targetMargin = target
+  for (let i = 0; i < burst; i++) await c.frame({})       // a hitch's catch-up burst
   let acc = 0
   let last = performance.now()
   let n = 0
   const startSnap = c.snapshots.length
-  while (n < 180) {
+  const repeats0 = c.predictor.stats.serverRepeats
+  while (n < ticks) {
     await sleep(4)
     const now = performance.now()
     acc += now - last
     last = now
+    const adj = c.predictor.takeClockAdjust()
     if (steer) {
-      const adj = c.predictor.takeClockAdjust()
       if (adj > 0) acc += DT * adj
       else if (adj < 0) acc = Math.max(0, acc + DT * adj)
-    } else c.predictor.takeClockAdjust()
+    }
     let budget = 8
     while (acc >= DT && budget-- > 0) { await c.frame({}); acc -= DT; n++ }
     if (acc > DT) acc = 0
     c.drain()
   }
-  await sleep(200)
+  await sleep(300)
   c.drain()
   const snaps = c.snapshots.slice(startSnap)
   const late = snaps.slice(-30)                         // the last second
@@ -376,14 +380,16 @@ async function run (steer) {
     const t = c.sentAt.get(s.lastInputTick)
     if (t !== undefined) lat.push(s.arrived - t)
   }
-  const out = { margin: med(late.map((s) => s.inputMargin)), latency: med(lat) }
+  const out = { margin: med(late.map((s) => s.inputMargin)), latency: med(lat),
+                target: c.predictor.targetMargin, repeats: c.predictor.stats.serverRepeats - repeats0 }
   await c.close()
   return out
 }
 
-const on = await run(true)
-const off = await run(false)
-console.log(`  steering: held margin ${on.margin} ticks, input to its snapshot ${on.latency.toFixed(1)} ms; ` +
+// THE BURST: steering brings the lead back; not steering, it stays.
+const on = await run()
+const off = await run({ steer: false })
+console.log(`  after a burst -- steering: held margin ${on.margin} ticks, input to its snapshot ${on.latency.toFixed(1)} ms; ` +
             `not steering: ${off.margin} ticks, ${off.latency.toFixed(1)} ms`)
 check(on.margin <= 3, `steered, the server holds a few ticks of input (${on.margin})`)
 check(off.margin >= 10, `CONTROL: not steered, the burst's lead stays (${off.margin})`)

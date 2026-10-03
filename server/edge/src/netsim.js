@@ -79,7 +79,14 @@ export class Impairment {
     if (this.stopped) return
     let delay = this.latencyMs
     if (this.jitterMs > 0) delay += (this.rng() * 2 - 1) * this.jitterMs
-    this._schedule(deliver, Math.max(0, delay))
+    // IN ORDER, as a reliable stream is: never before the message ahead of
+    // it. Jitter drawn per message used to let a later chunk overtake an
+    // earlier one -- reordering bytes of an ordered stream, which no real
+    // transport does, and which corrupted a map download under any jitter.
+    const now = performance.now()
+    const at = Math.max(now + Math.max(0, delay), this.reliableAt ?? 0)
+    this.reliableAt = at
+    this._schedule(deliver, at - now)
   }
 
   _schedule (deliver, delay) {
