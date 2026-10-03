@@ -18,6 +18,7 @@ import { Core, WEAPON_ACTION } from './core.js'
 import { RenderClock } from './render/renderclock.js'
 import { GhostMissiles } from './render/ghostmissiles.js'
 import { KnockLayer, shoveOf } from './render/knock.js'
+import { NearPresent, presentWeight } from './render/nearnow.js'
 import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
@@ -1663,6 +1664,9 @@ const others = new EntityView({
 // Our blast's shove of the bodies around it, drawn when it happens rather
 // than a snapshot later (render/knock.js).
 const knock = new KnockLayer()
+// The bodies near us, drawn at the present rather than a beat behind
+// (render/nearnow.js).
+const near = new NearPresent()
 // The server tick our next step lands on: input ticks and server ticks differ
 // by a near-constant the newest snapshot states.
 const serverTickOf = (inputTick) => {
@@ -1912,6 +1916,7 @@ function enterLevel (w, streamed) {
   others.clear()
   ghosts.clear()
   knock.clear()
+  near.clear()
   ghosts.world = world
   ghosts.agent = agent
   pendingSnapshots.length = 0
@@ -2304,7 +2309,35 @@ function applyWeaponDefs () {
 // anything has been drawn.
 function drawnTick () {
   const t = others?.renderTick
-  return (LIVE && t !== undefined && t > 0) ? viewByte(Math.round(t)) : 0
+  if (!(LIVE && t !== undefined && t > 0)) return 0
+  // A shot at a body drawn at the PRESENT (render/nearnow.js) is judged as
+  // now -- which 0 asks for -- not rewound to where the interpolated picture
+  // would have had it, where nothing was drawn.
+  if (aimingAtPresent()) return 0
+  return viewByte(Math.round(t))
+}
+
+// Is our aim on a body drawn mostly at the present? Within the auto-aim cone
+// plus the body's own width, in plan, in front of us.
+const PRESENT_AIM_CONE = 6 * Math.PI / 180
+function aimingAtPresent () {
+  if (!others) return false
+  const me = world.readAgent(agent).pos
+  const mx = fxToFloat(me.x)
+  const my = fxToFloat(me.y)
+  const a = (lastAim >>> 0) / 4294967296 * 2 * Math.PI
+  for (const ent of others.entities.values()) {
+    if (!(ent.presentWeight >= 0.5)) continue
+    const dx = ent.mesh.position.x - mx
+    const dy = -ent.mesh.position.z - my
+    const d = Math.hypot(dx, dy)
+    if (d < 1e-6) return true
+    let off = Math.atan2(dy, dx) - a
+    off = Math.atan2(Math.sin(off), Math.cos(off))
+    const r = (ent.kind ? props?.kinds.get(ent.kind)?.radius : bodyRadius) ?? 0.5
+    if (Math.abs(off) <= PRESENT_AIM_CONE + Math.atan2(r, d)) return true
+  }
+  return false
 }
 
 // The weapon wanted this tick, by number key, then forgotten: it is a key
@@ -2643,19 +2676,35 @@ function frame (now) {
     // jumped two, and every remote body stuttered at 30 Hz.
     const drawn = renderClock.advance(dt)
     others.update(Math.floor(drawn), drawn - Math.floor(drawn))
-    // Bodies our blast has shoved, ahead of the stream by the shove the
-    // stream has not drawn yet.
-    if (knock.shoves.length > 0) {
+    // WHERE EACH REMOTE BODY IS DRAWN, past the plain interpolation:
+    //   - a body our blast has shoved is ahead of the stream by the part of
+    //     the shove the stream has not drawn yet (render/knock.js);
+    //   - a body near us is drawn at the present rather than a beat behind,
+    //     fading back to the interpolated picture with distance
+    //     (render/nearnow.js).
+    {
       const now = serverTickOf(predictor.tick)
-      if (now !== null) {
-        for (const [index, ent] of others.entities) {
-          const o = knock.offset(`${index}/${ent.generation}`, now, others.renderTick)
-          if (o === null) continue
-          ent.mesh.position.x += toThreeX(o.x)
-          ent.mesh.position.y += toThreeY(o.z)
-          ent.mesh.position.z += toThreeZ(o.y)
-        }
+      const nowF = now === null ? null : now + acc / DT
+      const kept = new Set()
+      const three = (o) => o && { x: toThreeX(o.x), y: toThreeY(o.z), z: toThreeZ(o.y) }
+      for (const [index, ent] of others.entities) {
+        const key = `${index}/${ent.generation}`
+        const pos = ent.mesh.position
+        const kR = now === null ? null : three(knock.offset(key, now, others.renderTick))
+        if (kR) { pos.x += kR.x; pos.y += kR.y; pos.z += kR.z }
+        const last = ent.samples.at(-1)
+        const w = (nowF === null || !last) ? 0 : presentWeight(Math.hypot(last.x - subject.x, last.z - subject.z))
+        ent.presentWeight = w
+        if (w <= 0) continue
+        kept.add(key)
+        const p = near.present(key, ent.samples, nowF, dt, (from) => three(knock.offset(key, now, from)))
+        if (!p) continue
+        const yo = ent.mesh.userData.yOffset ?? 0
+        pos.x += (p.x - pos.x) * w
+        pos.y += (p.y + yo - pos.y) * w
+        pos.z += (p.z - pos.z) * w
       }
+      near.keep(kept)
       knock.prune(others.renderTick)
     }
     // The server's copy of a rocket we are already flying is not drawn twice.

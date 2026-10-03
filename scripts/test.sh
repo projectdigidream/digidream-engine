@@ -537,6 +537,9 @@ suite_client () {
   # Our blast's shove of the bodies around it, drawn when it happens and never
   # twice: the server's path, and an offset that closes as the stream catches up.
   node client/test/knock.test.js | grep -E 'FAIL|failures'
+  # The bodies near us drawn at the present: carried forward, settling rather
+  # than snapping, and a shove counted once.
+  node client/test/nearnow.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.

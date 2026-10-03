@@ -27,6 +27,9 @@
 //             as copies of ours so neither is drawn twice.
 //   knock     in the same run, the bodies our rockets shove are shoved here
 //             at once (render/knock.js), the way the server then moves them.
+//   present   in the second run, a moving body near us drawn at the present
+//             (render/nearnow.js) is nearer where the server has it then than
+//             the interpolated picture is.
 //   jump      a fourth run, first-person: a rocket at your own feet throws you
 //             on the tick its ghost bursts, on the server's bits -- the jump
 //             is predicted, so not one comparison needs excusing. CONTROL:
@@ -48,6 +51,7 @@ import { Predictor } from '../../../client/src/predictor.js'
 import { parseProps } from '../../../client/src/render/props.js'
 import { GhostMissiles } from '../../../client/src/render/ghostmissiles.js'
 import { KnockLayer, shoveOf } from '../../../client/src/render/knock.js'
+import { NearPresent } from '../../../client/src/render/nearnow.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   numberToFx, MSG, BUTTON, NO_WEAPON, ENT_FIELD
@@ -265,6 +269,7 @@ async function session ({ echo, giveAll = false, fps = false }) {
         c.bodies.set(index, b)
       }
       c.onSnapshot?.(s)
+      c.guessNow?.()
     }
   }
   c.zero = () => {
@@ -383,6 +388,35 @@ const firing = (slots) => (i) => {
 
 {
   const c = await session({ echo: false })
+  // PRESENT: for every moving body near us, at each snapshot, where the
+  // present-drawn picture and the interpolated one put it at the server tick
+  // our prediction is on -- judged when the server's sample for that tick
+  // arrives.
+  const np = new NearPresent()
+  const guesses = []
+  c.guessNow = () => {
+    const ls = c.predictor.lastSnapshot
+    if (!ls) return
+    const now = c.predictor.tick + (ls.serverTick - ls.lastInputTick)
+    const me = c.world.readAgent(c.agent).pos
+    const mx = Number(me.x) / 4294967296
+    const my = Number(me.y) / 4294967296
+    for (const [index, b] of c.bodies) {
+      if (index === c.serverAgent || b.track.length < 3) continue
+      const n = b.track.at(-1)
+      if (Math.hypot(n.x - mx, n.y - my) > 10) continue
+      const samples = b.track.map((t) => ({ tick: t.tick, x: t.x, y: t.y, z: 0 }))
+      const p = np.present(index, samples, now, 1 / 60)
+      // The interpolated picture: INTERP_DELAY_TICKS (4) behind the newest.
+      const rt = n.tick - 4
+      const i = b.track.findLastIndex((t) => t.tick <= rt)
+      if (i < 0) continue
+      const a = b.track[i]
+      const z = b.track[i + 1] ?? a
+      const f = z.tick > a.tick ? (rt - a.tick) / (z.tick - a.tick) : 0
+      guesses.push({ index, tick: Math.round(now), p, q: { x: a.x + (z.x - a.x) * f, y: a.y + (z.y - a.y) * f } })
+    }
+  }
   c.predictedVfx.length = 0
   const firstSnapshot = c.snapshots.length
   await c.play(200, (i) => ({ buttons: (i % 24) < 3 ? BUTTON.ATTACK_PRIMARY : 0, aim: (i * 7001) >>> 0 }))
@@ -391,6 +425,22 @@ const firing = (slots) => (i) => {
   console.log(`  no echo: ${c.predictedVfx.length} predicted effects, ${echoed} sent back`)
   check(c.predictedVfx.length > 5, `the client drew its own shots (${c.predictedVfx.length})`)
   check(echoed === 0, `the server sent none of them back to be drawn twice (${echoed})`)
+  c.guessNow = null
+  const errP = []
+  const errQ = []
+  for (const g of guesses) {
+    const t = c.bodies.get(g.index)?.track.find((s) => s.tick === g.tick)
+    if (!t) continue
+    const eq = Math.hypot(g.q.x - t.x, g.q.y - t.y)
+    if (eq < 0.01) continue           // it was not moving: nothing to judge
+    errP.push(Math.hypot(g.p.x - t.x, g.p.y - t.y))
+    errQ.push(eq)
+  }
+  const med = (xs) => xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : 0
+  console.log(`  present: ${errP.length} judged; median error drawn at the present ${med(errP).toFixed(3)}, ` +
+              `interpolated ${med(errQ).toFixed(3)} units`)
+  check(errP.length > 20, `moving bodies near us were judged (${errP.length})`)
+  check(med(errP) < med(errQ) * 0.6, 'drawn at the present, a body is nearer where the server has it now')
   await c.close()
 }
 
