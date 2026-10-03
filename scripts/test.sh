@@ -612,9 +612,35 @@ suite_studio () {
   # The player: the parameter names held against the engine's own header, and
   # the merged module file chaining hooks two of its parts both define.
   node ../studio/test/player.test.js | tail -2
-  # A map's music is filed under the hash the client computes for it, and a
-  # cue that names a missing track is said, not silently dropped.
+  # A map's music is filed under the level name the client looks up first, so
+  # a re-bake keeps it, and a cue that names a missing track is said.
   node ../studio/test/music.test.js | tail -2
+  # Weather and fog: the studio's fx lines taken by native and wasm mapc alike
+  # and read back by the runtime with the engine's defaults; a stale wasm
+  # mapc would refuse every one.
+  node ../studio/test/fx.test.js | tail -2
+  # Screens: every layout file the studio writes parses clean in the client's
+  # own parser, each map's file is found by its name, and a dropped element
+  # re-anchors without moving (the inverse of the client's place).
+  node ../studio/test/screens.test.js | tail -2
+  # A map's graph: graphs.load itself takes what the studio writes (a picked
+  # wall resolved to its side and guard), the studio names what it would
+  # refuse, and monsters + triggers + a graph still fit a map's 8 scripts.
+  node ../studio/test/graphs.test.js | tail -2
+  # A refused bake marks the rooms it is about: mapc's line, sector and side
+  # numbers traced back to the document's sectors, for the red outline.
+  node ../studio/test/problems.test.js | tail -2
+  # Sound packs merged into the one bank the engine plays, judged by the sound
+  # engine's own loader; the control is the packs naively concatenated.
+  node ../studio/test/soundpacks.test.js | tail -2
+  # The metamap: the server places every level from the studio's metamap.txt,
+  # in one world with a pitch, and stitches exactly the seams the studio's
+  # check says join (control: one side a wall stitches nothing).
+  node ../studio/test/metamap.test.js | tail -2
+  # The studio's sections: one mounted at a time, its address in the hash.
+  node ../studio/test/router.test.js | tail -2
+  # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
+  node ../studio/test/thumbs.test.js | tail -2
   # modules/starter is generated from its documents; a checked-in copy that
   # the emitter would write differently is a stale one.
   node ../studio/tools/emit_module.mjs ../modules/starter --check | tail -1
