@@ -534,6 +534,9 @@ suite_client () {
   # Our own rockets, flown here: the server's flight, the burst at the wall,
   # and the server's copies of the rocket and its blast not drawn twice.
   node client/test/ghostmissiles.test.js | grep -E 'FAIL|failures'
+  # Our blast's shove of the bodies around it, drawn when it happens and never
+  # twice: the server's path, and an offset that closes as the stream catches up.
+  node client/test/knock.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.

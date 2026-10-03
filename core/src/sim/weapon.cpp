@@ -340,6 +340,8 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
     w.u32v(t.initial_have);
     w.fxraw(t.autoaim_range);
     w.u32v(t.autoaim_cone);
+    w.u8v(t.mass_count);
+    for (u32 i = 0; i < t.mass_count && i < MAX_MASSES; ++i) { w.u16v(t.mass_kind[i]); w.u16v(t.mass_value[i]); }
     w.u8v(t.weapon_count);
     for (u32 i = 0; i < t.weapon_count; ++i) {
         const WeaponDef& d = t.weapons[i];
@@ -375,8 +377,9 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                     for (u32 v = 0; v < m.vfx_count && v < MAX_MISSILE_VFX; ++v) {
                         w.u16v(m.vfx_kind[v]); w.fxraw(m.vfx_radius[v]);
                     }
-                    w.u8v(static_cast<u8>((m.self_shove ? 1 : 0) | (m.blast_falloff ? 2 : 0)));
-                    if (m.self_shove) {
+                    w.u8v(static_cast<u8>((m.self_shove ? 1 : 0) | (m.blast_falloff ? 2 : 0) |
+                                          (m.has_blast ? 4 : 0)));
+                    if (m.has_blast) {
                         w.fxraw(m.blast_radius); w.fxraw(m.blast_knockback); w.fxraw(m.blast_lift);
                     }
                 }
@@ -415,6 +418,9 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
     t.initial_have = r.u32v();
     t.autoaim_range = r.fxraw();
     t.autoaim_cone = r.u32v();
+    t.mass_count = r.u8v();
+    if (!r.ok() || t.mass_count > MAX_MASSES) return false;
+    for (u32 i = 0; i < t.mass_count; ++i) { t.mass_kind[i] = r.u16v(); t.mass_value[i] = r.u16v(); }
     t.weapon_count = r.u8v();
     if (!r.ok() || t.weapon_count > MAX_WEAPONS) return false;
     if (t.weapon_count < 32 && (t.initial_have >> t.weapon_count) != 0) return false;
@@ -472,7 +478,9 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                     for (u32 v = 0; v < m.vfx_count; ++v) { m.vfx_kind[v] = r.u16v(); m.vfx_radius[v] = r.fxraw(); }
                     const u8 bf = r.u8v();
                     m.self_shove = (bf & 1) != 0; m.blast_falloff = (bf & 2) != 0;
-                    if (m.self_shove) {
+                    m.has_blast = (bf & 4) != 0;
+                    if (m.self_shove && !m.has_blast) return false;
+                    if (m.has_blast) {
                         m.blast_radius = r.fxraw(); m.blast_knockback = r.fxraw(); m.blast_lift = r.fxraw();
                     }
                     if (!r.ok()) return false;
@@ -519,6 +527,7 @@ void WeaponTable::clear() noexcept {
     initial_have = 0;
     autoaim_range = fx{};
     autoaim_cone = 0;
+    mass_count = 0;
     for (AmmoPool& p : pools) p = AmmoPool{};
     for (WeaponDef& d : weapons) {
         for (char& ch : d.name) ch = 0;

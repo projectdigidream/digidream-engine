@@ -25,6 +25,8 @@
 //             rockets flown here (render/ghostmissiles.js) burst where the
 //             server's do, and the server's blast and rocket are recognised
 //             as copies of ours so neither is drawn twice.
+//   knock     in the same run, the bodies our rockets shove are shoved here
+//             at once (render/knock.js), the way the server then moves them.
 //   jump      a fourth run, first-person: a rocket at your own feet throws you
 //             on the tick its ghost bursts, on the server's bits -- the jump
 //             is predicted, so not one comparison needs excusing. CONTROL:
@@ -45,6 +47,7 @@ import { MapAccumulator } from '../../../client/src/maploader.js'
 import { Predictor } from '../../../client/src/predictor.js'
 import { parseProps } from '../../../client/src/render/props.js'
 import { GhostMissiles } from '../../../client/src/render/ghostmissiles.js'
+import { KnockLayer, shoveOf } from '../../../client/src/render/knock.js'
 import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   numberToFx, MSG, BUTTON, NO_WEAPON, ENT_FIELD
@@ -195,6 +198,25 @@ async function session ({ echo, giveAll = false, fps = false }) {
     }
   })
   c.shoves = 0
+  // As main.js: our blast's shove of the bodies around it, by the server's
+  // rule, at their last known positions, landing at the server tick of the
+  // step the burst lands in.
+  c.knock = new KnockLayer()
+  c.bodies = new Map()          // index -> { pos, kind, track: [{ tick, x, y }] }
+  c.ghosts.onBlast = (impact, blast) => {
+    const ls = c.predictor.lastSnapshot
+    if (!ls) return
+    const S = c.predictor.tick + 1 + (ls.serverTick - ls.lastInputTick)
+    for (const [index, b] of c.bodies) {
+      if (index === c.serverAgent || !b.pos) continue
+      const mass = b.kind ? c.world.mobMass(b.kind) : 100
+      if (!mass) continue
+      const def = b.kind ? catalogue.kinds.get(b.kind) : { radius: 0.5, height: 2 }
+      if (!def) continue
+      const sh = shoveOf(c.world, impact, b.pos, blast, mass, def)
+      if (sh) c.knock.add(index, S, sh.v, sh.path)
+    }
+  }
   c.launches = 0
 
   c.frame = async (input) => {
@@ -230,6 +252,18 @@ async function session ({ echo, giveAll = false, fps = false }) {
         ENT_FIELD, handleIndex: (h) => (h & 0x00ffffff) - 1
       })
       c.predictor.reconcile(s)
+      for (const e of s.entities ?? []) {
+        const index = (e.handle & 0x00ffffff) - 1
+        if (e.mask & ENT_FIELD.DESTROYED) { c.bodies.delete(index); continue }
+        const b = c.bodies.get(index) ?? { track: [] }
+        if (e.displayId) b.kind = e.displayId
+        if ((e.mask & ENT_FIELD.POS) && e.pos) {
+          b.pos = e.pos
+          b.track.push({ tick: s.serverTick, x: Number(e.pos.x) / 4294967296, y: Number(e.pos.y) / 4294967296 })
+          if (b.track.length > 400) b.track.shift()
+        }
+        c.bodies.set(index, b)
+      }
       c.onSnapshot?.(s)
     }
   }
@@ -423,6 +457,33 @@ const firing = (slots) => (i) => {
   const hidden = [...rockets.values()].filter((r) => r.hidden === r.seen).length
   check(rockets.size > 0 && hidden >= rockets.size * 0.75,
         `the server's rockets were recognised as ours and hidden (${hidden} of ${rockets.size})`)
+  // KNOCK: every body our rockets shoved here, against how the server moved
+  // it -- in the predicted direction, by a fair part of the predicted distance
+  // (the monster's own steering takes some back, which this does not model).
+  let judged = 0
+  let agreed2 = 0
+  const ratios = []
+  for (const sh of c.knock.shoves) {
+    const b = c.bodies.get(sh.key)
+    const p20 = sh.path[Math.min(20, sh.path.length - 1)]
+    const dist = Math.hypot(p20.x, p20.y)
+    if (!b || dist < 0.5) continue
+    const before = [...b.track].reverse().find((t) => t.tick <= sh.at)
+    const after = b.track.find((t) => t.tick >= sh.at + 20)
+    if (!before || !after) continue
+    judged++
+    const along = ((after.x - before.x) * p20.x + (after.y - before.y) * p20.y) / dist
+    if (along > dist * 0.4) agreed2++
+    ratios.push(along / dist)
+  }
+  ratios.sort((a, b) => a - b)
+  const median = ratios.length ? ratios[Math.floor(ratios.length / 2)] : 0
+  console.log(`  knock: ${c.knock.shoves.length} bodies shoved here, ${judged} judged, ${agreed2} moved the same way on the server; ` +
+              `the server's distance over the prediction's, median ${median.toFixed(2)}`)
+  check(c.knock.shoves.length > 0, `our rockets shoved bodies here at once (${c.knock.shoves.length})`)
+  check(judged > 0 && agreed2 >= judged * 0.75, `and the server moved them the same way (${agreed2} of ${judged})`)
+  check(median > 0.6 && median < 1.4, `about as far (median ${median.toFixed(2)} of the predicted distance)`)
+
   // CONTROL: a blast somewhere else is not swallowed.
   const far = ours[0] ? { ...ours[0].v, pos: { ...ours[0].v.pos, x: ours[0].v.pos.x + (40n << 32n) } } : null
   check(far !== null && !c.ghosts.swallow(far), 'CONTROL: a blast forty units away is not taken for ours')

@@ -705,8 +705,8 @@ unsigned dnp_world_weapon_launches(const sim::World* w, long long* out64, unsign
 // (returned; 0 for one nobody described), and six i64 -- speed, radius,
 // z_offset, offset, and the two impact effects' radii -- and six words --
 // life, burst state, burst ticks, effect count, the two effect kinds. Then its
-// blast's shove of its owner: three more i64 (radius, knockback, lift) and a
-// seventh word, bit 0 "it shoves its owner" and bit 1 "it falls off".
+// blast: three more i64 (radius, knockback, lift) and a seventh word, bit 0
+// "it shoves its owner", bit 1 "it falls off", bit 2 "it has a blast".
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned phase, unsigned step,
                                   long long* out64, unsigned* out32) {
@@ -721,8 +721,17 @@ unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned
     out32[0] = m.life; out32[1] = m.burst_anim; out32[2] = m.burst_ticks; out32[3] = m.vfx_count;
     out32[4] = m.vfx_kind[0]; out32[5] = m.vfx_kind[1];
     out64[6] = m.blast_radius.raw; out64[7] = m.blast_knockback.raw; out64[8] = m.blast_lift.raw;
-    out32[6] = (m.self_shove ? 1u : 0u) | (m.blast_falloff ? 2u : 0u);
+    out32[6] = (m.self_shove ? 1u : 0u) | (m.blast_falloff ? 2u : 0u) | (m.has_blast ? 4u : 0u);
     return m.kind;
+}
+
+// How heavy a monster is, by catalogue kind (WeaponTable::mass_of): 0 when
+// the table names none, or there is no table.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_mob_mass(const sim::World* w, unsigned kind) {
+    auto it = weapon_tables().find(w);
+    if (it == weapon_tables().end()) return 0;
+    return it->second->mass_of(static_cast<u16>(kind));
 }
 
 // A blast's shove of a body (sim/blast.hpp), the rule the server's damage_area
@@ -739,6 +748,43 @@ int dnp_blast_shove(const long long* in64, int falloff, int mass, long long* out
                                      sim::knock_scale(r, mass));
     out64[0] = v.x.raw; out64[1] = v.y.raw; out64[2] = v.z.raw;
     return 1;
+}
+
+// WHERE A SHOVED BODY GOES: the core's own controller (physics::
+// step_controller) run on this world's map for `ticks` steps, from `pos` with
+// `vel` just added, no input, and the shove's slide -- ground acceleration and
+// friction at `knock_rate` -- for the first `knock_ticks`, as mobs.lua's
+// apply_hit sets them. Collides with the walls; not with other bodies. In:
+// pos xyz, vel xyz, radius, height, move_speed, knock_rate as i64. Out: x, y, z
+// per tick. Returns the ticks written. Display only (render/knock.js).
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_knock_path(const sim::World* w, const long long* in64, unsigned knock_ticks,
+                        unsigned ticks, long long* out64) {
+    const geom::MapData* map = w->map();
+    if (map == nullptr) return 0;
+    fx3 pos{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
+    fx3 vel{fx::from_raw(in64[3]), fx::from_raw(in64[4]), fx::from_raw(in64[5])};
+    physics::MoveParams p;
+    p.radius = fx::from_raw(in64[6]);
+    p.height = fx::from_raw(in64[7]);
+    if (in64[8] > 0) p.move_speed = fx::from_raw(in64[8]);
+    const physics::MoveParams base = p;
+    physics::MoveState st;
+    st.sector = geom::find_sector_at(*map, fx2{pos.x, pos.y}, pos.z, p.height);
+    st.grounded = vel.z.raw <= 0;
+    const physics::MoveCommand cmd;
+    for (unsigned t = 0; t < ticks; ++t) {
+        if (t < knock_ticks) {
+            p.ground_accel = fx::from_raw(in64[9]);
+            p.friction = fx::from_raw(in64[9]);
+        } else {
+            p.ground_accel = base.ground_accel;
+            p.friction = base.friction;
+        }
+        physics::step_controller(*map, p, st, cmd, pos, vel, sim::DT);
+        out64[t * 3] = pos.x.raw; out64[t * 3 + 1] = pos.y.raw; out64[t * 3 + 2] = pos.z.raw;
+    }
+    return ticks;
 }
 
 // A velocity added to a body, as a script's add_impulse lands on the server

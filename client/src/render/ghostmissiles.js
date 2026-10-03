@@ -46,10 +46,13 @@ export class GhostMissiles {
    *                   burst(mesh, state), remove(mesh), blast(vfx) }
    * @param selfBlast (impact, blast) when a ghost whose blast shoves its owner
    *                 bursts: the owner's shove, predicted (a rocket jump)
+   * @param onBlast  (impact, blast) when any ghost with a blast bursts: its
+   *                 shove of the bodies around it, predicted (render/knock.js)
    */
-  constructor ({ world, agent, draw, selfBlast = null, now = () => performance.now() }) {
+  constructor ({ world, agent, draw, selfBlast = null, onBlast = null, now = () => performance.now() }) {
     this.world = world
     this.selfBlast = selfBlast
+    this.onBlast = onBlast
     this.agent = agent
     this.draw = draw
     this.now = now
@@ -120,7 +123,8 @@ export class GhostMissiles {
     g.burstLeft = Math.max(1, g.m.burstTicks)
     if (g.m.burstAnim !== 0xFFFF) this.draw.burst(g.mesh, g.m.burstAnim)
     // Its owner thrown, before anything is drawn: the rocket jump.
-    if (g.m.blast && this.selfBlast) this.selfBlast(g.impact, g.m.blast)
+    if (g.m.blast?.shovesOwner && this.selfBlast) this.selfBlast(g.impact, g.m.blast)
+    if (g.m.blast && this.onBlast) this.onBlast(g.impact, g.m.blast)
     // The impact's effects, as mobs.lua's acts.vfx sends them: at the impact,
     // facing back along the flight, the radius in 256ths.
     const back = ((g.aim >>> 0) + 2147483648) % 4294967296

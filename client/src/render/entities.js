@@ -156,6 +156,9 @@ export class EntityView {
 
       const last = ent.samples.at(-1)
       const p = toThree(fxToFloat(e.pos.x), fxToFloat(e.pos.y), fxToFloat(e.pos.z))
+      // The newest position as the server holds it, exact, for questions the
+      // core answers about it (a predicted blast's reach, render/knock.js).
+      ent.fxPos = e.pos
       ent.samples.push({
         tick: snapshot.serverTick,
         x: p.x, y: p.y, z: p.z,

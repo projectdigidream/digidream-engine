@@ -672,11 +672,13 @@ export class WasmWorld {
     const b32 = c.wmis32 / 4
     const vfx = []
     for (let v = 0; v < u[b32 + 3]; v++) vfx.push({ kind: u[b32 + 4 + v], radius: i[b64 + 4 + v] })
-    // Its blast's shove of the one who fired it, when it has one (a rocket
-    // jump): what that player's client predicts.
+    // Its blast, when it shoves: what this client predicts it does to the
+    // bodies around the impact, and to us when it shoves its owner (a rocket
+    // jump).
     const flags = u[b32 + 6]
-    const blast = (flags & 1)
-      ? { radius: i[b64 + 6], knockback: i[b64 + 7], lift: i[b64 + 8], falloff: (flags & 2) !== 0 }
+    const blast = (flags & 4)
+      ? { radius: i[b64 + 6], knockback: i[b64 + 7], lift: i[b64 + 8], falloff: (flags & 2) !== 0,
+          shovesOwner: (flags & 1) !== 0 }
       : null
     return { kind, speed: i[b64], radius: i[b64 + 1], zOffset: i[b64 + 2], offset: i[b64 + 3],
              life: u[b32], burstAnim: u[b32 + 1], burstTicks: u[b32 + 2], vfx, blast }
@@ -700,6 +702,39 @@ export class WasmWorld {
     const o = c.blastOut64 / 8
     return { x: v[o], y: v[o + 1], z: v[o + 2] }
   }
+
+  /**
+   * Where a shoved body goes (dnp_knock_path): the core's controller on this
+   * world's map, from `pos` (fx) with `vel` (fx) just added, sliding at
+   * `knockRate` (fx) for `knockTicks`. Returns the displacement from `pos`
+   * per tick, in float world units.
+   */
+  knockPath (pos, vel, { radius, height, speed = 0n }, knockRate, knockTicks, ticks) {
+    const c = this.core
+    const M = c.M
+    if (!c.kp64 || c.kpTicks < ticks) {
+      if (c.kp64) { M._free(c.kp64); M._free(c.kpOut) }
+      c.kp64 = M._malloc(10 * 8); c.kpOut = M._malloc(ticks * 3 * 8); c.kpTicks = ticks
+    }
+    const i = c.views.i64
+    const b = c.kp64 / 8
+    i[b] = pos.x; i[b + 1] = pos.y; i[b + 2] = pos.z
+    i[b + 3] = vel.x; i[b + 4] = vel.y; i[b + 5] = vel.z
+    i[b + 6] = radius; i[b + 7] = height; i[b + 8] = speed; i[b + 9] = knockRate
+    const n = M._dnp_knock_path(this.ptr, c.kp64, knockTicks, ticks, c.kpOut)
+    const v = c.views.i64
+    const o = c.kpOut / 8
+    const out = []
+    for (let t = 0; t < n; t++) {
+      out.push({ x: Number(v[o + t * 3] - pos.x) / 4294967296,
+                 y: Number(v[o + t * 3 + 1] - pos.y) / 4294967296,
+                 z: Number(v[o + t * 3 + 2] - pos.z) / 4294967296 })
+    }
+    return out
+  }
+
+  /** A monster's mass by catalogue kind (the weapon table's), or 0. */
+  mobMass (kind) { return this.core.M._dnp_world_mob_mass(this.ptr, kind) }
 
   /** A velocity added to a body (World::add_impulse), fx raw BigInts. */
   addImpulse (idx, v) {

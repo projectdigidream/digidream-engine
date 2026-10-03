@@ -380,19 +380,20 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
                                     ++m.vfx_count;
                                 }
                             }
-                            // Its blast, when it shoves the one who fired it
-                            // and does not hurt them: that player's client
-                            // predicts the shove (a rocket jump).
-                            if (lua_istable(L, a) && !m.self_shove && r.str_at(a, "action") == "damage_area") {
+                            // Its blast, when it shoves: the shooter's client
+                            // predicts it on the bodies around the impact, and
+                            // on the shooter when it shoves its owner without
+                            // hurting (a rocket jump).
+                            if (lua_istable(L, a) && !m.has_blast && r.str_at(a, "action") == "damage_area") {
                                 bool hurts = true, shoves = false, falloff = false, has_hurts = false, has_kb = false;
                                 r.bool_at(a, "hurts_owner", hurts, &has_hurts);
                                 r.bool_at(a, "shoves_owner", shoves);
                                 r.bool_at(a, "falloff", falloff);
-                                if (has_hurts && !hurts && shoves &&
-                                    r.fx_at(a, "radius", mw, m.blast_radius) &&
+                                if (r.fx_at(a, "radius", mw, m.blast_radius) &&
                                     r.fx_at(a, "knockback", mw, m.blast_knockback, &has_kb) && has_kb &&
                                     r.fx_at(a, "lift", mw, m.blast_lift)) {
-                                    m.self_shove = true;
+                                    m.has_blast = true;
+                                    m.self_shove = has_hurts && !hurts && shoves;
                                     m.blast_falloff = falloff;
                                 }
                             }
@@ -579,7 +580,10 @@ void push_names(lua_State* L, const std::vector<std::string>& names, const char*
     lua_setfield(L, into, list);
 }
 
-// dnp.weapons_compile(defs, ammo [, initial_weapons [, autoaim [, missiles]]]) -> index | nil, why
+// dnp.weapons_compile(defs, ammo [, initial_weapons [, autoaim [, missiles [, masses]]]]) -> index | nil, why
+//
+// `masses` is { [prop name] = mass } for the monsters (mobs.lua publishes it):
+// carried in the table so a predicting client shoves them by the server's rule.
 //
 // `defs` is weapons.defs and `ammo` weapons.ammo, AFTER weapons.load has
 // validated them. ALL OR NOTHING: a weapon the core cannot run (one using
@@ -600,6 +604,22 @@ int l_weapons_compile(lua_State* L) {
     Reader r{L, {}};
     if (lua_istable(L, 5)) r.missiles = 5;
     r.props = context_of(L).props;
+
+    // The monsters' masses, by catalogue kind, in name order so two builds of
+    // the same tables encode the same bytes.
+    if (lua_istable(L, 6) && r.props != nullptr) {
+        for (const std::string& name : sorted_keys(L, 6)) {
+            if (t.mass_count >= sim::MAX_MASSES) break;
+            lua_getfield(L, 6, name.c_str());
+            const lua_Number m = lua_tonumber(L, -1);
+            lua_pop(L, 1);
+            const u16 kind = r.props->kind_by_name(name.c_str(), name.size());
+            if (kind == 0 || !(m >= 1 && m <= 65535)) continue;
+            t.mass_kind[t.mass_count] = kind;
+            t.mass_value[t.mass_count] = static_cast<u16>(m);
+            ++t.mass_count;
+        }
+    }
 
     const std::vector<std::string> pools = sorted_keys(L, 2);
     const std::vector<std::string> weapons = sorted_keys(L, 1);

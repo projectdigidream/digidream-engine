@@ -431,10 +431,20 @@ end
 -- missile -- speed, size, burst -- so a predicting client can fly its own
 -- rocket, and the definitions live here, in the level, where monsters fire them
 -- too. A game without weapons there has no such export and hears nothing.
+--- How heavy each monster is, by the prop it is drawn as: the table carries
+--- it, so a predicting client shows its own blast shoving them by the rule
+--- apply_hit uses (100 when a mob gives none, as there).
+function M.mob_masses()
+  local out = {}
+  for name, d in pairs(defs) do out[d.prop or name] = d.mass or 100 end
+  return out
+end
+
 local function publish_missiles()
   if dnp == nil or dnp.is_game == nil or dnp.is_game() then return end
   if dnp.game_has == nil or not dnp.game_has("weapon_missiles") then return end
   pcall(dnp.call_game, "weapon_missiles", missiles)
+  if dnp.game_has("weapon_masses") then pcall(dnp.call_game, "weapon_masses", M.mob_masses()) end
 end
 --- The missile definitions by name, for weapons.lua's compiler in this VM.
 function M.missile_defs() return missiles end

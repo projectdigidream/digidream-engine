@@ -1176,6 +1176,17 @@ W.autoaim_h = 5.625
 -- weapons' own, the ones levels published (weapon_missiles below), and the mob
 -- runtime's when it shares this VM.
 W.missile_defs = {}
+-- The monsters' masses, by prop name: the mob runtime's when it shares this VM,
+-- and what levels published (weapon_masses below).
+W.masses = {}
+local function masses()
+  local all = {}
+  if mobs ~= nil and mobs.mob_masses ~= nil then
+    for k, v in pairs(mobs.mob_masses()) do all[k] = v end
+  end
+  for k, v in pairs(W.masses) do all[k] = v end
+  return all
+end
 local function missile_defs()
   local all = {}
   if mobs ~= nil and mobs.missile_defs ~= nil then
@@ -1213,7 +1224,7 @@ local function core_index()
     W.core_why = "no weapons"
   else
     local idx, why = dnp.weapons_compile(W.defs, W.ammo, W.initial_weapons or false, autoaim_knobs(),
-                                         missile_defs())
+                                         missile_defs(), masses())
     W.core, W.core_why = idx, why
     if idx == nil then
       print(("weapons: the machine runs in Lua -- %s"):format(tostring(why)))
@@ -1658,6 +1669,14 @@ if GAME then
   -- A level's missile definitions (mobs.lua publish_missiles), so the table a
   -- predicting client flies its rockets by knows them. A new one means a new
   -- table, which every client is sent again.
+  dnp.export("weapon_masses", function(t)
+    local changed = false
+    for k, v in pairs(t or {}) do
+      if W.masses[k] ~= v then W.masses[k] = v; changed = true end
+    end
+    if changed then W.core_stale() end
+  end)
+
   dnp.export("weapon_missiles", function(t)
     local changed = false
     for k, v in pairs(t or {}) do

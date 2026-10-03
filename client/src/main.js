@@ -17,6 +17,7 @@ import * as THREE from 'three'
 import { Core, WEAPON_ACTION } from './core.js'
 import { RenderClock } from './render/renderclock.js'
 import { GhostMissiles } from './render/ghostmissiles.js'
+import { KnockLayer, shoveOf } from './render/knock.js'
 import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
@@ -1659,9 +1660,37 @@ const others = new EntityView({
 // OUR OWN MISSILES, flown here the server's way from the tick they are fired
 // (render/ghostmissiles.js), so a rocket leaves the barrel and bursts when it
 // does rather than a snapshot later. The server's copies are hidden below.
+// Our blast's shove of the bodies around it, drawn when it happens rather
+// than a snapshot later (render/knock.js).
+const knock = new KnockLayer()
+// The server tick our next step lands on: input ticks and server ticks differ
+// by a near-constant the newest snapshot states.
+const serverTickOf = (inputTick) => {
+  const s = predictor?.lastSnapshot
+  return s ? inputTick + (s.serverTick - s.lastInputTick) : null
+}
+
 const ghosts = new GhostMissiles({
   world,
   agent,
+  // EVERY BODY IN REACH, shoved by the server's rule (sim/blast.hpp) at its
+  // last known position, with its mass from the weapon table -- in the step
+  // the burst lands in, as the server's damage_area does it.
+  onBlast: (impact, blast) => {
+    const S = serverTickOf(predictor.tick + 1)
+    if (S === null) return
+    for (const [index, ent] of others.entities) {
+      if (!ent.fxPos) continue
+      const mass = ent.kind ? ghosts.world.mobMass(ent.kind) : 100
+      if (!mass) continue
+      // Its size and speed: the catalogue's for a monster, the map's body for
+      // a player.
+      const def = ent.kind ? props?.kinds.get(ent.kind) : { radius: bodyRadius, height: bodyHeight }
+      if (!def) continue
+      const sh = shoveOf(ghosts.world, impact, ent.fxPos, blast, mass, def)
+      if (sh) knock.add(`${index}/${ent.generation}`, S, sh.v, sh.path)
+    }
+  },
   // OUR OWN ROCKET AT OUR OWN FEET: the shove its blast gives us, by the
   // server's rule (sim/blast.hpp), in the step about to run -- and replayed
   // with it, so a correction does not take the jump back.
@@ -1882,6 +1911,7 @@ function enterLevel (w, streamed) {
   // snapshots still queued describe the old world.
   others.clear()
   ghosts.clear()
+  knock.clear()
   ghosts.world = world
   ghosts.agent = agent
   pendingSnapshots.length = 0
@@ -2613,6 +2643,21 @@ function frame (now) {
     // jumped two, and every remote body stuttered at 30 Hz.
     const drawn = renderClock.advance(dt)
     others.update(Math.floor(drawn), drawn - Math.floor(drawn))
+    // Bodies our blast has shoved, ahead of the stream by the shove the
+    // stream has not drawn yet.
+    if (knock.shoves.length > 0) {
+      const now = serverTickOf(predictor.tick)
+      if (now !== null) {
+        for (const [index, ent] of others.entities) {
+          const o = knock.offset(`${index}/${ent.generation}`, now, others.renderTick)
+          if (o === null) continue
+          ent.mesh.position.x += toThreeX(o.x)
+          ent.mesh.position.y += toThreeY(o.z)
+          ent.mesh.position.z += toThreeZ(o.y)
+        }
+      }
+      knock.prune(others.renderTick)
+    }
     // The server's copy of a rocket we are already flying is not drawn twice.
     for (const [index, ent] of others.entities) {
       if (!ent.kind) continue

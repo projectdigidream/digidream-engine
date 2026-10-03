@@ -98,8 +98,10 @@ struct WMissile {
     u8  vfx_count = 0;            // on_hit's impact effects
     u16 vfx_kind[MAX_MISSILE_VFX]{};
     fx  vfx_radius[MAX_MISSILE_VFX]{};
-    // Its blast's shove of the one who fired it -- a damage_area with
-    // `shoves_owner` -- which that player's client predicts (sim/blast.hpp).
+    // Its blast, when it shoves (a damage_area with `knockback`): what the
+    // shooter's client predicts it does to the bodies around it, and to the
+    // shooter too when it `shoves_owner` without hurting (sim/blast.hpp).
+    bool has_blast = false;
     bool self_shove = false;
     bool blast_falloff = false;
     fx   blast_radius{};
@@ -183,6 +185,8 @@ struct AmmoPool {
     u16  initial = 0;
 };
 
+inline constexpr u32 MAX_MASSES = 64;
+
 struct WeaponTable {
     u8        weapon_count = 0;
     WeaponDef weapons[MAX_WEAPONS]{};
@@ -197,6 +201,17 @@ struct WeaponTable {
     // auto-aim. A first-person body aims with its view instead.
     fx        autoaim_range{};
     u32       autoaim_cone = 0;
+    // HOW HEAVY EACH MONSTER IS, by catalogue kind (mob_vocab.lua `mass`):
+    // what a predicting client needs to show its own blast shoving them by
+    // the server's rule (sim/blast.hpp). Not read by the machine.
+    u8        mass_count = 0;
+    u16       mass_kind[MAX_MASSES]{};
+    u16       mass_value[MAX_MASSES]{};
+    // The mass of a catalogue kind, or 0 for one nobody gave a mass.
+    u16 mass_of(u16 kind) const noexcept {
+        for (u32 i = 0; i < mass_count; ++i) if (mass_kind[i] == kind) return mass_value[i];
+        return 0;
+    }
 
     void clear() noexcept;
     // Content hash: what WELCOME can carry so a client running other weapons
