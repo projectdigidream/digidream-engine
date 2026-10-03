@@ -61,7 +61,7 @@ inline constexpr fx EYE_FRACTION = fx::from_frac(41, 56);
 
 // How many 64-bit words a swing's record of the props it has hit takes: one
 // bit per spawnable prop slot (World asserts it covers SPAWNABLE_PROPS).
-inline constexpr u32 ATTACK_HIT_PROP_WORDS = 6;
+inline constexpr u32 ATTACK_HIT_PROP_WORDS = 64;
 
 // Written as an exact rational rather than a decimal literal, so that changing
 // the rate cannot introduce a rounding difference that only shows up as drift.

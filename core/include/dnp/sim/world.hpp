@@ -44,7 +44,10 @@ using namespace dnp;
 // SPAWNABLE_PROPS is checked below rather than left to underflow: it is
 // unsigned, so MAX_PROPS < MIRROR_SLOTS would wrap to four billion and the
 // allocator would hand out prop indices on top of the mirror band.
-inline constexpr u32 MAX_PROPS    = 2432;
+// 4096 SPAWNABLE: a region holds several DOOM levels in one world, and at 384
+// doomworld's own levels could not place their items -- "PROP TABLE FULL" for
+// half of them, and every monster's drop silently gone with them.
+inline constexpr u32 MAX_PROPS    = 2048 + 4096;
 
 // The top of the prop range, which spawn_prop never allocates from.
 //

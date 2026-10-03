@@ -161,7 +161,7 @@ export const TICK_RATE_HZ = 60
  * a 1200-byte datagram holds about 46 entities, so the cap was never
  * approached. A copy with no check is a copy that is already wrong.
  */
-export const MAX_ENTITIES = 4480
+export const MAX_ENTITIES = 8192
 export const FX_ONE = 4294967296n // 2^32
 const FXQ_SHIFT = 20n
 

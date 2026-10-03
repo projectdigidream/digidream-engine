@@ -2281,10 +2281,14 @@ local function drop_loot(m)
       end
       -- Protected: an item the catalogue lost since load is a complaint, not a
       -- raise in the middle of a death.
-      local ok, err = pcall(dnp.spawn_prop, item, at)
-      if not ok and not drop_failures[item] then
+      local ok, made = pcall(dnp.spawn_prop, item, at)
+      -- And SAID when it did not appear: a raise, or nil because the prop
+      -- table is full -- which is what a region of many levels runs into, and
+      -- which looked exactly like the drop table not working.
+      if (not ok or made == nil) and not drop_failures[item] then
         drop_failures[item] = true
-        print(("mobs: %s could not drop '%s': %s"):format(m.def.name, item, tostring(err)))
+        print(("mobs: %s could not drop '%s': %s"):format(m.def.name, item,
+              ok and "the prop table is full" or tostring(made)))
       end
       placed = placed + 1
     end
