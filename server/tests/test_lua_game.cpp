@@ -454,6 +454,45 @@ int main(int argc, char** argv) {
     CHECK(num(GV, "x_got") == 7);
     CHECK(num(LV, "x_back") == 8);
 
+    // ================================================================
+    // A GAME GRAPH USES WHAT THE GAME HAS (graph_vocab.game): a level's verb
+    // or event is refused at load in the game VM, by node; the same graph
+    // loads in a level (CONTROL); a game-OK verb runs.
+    std::printf("-- a game graph is refused a level's verbs and events --\n");
+    CHECK(run(GV, R"LUA(
+      local function door() return { graph = 1, name = "door",
+        nodes = { { id = "t", type = "event", event = "on_touch" },
+                  { id = "m", type = "action", a = "sector_move", sector = 0, surface = "floor", offset = "1", speed = "1" } },
+        links = { { "t.then", "m.in" } } } end
+      g_door = graphs.load(door(), "door")
+      g_cross = graphs.load({ graph = 1, name = "cross",
+        nodes = { { id = "c", type = "event", event = "on_cross" },
+                  { id = "n", type = "action", a = "counter_add", counter = "crossed" } },
+        links = { { "c.then", "n.in" } } }, "cross")
+      g_fine = graphs.load({ graph = 1, name = "fine",
+        nodes = { { id = "t", type = "event", event = "on_touch" },
+                  { id = "n", type = "action", a = "counter_add", counter = "game_touched" } },
+        links = { { "t.then", "n.in" } } }, "fine")
+      graphs.fire("on_touch", { entity = dnp.players()[1] })
+      g_count = triggers.counter("game_touched")
+    )LUA", "game graphs"));
+    CHECK(run(LV, R"LUA(
+      l_door = graphs.load({ graph = 1, name = "door_l",
+        nodes = { { id = "t", type = "event", event = "on_touch" },
+                  { id = "m", type = "action", a = "sector_move", sector = 0, surface = "floor", offset = "1", speed = "1" } },
+        links = { { "t.then", "m.in" } } }, "door_l")
+    )LUA", "the same in a level"));
+    CHECK(!truthy(GV, "g_door"));          // sector_move: a level's verb
+    CHECK(!truthy(GV, "g_cross"));         // on_cross never reaches the game
+    CHECK(truthy(GV, "g_fine"));           // counter_add, on_touch: the game's
+    CHECK(num(GV, "g_count") == 1);        // and it ran
+    CHECK(truthy(LV, "l_door"));           // CONTROL: in a level, the same graph loads
+    // CONTROL: the game's lists are checked against the trigger vocabulary.
+    CHECK(run(GV, "table.insert(graph_vocab.game.actions, 'open_portal')\n"
+                  "g_wrong = #graphs.check_vocabulary()\n"
+                  "table.remove(graph_vocab.game.actions)", "a bad game list"));
+    CHECK(num(GV, "g_wrong") == 1);
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

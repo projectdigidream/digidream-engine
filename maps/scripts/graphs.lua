@@ -35,15 +35,23 @@ for _, f in ipairs(V.node_fields) do NODE_FIELD[f.name] = f end
 
 local function set_of(list) local s = {} for _, v in ipairs(list or {}) do s[v] = true end return s end
 
--- The events a graph may start from: the triggers', and in a module's graph the
--- two the game VM is told about.
+-- In the game VM (a module's graph) or a level's.
+local function in_game() return dnp ~= nil and dnp.is_game ~= nil and dnp.is_game() end
+
+-- The events a graph may start from: in a level, the triggers'; in the game,
+-- the hooks the game VM is given (graph_vocab.game.events).
 local function event_names()
   local s = {}
-  if trigger_vocab ~= nil then for _, e in ipairs(trigger_vocab.events) do s[e.name] = true end end
-  s.on_player_enter = true
-  s.on_player_leave = true
+  if in_game() then
+    for _, e in ipairs(V.game.events) do s[e] = true end
+  elseif trigger_vocab ~= nil then
+    for _, e in ipairs(trigger_vocab.events) do s[e.name] = true end
+  end
   return s
 end
+local GAME_OK = { condition = {}, action = {} }
+for _, c in ipairs(V.game.conditions) do GAME_OK.condition[c] = true end
+for _, a in ipairs(V.game.actions) do GAME_OK.action[a] = true end
 
 -- ------------------------------------------------------------- the runtime
 
@@ -349,6 +357,21 @@ function M.check_vocabulary()
   end
   for name in pairs(PURE) do if not listed[name] then wrong[#wrong + 1] = "'" .. name .. "' is not in the vocabulary" end end
   for name in pairs(EXEC) do if not listed[name] then wrong[#wrong + 1] = "'" .. name .. "' is not in the vocabulary" end end
+  -- The game's lists name only what exists: a typo there would refuse a verb
+  -- that works, or let one through by a name nothing has.
+  if trigger_vocab ~= nil and V.game ~= nil then
+    local have = { event = {}, condition = {}, action = {} }
+    for _, e in ipairs(trigger_vocab.events) do have.event[e.name] = true end
+    have.event.on_player_enter = true
+    have.event.on_player_leave = true
+    for _, c in ipairs(trigger_vocab.conditions) do have.condition[c.name] = true end
+    for _, a in ipairs(trigger_vocab.actions) do have.action[a.name] = true end
+    for kind, list in pairs({ event = V.game.events, condition = V.game.conditions, action = V.game.actions }) do
+      for _, name in ipairs(list) do
+        if not have[kind][name] then wrong[#wrong + 1] = ("graph_vocab.game names %s '%s', which does not exist"):format(kind, name) end
+      end
+    end
+  end
   return wrong
 end
 
@@ -433,7 +456,20 @@ function M.load(data, label)
           end
         end
         if n.type == "event" and type(n.event) == "string" and not events[n.event] then
-          bad("%s: '%s' is not an event a graph can start from", where, n.event)
+          if in_game() then
+            bad("%s: '%s' does not reach the game -- a game graph starts from %s",
+                where, n.event, table.concat(V.game.events, ", "))
+          else
+            bad("%s: '%s' is not an event a graph can start from", where, n.event)
+          end
+        end
+        -- A level's verb in a game graph: the game has no level of its own.
+        if verb and in_game() then
+          local name = n.type == "condition" and n.c or n.a
+          if type(name) == "string" and not GAME_OK[n.type][name] then
+            bad("%s: %s '%s' acts on a level, and a game graph has none -- " ..
+                "`call` a level's graph to do it there", where, n.type, name)
+          end
         end
         if n.type == "sequence" and type(n.count) == "number" and (n.count < 2 or n.count > 8) then
           bad("%s: `count` is 2 to 8", where)

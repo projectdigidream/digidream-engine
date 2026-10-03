@@ -48,5 +48,53 @@ else
   fails=$((fails + 1))
 fi
 
+# A GRAPH FOR THE WHOLE GAME, beside the map's own. The trigger and graph
+# runtimes are `game ... shared` lines: run in the game VM AND kept by every
+# level. CONTROL: the same lines without `shared` make the level skip its own
+# copies, and the map's graph -- which needs them -- cannot load.
+game_module () {   # modifier -> a module dir
+  local dir; dir="$(mktemp -d)"
+  mkdir -p "$dir/maps"
+  for s in trigger_vocab.lua triggers.lua graph_vocab.lua graphs.lua; do
+    cp "$(dirname "$MAP")/$s" "$dir/maps/"
+    echo "game $s $1" >> "$dir/module.txt"
+  done
+  cat > "$dir/maps/world.graph.json" <<'JSON'
+{ "graph": 1, "name": "world", "vars": { "joined": 0 },
+  "nodes": [ { "id": "in", "type": "event", "event": "on_player_enter" },
+             { "id": "n",  "type": "add_var", "var": "joined", "value": 1 } ],
+  "links": [ ["in.then", "n.in"] ] }
+JSON
+  echo "game world.graph.json" >> "$dir/module.txt"
+  echo "$dir"
+}
+run_with_module () {   # module dir -> the log
+  local log; log="$(mktemp)"
+  "$SERVER" --port 34617 --module "$1" --map "$MAP" >"$log" 2>&1 &
+  local pid=$!
+  sleep 2
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  cat "$log"; rm -f "$log"
+}
+mod="$(game_module shared)"
+out="$(run_with_module "$mod")"
+rm -rf "$mod"
+if grep -q "world.graph.json: 2 nodes, 1 links" <<<"$out" && grep -q "graph_test.graph.json: 7 nodes, 6 links" <<<"$out"; then
+  echo "  ok   a game-wide graph runs, and the map keeps its triggers and its own graph (shared)"
+else
+  echo "  FAIL with \`game ... shared\`, the game graph and the map's both had to load:"
+  grep -E "graph|lua|game" <<<"$out" | head -12 | sed 's/^/       /'
+  fails=$((fails + 1))
+fi
+mod="$(game_module "")"
+out="$(run_with_module "$mod")"
+rm -rf "$mod"
+if ! grep -q "graph_test.graph.json: 7 nodes, 6 links" <<<"$out"; then
+  echo "  ok   CONTROL: game-only, the level skips its copies and the map's graph cannot load"
+else
+  echo "  FAIL CONTROL: without \`shared\` the level still loaded the map's graph -- the check proves nothing"
+  fails=$((fails + 1))
+fi
+
 if [[ $fails -ne 0 ]]; then echo "graph server: $fails failures"; exit 1; fi
 echo "graph server ok"

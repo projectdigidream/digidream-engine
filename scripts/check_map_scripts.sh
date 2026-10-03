@@ -76,7 +76,7 @@ done
 for mt in ../modules/*/module.txt; do
   [[ -f "$mt" ]] || continue
   mdir="$(dirname "$mt")/maps"
-  while read -r _ gfile; do
+  while read -r _ gfile _modifier; do
     [[ -n "$gfile" ]] || continue
     want="$mdir/$gfile"
     checked=$((checked + 1))

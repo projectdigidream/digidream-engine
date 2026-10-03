@@ -28,6 +28,26 @@ graph_vocab = {
   -- functions, trigger names -- are structure, not values.
   pinnable_types = { "int", "fx", "string", "bool", "enum", "sector", "value" },
 
+  -- WHAT A GAME-WIDE GRAPH MAY USE (a module's `game <name>.graph.json`). The
+  -- game VM has no level of its own -- it is bound, call by call, to the world
+  -- of the player a callback is about, in that world's coordinates -- so the
+  -- verbs about a level's sectors and sides, about points authored in a
+  -- level's coordinates, and about a level's trigger table are refused in a
+  -- game graph at load, by node. Everything a game graph can start from is
+  -- listed too: the hooks the game VM is given (docs/MODULES.md).
+  --
+  -- A game graph reaches a level through a `call` node to an `on_call` in the
+  -- level's own graph, which can do all of it.
+  game = {
+    events = { "on_tick", "on_touch", "on_prop_use", "on_ui_event",
+               "on_player_enter", "on_player_leave" },
+    conditions = { "entity_is_player", "entity_kind_is", "target_name_is",
+                   "widget_is", "property_is", "counter_at_least", "tick_at_least" },
+    actions = { "set_hp", "set_solid", "set_animation", "despawn", "add_effect",
+                "music", "ui_open", "ui_close", "camera", "screen",
+                "counter_add", "counter_set", "set_property", "log", "lua" },
+  },
+
   -- The file's own top level.
   graph_fields = {
     { name = "graph", type = "int",

@@ -1,4 +1,40 @@
 {
+  "game": {
+    "actions": [
+      "set_hp",
+      "set_solid",
+      "set_animation",
+      "despawn",
+      "add_effect",
+      "music",
+      "ui_open",
+      "ui_close",
+      "camera",
+      "screen",
+      "counter_add",
+      "counter_set",
+      "set_property",
+      "log",
+      "lua"
+    ],
+    "conditions": [
+      "entity_is_player",
+      "entity_kind_is",
+      "target_name_is",
+      "widget_is",
+      "property_is",
+      "counter_at_least",
+      "tick_at_least"
+    ],
+    "events": [
+      "on_tick",
+      "on_touch",
+      "on_prop_use",
+      "on_ui_event",
+      "on_player_enter",
+      "on_player_leave"
+    ]
+  },
   "graph_fields": [
     {
       "doc": "The format version. 1.",

@@ -831,8 +831,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         const size_t slash = p.find_last_of("/\\");
         return slash == std::string::npos ? p : p.substr(slash + 1);
     }
+    // Game scripts marked `shared` (module.txt: `game triggers.lua shared`):
+    // run in the game VM AND in every level that declares them. Without the
+    // mark a game script is game-ONLY and a level skips its own copy -- which
+    // is right for weapons.lua, and for the trigger runtime would switch off
+    // every map's triggers the moment a module-wide graph needed it.
+    std::vector<std::string> game_shared;
     bool runs_game_wide(const std::string& path) const {
         const std::string b = base_name(path);
+        for (const auto& g : game_shared) if (base_name(g) == b) return false;
         for (const auto& g : game_scripts) if (base_name(g) == b) return true;
         return false;
     }
@@ -4345,11 +4352,22 @@ int main(int argc, char** argv) {
             // maps directory beside the copies its levels run. The first module
             // to name a file wins; a second naming the same one is the same
             // weapons, not a second set.
+            //
+            // `game <file> shared`: in the game VM as well, and levels keep
+            // theirs (see runs_game_wide). Anything else after the name is a
+            // mistake, said rather than ignored.
             char gfile[200] = {0};
-            if (std::sscanf(line, "game %199s", gfile) == 1) {
+            char gmod[32] = {0};
+            const int gn = std::sscanf(line, "game %199s %31s", gfile, gmod);
+            if (gn >= 1) {
                 bool dup = false;
                 for (const auto& g : srv.game_scripts) dup = dup || Server::base_name(g) == Server::base_name(gfile);
                 if (!dup) srv.game_scripts.push_back(std::string(module_dirs[mi]) + "/maps/" + gfile);
+                if (gn == 2) {
+                    if (std::strcmp(gmod, "shared") == 0) srv.game_shared.push_back(gfile);
+                    else std::fprintf(stderr, "[srv] %s/module.txt: `game %s %s` -- the only modifier is `shared`\n",
+                                      module_dirs[mi], gfile, gmod);
+                }
                 continue;
             }
             char scheme[32] = {0};
