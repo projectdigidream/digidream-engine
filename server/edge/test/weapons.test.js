@@ -25,6 +25,10 @@
 //             rockets flown here (render/ghostmissiles.js) burst where the
 //             server's do, and the server's blast and rocket are recognised
 //             as copies of ours so neither is drawn twice.
+//   jump      a fourth run, first-person: a rocket at your own feet throws you
+//             on the tick its ghost bursts, on the server's bits -- the jump
+//             is predicted, so not one comparison needs excusing. CONTROL:
+//             without the predicted shove the server's has to be adopted.
 //   control   the same client without the table -- its machine does not run --
 //             mispredicts as soon as it fires. Without this, zero would only
 //             say the weapon state is not being compared at all.
@@ -93,9 +97,9 @@ const vfxKey = (v) => `${v.kind}/${q(v.pos.x)}/${q(v.pos.y)}/${q(v.pos.z)}/${v.d
 // SERVER, whose random stream the spread is drawn from) and with other bodies
 // (mirrored, so a predicted shot stops where the server's does).
 
-async function session ({ echo, giveAll = false }) {
+async function session ({ echo, giveAll = false, fps = false }) {
   const args = ['--port', String(LINK_PORT), '--module', 'doom2', '--map', MAP]
-  if (FPS) args.push('--controls', 'fps')
+  if (FPS || fps) args.push('--controls', 'fps')
   const env = { ...process.env, DNP_ECHO_PREDICTED: echo ? '1' : '0', DNP_GIVE_ALL: giveAll ? '1' : '0' }
   const server = spawn(serverBin, args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let log = ''
@@ -182,8 +186,15 @@ async function session ({ echo, giveAll = false }) {
     world: c.world,
     agent: c.agent,
     draw: { make: () => ({}), place () {}, burst () {}, remove () {},
-            blast: (v) => c.ghostBlasts.push({ v, at: Date.now() }) }
+            blast: (v) => c.ghostBlasts.push({ v, at: Date.now() }) },
+    // As main.js: our own blast's shove, in the step about to run.
+    selfBlast: (impact, blast) => {
+      if (c.noSelfShove) return
+      const v = c.world.blastShove(impact, c.world.readAgent(c.agent).pos, blast)
+      if (v) { c.predictor.addImpulse(c.predictor.tick + 1, v); c.shoves++ }
+    }
   })
+  c.shoves = 0
   c.launches = 0
 
   c.frame = async (input) => {
@@ -192,13 +203,14 @@ async function session ({ echo, giveAll = false }) {
       moveX: core.axisFromFxRaw(numberToFx(input.moveX ?? 0)),
       moveY: core.axisFromFxRaw(numberToFx(input.moveY ?? 0)),
       aim: input.aim ?? 0,
-      pitch: 0,
+      pitch: input.pitch ?? 0,
       weapon: input.weapon ?? NO_WEAPON
     }
     if (FPS) f = { ...fpsFrame(f), weapon: f.weapon }
+    // As main.js: our missiles fly before the step, launches join after it.
+    c.ghosts.tick()
     c.predictor.step(f)
     for (const v of c.predictor.weapon?.vfx ?? []) c.predictedVfx.push(v)
-    c.ghosts.tick()
     for (const l of c.predictor.weapon?.launches ?? []) { c.ghosts.launch(l); c.launches++ }
     c.history.unshift(f)
     c.history = c.history.slice(0, 12)
@@ -414,6 +426,59 @@ const firing = (slots) => (i) => {
   // CONTROL: a blast somewhere else is not swallowed.
   const far = ours[0] ? { ...ours[0].v, pos: { ...ours[0].v.pos, x: ours[0].v.pos.x + (40n << 32n) } } : null
   check(far !== null && !c.ghosts.swallow(far), 'CONTROL: a blast forty units away is not taken for ours')
+  await c.close()
+}
+
+// ===================================================== run 4: rocket jump
+
+{
+  const c = await session({ echo: false, giveAll: true, fps: true })
+  let launcher = null
+  for (const w of c.slots) {
+    await c.play(40, (i) => ({ weapon: i === 0 ? w : NO_WEAPON }))
+    const before = c.launches
+    await c.play(30, (i) => ({ buttons: i < 2 ? BUTTON.ATTACK_PRIMARY : 0, aim: 0 }))
+    if (c.launches > before) { launcher = w; break }
+  }
+  check(launcher !== null, `first person, a weapon in hand launches (${launcher})`)
+  const DOWN = -12000                      // about 66 degrees below level
+  // Judged over the JUMP: from the trigger until thirty ticks on, which takes
+  // in the rocket's flight, the shove and the rise, and every snapshot about
+  // them. Not the landing: map01's spawn is crowded with wandering bodies that
+  // the client holds where it last saw them, and coming down among them
+  // mispredicts for reasons that have nothing to do with the rocket.
+  const jump = async () => {
+    const z0 = c.world.readAgent(c.agent).pos.z
+    let top = z0
+    let rose = null
+    let window = null
+    await c.play(150, (i) => {
+      const z = c.world.readAgent(c.agent).pos.z
+      if (z > top) top = z
+      if (rose === null && z > z0 + (1n << 28n)) rose = i
+      if (i === 10) c.zero()
+      if (i === 40) window = { ...c.predictor.stats }
+      return { buttons: i === 10 ? BUTTON.ATTACK_PRIMARY : 0, pitch: DOWN, aim: 0 }
+    })
+    return { rose, height: Number(top - z0) / 4294967296, st: window }
+  }
+  const shoves0 = c.shoves
+  const p = await jump()
+  console.log(`  rocket jump, predicted: rose ${p.height.toFixed(2)} units, ${p.rose === null ? 'never' : (p.rose - 10) + ' ticks after the trigger'}; ` +
+              `exact ${p.st.exactMatches} lua ${p.st.luaApplied} mispredicted ${p.st.mispredictions}`)
+  check(c.shoves > shoves0, 'the ghost burst at our feet and shoved us here')
+  check(p.height > 1, `we were thrown up (${p.height.toFixed(2)} units)`)
+  check(p.st.mispredictions === 0 && p.st.luaApplied === 0,
+        `and the server agreed to the bit: nothing to excuse (lua ${p.st.luaApplied}, mispredicted ${p.st.mispredictions})`)
+  // CONTROL: the same jump with the shove left to the server.
+  await c.play(120, () => ({}))
+  c.noSelfShove = true
+  const n = await jump()
+  console.log(`  CONTROL, unpredicted: rose ${n.height.toFixed(2)} units, ${n.rose === null ? 'never' : (n.rose - 10) + ' ticks after the trigger'}; ` +
+              `lua ${n.st.luaApplied}`)
+  check(n.st.luaApplied > 0, 'CONTROL: without it, the server\'s shove has to be adopted')
+  check(p.rose !== null && n.rose !== null && p.rose < n.rose,
+        `CONTROL: and it is felt later (${n.rose - 10} ticks against ${p.rose - 10})`)
   await c.close()
 }
 

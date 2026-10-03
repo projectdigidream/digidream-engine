@@ -21,6 +21,7 @@
 
 #include "dnp/geom/mapfile.hpp"
 #include "dnp/physics/params_table.hpp"
+#include "dnp/sim/blast.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 
@@ -703,7 +704,9 @@ unsigned dnp_world_weapon_launches(const sim::World* w, long long* out64, unsign
 // The missile a launch step fires (sim::WMissile), for flying it: its kind
 // (returned; 0 for one nobody described), and six i64 -- speed, radius,
 // z_offset, offset, and the two impact effects' radii -- and six words --
-// life, burst state, burst ticks, effect count, the two effect kinds.
+// life, burst state, burst ticks, effect count, the two effect kinds. Then its
+// blast's shove of its owner: three more i64 (radius, knockback, lift) and a
+// seventh word, bit 0 "it shoves its owner" and bit 1 "it falls off".
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned phase, unsigned step,
                                   long long* out64, unsigned* out32) {
@@ -717,24 +720,57 @@ unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned
     out64[4] = m.vfx_radius[0].raw; out64[5] = m.vfx_radius[1].raw;
     out32[0] = m.life; out32[1] = m.burst_anim; out32[2] = m.burst_ticks; out32[3] = m.vfx_count;
     out32[4] = m.vfx_kind[0]; out32[5] = m.vfx_kind[1];
+    out64[6] = m.blast_radius.raw; out64[7] = m.blast_knockback.raw; out64[8] = m.blast_lift.raw;
+    out32[6] = (m.self_shove ? 1u : 0u) | (m.blast_falloff ? 2u : 0u);
     return m.kind;
+}
+
+// A blast's shove of a body (sim/blast.hpp), the rule the server's damage_area
+// runs: in, the centre and the body's position (xyz each), radius, knockback
+// and lift as i64, and the body's mass; out, the impulse. Returns whether the
+// body is in reach at all -- out of it, there is no shove.
+EMSCRIPTEN_KEEPALIVE
+int dnp_blast_shove(const long long* in64, int falloff, int mass, long long* out64) {
+    const fx3 centre{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
+    const fx3 at{fx::from_raw(in64[3]), fx::from_raw(in64[4]), fx::from_raw(in64[5])};
+    const sim::BlastReach r = sim::blast_reach(centre, at, fx::from_raw(in64[6]), falloff != 0);
+    if (!r.reached) return 0;
+    const fx3 v = sim::knock_impulse(centre, at, fx::from_raw(in64[7]), fx::from_raw(in64[8]),
+                                     sim::knock_scale(r, mass));
+    out64[0] = v.x.raw; out64[1] = v.y.raw; out64[2] = v.z.raw;
+    return 1;
+}
+
+// A velocity added to a body, as a script's add_impulse lands on the server
+// (World::add_impulse): the predicted half of a shove.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_add_impulse(sim::World* w, unsigned agent, const long long* in64) {
+    w->add_impulse(agent, fx3{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])});
 }
 
 // A sphere moving through this world (World::sweep_entities): what a missile
 // meets, the question the server's flight asks of its world. In: from xyz,
 // heading xy (a unit vector), distance, radius, slope as i64 -- the slope at
 // INT64_MIN for a flat sweep, as RAY_NO_HEIGHT. Out: the distance and
-// the point as i64; hit, entity hit, entity as words. Returns whether it hit.
+// the point as i64, then the IMPACT as dnp.sweep_hit reports it -- a tenth
+// short along the normalised heading, at the hit's height -- so a missile
+// flown here stops on the server's bits; hit, entity hit, entity as words.
+// Returns whether it hit.
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long long* out64,
                     unsigned* out32) {
     const fx3 from{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
-    const fx2 dir{fx::from_raw(in64[3]), fx::from_raw(in64[4])};
+    // Normalised, as dnp.sweep_hit does: a heading from fx_dir is unit to
+    // within an ulp, and the server sweeps the normalised one.
+    const fx2 dir = normalize(fx2{fx::from_raw(in64[3]), fx::from_raw(in64[4])});
     const sim::World::SweepHit h = w->sweep_entities(from, dir, fx::from_raw(in64[5]),
                                                      fx::from_raw(in64[6]), ignore, -1, -1,
                                                      fx::from_raw(in64[7]));
     out64[0] = h.distance.raw;
     out64[1] = h.point.x.raw; out64[2] = h.point.y.raw; out64[3] = h.point.z.raw;
+    const fx back = fx::from_frac(1, 10);
+    const fx d = h.distance > back ? h.distance - back : fx::zero();
+    out64[4] = (from.x + dir.x * d).raw; out64[5] = (from.y + dir.y * d).raw; out64[6] = h.point.z.raw;
     out32[0] = h.hit ? 1u : 0u; out32[1] = h.entity_hit ? 1u : 0u; out32[2] = h.entity;
     return h.hit ? 1 : 0;
 }

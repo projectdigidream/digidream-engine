@@ -445,6 +445,22 @@ dnp = {
     return mkfx(math.sqrt(x * x + y * y + z * z))
   end,
 
+  -- A blast's reach and shove (core sim/blast.hpp), in floats: inside a
+  -- sphere, the falloff by the PLANAR distance, outward in the plane.
+  blast_reach = function(centre, at, radius, falloff)
+    local dx, dy, dz = fxv(at.x) - fxv(centre.x), fxv(at.y) - fxv(centre.y), fxv(at.z) - fxv(centre.z)
+    local r = fxv(radius)
+    if dx * dx + dy * dy + dz * dz > r * r then return nil end
+    if not falloff or r == 0 then return true end
+    return true, mkfx((r - math.sqrt(dx * dx + dy * dy)) / r)
+  end,
+  knock_impulse = function(origin, at, knockback, lift, k)
+    local dx, dy = fxv(at.x) - fxv(origin.x), fxv(at.y) - fxv(origin.y)
+    local a = (dx == 0 and dy == 0) and 0 or math.atan2(dy, dx)
+    local kb = fxv(knockback) * fxv(k)
+    return { x = mkfx(math.cos(a) * kb), y = mkfx(math.sin(a) * kb), z = mkfx(fxv(lift) * fxv(k)) }
+  end,
+
   -- The engine's dnp.sound (docs/SOUNDS.md): from a place or a thing. Recorded,
   -- never played -- what a sound is is the client's business.
   sound = function(name, at, opts)

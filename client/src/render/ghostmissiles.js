@@ -20,8 +20,17 @@
 // Everything here is in fx raw BigInts, as the core is; only drawing converts.
 //
 const FX_ONE = 1n << 32n
-const mul = (a, b) => (a * b) >> 32n
+// The core's fx multiply: truncated toward zero, not floored -- a flight
+// heading west would otherwise drift from the server's by an ulp a tick.
+const mul = (a, b) => { const p = a * b; return p < 0n ? -((-p) >> 32n) : p >> 32n }
 const toF = (v) => Number(v) / 4294967296
+// WHERE A PROP CAN BE: the server's missile is a prop, and a prop's position is
+// stored at the wire's precision (fx_to_fxq, 2^-12 of a unit, truncated toward
+// zero) by spawn_prop and by every set_pos. Its flight steps from there each
+// tick, so the ghost has to stand where the prop can, or the burst -- and the
+// shove it gives -- is a hair from the server's.
+const quant = (v) => (v < 0n ? -((-v) >> 20n) : v >> 20n) << 20n
+const quant3 = (p) => ({ x: quant(p.x), y: quant(p.y), z: quant(p.z) })
 
 export const CLAIM_DIST = 3          // units: a server rocket this near a ghost is its copy
 export const BLAST_DIST = 2.5        // units: a server effect this near a ghost blast is a copy
@@ -35,9 +44,12 @@ export class GhostMissiles {
    * @param agent    our body's index in this world, which the sweep ignores
    * @param draw     { make(kind), place(mesh, {x,y,z} floats, aimTurns),
    *                   burst(mesh, state), remove(mesh), blast(vfx) }
+   * @param selfBlast (impact, blast) when a ghost whose blast shoves its owner
+   *                 bursts: the owner's shove, predicted (a rocket jump)
    */
-  constructor ({ world, agent, draw, now = () => performance.now() }) {
+  constructor ({ world, agent, draw, selfBlast = null, now = () => performance.now() }) {
     this.world = world
+    this.selfBlast = selfBlast
     this.agent = agent
     this.draw = draw
     this.now = now
@@ -50,13 +62,19 @@ export class GhostMissiles {
   /** A predicted launch (WasmWorld.weaponFrame().launches). */
   launch (l) {
     const m = l.missile
-    const g = { pos: { ...l.pos }, dir: l.dir, slope: l.slope, aim: l.aim, m, age: 0,
+    const g = { pos: quant3(l.pos), dir: l.dir, slope: l.slope, aim: l.aim, m, age: 0,
                 mesh: this.draw.make(m.kind), burstLeft: -1, impact: null, start: { ...l.pos } }
     this.flying.push(g)
     this.#place(g)
   }
 
-  /** One simulation tick: every ghost moves, as the server's flight does. */
+  /**
+   * One simulation tick: every ghost moves, as the server's flight does.
+   *
+   * BEFORE the tick's step, as the server's on_tick runs before its world
+   * steps: a missile then meets the world as it was after the last step, and
+   * the shove of a burst lands in the step that follows -- on both sides.
+   */
   tick () {
     for (const g of this.flying) {
       if (g.burstLeft >= 0) { g.burstLeft--; continue }
@@ -67,14 +85,19 @@ export class GhostMissiles {
       // a step stop it where its line meets them.
       const hit = this.world.sweep(g.pos, g.dir, step, g.m.radius, this.agent, g.slope)
       if (hit) {
-        // dnp.sweep_hit: a tenth short of what it met, at the height it met it.
-        const back = FX_ONE / 10n
-        const d = hit.distance > back ? hit.distance - back : 0n
-        g.pos = { x: g.pos.x + mul(g.dir.x, d), y: g.pos.y + mul(g.dir.y, d), z: hit.point.z }
+        // dnp.sweep_hit's impact: a tenth short of what it met, at the height
+        // it met it -- the world computes it, on the server's bits.
+        if (hit.impact) {
+          g.pos = { ...hit.impact }
+        } else {
+          const back = FX_ONE / 10n
+          const d = hit.distance > back ? hit.distance - back : 0n
+          g.pos = { x: g.pos.x + mul(g.dir.x, d), y: g.pos.y + mul(g.dir.y, d), z: hit.point.z }
+        }
         this.#burst(g)
       } else {
-        g.pos = { x: g.pos.x + mul(g.dir.x, step), y: g.pos.y + mul(g.dir.y, step),
-                  z: g.pos.z + mul(g.slope, step) }
+        g.pos = quant3({ x: g.pos.x + mul(g.dir.x, step), y: g.pos.y + mul(g.dir.y, step),
+                         z: g.pos.z + mul(g.slope, step) })
       }
       this.#place(g)
     }
@@ -96,6 +119,8 @@ export class GhostMissiles {
     g.impact = { ...g.pos }
     g.burstLeft = Math.max(1, g.m.burstTicks)
     if (g.m.burstAnim !== 0xFFFF) this.draw.burst(g.mesh, g.m.burstAnim)
+    // Its owner thrown, before anything is drawn: the rocket jump.
+    if (g.m.blast && this.selfBlast) this.selfBlast(g.impact, g.m.blast)
     // The impact's effects, as mobs.lua's acts.vfx sends them: at the impact,
     // facing back along the flight, the radius in 256ths.
     const back = ((g.aim >>> 0) + 2147483648) % 4294967296

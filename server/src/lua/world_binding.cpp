@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "dnp/sim/blast.hpp"
 #include "dnp/proto/messages.hpp"
 #include "dnp/sim/sectormotion.hpp"
 #include "dnp/physics/params_table.hpp"
@@ -2364,6 +2365,32 @@ int l_dnp_find_path(lua_State* L) {
 // double-precision atan2 would produce an angle the simulation could not have
 // produced, and the difference would show up as a monster facing a fraction of
 // a degree off on one machine.
+// dnp.blast_reach(centre, at, radius, falloff) -> nil | true, share | true
+//
+// Is `at` in the blast, and by what share when it falls off (sim/blast.hpp).
+// In the core, not the script, because a predicting client runs the same rule
+// for the blast of its own rocket: a rocket jump felt as it happens.
+int l_dnp_blast_reach(lua_State* L) {
+    const fx3 centre = check_vec3(L, 1);
+    const fx3 at = check_vec3(L, 2);
+    const sim::BlastReach r = sim::blast_reach(centre, at, check_fx(L, 3), lua_toboolean(L, 4) != 0);
+    if (!r.reached) { lua_pushnil(L); return 1; }
+    lua_pushboolean(L, 1);
+    if (!r.scaled) return 1;
+    push_fx(L, r.share);
+    return 2;
+}
+
+// dnp.knock_impulse(origin, at, knockback, lift, k) -> vec3
+//
+// The velocity a shove gives a body at `at` from `origin` (sim/blast.hpp):
+// outward in the plane by knockback * k, up by lift * k.
+int l_dnp_knock_impulse(lua_State* L) {
+    push_vec3(L, sim::knock_impulse(check_vec3(L, 1), check_vec3(L, 2), check_fx(L, 3),
+                                    check_fx(L, 4), check_fx(L, 5)));
+    return 1;
+}
+
 int l_dnp_atan2(lua_State* L) {
     lua_pushnumber(L, fx_atan2(check_fx(L, 1), check_fx(L, 2)).raw);
     return 1;
@@ -2912,6 +2939,8 @@ const luaL_Reg DNP_FUNCS[] = {
     {"sweep_hit", l_dnp_sweep_hit},
     {"find_path", l_dnp_find_path},
     {"atan2", l_dnp_atan2},
+    {"blast_reach", l_dnp_blast_reach},
+    {"knock_impulse", l_dnp_knock_impulse},
     {"dir", l_dnp_dir},
     {"vfx", l_dnp_vfx},
     {"sound", l_dnp_sound},

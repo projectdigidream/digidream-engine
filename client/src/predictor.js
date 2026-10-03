@@ -70,6 +70,9 @@ export class Predictor {
     // carrying no information and could be deleted.
     this.ignoreLuaFlag = false
 
+    // Shoves predicted for our own body, by input tick (addImpulse).
+    this.impulses = new Map()
+
     this.stats = {
       ticks: 0,
       snapshots: 0,
@@ -87,12 +90,29 @@ export class Predictor {
     }
   }
 
+  /**
+   * A shove this client predicts for its own body (its own rocket's blast):
+   * added to the velocity before the step of input tick `tick`, where the
+   * server's script adds it -- and again in every replay through that tick,
+   * or a correction would replay the jump away.
+   */
+  addImpulse (tick, v) {
+    const list = this.impulses.get(tick) ?? []
+    list.push(v)
+    this.impulses.set(tick, list)
+  }
+
+  _impulsesAt (tick) {
+    for (const v of this.impulses.get(tick) ?? []) this.world.addImpulse(this.agent, v)
+  }
+
   /** Advance one simulation tick with the given (already quantised) input. */
   step (frame) {
     this.tick += 1
     this.inputs.set(this.tick, frame)
 
     this.world.setInput(this.agent, frame)
+    this._impulsesAt(this.tick)
     this.world.step()
     // What our weapon did on this NEW tick, for drawing and hearing at once.
     // Only here, never in a replay: a replay re-derives ticks already shown.
@@ -112,6 +132,7 @@ export class Predictor {
     if (cutoff <= 0) return
     for (const t of this.inputs.keys()) if (t <= cutoff) this.inputs.delete(t)
     for (const t of this.predicted.keys()) if (t <= cutoff) this.predicted.delete(t)
+    for (const t of this.impulses.keys()) if (t <= cutoff) this.impulses.delete(t)
   }
 
   /**
@@ -321,6 +342,7 @@ export class Predictor {
       const frame = this.inputs.get(k)
       if (!frame) continue
       this.world.setInput(this.agent, frame)
+      this._impulsesAt(k)
       this.world.step()
       this.predicted.set(k, { hash: this.world.readAgent(this.agent).hash, epoch: this.paramEpoch })
       this.stats.replayedTicks += 1

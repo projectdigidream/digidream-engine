@@ -375,6 +375,10 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                     for (u32 v = 0; v < m.vfx_count && v < MAX_MISSILE_VFX; ++v) {
                         w.u16v(m.vfx_kind[v]); w.fxraw(m.vfx_radius[v]);
                     }
+                    w.u8v(static_cast<u8>((m.self_shove ? 1 : 0) | (m.blast_falloff ? 2 : 0)));
+                    if (m.self_shove) {
+                        w.fxraw(m.blast_radius); w.fxraw(m.blast_knockback); w.fxraw(m.blast_lift);
+                    }
                 }
             }
             w.u8v(ph.transition_count);
@@ -466,6 +470,11 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                     m.vfx_count = r.u8v();
                     if (!r.ok() || m.vfx_count > MAX_MISSILE_VFX) return false;
                     for (u32 v = 0; v < m.vfx_count; ++v) { m.vfx_kind[v] = r.u16v(); m.vfx_radius[v] = r.fxraw(); }
+                    const u8 bf = r.u8v();
+                    m.self_shove = (bf & 1) != 0; m.blast_falloff = (bf & 2) != 0;
+                    if (m.self_shove) {
+                        m.blast_radius = r.fxraw(); m.blast_knockback = r.fxraw(); m.blast_lift = r.fxraw();
+                    }
                     if (!r.ok()) return false;
                 }
             }

@@ -365,16 +365,35 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
                     if (ok && lua_istable(L, -1)) {
                         const int oh = lua_gettop(L);
                         const size_t cnt = lua_objlen(L, oh);
-                        for (size_t i = 1; i <= cnt && m.vfx_count < sim::MAX_MISSILE_VFX; ++i) {
+                        // Every entry, not only until the effects are full:
+                        // the blast comes after them in a rocket's on_hit.
+                        for (size_t i = 1; i <= cnt; ++i) {
                             lua_rawgeti(L, oh, static_cast<int>(i));
                             const int a = lua_gettop(L);
-                            if (lua_istable(L, a) && r.str_at(a, "action") == "vfx" && r.str_at(a, "at") == "impact") {
+                            if (lua_istable(L, a) && m.vfx_count < sim::MAX_MISSILE_VFX &&
+                                r.str_at(a, "action") == "vfx" && r.str_at(a, "at") == "impact") {
                                 i64 k = 0;
                                 fx rad{};
                                 if (r.int_at(a, "kind", mw, 0, 65535, k) && r.fx_at(a, "radius", mw, rad)) {
                                     m.vfx_kind[m.vfx_count] = static_cast<u16>(k);
                                     m.vfx_radius[m.vfx_count] = rad;
                                     ++m.vfx_count;
+                                }
+                            }
+                            // Its blast, when it shoves the one who fired it
+                            // and does not hurt them: that player's client
+                            // predicts the shove (a rocket jump).
+                            if (lua_istable(L, a) && !m.self_shove && r.str_at(a, "action") == "damage_area") {
+                                bool hurts = true, shoves = false, falloff = false, has_hurts = false, has_kb = false;
+                                r.bool_at(a, "hurts_owner", hurts, &has_hurts);
+                                r.bool_at(a, "shoves_owner", shoves);
+                                r.bool_at(a, "falloff", falloff);
+                                if (has_hurts && !hurts && shoves &&
+                                    r.fx_at(a, "radius", mw, m.blast_radius) &&
+                                    r.fx_at(a, "knockback", mw, m.blast_knockback, &has_kb) && has_kb &&
+                                    r.fx_at(a, "lift", mw, m.blast_lift)) {
+                                    m.self_shove = true;
+                                    m.blast_falloff = falloff;
                                 }
                             }
                             lua_pop(L, 1);

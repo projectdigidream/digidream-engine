@@ -1735,29 +1735,28 @@ local KNOCK_DECEL = fx.int(10)
 local KNOCK_MIN = fx.frac(1, 2)
 local KNOCK_MAX_TICKS = 90
 
-function M.apply_hit(target, origin, a, share)
+-- `bare`: the shove only, none of the slide that follows it -- for the
+-- owner of a blast (a rocket jump), whose client predicts the shove and can
+-- predict nothing else about it.
+function M.apply_hit(target, origin, a, share, bare)
   if target == nil or not target:valid() then return end
   -- A PROP is not shoved: it has no velocity to shove (and no add_impulse --
   -- a barrel in a blast raised here once knockback became common).
   if a.knockback and a.knockback ~= 0 and target.add_impulse ~= nil then
-    local p = target:pos()
-    local dx, dy = p.x - origin.x, p.y - origin.y
-    -- Straight up when the target is exactly on the origin: a blast centred on
-    -- somebody's feet has no direction to throw them, and zero is worse.
-    local ang = (dx.raw == 0 and dy.raw == 0) and 0 or aim_at(origin, p)
-    local d = dnp.dir(wrap_brad(ang))
     local who = live[target:index()]
     local mass = (who and who.def and who.def.mass) or 100
     local k = (share or fx.int(1)) * fx.frac(100, mass)
     local kb = a.knockback * k
-    target:add_impulse(vec3.new(d.x * kb, d.y * kb, (a.lift or ZERO) * k))
+    -- Outward in the plane, and up by `lift`: the core's rule
+    -- (sim/blast.hpp), the one a client predicting its own shove runs.
+    target:add_impulse(dnp.knock_impulse(origin, target:pos(), a.knockback, a.lift or ZERO, k))
     -- AND THE SHOVE IS KEPT, as Doom keeps it: momentum that friction wears
     -- down, not something the body's own walking cancels in a tenth of a
     -- second. Steering at 80 units/s^2 ate an 8 units/s blast within six
     -- ticks, so a zombie hit by a rocket barely moved. While shoved, the body
     -- steers and brakes at KNOCK_DECEL instead -- for as long as that takes to
     -- bring the shove to rest, and no longer.
-    if kb > KNOCK_MIN then
+    if kb > KNOCK_MIN and not bare then
       local t = math.min(KNOCK_MAX_TICKS, math.ceil((kb / KNOCK_DECEL).raw / 4294967296 * 60))
       M.tagged_effect(target, "knock_accel", "ground_accel", "set", KNOCK_DECEL, t)
       M.tagged_effect(target, "knock_friction", "friction", "set", KNOCK_DECEL, t)
@@ -1809,29 +1808,19 @@ function acts.damage_area(m, a)
     local own = e:valid() and e:index() == m.idx
     local spared = own and a.hurts_owner == false
     if e:valid() and (not spared or a.shoves_owner) then
-      local q = e:pos()
-      local dx, dy, dz = q.x - p.x, q.y - p.y, q.z - p.z
-      local d2 = dx * dx + dy * dy + dz * dz
-      if d2 <= a.radius * a.radius then
+      -- In reach, and by what share: the CORE's rule (sim/blast.hpp), since
+      -- a predicting client runs it too for its own rocket jump. Inside a
+      -- sphere; the falloff linear in the PLANAR distance, as it always was.
+      local inside, share = dnp.blast_reach(p, e:pos(), a.radius, a.falloff)
+      if inside then
         local dmg = a.damage
-        local share = nil
-        if a.falloff then
-          -- Linear in distance, not in distance squared: a blast at full
-          -- strength until the last inch and then nothing reads as a bug.
-          --
-          -- ALL IN fx, truncated ONCE at the end with `.int`. The first
-          -- version wrote `1 - d / a.radius` in Lua arithmetic, mixing an fx
-          -- with a number -- which the real fx userdata refuses outright, so
-          -- it would have raised on the first rocket anybody fired.
-          local d = dnp.length(vec3.new(dx, dy, dz))
-          share = (a.radius - d) / a.radius
-          dmg = (fx.int(a.damage) * share).int
-        end
+        -- ALL IN fx, truncated ONCE at the end with `.int`.
+        if share ~= nil then dmg = (fx.int(a.damage) * share).int end
         if dmg > 0 and not spared then hurt(e, dmg, m) end
         -- Knockback and slow apply whether or not the damage rounded to zero at
         -- the edge of the falloff: being on the fringe of a blast still shoves
         -- you, and a wave that pushes without hurting is a real thing to write.
-        M.apply_hit(e, p, a, share)
+        M.apply_hit(e, p, a, share, spared)
       end
     end
   end

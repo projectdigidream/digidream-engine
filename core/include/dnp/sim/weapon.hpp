@@ -98,6 +98,13 @@ struct WMissile {
     u8  vfx_count = 0;            // on_hit's impact effects
     u16 vfx_kind[MAX_MISSILE_VFX]{};
     fx  vfx_radius[MAX_MISSILE_VFX]{};
+    // Its blast's shove of the one who fired it -- a damage_area with
+    // `shoves_owner` -- which that player's client predicts (sim/blast.hpp).
+    bool self_shove = false;
+    bool blast_falloff = false;
+    fx   blast_radius{};
+    fx   blast_knockback{};
+    fx   blast_lift{};
 };
 
 // One sequence entry. Only what the CORE reads is resolved here; a reported

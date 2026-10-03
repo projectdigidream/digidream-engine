@@ -663,7 +663,7 @@ export class WasmWorld {
   missileSpec (weapon, phase, step) {
     const c = this.core
     const M = c.M
-    if (!c.wmis64) { c.wmis64 = M._malloc(6 * 8); c.wmis32 = M._malloc(6 * 4) }
+    if (!c.wmis64) { c.wmis64 = M._malloc(9 * 8); c.wmis32 = M._malloc(7 * 4) }
     const kind = M._dnp_world_weapon_missile(this.ptr, weapon, phase, step, c.wmis64, c.wmis32)
     if (!kind) return null
     const i = c.views.i64
@@ -672,8 +672,44 @@ export class WasmWorld {
     const b32 = c.wmis32 / 4
     const vfx = []
     for (let v = 0; v < u[b32 + 3]; v++) vfx.push({ kind: u[b32 + 4 + v], radius: i[b64 + 4 + v] })
+    // Its blast's shove of the one who fired it, when it has one (a rocket
+    // jump): what that player's client predicts.
+    const flags = u[b32 + 6]
+    const blast = (flags & 1)
+      ? { radius: i[b64 + 6], knockback: i[b64 + 7], lift: i[b64 + 8], falloff: (flags & 2) !== 0 }
+      : null
     return { kind, speed: i[b64], radius: i[b64 + 1], zOffset: i[b64 + 2], offset: i[b64 + 3],
-             life: u[b32], burstAnim: u[b32 + 1], burstTicks: u[b32 + 2], vfx }
+             life: u[b32], burstAnim: u[b32 + 1], burstTicks: u[b32 + 2], vfx, blast }
+  }
+
+  /**
+   * A blast's shove of a body at `at` (sim/blast.hpp, the server's damage_area
+   * rule): null out of reach, else the impulse {x,y,z}, all fx raw BigInts.
+   */
+  blastShove (centre, at, { radius, knockback, lift, falloff }, mass = 100) {
+    const c = this.core
+    const M = c.M
+    if (!c.blast64) { c.blast64 = M._malloc(9 * 8); c.blastOut64 = M._malloc(3 * 8) }
+    const i = c.views.i64
+    const b = c.blast64 / 8
+    i[b] = centre.x; i[b + 1] = centre.y; i[b + 2] = centre.z
+    i[b + 3] = at.x; i[b + 4] = at.y; i[b + 5] = at.z
+    i[b + 6] = radius; i[b + 7] = knockback; i[b + 8] = lift
+    if (!M._dnp_blast_shove(c.blast64, falloff ? 1 : 0, mass, c.blastOut64)) return null
+    const v = c.views.i64
+    const o = c.blastOut64 / 8
+    return { x: v[o], y: v[o + 1], z: v[o + 2] }
+  }
+
+  /** A velocity added to a body (World::add_impulse), fx raw BigInts. */
+  addImpulse (idx, v) {
+    const c = this.core
+    const M = c.M
+    if (!c.imp64) c.imp64 = M._malloc(3 * 8)
+    const i = c.views.i64
+    const b = c.imp64 / 8
+    i[b] = v.x; i[b + 1] = v.y; i[b + 2] = v.z
+    M._dnp_world_add_impulse(this.ptr, idx, c.imp64)
   }
 
   /**
@@ -681,12 +717,13 @@ export class WasmWorld {
    * BigInts: from {x,y,z}, a unit heading {x,y}, a distance and a radius --
    * and a missile's `slope`, given which the floor, a ceiling and a step stop
    * it too and `point.z` is where it met them.
-   * Returns null, or { distance, point, entity } -- entity null for the map.
+   * Returns null, or { distance, point, impact, entity } -- entity null for the
+   * map; `impact` is where dnp.sweep_hit puts the missile, a tenth short.
    */
   sweep (from, dir, dist, radius, ignore = -1, slope = null) {
     const c = this.core
     const M = c.M
-    if (!c.sweep64) { c.sweep64 = M._malloc(8 * 8); c.sweepOut64 = M._malloc(4 * 8); c.sweepOut32 = M._malloc(3 * 4) }
+    if (!c.sweep64) { c.sweep64 = M._malloc(8 * 8); c.sweepOut64 = M._malloc(7 * 8); c.sweepOut32 = M._malloc(3 * 4) }
     const i = c.views.i64
     const b = c.sweep64 / 8
     i[b] = from.x; i[b + 1] = from.y; i[b + 2] = from.z
@@ -697,6 +734,7 @@ export class WasmWorld {
     const u = c.views.u32
     const v = c.views.i64
     return { distance: v[o], point: { x: v[o + 1], y: v[o + 2], z: v[o + 3] },
+             impact: { x: v[o + 4], y: v[o + 5], z: v[o + 6] },
              entity: u[c.sweepOut32 / 4 + 1] ? u[c.sweepOut32 / 4 + 2] : null }
   }
 

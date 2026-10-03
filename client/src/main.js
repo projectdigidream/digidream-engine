@@ -1662,6 +1662,13 @@ const others = new EntityView({
 const ghosts = new GhostMissiles({
   world,
   agent,
+  // OUR OWN ROCKET AT OUR OWN FEET: the shove its blast gives us, by the
+  // server's rule (sim/blast.hpp), in the step about to run -- and replayed
+  // with it, so a correction does not take the jump back.
+  selfBlast: (impact, blast) => {
+    const v = ghosts.world.blastShove(impact, ghosts.world.readAgent(ghosts.agent).pos, blast)
+    if (v) predictor.addImpulse(predictor.tick + 1, v)
+  },
   draw: {
     make: (kind) => {
       const m = props?.make(kind) ?? null
@@ -2342,11 +2349,13 @@ function frame (now) {
       // ONLY AT A CELL BOUNDARY. A pit inside the level is a fall and must
       // stay one; this is about leaving the map the simulation is holding.
       const before = world.readAgent(agent)
+      // Our missiles fly BEFORE the step, where the server's on_tick flies its
+      // own, and one that bursts at our feet shoves us in this very step.
+      // This tick's launches are added after it -- the server's order again:
+      // a missile spawned this tick first moves on the next.
+      ghosts.tick()
       predictor.step(f)
       if (predictor.weapon) ownWeapon.push(predictor.weapon)
-      // Flown one step per NEW tick, then this tick's launches added -- the
-      // server's order: a missile spawned this tick first moves on the next.
-      ghosts.tick()
       for (const l of predictor.weapon?.launches ?? []) ghosts.launch(l)
       const after = world.readAgent(agent)
       if (!region && before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
