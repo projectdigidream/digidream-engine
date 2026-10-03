@@ -4175,6 +4175,7 @@ int main(int argc, char** argv) {
     const char* env_perf = std::getenv("DNP_PERF");
     const char* env_stall = std::getenv("DNP_LUA_STALL_US");
     u32  perf_every = env_perf ? static_cast<u32>(std::atoi(env_perf)) : 0;
+    u32  snapshot_divisor_arg = 2;
     u32  lua_stall_us = env_stall ? static_cast<u32>(std::atoi(env_stall)) : 0;
     const char* props_path = nullptr;      // --props wins over any module
     std::vector<std::string> game_script_args;
@@ -4235,6 +4236,11 @@ int main(int argc, char** argv) {
             no_scripts = true;
         } else if (std::strcmp(argv[i], "--script-trust") == 0 && i + 1 < argc) {
             strict_scripts = std::strcmp(argv[++i], "strict") == 0;
+        } else if (std::strcmp(argv[i], "--snapshot-divisor") == 0 && i + 1 < argc) {
+            // Snapshots every N ticks: 2 is 30 Hz (the default), 1 is every
+            // tick. The client is told the rate in WELCOME.
+            const int d = std::atoi(argv[++i]);
+            snapshot_divisor_arg = d >= 1 && d <= 6 ? static_cast<u32>(d) : 2;
         } else if (std::strcmp(argv[i], "--perf") == 0 && i + 1 < argc) {
             // Report where each tick went, every N ticks. See Server::Perf.
             perf_every = static_cast<u32>(std::atoi(argv[++i]));
@@ -4260,6 +4266,7 @@ int main(int argc, char** argv) {
 
     Server srv;
     srv.perf.every = perf_every;
+    srv.snapshot_divisor = snapshot_divisor_arg;
     srv.param_test = want_param_test;
     if (spawn_tag_arg) {
         srv.spawn_tag = spawn_tag_arg;

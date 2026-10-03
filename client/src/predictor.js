@@ -353,8 +353,10 @@ export class Predictor {
   // in hand. One tick at a time, never a snap: a client that jumps its clock
   // produces a burst of mispredictions indistinguishable from a determinism bug.
   _steerClock (margin) {
+    // A band of one above the target: coming down from a burst, a band of two
+    // settled at the top of it -- two ticks, 33 ms, held for nothing.
     if (margin < this.targetMargin) this.tickAdjust = 1
-    else if (margin > this.targetMargin + 2) this.tickAdjust = -1
+    else if (margin > this.targetMargin + 1) this.tickAdjust = -1
     else this.tickAdjust = 0
   }
 

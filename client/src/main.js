@@ -2380,6 +2380,17 @@ function frame (now) {
   }
 
   acc += dt
+  // STEER THE CLOCK: run a tick more, or one fewer, so the server holds the
+  // few ticks of our input it needs and no more (Predictor._steerClock). Every
+  // tick it holds is a sixtieth of a second between pressing something and its
+  // effect -- and nothing ever read this: the lead was whatever it was at the
+  // start plus every catch-up burst after a hitch, measured at 13 ticks (over
+  // 200 ms) where 2 were wanted.
+  if (LIVE && predictor && !PAUSED) {
+    const adj = predictor.takeClockAdjust()
+    if (adj > 0) acc += DT * adj
+    else if (adj < 0) acc = Math.max(0, acc + DT * adj)
+  }
   // Bounded, so a backgrounded tab does not return and run ten thousand ticks
   // in one frame. Dropping the missed time is the same choice the server makes
   // after a stall, and for the same reason.
