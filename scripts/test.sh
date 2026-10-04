@@ -647,6 +647,9 @@ suite_studio () {
   # The Play log: on the server's real output it raises nothing for a module
   # that loads and picks out a refused graph by what the server said.
   node ../studio/test/playlog.test.js | tail -2
+  # The module's style: the client's parser takes every layout written with
+  # it; a styled panel keeps its colours; the subtitle has the client's shape.
+  node ../studio/test/style.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
