@@ -637,6 +637,10 @@ suite_studio () {
   # in one world with a pitch, and stitches exactly the seams the studio's
   # check says join (control: one side a wall stitches nothing).
   node ../studio/test/metamap.test.js | tail -2
+  # The module's panels: the client's parser takes every template in every
+  # layout a level draws from; the trigger runtime loads the panel table and a
+  # graph that opens one and answers its button; the server loads the module.
+  node ../studio/test/panels.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
