@@ -334,5 +334,17 @@ const openStyled = (template) => {
         'and wins over the style\'s button look for its widget, keeping what it does not say')
 }
 
+{
+  // assetUrl (docs/UI_STYLES.md 6.1): where a view finds the files a layout names.
+  const doc = makeDom()
+  new UiView({ onEvent: () => {}, doc, layout: STYLED.layout, size: { width: 800, height: 600 }, assetUrl: (f) => 'blob:' + f })
+    .open({ ...withButton, template: 'shop' })
+  const root = rootOf(doc)
+  check(/^url\("blob:skins\/parchment\.png"\)/.test(root.style.borderImage) &&
+        /blob:skins\/button\.png/.test(all(root).find((e) => e.tag === 'button').style.borderImage),
+        `given assetUrl, a style's skins come from it (${root.style.borderImage})`)
+  check(/^url\("\/ui\/skins\/parchment\.png"\)/.test(openStyled('shop').style.borderImage), 'CONTROL: without it, from /ui/')
+}
+
 console.log(`\nui: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

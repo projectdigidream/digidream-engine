@@ -139,7 +139,7 @@ export const DEFAULT_LAYOUT = Object.freeze({
 // --- fonts and skins, loaded (docs/UI_STYLES.md 2.1, 3) --------------------
 //
 // What the studio checks to say honestly what the game draws yet.
-export const UI_STYLES = Object.freeze({ version: 1, fonts: true, skins: true, hudFont: true, hudBox: true })
+export const UI_STYLES = Object.freeze({ version: 1, fonts: true, skins: true, hudFont: true, hudBox: true, assetUrl: true })
 
 // Every picture a layout's styles name: panel, title, button (and pressed),
 // close, in named styles, inline template styles and slot styles.
@@ -168,7 +168,9 @@ export function layoutImages (layout) {
  * when the views draw again (main.js).
  */
 export class UiAssets {
-  constructor ({ fetch = globalThis.fetch, FontFace = globalThis.FontFace, fonts = globalThis.document?.fonts,
+  // The browser's fetch must be called unbound (as itself): stored and called
+  // as this.fetch(...) it throws "Illegal invocation", which no stub shows.
+  constructor ({ fetch = (...a) => globalThis.fetch(...a), FontFace = globalThis.FontFace, fonts = globalThis.document?.fonts,
                  Image = globalThis.Image, base = '/ui/', warn = (m) => console.warn(m) } = {}) {
     Object.assign(this, { fetch, FontFace, fonts, Image, base, warn })
     this.asked = new Map()       // key -> Promise<boolean>
@@ -503,8 +505,11 @@ export function layoutFileFor (index, levelName) {
  * is not in the world (render/ui.js makes the same choice).
  */
 export class HudView {
-  constructor ({ host, doc = globalThis.document, touch = false, insets = null, size = null } = {}) {
+  constructor ({ host, doc = globalThis.document, touch = false, insets = null, size = null, assetUrl = (f) => `/ui/${f}` } = {}) {
     this.host = host
+    // Where a file the layout names is fetched from (docs/UI_STYLES.md 6.1).
+    // No HUD element draws a /ui/ file yet; kept for when one does.
+    this.assetUrl = assetUrl
     this.doc = doc
     this.touch = touch
     this.insets = insets

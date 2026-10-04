@@ -53,14 +53,17 @@ const STYLE = `
 // A 9-SLICE SKIN: the picture as border-image, its four insets (px of the
 // picture) the slices, the middle filled and stretched; the border as wide as
 // the slices, in UI units, scaled like every UI unit.
-function nineSlice (el, image, slice, scale) {
+// Where a file the layout names is fetched from: the server's /ui/ route, or
+// the view's `assetUrl` (docs/UI_STYLES.md 6.1; the studio's own copies).
+export const UI_URL = (f) => `/ui/${f}`
+function nineSlice (el, image, slice, scale, url = UI_URL) {
   const [t, r, b, l] = Array.isArray(slice) ? slice : [0, 0, 0, 0]
   el.style.borderStyle = 'solid'
   el.style.borderWidth = `${t * scale}px ${r * scale}px ${b * scale}px ${l * scale}px`
-  el.style.borderImage = `url("/ui/${image}") ${t} ${r} ${b} ${l} fill stretch`
+  el.style.borderImage = `url("${url(image)}") ${t} ${r} ${b} ${l} fill stretch`
 }
 // One part of a style (the panel box, the title, a button) on an element.
-function skin (el, part, scale) {
+function skin (el, part, scale, url) {
   if (!part || typeof part !== 'object') return
   if (typeof part.bg === 'string') el.style.background = part.bg
   if (typeof part.color === 'string') el.style.color = part.color
@@ -71,13 +74,13 @@ function skin (el, part, scale) {
   if (typeof part.weight === 'number') el.style.fontWeight = String(part.weight)
   if (typeof part.align === 'string') el.style.textAlign = part.align
   if (typeof part.font === 'string') el.style.fontFamily = part.font
-  if (typeof part.image === 'string') nineSlice(el, part.image, part.slice, scale)
+  if (typeof part.image === 'string') nineSlice(el, part.image, part.slice, scale, url)
 }
 
 // The slot's own look, from the template. Colours and sizes only: a template
 // is presentation, so nothing here can change what a widget does.
 const SLOT_STYLE = { bg: 'background', color: 'color', border: 'border' }
-function styleSlot (el, st, scale) {
+function styleSlot (el, st, scale, url) {
   if (!st) return
   for (const [k, css] of Object.entries(SLOT_STYLE)) if (typeof st[k] === 'string') el.style[css] = st[k]
   if (typeof st.radius === 'number') el.style.borderRadius = `${st.radius * scale}px`
@@ -86,7 +89,7 @@ function styleSlot (el, st, scale) {
   if (typeof st.opacity === 'number') el.style.opacity = String(st.opacity)
   // A slot may also name a font and a 9-slice picture (docs/UI_STYLES.md 2.2).
   if (typeof st.font === 'string') el.style.fontFamily = st.font
-  if (typeof st.image === 'string') nineSlice(el, st.image, st.slice, scale)
+  if (typeof st.image === 'string') nineSlice(el, st.image, st.slice, scale, url)
 }
 
 /**
@@ -123,8 +126,9 @@ export class UiView {
    * them and the scale, `host` and `size` let the studio draw a panel inside a
    * device frame rather than the window.
    */
-  constructor ({ onEvent, onChange = null, doc = globalThis.document, host = null, layout = null, size = null, insets = null }) {
+  constructor ({ onEvent, onChange = null, doc = globalThis.document, host = null, layout = null, size = null, insets = null, assetUrl = UI_URL }) {
     this.onEvent = onEvent
+    this.assetUrl = assetUrl
     // Called after any panel opens or closes, however it closed (the script,
     // or the player's ×) -- what main.js needs to know whether one is modal.
     this.onChange = onChange
@@ -260,9 +264,9 @@ export class UiView {
       if (typeof named.color === 'string') root.style.color = named.color
       if (typeof named.weight === 'number') root.style.fontWeight = String(named.weight)
       if (typeof named.accent === 'string') root.style.accentColor = named.accent
-      skin(root, named.panel, s)
+      skin(root, named.panel, s, this.assetUrl)
     }
-    styleSlot(root, inline, s)
+    styleSlot(root, inline, s, this.assetUrl)
     this.button = named?.button ?? null
     this.buildScale = s
 
@@ -277,13 +281,13 @@ export class UiView {
       if (typeof named.close.image === 'string') {
         x.textContent = ''
         Object.assign(x.style, { display: 'inline-block', width: '1.2em', height: '1.2em',
-                                 background: `url("/ui/${named.close.image}") center / contain no-repeat` })
+                                 background: `url("${this.assetUrl(named.close.image)}") center / contain no-repeat` })
       }
     }
     if (tpl.title?.show !== false) {
       const title = doc.createElement('div')
       title.className = 'dnp-ui-title'
-      skin(title, named?.title, s)
+      skin(title, named?.title, s, this.assetUrl)
       const t = doc.createElement('span')
       t.textContent = msg.title
       title.append(t)
@@ -316,7 +320,7 @@ export class UiView {
     let decor = null
     if ((tpl.decor ?? []).length) {
       // Decor is HUD elements, drawn by the HUD's own code, behind the widgets.
-      decor = new HudView({ host: stage, doc, size: { width: pw, height: sh } })
+      decor = new HudView({ host: stage, doc, size: { width: pw, height: sh }, assetUrl: this.assetUrl })
       decor.root.style.zIndex = '0'
       decor.setLayout({ ...this.layout, hud: tpl.decor })
     }
@@ -328,7 +332,7 @@ export class UiView {
       el.className = `${el.className} dnp-ui-slot`
       const r = place({ anchor: 'tl', ...sl, h: sl.h ?? 32 }, this.layout, pw, sh, {}, { w: pw, h: 32 * s })
       Object.assign(el.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
-      styleSlot(el, sl.style, s)
+      styleSlot(el, sl.style, s, this.assetUrl)
       stage.appendChild(el)
     }
     if (slots.length || decor) root.append(stage)
@@ -401,11 +405,11 @@ export class UiView {
       const bs = this.button && (this.slotStyle ? { ...this.button, ...this.slotStyle } : this.button)
       if (bs) {
         const sc = this.buildScale ?? 1
-        skin(b, bs, sc)
+        skin(b, bs, sc, this.assetUrl)
         if (bs.pressed) {
           const down = { ...bs, ...bs.pressed }
-          b.onpointerdown = () => skin(b, down, sc)
-          b.onpointerup = b.onpointerleave = () => skin(b, bs, sc)
+          b.onpointerdown = () => skin(b, down, sc, this.assetUrl)
+          b.onpointerup = b.onpointerleave = () => skin(b, bs, sc, this.assetUrl)
         }
       }
       row.appendChild(b)

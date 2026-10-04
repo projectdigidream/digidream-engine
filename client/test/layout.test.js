@@ -336,5 +336,25 @@ export const PARCHMENT = {
   check(warned.filter((w) => /gone\.png/.test(w)).length === 1, 'and so does a missing skin')
 }
 
+{
+  // The DEFAULT fetch, as the browser's is: it throws "Illegal invocation" when
+  // called with any `this` but itself -- the bug every injected stub hid.
+  const real = globalThis.fetch
+  const asked = []
+  globalThis.fetch = function (url) {
+    if (this !== undefined && this !== globalThis) throw new TypeError('Illegal invocation')
+    asked.push(url)
+    return Promise.resolve({ ok: true, arrayBuffer: async () => new ArrayBuffer(4) })
+  }
+  const warned = []
+  const added = []
+  const assets = new UiAssets({ FontFace: class { constructor (f) { this.family = f } async load () { return this } },
+                                fonts: { add: (f) => added.push(f) }, Image: null, warn: (m) => warned.push(m) })
+  await assets.load(parseLayout({ fonts: [{ family: 'Bitter', file: 'fonts/bitter.woff2' }] }).layout)
+  globalThis.fetch = real
+  check(asked.join() === '/ui/fonts/bitter.woff2' && added.length === 1 && warned.length === 0,
+        `the default fetch is the browser's, called as itself (${warned.join('; ')})`)
+}
+
 console.log(`\nlayout: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)
