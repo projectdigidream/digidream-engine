@@ -641,6 +641,9 @@ suite_studio () {
   # layout a level draws from; the trigger runtime loads the panel table and a
   # graph that opens one and answers its button; the server loads the module.
   node ../studio/test/panels.test.js | tail -2
+  # A cutscene previewed: the plan timed as graphs.lua times it (read from its
+  # source), the camera on the client's own curve, flythrough and track.
+  node ../studio/test/scene.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
