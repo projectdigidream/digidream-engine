@@ -6,7 +6,7 @@
 //
 //   strip <IMAGE> [repeat N] [yaw T] [height H]   DOOM's: wrapped round the horizon
 //   panorama <IMAGE> [yaw T]                      one equirectangular picture
-//   cube <+X> <-X> <+Y> <-Y> <+Z> <-Z> [yaw T]    six pictures
+//   cube <E> <W> <N> <S> <UP> <DOWN> [yaw T]       six pictures (docs/SKY.md 2.3)
 //   none                                          no sky (the clear colour)
 //
 // Pictures are TEXTURE names, served from /textures/ like any wall's. Header
@@ -88,6 +88,27 @@ inline bool parse_sky(const std::vector<std::string>& w, proto::SkySet& out, std
     }
     out = s;
     return true;
+}
+
+// A sky back to its words: what a level's saved state keeps, read again by
+// parse_sky. Settings are written in thousandths' exact decimal.
+inline std::string sky_text(const proto::SkySet& s) {
+    static const char* KINDS[] = {"none", "strip", "panorama", "cube"};
+    const u8 k = static_cast<u8>(s.kind);
+    std::string out = KINDS[k <= 3 ? k : 0];
+    for (u8 i = 0; i < s.images && i < proto::SKY_MAX_IMAGES; ++i)
+        out += " " + std::string(s.image[i].text, s.image[i].len);
+    for (u16 i = 0; i < s.count && i < proto::SKY_MAX_FIELDS; ++i) {
+        const char* key = s.fields[i].id == SKY_FIELD_REPEAT ? "repeat"
+                        : s.fields[i].id == SKY_FIELD_YAW    ? "yaw"
+                        : s.fields[i].id == SKY_FIELD_HEIGHT ? "height" : nullptr;
+        if (key == nullptr) continue;
+        char num[32];
+        const i32 m = s.fields[i].milli;
+        std::snprintf(num, sizeof(num), "%s%d.%03d", m < 0 ? "-" : "", std::abs(m) / 1000, std::abs(m) % 1000);
+        out += std::string(" ") + key + " " + num;
+    }
+    return out;
 }
 
 inline std::vector<std::string> sky_words(const std::string& text) {

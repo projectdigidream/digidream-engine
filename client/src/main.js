@@ -284,7 +284,9 @@ const hudValues = new Map()
 // (client/src/controls.js). Up here because the input and camera code below
 // both read it from the first frame.
 let scheme = SCHEME.PLATFORMER
-const fpsLook = new FpsLook()
+// ?pitch= (degrees, up positive) starts a first-person view looking up or
+// down: what a headless check needs to see a ceiling, having no pointer lock.
+const fpsLook = new FpsLook({ pitch: Number(params.get('pitch') ?? 0) * Math.PI / 180 })
 const isFps = () => scheme === SCHEME.FPS
 window.__dnpStats = dnpStats
 dnpStats.hud = () => Object.fromEntries(hudValues)

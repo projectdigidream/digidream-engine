@@ -1444,7 +1444,7 @@
           ]
         },
         {
-          "doc": "A texture name: strip and panorama's picture, or cube's six separated by spaces (+x -x +y -y +z -z).",
+          "doc": "A texture name: strip and panorama's picture, or cube's six separated by spaces: east west north south up down.",
           "name": "image",
           "optional": true,
           "type": "string"

@@ -435,7 +435,7 @@ graph_vocab = {
                  doc = "strip: one picture round the horizon, as DOOM's. panorama: one picture of the whole sphere. " ..
                        "cube: six. default: the module's sky for this level again." },
                { name = "image", type = "string", optional = true,
-                 doc = "A texture name: strip and panorama's picture, or cube's six separated by spaces (+x -x +y -y +z -z)." },
+                 doc = "A texture name: strip and panorama's picture, or cube's six separated by spaces: east west north south up down." },
                { name = "repeat", type = "number", optional = true, doc = "strip: times round the horizon. Defaults to 4." },
                { name = "yaw", type = "number", optional = true, doc = "Turns the sky, in degrees." } },
       exec_in = { "in" }, exec_out = { "then" },

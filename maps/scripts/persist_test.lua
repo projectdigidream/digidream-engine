@@ -25,6 +25,9 @@ end
 if not dnp.restoring() then
   for n = 1, 4 do place(n, vec3.new(fx.int(6 + 6 * n), fx.int(20), fx.int(0))) end
   print(("[persist_test] placed %d keys"):format(left()))
+  -- And a sky (docs/SKY.md), only here: a restored level must get it back from
+  -- its saved state, since this line does not run again.
+  dnp.sky("strip SKY2 repeat 2")
 end
 
 local next_at = dnp.tick() + 120

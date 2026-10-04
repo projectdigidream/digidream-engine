@@ -77,6 +77,8 @@ const SKY_GLSL = /* glsl */`
   uniform float height;
   uniform vec3 zenith;
   uniform vec3 horizon;
+  uniform vec3 capTop;
+  uniform vec3 capBottom;
   const float TAU = 6.28318530718;
   vec3 skyColour (vec3 d) {
     d = normalize(d);
@@ -87,13 +89,34 @@ const SKY_GLSL = /* glsl */`
       float t = r.y / max(length(r.xz), 1e-4);
       float bottom = -height * ${DOOM_SKY.below.toFixed(4)};
       float v = clamp((t - bottom) / (height - bottom), 0.0, 1.0);
-      return texture2D(pic, vec2(turn * repeatTimes, v)).rgb;
+      vec4 p = texture2D(pic, vec2(turn * repeatTimes, v));
+      // A pixel the picture left transparent (DOOM's skies have a few) is the
+      // cap's colour, not whatever colour hides under its zero alpha.
+      vec3 c = mix(t > 0.0 ? capTop : capBottom, p.rgb, step(0.5, p.a));
+      // Past its edges, a strip's last row would be smeared into streaks that
+      // meet overhead. Fade into the edge rows' average instead (GZDoom's cap).
+      c = mix(c, capTop, smoothstep(height, height + 0.3, t));
+      return mix(c, capBottom, smoothstep(bottom, bottom - 0.12, t));
     }
     if (kind == ${SKY_KIND.PANORAMA}) {
       float v = asin(clamp(r.y, -1.0, 1.0)) / 3.14159265359 + 0.5;
-      return texture2D(pic, vec2(turn + 0.5, v)).rgb;
+      // Gradients from whichever of u and u+0.5 is continuous here, so the
+      // wrap from 1 back to 0 does not pick the smallest mip: a seam otherwise.
+      float u = turn + 0.5;
+      float w = fract(turn + 1.0);
+      vec2 gx = vec2(dFdx(u), dFdx(v)); vec2 gy = vec2(dFdy(u), dFdy(v));
+      vec2 hx = vec2(dFdx(w), dFdx(v)); vec2 hy = vec2(dFdy(w), dFdy(v));
+      if (abs(hx.x) + abs(hy.x) < abs(gx.x) + abs(gy.x)) { gx = hx; gy = hy; }
+      return textureGrad(pic, vec2(u, v), gx, gy).rgb;
     }
-    if (kind == ${SKY_KIND.CUBE}) return textureCube(cube, vec3(-r.x, r.y, r.z)).rgb;
+    if (kind == ${SKY_KIND.CUBE}) {
+      // Sampled exactly as three.js samples its own cube backgrounds (x
+      // flipped), and the slots filled so the picture named for a direction is
+      // the one seen looking that way, upright and unmirrored (Sky.set). Up and
+      // down meet SOUTH, as in three.js: a set that looks right there looks the
+      // same here (docs/SKY.md 2.3).
+      return textureCube(cube, vec3(-r.x, r.y, r.z)).rgb;
+    }
     return mix(horizon, zenith, clamp(r.y * 1.5, 0.0, 1.0));
   }
 `
@@ -161,12 +184,16 @@ export class Sky {
       height: { value: DOOM_SKY.height },
       zenith: { value: c.clone() },
       horizon: { value: c.clone().lerp(new THREE.Color(0x2a3550), 0.6) },
+      capTop: { value: new THREE.Color(0, 0, 0) },
+      capBottom: { value: new THREE.Color(0, 0, 0) },
       unproject: { value: new THREE.Matrix4() },
       eye: { value: new THREE.Vector3() }
     }
     this.surface = new THREE.ShaderMaterial({
       uniforms: this.uniforms, vertexShader: SURFACE_VERTEX, fragmentShader: SURFACE_FRAGMENT,
-      side: THREE.DoubleSide, depthWrite: true
+      // Front faces only, as every map surface: a sky ceiling seen from above
+      // (a platformer's camera) must not cover the room beneath it.
+      side: THREE.FrontSide, depthWrite: true
     })
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3))
@@ -217,6 +244,7 @@ export class Sky {
     if (cached) {
       if (sky.kind === SKY_KIND.CUBE) u.cube.value = cached
       else u.pic.value = cached
+      if (sky.kind === SKY_KIND.STRIP) this.#caps(cached.image)
       u.kind.value = sky.kind
       return Promise.resolve(true)
     }
@@ -228,7 +256,12 @@ export class Sky {
         resolve(true)
       }
       if (sky.kind === SKY_KIND.CUBE) {
-        new THREE.CubeTextureLoader().load(sky.images.map(url),
+        // The message's order is the game's directions -- east west north
+        // south up down -- and three.js's slots are +x -x +y -y +z -z of its
+        // own frame, sampled with x flipped (as three's own backgrounds are):
+        // so west, east, up, down, south, north.
+        const [e, w, n, s, up, down] = sky.images
+        new THREE.CubeTextureLoader().load([w, e, up, down, s, n].map(url),
           (t) => { this.cache.set(cacheKey, t); done(() => { u.cube.value = t }) },
           undefined, () => { sky.images.forEach(fail); resolve(false) })
         return
@@ -241,9 +274,35 @@ export class Sky {
         t.magFilter = px
         t.minFilter = sky.kind === SKY_KIND.STRIP ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter
         t.needsUpdate = true
+        if (sky.kind === SKY_KIND.STRIP) this.#caps(t.image)
         this.cache.set(cacheKey, t)
         done(() => { u.pic.value = t })
       }, undefined, () => { fail(sky.images[0]); resolve(false) })
     })
+  }
+
+  // The average of a strip's top and bottom rows (eight each), which its
+  // edges fade into. Read from the picture once; without a canvas (a test) the
+  // caps stay black.
+  #caps (img) {
+    const u = this.uniforms
+    try {
+      const w = img?.width ?? 0
+      const h = img?.height ?? 0
+      if (!w || !h || typeof document === 'undefined') return
+      const cv = document.createElement('canvas')
+      cv.width = w
+      cv.height = h
+      const g = cv.getContext('2d', { willReadFrequently: true })
+      g.drawImage(img, 0, 0)
+      const avg = (y0) => {
+        const d = g.getImageData(0, y0, w, Math.min(8, h)).data
+        let r = 0; let gg = 0; let b = 0; let n = 0
+        for (let i = 0; i < d.length; i += 4) { if (d[i + 3] < 128) continue; r += d[i]; gg += d[i + 1]; b += d[i + 2]; n++ }
+        return n ? [r / n / 255, gg / n / 255, b / n / 255] : [0, 0, 0]
+      }
+      u.capTop.value.setRGB(...avg(0))
+      u.capBottom.value.setRGB(...avg(Math.max(0, h - 8)))
+    } catch { /* a picture the canvas will not read: the caps stay as they were */ }
   }
 }

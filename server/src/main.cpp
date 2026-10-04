@@ -1126,6 +1126,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                           static_cast<int>(t.name.len), t.name.text);
             out += line;
         }
+        // The sky a script gave the level (docs/SKY.md), as its words.
+        if (L.has_sky) out += "sky " + sky_text(L.sky) + "\n";
         if (L.vm.is_open()) {
             std::string parts, err;
             lua::persist_capture(L.vm.state(), parts, err);
@@ -1187,6 +1189,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 std::memcpy(t.name.text, name, t.name.len);
                 set_side_texture(li, t);
                 ++sides;
+            } else if (ln.compare(0, 4, "sky ") == 0) {
+                proto::SkySet sky;
+                std::string err;
+                if (parse_sky(sky_words(ln.substr(4)), sky, err)) set_level_sky(li, &sky);
+                else std::fprintf(stderr, "[srv] level %u: a saved sky is unreadable (%s); the module's is used\n", li, err.c_str());
             } else if (ln.compare(0, 8, "scripts ") == 0) {
                 const size_t n = static_cast<size_t>(std::strtoull(ln.c_str() + 8, nullptr, 10));
                 if (at + n > text.size()) break;

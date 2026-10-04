@@ -557,7 +557,7 @@ bool decode_screen_set(ByteReader& r, ScreenSet& out) noexcept;
 //             the clear colour (what a level without one has always looked like)
 //   Strip  -- one picture wrapped round the horizon `repeat` times, DOOM's sky
 //   Panorama -- one equirectangular picture, the whole sphere
-//   Cube   -- six pictures: +x -x +y -y +z -z
+//   Cube   -- six pictures: east west north south up down (+x -x +y -y +z -z)
 // Fields are the CameraSet record shape, {u8 id, i32 milli}, unknown ids
 // skipped: 1 repeat (Strip), 2 yaw (turns), 3 height (Strip: the tangent of
 // the elevation its top edge sits at).

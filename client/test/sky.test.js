@@ -118,6 +118,11 @@ check(isSkyName('F_SKY1') && isSkyName('f_sky2') && !isSkyName('FLAT5') && !isSk
         'back to a picture seen before: not loaded again, its settings new')
   await sky.set({ kind: SKY_KIND.CUBE, images: ['a', 'b', 'c', 'd', 'e', 'f'], repeat: 4, yaw: 0, height: 0.625 })
   check(sky.uniforms.kind.value === SKY_KIND.CUBE && sky.uniforms.cube.value && asked.length === 8, 'a cube: six faces')
+  // The message's order is the game's directions; three.js's slots are what the
+  // shader samples (docs/SKY.md 2.1, checked by eye in a browser).
+  await sky.set({ kind: SKY_KIND.CUBE, images: ['E', 'W', 'N', 'S', 'U', 'D'], repeat: 4, yaw: 0, height: 0.625 })
+  check(asked.slice(-6).map((u) => u.match(/(\w)\.png/)[1]).join('') === 'WEUDSN',
+        `east west north south up down go to three's slots as west east up down south north (${asked.slice(-6).join(' ')})`)
   await sky.set(skyFromMessage(null))
   check(!sky.background.visible && sky.uniforms.kind.value === SKY_KIND.NONE, 'and none puts the old look back')
 

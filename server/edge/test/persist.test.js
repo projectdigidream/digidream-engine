@@ -95,6 +95,7 @@ async function start (persist, stateDir) {
   run.cw = control.writable.getWriter()
   run.welcomes = 0
   run.results = []
+  run.skies = []
   ;(async () => {
     const r = control.readable.getReader()
     let buf = Buffer.alloc(0)
@@ -110,6 +111,7 @@ async function start (persist, stateDir) {
           buf = buf.subarray(4 + len)
           if (m?.type === MSG.WELCOME) run.welcomes++
           else if (m?.type === MSG.GAME_RESULT) run.results.push(m)
+          else if (m?.type === MSG.SKY_SET) run.skies.push(m)
         }
       }
     } catch {}
@@ -196,6 +198,8 @@ try {
     const first = await start('server', dir)
     // CONTROL: a first start has nothing to come back to.
     check(first.log.includes('placed 4 keys'), 'CONTROL: the first start puts down four keys')
+    const skyOf = (run) => { const m = run.skies.at(-1); return m ? `${m.kind}:${m.images.join()}:${m.fields.map((f) => f.milli).join()}` : 'none sent' }
+    check(skyOf(first) === '1:SKY2:2000', `CONTROL: the fresh start's script gives the level a sky (${skyOf(first)})`)
     await waitFor(() => leftNow(first) === 2, 8000, 'two taken')
     await stop(first, 'SIGTERM')
     check(/level state\(s\) written/.test(first.log), 'stopping writes the level\'s state')
@@ -204,6 +208,7 @@ try {
     check(!second.log.includes('placed 4 keys'), 'the restart does not put down a fresh four')
     const restored = Number(second.log.match(/restored (\d) keys/)?.[1])
     check(restored === 2, `it comes back as it was left: two keys (${restored})`)
+    check(skyOf(second) === '1:SKY2:2000', `and with the sky its script gave it, which nothing set again (${skyOf(second)})`)
     check(/saved level state\(s\) read/.test(second.log), 'and says where it read them from')
 
     // A new game forgets the kept state ON DISK too, or the next restart would

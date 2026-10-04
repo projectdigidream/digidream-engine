@@ -741,6 +741,21 @@ int main(int argc, char** argv) {
         CHECK(server::sky_for(skies, "dw_map12") == &skies[1].sky);
         CHECK(server::sky_for(skies, "map01") == &skies[0].sky);
         CHECK(server::sky_for({}, "map01") == nullptr);
+        // A level's saved state keeps a script's sky as words: read back, the same sky.
+        for (const char* w : {"strip SKY2 repeat 2.5 yaw -0.25 height 0.7", "cube a b c d e f yaw 0.125", "none"}) {
+            proto::SkySet a, b;
+            CHECK(server::parse_sky(server::sky_words(w), a, err));
+            const std::string text = server::sky_text(a);
+            CHECK(server::parse_sky(server::sky_words(text), b, err));
+            // Field by field: CameraField has padding, which memcmp would read.
+            bool same = a.kind == b.kind && a.images == b.images && a.count == b.count;
+            for (u16 i = 0; same && i < a.count; ++i)
+                same = a.fields[i].id == b.fields[i].id && a.fields[i].milli == b.fields[i].milli;
+            for (u8 i = 0; same && i < a.images; ++i)
+                same = a.image[i].len == b.image[i].len && std::memcmp(a.image[i].text, b.image[i].text, a.image[i].len) == 0;
+            if (!same) std::printf("  '%s' came back as '%s'\n", w, text.c_str());
+            CHECK(same);
+        }
     }
     CHECK(run("dnp.sky('panorama dusk yaw 0.5')", "dnp.sky words"));
     CHECK(g_ui.sky_kind == static_cast<int>(proto::SkyKind::Panorama) && g_ui.sky.image[0].len == 4);
