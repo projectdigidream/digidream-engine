@@ -655,6 +655,9 @@ suite_studio () {
   # The module's style: the client's parser takes every layout written with
   # it; a styled panel keeps its colours; the subtitle has the client's shape.
   node ../studio/test/style.test.js | tail -2
+  # The sky: the server reads every sky line the studio writes (a broken one
+  # it reports), and the client reads the preview message as written.
+  node ../studio/test/sky.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
