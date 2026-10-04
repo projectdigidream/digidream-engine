@@ -629,11 +629,30 @@ public final class MainActivity extends Activity {
    * through to the APK.
    */
   private WebResourceResponse serveFromTree(String path, String type) throws IOException {
-    List<File> mods = userModules();
+    // THE STUDIO'S OWN COPY OF THE BUNDLED MODULE TOO. On a phone the studio
+    // edits the module the APK ships (starter), in the writable tree; serving
+    // that module's files only out of the APK meant every picture, font, sprite
+    // and prop the studio gave it never reached the game. Other modules first,
+    // then the bundled module's tree copy, then the APK (below).
+    List<File> mods = new ArrayList<>(userModules());
+    File bundledTree = gameDir == null || bundledModule == null ? null : new File(gameDir, "modules/" + bundledModule);
+    boolean haveBundled = bundledTree != null && bundledTree.isDirectory();
+    if (haveBundled) mods.add(bundledTree);
     if (mods.isEmpty()) return null;
     if (path.equals("props.txt") || path.equals("animations.txt")) {
       ByteArrayOutputStream bo = new ByteArrayOutputStream();
-      byte[] base = assetBytes(path);
+      // The APK's copy is the engine's catalogue and the bundled module's,
+      // concatenated (build_apk.sh). When the bundled module has its tree copy
+      // (the studio may have added to it), the base is the engine's alone --
+      // unpacked beside the modules -- and the module's tree copy follows in
+      // the loop, so neither is lost and nothing is there twice.
+      File bundledFile = haveBundled ? new File(bundledTree, "assets/" + path) : null;
+      byte[] base;
+      if (bundledFile != null && bundledFile.isFile()) {
+        File engineFile = new File(gameDir, "assets/" + path);
+        base = null;
+        if (engineFile.isFile()) try (InputStream in = new FileInputStream(engineFile)) { bo.write(readAllBytes(in)); }
+      } else base = assetBytes(path);
       if (base != null) bo.write(base);
       for (File m : mods) {
         File f = new File(m, "assets/" + path);
