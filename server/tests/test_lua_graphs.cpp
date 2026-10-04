@@ -349,6 +349,18 @@ int main(int argc, char** argv) {
     }
 
     // ================================================================
+    // EACH GRAPH HAS ITS OWN NAME: many graphs in one VM, but a second under
+    // a name already loaded is refused. CONTROL: under a new name it loads.
+    std::printf("-- each graph its own name --\n");
+    CHECK(run("n_before = graphs.count()", "counting"));
+    CHECK(!load_graph(R"({ "graph": 1, "name": "count", "nodes": [], "links": [] })"));
+    CHECK(run("n_dup = graphs.count()", "counting"));
+    CHECK(num("n_dup") == num("n_before"));
+    CHECK(load_graph(R"({ "graph": 1, "name": "count_two", "nodes": [], "links": [] })"));
+    CHECK(run("n_two = graphs.count()", "counting"));
+    CHECK(num("n_two") == num("n_before") + 1);
+
+    // ================================================================
     // DATA PINS ON VERB ARGUMENTS: a computed value reaches the world. `by` is
     // linked to 3 * 2; a condition's required `value` is linked, so the loader
     // must not ask for its literal; a fraction into an int is skipped, said.

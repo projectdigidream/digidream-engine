@@ -96,5 +96,40 @@ else
   fails=$((fails + 1))
 fi
 
+# MANY GRAPHS, EACH ITS OWN: two in one module, a second module shipping a
+# file of the same name (another graph, another name), and a map declaring two.
+mod="$(game_module shared)"
+cat > "$mod/maps/quest.graph.json" <<'JSON'
+{ "graph": 1, "name": "quest", "nodes": [], "links": [] }
+JSON
+echo "game quest.graph.json" >> "$mod/module.txt"
+mod2="$(mktemp -d)"; mkdir -p "$mod2/maps"
+cat > "$mod2/maps/world.graph.json" <<'JSON'
+{ "graph": 1, "name": "world_of_the_second_module", "nodes": [], "links": [] }
+JSON
+echo "game world.graph.json" > "$mod2/module.txt"
+twomap="$(mktemp -d)"
+sed "s|^script graph_test.graph.json|script $ROOT/maps/graph_test.graph.json\nscript $twomap/second.graph.json|; s|^script scripts/|script $ROOT/maps/scripts/|" maps/graph_test.map > "$twomap/two.map"
+cat > "$twomap/second.graph.json" <<'JSON'
+{ "graph": 1, "name": "second", "nodes": [], "links": [] }
+JSON
+"build/$ARCH/mapc" "$twomap/two.map" "$twomap/two.dnpm" >/dev/null 2>&1
+log="$(mktemp)"
+"$SERVER" --port 34617 --module "$mod" --module "$mod2" --map "$twomap/two.dnpm" >"$log" 2>&1 &
+pid=$!; sleep 2; kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+out="$(cat "$log")"; rm -f "$log"; rm -rf "$mod" "$mod2" "$twomap"
+n_ok=0
+for want in "world.graph.json: 2 nodes" "quest.graph.json: 0 nodes" "world.graph.json: 0 nodes" \
+            "graph_test.graph.json: 7 nodes" "second.graph.json: 0 nodes"; do
+  grep -q "$want" <<<"$out" && n_ok=$((n_ok + 1))
+done
+if [[ $n_ok -eq 5 ]]; then
+  echo "  ok   many graphs: two in a module, a second module's same-named file, two on one map"
+else
+  echo "  FAIL many graphs: $n_ok of 5 loaded"
+  grep -E "graph|refused|failed" <<<"$out" | head -12 | sed 's/^/       /'
+  fails=$((fails + 1))
+fi
+
 if [[ $fails -ne 0 ]]; then echo "graph server: $fails failures"; exit 1; fi
 echo "graph server ok"

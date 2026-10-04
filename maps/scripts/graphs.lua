@@ -773,7 +773,8 @@ if dnp ~= nil and dnp.export ~= nil then
 end
 
 -- SAVED with the game (docs/SAVING.md): each graph's variables and which of
--- its `once` nodes have been passed, by the graph's file. Not its pending
+-- its `once` nodes have been passed, by the graph's NAME -- its identity, so a
+-- file renamed or moved keeps its state. Not its pending
 -- delays -- a save keeps state, not what was in the middle of happening. A
 -- variable a later version of the graph no longer has, or now holds as a
 -- different type, is dropped rather than forced in.
@@ -784,12 +785,12 @@ if dnp ~= nil and dnp.persist ~= nil then
       local spent = {}
       for id in pairs(g.spent) do spent[#spent + 1] = id end
       table.sort(spent)
-      out[g.label] = { vars = g.vars, spent = spent }
+      out[g.name] = { vars = g.vars, spent = spent }
     end
     return out
   end, function(t)
     for _, g in ipairs(loaded) do
-      local s = t and t[g.label]
+      local s = t and (t[g.name] or t[g.label])   -- by name; by file before 2026-10-04
       if type(s) == "table" then
         for k, v in pairs(s.vars or {}) do
           if g.vars[k] ~= nil and type(g.vars[k]) == type(v) then g.vars[k] = v end
@@ -1157,6 +1158,21 @@ function M.load(data, label)
       table.insert(by_event[n.event], n.id)
     end
   end
+  -- EACH GRAPH HAS ITS OWN NAME, in its VM: a map or a module may carry many
+  -- graphs, and the name is how a message, graphs.var and a save tell them
+  -- apart. A second graph under a name already loaded is refused, naming both.
+  for _, other in ipairs(loaded) do
+    if other.name == data.name then
+      bad("a graph named '%s' is already loaded here (%s) -- each graph needs its own name",
+          tostring(data.name), other.label)
+    end
+  end
+  if #problems > 0 then
+    for i = 1, math.min(#problems, MAX_REPORTS) do say("%s", problems[i]) end
+    say("%s: %d problems -- the graph is not loaded", label, #problems)
+    return false, problems
+  end
+
   local by_start = {}
   for _, n in ipairs(order) do
     if STARTS[n.type] then

@@ -4360,9 +4360,18 @@ int main(int argc, char** argv) {
             char gmod[32] = {0};
             const int gn = std::sscanf(line, "game %199s %31s", gfile, gmod);
             if (gn >= 1) {
+                // A SCRIPT named twice is one script (two modules' weapons.lua
+                // are the same weapons); a GRAPH is its own thing wherever it
+                // comes from -- two modules may each ship a world.graph.json --
+                // so graphs are one only when they are the same file. Each
+                // graph's `name` is what must be unique (graphs.load says so).
+                const std::string full = std::string(module_dirs[mi]) + "/maps/" + gfile;
                 bool dup = false;
-                for (const auto& g : srv.game_scripts) dup = dup || Server::base_name(g) == Server::base_name(gfile);
-                if (!dup) srv.game_scripts.push_back(std::string(module_dirs[mi]) + "/maps/" + gfile);
+                for (const auto& g : srv.game_scripts) {
+                    dup = dup || (Server::is_graph(full) ? g == full
+                                                         : Server::base_name(g) == Server::base_name(gfile));
+                }
+                if (!dup) srv.game_scripts.push_back(full);
                 if (gn == 2) {
                     if (std::strcmp(gmod, "shared") == 0) srv.game_shared.push_back(gfile);
                     else std::fprintf(stderr, "[srv] %s/module.txt: `game %s %s` -- the only modifier is `shared`\n",
