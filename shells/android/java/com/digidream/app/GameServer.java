@@ -80,6 +80,16 @@ final class GameServer {
    * error into a black screen.
    */
   void start(File exe, File workDir, int port, List<File> modules, File map) throws IOException {
+    start(exe, workDir, port, modules, map, null);
+  }
+
+  /**
+   * As above, and with {@code logFile} every line also written there, the file
+   * started afresh: the studio's Play log (logs/play-server.log), which the
+   * studio reads back -- on a phone with no logcat, the only place a person
+   * can see why a level would not load.
+   */
+  void start(File exe, File workDir, int port, List<File> modules, File map, File logFile) throws IOException {
     List<String> cmd = new java.util.ArrayList<>();
     cmd.add(exe.getAbsolutePath());
     cmd.add("--port"); cmd.add(String.valueOf(port));
@@ -90,8 +100,17 @@ final class GameServer {
     pb.directory(workDir);
     pb.redirectErrorStream(true);
     stopped = false;
+    java.io.OutputStream file = null;
+    if (logFile != null) {
+      File dir = logFile.getParentFile();
+      if (dir != null) dir.mkdirs();
+      file = new java.io.FileOutputStream(logFile, false);
+      file.write(("$ " + String.join(" ", cmd) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      file.flush();
+    }
     process = pb.start();
 
+    final java.io.OutputStream sink = file;
     Thread log = new Thread(() -> {
       try (InputStream is = process.getInputStream()) {
         byte[] buf = new byte[4096];
@@ -100,11 +119,23 @@ final class GameServer {
         while ((n = is.read(buf)) > 0) {
           for (int i = 0; i < n; i++) {
             char c = (char) (buf[i] & 0xff);
-            if (c == '\n') { Log.i(TAG, line.toString()); line.setLength(0); }
-            else line.append(c);
+            if (c == '\n') {
+              Log.i(TAG, line.toString());
+              if (sink != null) {
+                try { sink.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)); sink.flush(); } catch (IOException ignored) { }
+              }
+              line.setLength(0);
+            } else line.append(c);
           }
         }
       } catch (IOException ignored) {
+      }
+      if (sink != null) {
+        try {
+          String end = process.isAlive() ? "" : "[shell] the server exited (" + process.exitValue() + ")\n";
+          sink.write(end.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+          sink.close();
+        } catch (Exception ignored) { }
       }
     }, "dnp-server-log");
     log.setDaemon(true);
@@ -126,7 +157,7 @@ final class GameServer {
     while (System.currentTimeMillis() < deadline) {
       if (process != null && !process.isAlive()) {
         throw new IOException("the game server exited while starting (exit " + process.exitValue()
-            + "); see logcat -s digidream");
+            + "); the studio's Play log shows what it said");
       }
       try {
         socket = new Socket(InetAddress.getByName("127.0.0.1"), port);

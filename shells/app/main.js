@@ -39,7 +39,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync } from 'node:fs'
 import { readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -127,8 +127,14 @@ function spawnServer (linkPort, extra = {}) {
       stream.write(line.startsWith('[') ? line + '\n' : '[srv] ' + line + '\n')
     }
   }
-  p.stdout.on('data', relay_out(process.stdout))
-  p.stderr.on('data', relay_out(process.stderr))
+  // A play-test's server output also goes to the studio's Play log
+  // (logs/play-server.log), started afresh, for the studio to read back.
+  const file = extra.logFile ? (mkdirSync(dirname(extra.logFile), { recursive: true }), createWriteStream(extra.logFile, { flags: 'w' })) : null
+  file?.write(`$ ${bin} ${args.join(' ')}\n`)
+  const both = (stream) => { const out = relay_out(stream); return (b) => { out(b); file?.write(b) } }
+  p.stdout.on('data', both(process.stdout))
+  p.stderr.on('data', both(process.stderr))
+  p.on('exit', (code, sig) => { file?.end(`[shell] the server exited (code=${code} signal=${sig})\n`) })
   p.on('exit', (code, sig) => {
     // SIGTERM here is almost always US: before-quit kills it. Anything else is
     // the server actually failing, and the two deserve different words.
@@ -138,6 +144,13 @@ function spawnServer (linkPort, extra = {}) {
     // The server going away is not something to paper over: without it there
     // is no game, and a window that keeps rendering a frozen world while
     // saying nothing is the failure the edge already learned to report.
+    // A play-test's server failing is a content error, not the app's: back to
+    // the studio, whose Play log shows what the server said, rather than quit.
+    if (!app.isQuiting && !restarting && extra.map && manifest.studio && win && !win.isDestroyed() && statics) {
+      playLog(`[shell] the server stopped during the play-test (code=${code} signal=${sig}); back to the studio`)
+      win.loadURL(`http://127.0.0.1:${statics.port}/studio/`)
+      return
+    }
     if (!app.isQuiting && !restarting) {
       dialog.showErrorBox('The game server stopped',
         `It exited with ${code ?? sig}. Check the console for what it said.`)
@@ -172,11 +185,26 @@ function announceWhenUp () {
   else relay.upstream.once('connected', announce)
 }
 
+// The game page's log for the studio, while a play-test runs (logs/play-game.log).
+let gameLog = null
+function playLog (line) {
+  if (!gameLog) return
+  try { appendFileSync(gameLog, line + '\n') } catch {}
+}
+
 /** The studio's Play: serve the module it wrote, then show the game. */
 async function launch ({ module, map }) {
   if (!(await files.exists(`${module}/maps/${map}`))) throw new Error(`no such level: ${module}/maps/${map}`)
   const modDir = join(GAME_RW, module)
-  await restartServer({ modules: [modDir], map: join(modDir, 'maps', map) })
+  // The Play log, started afresh: the server's output and the game page's console.
+  const logs = join(GAME_RW, 'logs')
+  mkdirSync(logs, { recursive: true })
+  gameLog = join(logs, 'play-game.log')
+  appendFileSync(gameLog, '', { flag: 'w' })
+  playLog(`[shell] play-test of ${module}/maps/${map}`)
+  try {
+    await restartServer({ modules: [modDir], map: join(modDir, 'maps', map), logFile: join(logs, 'play-server.log') })
+  } catch (e) { playLog(`[shell] the game did not start: ${e.message ?? e}`); throw e }
   await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
   announceWhenUp()
   return true
@@ -218,7 +246,9 @@ async function start () {
   // looking at the moment the window dies. An uncaught exception in the client
   // -- the thing most likely to take the window down and, through it, the game
   // server -- otherwise leaves no trace anywhere.
-  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+  win.webContents.on('console-message', (e, level, message, line, sourceId) => {
+    // The game page's console, into the Play log while a play-test runs.
+    playLog(`[${['verbose', 'info', 'warning', 'error'][level] ?? e?.level ?? level}] ${message ?? e?.message}${sourceId ? ` (${String(sourceId).replace(/^https?:\/\/[^/]+/, '')}:${line})` : ''}`)
     if (level < 2) return          // 0/1 are log and info; keep warnings and errors
     const where = sourceId ? `${sourceId.split('/').pop()}:${line}` : '?'
     console.error(`[page] ${message}  (${where})`)

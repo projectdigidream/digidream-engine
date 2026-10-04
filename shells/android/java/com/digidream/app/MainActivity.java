@@ -141,6 +141,17 @@ public final class MainActivity extends Activity {
         return res;
       }
     });
+    // THE GAME PAGE'S CONSOLE, into the studio's Play log while a play-test
+    // runs: an uncaught error, a refused map, a failed fetch -- what logcat
+    // would show, where the studio can read it back (logs/play-game.log).
+    web.setWebChromeClient(new android.webkit.WebChromeClient() {
+      @Override
+      public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
+        playLog("[" + m.messageLevel().name().toLowerCase(java.util.Locale.ROOT) + "] " + m.message()
+            + (m.sourceId() == null || m.sourceId().isEmpty() ? "" : " (" + m.sourceId().replace(ORIGIN, "") + ":" + m.lineNumber() + ")"));
+        return false;
+      }
+    });
     web.addJavascriptInterface(new Bridge(), "dnpNative");
     setContentView(web);
 
@@ -205,9 +216,13 @@ public final class MainActivity extends Activity {
 
   /** Start the server on a fresh port and connect the link to it. */
   private void startServer(List<File> modules, File map) throws IOException {
+    startServer(modules, map, null);
+  }
+
+  private void startServer(List<File> modules, File map, File logFile) throws IOException {
     int port = GameServer.freePort();
     Log.i(TAG, "starting server on 127.0.0.1:" + port + " for " + map);
-    server.start(exe, gameDir, port, modules, map);
+    server.start(exe, gameDir, port, modules, map, logFile);
     server.connect(port, 20000, new GameServer.Sink() {
       @Override public void onBytes(byte[] data, int length) {
         down(Base64.encodeToString(Arrays.copyOf(data, length), Base64.NO_WRAP));
@@ -358,8 +373,33 @@ public final class MainActivity extends Activity {
     File bundled = new File(gameDir, "modules/" + bundledModule);
     modules.add(bundled);
     if (!modDir.getCanonicalPath().equals(bundled.getCanonicalPath())) modules.add(modDir);
-    startServer(modules, mapFile);
+    // The Play log, started afresh: the server's output (play-server.log) and
+    // the game page's console (play-game.log), for the studio to read back.
+    File logs = rwFile("logs");
+    logs.mkdirs();
+    synchronized (this) {
+      gameLog = new File(logs, "play-game.log");
+      try (OutputStream os = new java.io.FileOutputStream(gameLog, false)) {
+        os.write(("[shell] play-test of " + module + "/maps/" + map + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      }
+    }
+    try {
+      startServer(modules, mapFile, new File(logs, "play-server.log"));
+    } catch (IOException e) {
+      playLog("[shell] the game did not start: " + e.getMessage());
+      throw e;
+    }
     ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1&studio=1"));
+  }
+
+  /** The game page's log for the studio, while a play-test runs. */
+  private File gameLog = null;
+
+  private synchronized void playLog(String line) {
+    if (gameLog == null) return;
+    try (OutputStream os = new java.io.FileOutputStream(gameLog, true)) {
+      os.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    } catch (IOException ignored) { }
   }
 
   @Override
@@ -438,6 +478,7 @@ public final class MainActivity extends Activity {
     @JavascriptInterface
     public void log(String line) {
       Log.i(TAG, "[web] " + line);
+      playLog("[web] " + line);
     }
   }
 

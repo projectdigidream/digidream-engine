@@ -644,6 +644,9 @@ suite_studio () {
   # A cutscene previewed: the plan timed as graphs.lua times it (read from its
   # source), the camera on the client's own curve, flythrough and track.
   node ../studio/test/scene.test.js | tail -2
+  # The Play log: on the server's real output it raises nothing for a module
+  # that loads and picks out a refused graph by what the server said.
+  node ../studio/test/playlog.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
