@@ -414,6 +414,89 @@ graph_vocab = {
       data_in = {}, data_out = {},
       doc = "Change what a wall shows: a switch flipped, a screen lit." },
 
+    -- --------------------------------------------------------- CINEMATICS
+    -- A cutscene: the player's controls taken (movement and attacks -- both
+    -- replicated rules, so the client predicts a frozen player exactly), bars
+    -- across the screen, lines spoken at the bottom of it, and the camera
+    -- flown along a path. Each acts on the event's player, or on every player
+    -- in the level with `everyone`.
+    { name = "start_cinematic", category = "cinematic",
+      args = { { name = "everyone", type = "bool", optional = true },
+               { name = "letterbox", type = "number", optional = true,
+                 doc = "Each bar's height, a fraction of the screen. Defaults to 0.12; 0 for none." },
+               { name = "seconds", type = "number", optional = true, doc = "How long the bars take. Defaults to 0.5." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Take the controls: the player cannot move or attack until " ..
+            "`end_cinematic`, and the letterbox bars come in." },
+    { name = "end_cinematic", category = "cinematic",
+      args = { { name = "everyone", type = "bool", optional = true },
+               { name = "seconds", type = "number", optional = true, doc = "How long the bars take to go. Defaults to 0.5." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Give the controls back, take the bars away, the camera back to " ..
+            "following the player, and any subtitle off." },
+    { name = "fade", category = "cinematic",
+      args = { { name = "to", type = "enum", values = { "black", "clear" },
+                 doc = "Fade to black, or back from it." },
+               { name = "seconds", type = "number", optional = true, doc = "Defaults to 1." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then", "done" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Fade the screen. `then` at once; `done` when the fade has finished." },
+    { name = "subtitle", category = "cinematic",
+      args = { { name = "text", type = "string" },
+               { name = "speaker", type = "string", optional = true, doc = "Who says it, shown above the line." },
+               { name = "seconds", type = "number", optional = true,
+                 doc = "How long it stays. Defaults to long enough to read it." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then", "done" },
+      data_in = { "entity", "text" }, data_out = {},
+      doc = "A line at the bottom of the screen. `then` at once; `done` when it " ..
+            "goes -- so lines chain one after another. A newer line replaces it." },
+    { name = "clear_subtitle", category = "cinematic",
+      args = { { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Take the subtitle off now." },
+
+    -- ------------------------------------------------------------- CAMERA
+    { name = "camera_follow", category = "camera",
+      args = { { name = "distance", type = "number", optional = true, doc = "Units behind the player." },
+               { name = "height", type = "number", optional = true, doc = "Degrees looking down. Defaults to the module's." },
+               { name = "angle", type = "number", optional = true, doc = "Degrees around the player." },
+               { name = "lock", type = "bool", optional = true,
+                 doc = "Hold that angle and distance: the player cannot turn or zoom it." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "The camera follows the player again, from where it is told. " ..
+            "Off a path, back to following." },
+    { name = "camera_flythrough", category = "camera", level_only = true,
+      args = { { name = "path", type = "int", doc = "The camera path's tag, picked on the map." },
+               { name = "speed", type = "number", optional = true, doc = "Units a second. Defaults to 6." },
+               { name = "blend", type = "number", optional = true, doc = "Seconds to ease onto the path. Defaults to 1." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then", "done" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Fly the camera along a path, looking where the path looks. `then` " ..
+            "at once; `done` when it reaches the end." },
+    { name = "camera_track", category = "camera", level_only = true,
+      args = { { name = "path", type = "int" },
+               { name = "blend", type = "number", optional = true },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "The camera rides a path but keeps looking at the player: a " ..
+            "dolly that tracks them along a corridor." },
+    { name = "camera_shake", category = "camera",
+      args = { { name = "strength", type = "number", optional = true, doc = "Defaults to 0.3." },
+               { name = "seconds", type = "number", optional = true, doc = "Defaults to 0.5." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Shake the camera: an explosion, a quake." },
+
     -- reading the world
     { name = "position_of", category = "entity",
       args = {},

@@ -138,7 +138,9 @@ function fakeDoc () {
   const doc = fakeDoc()
   const host = doc.createElement('body')
   const hud = new HudView({ host, doc, touch: false, size: { width: 800, height: 600 } })
-  check(hud.nodes.length === 1 && hud.nodes[0].el.id === 'health', 'on a desktop the desktop health box is built')
+  // Every layout ends with the subtitle line (withSubtitles), after its own elements.
+  check(hud.nodes.length === 2 && hud.nodes[0].el.id === 'health' && hud.nodes[1].el.id === 'subtitle',
+        'on a desktop the desktop health box is built, and the subtitle line after it')
   check(hud.nodes[0].dom.style.display === 'none', 'and hidden until a health arrives (solo keeps none)')
   hud.update({ hp: 100 })
   const box = hud.nodes[0]
@@ -158,16 +160,28 @@ function fakeDoc () {
   check(fill.style.width === '50.0%', 'CONTROL: a published hp_max wins over the most seen')
   check(box.dom.style.left === '12px', `placed 12 px in from the left (${box.dom.style.left})`)
   const touchHud = new HudView({ host: doc.createElement('body'), doc, touch: true, size: { width: 800, height: 600 } })
-  check(touchHud.nodes.length === 1 && touchHud.nodes[0].el.id === 'health_touch' && touchHud.nodes[0].dom.style.top === '34px',
+  check(touchHud.nodes.length === 2 && touchHud.nodes[0].el.id === 'health_touch' && touchHud.nodes[0].dom.style.top === '34px',
         'CONTROL: with touch controls it is the top-left one, out of the stick\'s corner')
   hud.setLayout(parseLayout({ hud: [{ id: 'ammo', type: 'text', text: '{hud.ammo} shells', anchor: 'br' }] }).layout)
   hud.update({ 'hud.ammo': 12 })
-  check(hud.nodes.length === 1 && hud.nodes[0].dom.textContent === '12 shells', 'a module\'s own element, bound to a HUD name')
+  check(hud.nodes.length === 2 && hud.nodes[0].dom.textContent === '12 shells', 'a module\'s own element, bound to a HUD name')
   hud.setLayout(parseLayout({ hud: [{ id: 'key', type: 'text', text: 'KEY', visible: { bind: 'hud.key', op: 'set' } }] }).layout)
   hud.update({ 'hud.key': 1 })
   const shown = hud.nodes[0].dom.style.display
   hud.update({ 'hud.key': undefined })
   check(shown === 'block' && hud.nodes[0].dom.style.display === 'none', 'a value the server clears is gone from the HUD (HUD_SET kind 2)')
+  // SUBTITLES: shown while there is a line, with its speaker above it; gone
+  // when cleared; and a layout that places its own is not given a second.
+  hud.setLayout(parseLayout({ hud: [] }).layout)
+  const sub = hud.nodes.find((n) => n.el.id === 'subtitle')
+  check(sub !== undefined && sub.dom.style.display === 'none', 'a subtitle line is in every layout, hidden while there is none')
+  hud.update({ 'hud.subtitle': 'Get to the lift!', 'hud.subtitle_speaker': 'Kowalski' })
+  check(sub.dom.style.display === 'flex' && sub.kids[1].dom.textContent === 'Get to the lift!' &&
+        sub.kids[0].dom.textContent === 'Kowalski', 'set, it shows the line and who says it')
+  hud.update({ 'hud.subtitle': undefined, 'hud.subtitle_speaker': undefined })
+  check(sub.dom.style.display === 'none', 'cleared, it is gone')
+  hud.setLayout(parseLayout({ hud: [{ id: 'subtitle', type: 'text', text: '{hud.subtitle}', anchor: 't' }] }).layout)
+  check(hud.nodes.length === 1 && hud.nodes[0].el.anchor === 't', 'CONTROL: a layout with its own subtitle element keeps only that one')
   hud.destroy()
   check(host.children.length === 0, 'destroy takes it all away')
 }

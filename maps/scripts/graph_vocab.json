@@ -1386,6 +1386,321 @@
       "name": "set_wall_texture"
     },
     {
+      "args": [
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "doc": "Each bar's height, a fraction of the screen. Defaults to 0.12; 0 for none.",
+          "name": "letterbox",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "How long the bars take. Defaults to 0.5.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "cinematic",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Take the controls: the player cannot move or attack until `end_cinematic`, and the letterbox bars come in.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "start_cinematic"
+    },
+    {
+      "args": [
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "doc": "How long the bars take to go. Defaults to 0.5.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "cinematic",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Give the controls back, take the bars away, the camera back to following the player, and any subtitle off.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "end_cinematic"
+    },
+    {
+      "args": [
+        {
+          "doc": "Fade to black, or back from it.",
+          "name": "to",
+          "type": "enum",
+          "values": [
+            "black",
+            "clear"
+          ]
+        },
+        {
+          "doc": "Defaults to 1.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "cinematic",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Fade the screen. `then` at once; `done` when the fade has finished.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then",
+        "done"
+      ],
+      "name": "fade"
+    },
+    {
+      "args": [
+        {
+          "name": "text",
+          "type": "string"
+        },
+        {
+          "doc": "Who says it, shown above the line.",
+          "name": "speaker",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "How long it stays. Defaults to long enough to read it.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "cinematic",
+      "data_in": [
+        "entity",
+        "text"
+      ],
+      "data_out": [],
+      "doc": "A line at the bottom of the screen. `then` at once; `done` when it goes -- so lines chain one after another. A newer line replaces it.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then",
+        "done"
+      ],
+      "name": "subtitle"
+    },
+    {
+      "args": [
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "cinematic",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Take the subtitle off now.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "clear_subtitle"
+    },
+    {
+      "args": [
+        {
+          "doc": "Units behind the player.",
+          "name": "distance",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Degrees looking down. Defaults to the module's.",
+          "name": "height",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Degrees around the player.",
+          "name": "angle",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Hold that angle and distance: the player cannot turn or zoom it.",
+          "name": "lock",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "camera",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "The camera follows the player again, from where it is told. Off a path, back to following.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "camera_follow"
+    },
+    {
+      "args": [
+        {
+          "doc": "The camera path's tag, picked on the map.",
+          "name": "path",
+          "type": "int"
+        },
+        {
+          "doc": "Units a second. Defaults to 6.",
+          "name": "speed",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Seconds to ease onto the path. Defaults to 1.",
+          "name": "blend",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "camera",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Fly the camera along a path, looking where the path looks. `then` at once; `done` when it reaches the end.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then",
+        "done"
+      ],
+      "level_only": true,
+      "name": "camera_flythrough"
+    },
+    {
+      "args": [
+        {
+          "name": "path",
+          "type": "int"
+        },
+        {
+          "name": "blend",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "camera",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "The camera rides a path but keeps looking at the player: a dolly that tracks them along a corridor.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "camera_track"
+    },
+    {
+      "args": [
+        {
+          "doc": "Defaults to 0.3.",
+          "name": "strength",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Defaults to 0.5.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "camera",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Shake the camera: an explosion, a quake.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "camera_shake"
+    },
+    {
       "args": [],
       "category": "entity",
       "data_in": [

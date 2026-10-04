@@ -44,8 +44,39 @@ export const STANDARD_HUD_NAMES = [
   { name: 'hud.ammo_type', kind: 'str', about: 'the pool it draws from' },
   { name: 'hud.ammo', kind: 'int', about: 'the amount in that pool' },
   { name: 'hud.ammo_max', kind: 'int', about: 'that pool\'s max' },
-  { name: 'hud.ammo_<pool>', kind: 'int', about: 'every pool by name' }
+  { name: 'hud.ammo_<pool>', kind: 'int', about: 'every pool by name' },
+  { name: 'hud.subtitle', kind: 'str', about: 'a subtitle line; cleared, none is shown' },
+  { name: 'hud.subtitle_speaker', kind: 'str', about: 'who is speaking it' }
 ]
+
+// SUBTITLES: a line of text low in the middle of the screen, and who says it,
+// filled by the server (dnp.hud, `hud.subtitle` / `hud.subtitle_speaker`; a
+// graph's `subtitle` node). Shown only while there is a line. Every layout
+// gets it -- the built-in one and a module's -- unless the layout places its
+// own element with the id `subtitle`, which is how a module restyles them.
+export const SUBTITLES = Object.freeze({
+  id: 'subtitle', type: 'group', anchor: 'b', x: 0, y: -110, w: { vw: 84, max: 760 },
+  stack: 'column', gap: 2,
+  visible: { bind: 'hud.subtitle', op: 'set' },
+  children: [
+    { id: 'subtitle_speaker', type: 'text', text: '{hud.subtitle_speaker}',
+      visible: { bind: 'hud.subtitle_speaker', op: 'set' },
+      style: { size: 14, weight: 700, align: 'center', color: '#ffd27a' } },
+    { id: 'subtitle_text', type: 'text', text: '{hud.subtitle}',
+      style: { size: 18, align: 'center', wrap: true } }
+  ]
+})
+function hasElement (els, id) {
+  for (const el of els ?? []) {
+    if (el.id === id || hasElement(el.children, id)) return true
+  }
+  return false
+}
+/** A layout with the subtitle line in it, unless it places its own. */
+export function withSubtitles (layout) {
+  if (hasElement(layout.hud, 'subtitle')) return layout
+  return { ...layout, hud: [...(layout.hud ?? []), SUBTITLES] }
+}
 
 // --- the built-in default -------------------------------------------------
 //
@@ -326,7 +357,7 @@ export class HudView {
     this.size = size
     this.bindings = new Map()
     this.maxSeen = new Map()
-    this.layout = DEFAULT_LAYOUT
+    this.layout = withSubtitles(DEFAULT_LAYOUT)
     this.root = doc.createElement('div')
     this.root.className = 'dnp-hud'
     Object.assign(this.root.style, { position: 'absolute', inset: '0', pointerEvents: 'none', zIndex: '20' })
@@ -335,7 +366,8 @@ export class HudView {
     this.#build()
   }
 
-  setLayout (layout) { this.layout = layout ?? DEFAULT_LAYOUT; this.#build() }
+  // Every layout shows subtitles (withSubtitles), unless it places its own.
+  setLayout (layout) { this.layout = withSubtitles(layout ?? DEFAULT_LAYOUT); this.#build() }
 
   /** Partial updates merge: { hp: 80, 'hud.ammo': 12 }. */
   update (bindings) {
@@ -385,7 +417,7 @@ export class HudView {
     const st = el.style ?? {}
     Object.assign(d.style, {
       font: `${st.weight ?? 400} ${st.size ?? 12}px/1.5 ${theme.font}`, color: st.color ?? theme.text,
-      textShadow: '0 1px 2px #000', whiteSpace: 'pre', textAlign: st.align ?? 'left'
+      textShadow: '0 1px 2px #000', whiteSpace: st.wrap ? 'normal' : 'pre', textAlign: st.align ?? 'left'
     })
     if (st.opacity !== undefined) d.style.opacity = String(st.opacity)
     const node = { el, dom: d, kids: [] }

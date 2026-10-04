@@ -204,6 +204,10 @@ function EXEC.once(g, n) if g.spent[n.id] then return nil end g.spent[n.id] = tr
 function EXEC.set_var(g, n, ev, pull) g.vars[n.var] = pull("value") return "then" end
 function EXEC.add_var(g, n, ev, pull) g.vars[n.var] = (tonumber(g.vars[n.var]) or 0) + (tonumber(pull("value")) or 0) return "then" end
 
+-- Declared here, defined below: nodes that continue a run later (a fade's
+-- `done`, a subtitle's) call it from their timers.
+local run
+
 -- ------------------------------------------------------- THE WORLD'S NODES
 --
 -- Plain verbs on things (graph_vocab.lua, "THE WORLD"). Sector moves are the
@@ -476,6 +480,119 @@ function EXEC.set_wall_texture(g, n, ev, pull)
   return "then"
 end
 
+-- ---------------------------------------------------- CINEMATIC AND CAMERA
+--
+-- The players a cutscene node acts on: every one in the level with
+-- `everyone`, else the linked entity or the event's -- if it is a player.
+local function audience(n, g, ev, pull)
+  if n.everyone then return dnp.players() or {} end
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  if e ~= nil and e.kind ~= nil and e:kind() == 0 then return { e } end
+  return {}
+end
+local function turns(deg) return (tonumber(deg) or 0) / 360 end
+
+local frozen = {}        -- player index -> the effect ids that took their controls
+local spoken = {}        -- player index -> the subtitle line now shown (a counter)
+
+function EXEC.start_cinematic(g, n, ev, pull)
+  local ms = math.floor((n.seconds or 0.5) * 1000)
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    local i = p:index()
+    if frozen[i] == nil and p.add_effect ~= nil then
+      -- Rules, not instructions: replicated parameters the client predicts.
+      frozen[i] = { p:add_effect("input_scale", "set", fx.int(0)), p:add_effect("attack_enabled", "set", fx.int(0)) }
+    end
+    dnp.screen(p, { letterbox = n.letterbox or 0.12, letterbox_ms = ms })
+  end
+  return "then"
+end
+function EXEC.end_cinematic(g, n, ev, pull)
+  local ms = math.floor((n.seconds or 0.5) * 1000)
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    local i = p:index()
+    for _, id in ipairs(frozen[i] or {}) do if id ~= 0 then p:remove_effect(id) end end
+    frozen[i] = nil
+    dnp.screen(p, { letterbox = 0, letterbox_ms = ms })
+    dnp.camera(p, { cam_mode = 0, cam_path = -1 })
+    spoken[i] = (spoken[i] or 0) + 1
+    dnp.hud(p, { subtitle = false, subtitle_speaker = false })
+  end
+  return "then"
+end
+function EXEC.fade(g, n, ev, pull, go)
+  local secs = n.seconds or 1
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    dnp.screen(p, { fade = n.to == "black" and 1 or 0, fade_ms = math.floor(secs * 1000) })
+  end
+  later(ticks_of(secs), function() run(g, n.id, "done", ev) end)
+  return "then"
+end
+function EXEC.subtitle(g, n, ev, pull)
+  local text = tostring(pull("text") or "")
+  local secs = n.seconds or math.min(8, 1.5 + #text * 0.05)
+  local mine = {}
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    local i = p:index()
+    spoken[i] = (spoken[i] or 0) + 1
+    mine[i] = spoken[i]
+    dnp.hud(p, { subtitle = text, subtitle_speaker = n.speaker or false })
+  end
+  later(ticks_of(secs), function()
+    -- Taken off only if it is still THIS line: a newer one replaced it.
+    for i, line in pairs(mine) do
+      if spoken[i] == line then
+        local p = dnp.entity(i)
+        if p ~= nil and p:valid() then dnp.hud(p, { subtitle = false, subtitle_speaker = false }) end
+      end
+    end
+    run(g, n.id, "done", ev)
+  end)
+  return "then"
+end
+function EXEC.clear_subtitle(g, n, ev, pull)
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    spoken[p:index()] = (spoken[p:index()] or 0) + 1
+    dnp.hud(p, { subtitle = false, subtitle_speaker = false })
+  end
+  return "then"
+end
+
+function EXEC.camera_follow(g, n, ev, pull)
+  local f = { cam_mode = 0, cam_path = -1 }
+  if n.distance ~= nil then f.distance = n.distance end
+  if n.height ~= nil then f.pitch = turns(n.height) end
+  if n.angle ~= nil then f.yaw = turns(n.angle) end
+  if n.lock ~= nil then f.lock_yaw = n.lock and 1 or 0; f.lock_zoom = n.lock and 1 or 0 end
+  for _, p in ipairs(audience(n, g, ev, pull)) do dnp.camera(p, f) end
+  return "then"
+end
+function EXEC.camera_flythrough(g, n, ev, pull)
+  local speed = n.speed or 6
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    dnp.camera(p, { cam_mode = 2, cam_path = n.path, cam_path_speed = speed, cam_path_blend = n.blend or 1 })
+  end
+  -- The engine has no completion event: the shot's end is arithmetic, from
+  -- the path's baked length (dnp.path_length) and the speed it is flown at.
+  local len = dnp.path_length ~= nil and dnp.path_length(n.path) or nil
+  if len ~= nil then
+    later(math.max(1, math.ceil(unfx(len) / speed * 60)), function() run(g, n.id, "done", ev) end)
+  end
+  return "then"
+end
+function EXEC.camera_track(g, n, ev, pull)
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    dnp.camera(p, { cam_mode = 1, cam_path = n.path, cam_path_blend = n.blend or 1 })
+  end
+  return "then"
+end
+function EXEC.camera_shake(g, n, ev, pull)
+  for _, p in ipairs(audience(n, g, ev, pull)) do
+    dnp.camera(p, { cam_shake = n.strength or 0.3, cam_shake_time = math.floor((n.seconds or 0.5) * 1000) })
+  end
+  return "then"
+end
+
 function PURE.position_of(g, n, ev, pull, pin)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   if e == nil then return nil end
@@ -516,7 +633,7 @@ function PURE.sector_of(g, n, ev, pull)
 end
 
 -- One run, from exit `pin` of node `start`.
-local function run(g, start, pin, ev)
+run = function(g, start, pin, ev)
   local memo = {}
   local function value_of(id, out)
     local key = id .. "." .. out
@@ -979,6 +1096,11 @@ function M.load(data, label)
         if spec.level_only and in_game() then
           bad("%s: a %s acts on a level, and a game graph has none -- `call` a level's graph", where, n.type)
         end
+        -- A camera path picked on the map must be there.
+        if (n.type == "camera_flythrough" or n.type == "camera_track") and type(n.path) == "number"
+           and has_map() and dnp.path_length ~= nil and dnp.path_length(n.path) == nil then
+          bad("%s: the map has no camera path tagged %d", where, n.path)
+        end
         -- A sector or wall picked on the map must still be there.
         if has_map() and type(n.sector) == "number" and dnp.sector(n.sector) == nil then
           bad("%s: sector %d is not in this map", where, n.sector)
@@ -1204,4 +1326,4 @@ end
 function M.count() return #loaded end
 function M.pending() return #timers end
 --- Forget every graph and timer. For a test.
-function M.reset() loaded = {}; timers = {}; jobs = {}; track = {}; touch_seen = {}; t0 = nil end
+function M.reset() loaded = {}; timers = {}; jobs = {}; track = {}; touch_seen = {}; t0 = nil; frozen = {}; spoken = {} end

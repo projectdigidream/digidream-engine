@@ -9,6 +9,7 @@
 //
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <string>
 #include <unistd.h>
 
@@ -62,6 +63,31 @@ struct Room {
 
 static lua_State* L = nullptr;
 static server::lua::Vm vm;
+
+// What the cinematic and camera nodes SEND, as the server would forward it to
+// the client: camera and screen fields by wire id, HUD values by name.
+struct RecordingUi : server::lua::UiSink {
+    std::map<u8, i32> cams, scr;
+    std::map<std::string, std::string> huds;
+    u32  open_ui(u32, u32, const proto::UiPanel&) override { return 0; }
+    void close_ui(u32, u32, u32) override {}
+    void set_ui(u32, u32, u32, u16, i32) override {}
+    void set_camera(u32, u32, const proto::CameraSet& c) override {
+        for (u16 i = 0; i < c.count; ++i) cams[c.fields[i].id] = c.fields[i].milli;
+    }
+    void set_level_camera(u32, const proto::CameraSet&) override {}
+    void set_side_texture(u32, const proto::SideTexture&) override {}
+    void music(u32, i32, const proto::MusicCue&) override {}
+    void screen(u32, i32, const proto::ScreenSet& sc) override {
+        for (u16 i = 0; i < sc.count; ++i) scr[sc.fields[i].id] = sc.fields[i].milli;
+    }
+    void predict_sounds(u32, u32, u32, const proto::PredictSound*, u32) override {}
+    bool hud(u32, i32, const std::vector<server::lua::HudSet>& set) override {
+        for (const auto& h : set) huds[h.name] = h.kind == proto::HUD_CLEAR ? std::string("<cleared>") : h.s;
+        return true;
+    }
+};
+static RecordingUi g_ui;
 
 static bool run(const char* src, const char* what) {
     if (luaL_dostring(L, src) != 0) {
@@ -128,7 +154,6 @@ int main(int argc, char** argv) {
     world.set_map(&room.view);
     world.set_map_storage(&room.store);
     const u32 player = world.spawn(fx3{fx::zero(), fx::zero(), fx::zero()});
-    (void)player;
     g_world = &world;
 
     static server::lua::CommandQueue commands;
@@ -142,6 +167,7 @@ int main(int argc, char** argv) {
     ctx.effects = &effects;
     ctx.hp = hp;
     ctx.rng = Rng(20261003u, 5);
+    ctx.ui = &g_ui;
 
     server::lua::VmConfig cfg;
     if (!vm.open(cfg)) { std::printf("  FAIL vm.open\n"); return 1; }
@@ -603,6 +629,61 @@ int main(int argc, char** argv) {
     CHECK(num("w8") >= 3 && num("w8") <= 4);    // ~110 ticks at every 30
     CHECK(num("w9") == 1);                      // after a second, once
     CHECK(num("w10") == 2);                     // held touches are one; a later one is another
+
+    // ================================================================
+    // A CUTSCENE: controls taken, bars in, two lines spoken one after another,
+    // a fade, the camera told what to do -- and all of it given back.
+    std::printf("-- a cutscene --\n");
+    CHECK(run("graphs.reset()", "a clean slate"));
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "scene",
+      "nodes": [
+        { "id": "go",    "type": "when_level_starts" },
+        { "id": "start", "type": "start_cinematic", "everyone": true },
+        { "id": "look",  "type": "camera_follow", "everyone": true, "distance": 12, "height": 30, "lock": true },
+        { "id": "line1", "type": "subtitle", "everyone": true, "text": "Where is everybody?", "speaker": "Marine", "seconds": 1 },
+        { "id": "line2", "type": "subtitle", "everyone": true, "text": "Too quiet.", "seconds": 1 },
+        { "id": "dark",  "type": "fade", "everyone": true, "to": "black", "seconds": 0.5 },
+        { "id": "boom",  "type": "camera_shake", "everyone": true, "strength": 0.5 },
+        { "id": "stop",  "type": "end_cinematic", "everyone": true },
+        { "id": "mark",  "type": "action", "a": "counter_add", "counter": "scene_done" }
+      ],
+      "links": [ ["go.then", "start.in"], ["start.then", "look.in"], ["look.then", "line1.in"],
+                 ["line1.done", "line2.in"], ["line2.done", "dark.in"], ["dark.done", "boom.in"],
+                 ["boom.then", "stop.in"], ["stop.then", "mark.in"] ]
+    })"));
+    ticks(5);
+    // The rules as the server applies them: the effect stack over the base.
+    const physics::MoveParams during = effects.compute(player);
+    const i32 bars = g_ui.scr.count(2) ? g_ui.scr[2] : -1;
+    const std::string first = g_ui.huds["subtitle"], who = g_ui.huds["subtitle_speaker"];
+    const i32 pitch = g_ui.cams.count(1) ? g_ui.cams[1] : -1;
+    ticks(70);                                   // the first line's second is over
+    const std::string second = g_ui.huds["subtitle"];
+    ticks(120);                                  // the second line, the fade, the shake, the end
+    CHECK(run("cs_done = triggers.counter('scene_done')", "after"));
+    const physics::MoveParams after = effects.compute(player);
+    std::printf("  frozen: input_scale %g; bars %d; said \"%s\" (%s), then \"%s\"; pitch %d; after: %g, bars %d, cam_mode %d, shake %d, done %g\n",
+                during.input_scale.raw / 4294967296.0, bars, first.c_str(), who.c_str(), second.c_str(), pitch,
+                after.input_scale.raw / 4294967296.0,
+                g_ui.scr[2], g_ui.cams.count(11) ? g_ui.cams[11] : -1, g_ui.cams.count(16) ? g_ui.cams[16] : -1,
+                num("cs_done"));
+    CHECK(during.input_scale == fx::zero() && !during.attack_enabled);   // the controls taken: no moving, no attacking
+    CHECK(bars == 120);                          // the bars, 0.12 of the screen
+    CHECK(first == "Where is everybody?" && who == "Marine");
+    CHECK(pitch == 83);                          // 30 degrees, in thousandths of a turn
+    CHECK(second == "Too quiet.");               // the second line, after the first's `done`
+    CHECK(g_ui.scr[0] == 1000);               // faded to black
+    CHECK(g_ui.cams[16] == 500);               // shaken
+    CHECK(after.input_scale == fx::one() && after.attack_enabled);       // the controls given back
+    CHECK(g_ui.scr[2] == 0);                  // the bars away
+    CHECK(g_ui.cams[11] == 0);                 // the camera back to following
+    CHECK(g_ui.huds["subtitle"] == "<cleared>");
+    CHECK(num("cs_done") == 1);
+    // A path the map does not have is refused, by tag.
+    CHECK(!load_graph(R"({ "graph": 1, "name": "fly",
+      "nodes": [ { "id": "go", "type": "when_level_starts" }, { "id": "f", "type": "camera_flythrough", "path": 7 } ],
+      "links": [ ["go.then", "f.in"] ] })"));
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
