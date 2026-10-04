@@ -120,6 +120,11 @@ inline constexpr u8  MSG_HUD_SET     = 0x34;
 // (docs/WEAPON_PREDICTION.md): sim::encode_weapon_table's bytes, sent when a
 // client has not got the current one. A client holding none predicts none.
 inline constexpr u8  MSG_WEAPON_DEFS = 0x35;
+// The sky the player's level is drawn under (docs/SKY.md): its kind, its
+// pictures (texture names) and a bag of fields. Sent with WELCOME and HOME and
+// whenever a script changes it. Not simulation state -- never hashed, never
+// predicted.
+inline constexpr u8  MSG_SKY_SET     = 0x36;
 inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
 inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
 inline constexpr u32 HUD_NAME_MAX    = 24;
@@ -546,6 +551,30 @@ struct ScreenSet {
 
 void encode_screen_set(ByteWriter& w, const ScreenSet& s) noexcept;
 bool decode_screen_set(ByteReader& r, ScreenSet& out) noexcept;
+
+// THE SKY (docs/SKY.md). `kind` says how the pictures wrap the world:
+//   None   -- no sky: sky surfaces show the default gradient, the background
+//             the clear colour (what a level without one has always looked like)
+//   Strip  -- one picture wrapped round the horizon `repeat` times, DOOM's sky
+//   Panorama -- one equirectangular picture, the whole sphere
+//   Cube   -- six pictures: +x -x +y -y +z -z
+// Fields are the CameraSet record shape, {u8 id, i32 milli}, unknown ids
+// skipped: 1 repeat (Strip), 2 yaw (turns), 3 height (Strip: the tangent of
+// the elevation its top edge sits at).
+enum class SkyKind : u8 { None = 0, Strip = 1, Panorama = 2, Cube = 3 };
+inline constexpr u32 SKY_MAX_IMAGES = 6;
+inline constexpr u32 SKY_MAX_FIELDS = 8;
+
+struct SkySet {
+    SkyKind kind = SkyKind::None;
+    u8      images = 0;
+    UiText  image[SKY_MAX_IMAGES]{};
+    u16     count = 0;
+    CameraField fields[SKY_MAX_FIELDS]{};
+};
+
+void encode_sky_set(ByteWriter& w, const SkySet& s) noexcept;
+bool decode_sky_set(ByteReader& r, SkySet& out) noexcept;
 
 struct UiEvent {
     u32 ui_id = 0;

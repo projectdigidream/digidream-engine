@@ -126,6 +126,10 @@ struct UiSink {
     // The level's camera defaults: sent to everyone who joins it, and at once
     // to whoever is already there. What a map's Lua says with dnp.level_camera.
     virtual void set_level_camera(u32 level, const proto::CameraSet& c) = 0;
+    // The level's sky (docs/SKY.md), over the module's: sent to everyone in it
+    // and to whoever arrives. Null puts the module's back. Not pure, so a
+    // test's sink need not care.
+    virtual void set_level_sky(u32 /*level*/, const proto::SkySet* /*sky*/) {}
     // A side's picture changes -- a switch thrown. Broadcast to everyone in the
     // level and remembered, because a switch thrown before you arrived is part
     // of the world you are arriving in.

@@ -26,6 +26,7 @@ import {
   MapView, makeCamera, resizeCamera, distanceFor, makeAgentMesh, PROJECTIONS,
   makeFacingArrow, aimFacingArrow
 } from './render/scene.js'
+import { Sky, skyFromMessage } from './render/sky.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
   viewYaw,
@@ -267,6 +268,8 @@ let liveMapBytes = null
 const sideTextures = []
 // Music cues, for the same reason. See the MUSIC case in onControl.
 const musicCues = []
+// The sky (docs/SKY.md), for the same reason: only the latest one matters.
+let skyMessage = null
 // Counters for the page tests (client/test/leak.test.js): how many times the
 // world was handed over, how many snapshots arrived, and -- once the renderer
 // exists -- what three.js says is still alive on the GPU. Declared up here
@@ -586,6 +589,7 @@ if (LIVE) {
       // thousand lines below this callback, and this callback runs during the
       // join. A cue arriving then would have thrown the same ReferenceError.
       else if (m.type === MSG.MUSIC) musicCues.push(m)
+      else if (m.type === MSG.SKY_SET) skyMessage = m
       // What to play the moment this client predicts its own jump or shot.
       else if (m.type === MSG.SOUND_PREDICT) ownSounds.set(m.group, m.entries)
       else if (m.type === MSG.HUD_SET) {
@@ -1027,6 +1031,10 @@ renderer.setClearColor(0x0b0d12)
 document.body.appendChild(renderer.domElement)
 
 const scene = new THREE.Scene()
+// THE SKY (render/sky.js), before any MapView: its sky flats wear its material.
+const sky = new Sky(THREE)
+MapView.sky = sky
+scene.add(sky.background)
 stage('geometry', 0, 'building geometry')
 let view = new MapView(mapData)
 stage('geometry', 1)
@@ -2484,6 +2492,10 @@ function frame (now) {
     while (motionSets.length) fresh = takeMotion(motionSets.shift()) || fresh
     // And switches thrown, here or before we arrived. Purely visual: what the
     // switch DID travels as sector motion, exactly as it did before.
+    if (skyMessage) {
+      sky.set(skyFromMessage(skyMessage))
+      skyMessage = null
+    }
     while (musicCues.length) {
       const m = musicCues.shift()
       music.cue(m.cue, { fadeMs: m.fadeMs, at: m.at })
@@ -2992,6 +3004,7 @@ function frame (now) {
   }
 
   const tDraw = performance.now()
+  sky.update(cam3)
   renderer.render(scene, cam3)
   // The fog pass, over the picture just drawn; a level without fog skips it.
   if (sectorFx?.hasFog) sectorFx.renderFog(renderer, scene, cam3)

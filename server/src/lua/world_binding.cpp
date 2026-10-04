@@ -13,6 +13,7 @@
 #include "dnp/sim/sectormotion.hpp"
 #include "dnp/physics/params_table.hpp"
 #include "lua/fx_binding.hpp"
+#include "sky.hpp"
 
 extern "C" {
 #include "lauxlib.h"
@@ -1721,6 +1722,53 @@ int l_dnp_level_camera(lua_State* L) {
     return 0;
 }
 
+// dnp.sky("strip SKY2 repeat 4") / dnp.sky{ kind = "cube", faces = {...}, yaw = 0.25 }
+// dnp.sky(nil)
+//
+// This level's sky (docs/SKY.md), over the module's: for everyone here now and
+// everyone who arrives. Words or a table, the same words a module.txt `sky`
+// line takes after the level; nil puts the module's back. A sky it cannot read
+// is an error, said with what was wrong, rather than a sky drawn wrongly.
+int l_dnp_sky(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (lua_isnoneornil(L, 1) || (lua_isboolean(L, 1) && !lua_toboolean(L, 1))) {
+        if (ctx.ui != nullptr) ctx.ui->set_level_sky(ctx.level, nullptr);
+        return 0;
+    }
+    std::vector<std::string> words;
+    if (lua_type(L, 1) == LUA_TSTRING) {
+        words = server::sky_words(lua_tostring(L, 1));
+    } else {
+        luaL_checktype(L, 1, LUA_TTABLE);
+        const auto str = [&](const char* key) -> std::string {
+            lua_getfield(L, 1, key);
+            std::string v = lua_type(L, -1) == LUA_TSTRING || lua_type(L, -1) == LUA_TNUMBER ? lua_tostring(L, -1) : "";
+            lua_pop(L, 1);
+            return v;
+        };
+        words.push_back(str("kind"));
+        if (!str("image").empty()) words.push_back(str("image"));
+        lua_getfield(L, 1, "faces");
+        if (lua_istable(L, -1)) {
+            for (int i = 1; i <= 6; ++i) {
+                lua_rawgeti(L, -1, i);
+                if (lua_type(L, -1) == LUA_TSTRING) words.push_back(lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+        for (const char* k : {"repeat", "yaw", "height"}) {
+            const std::string v = str(k);
+            if (!v.empty()) { words.push_back(k); words.push_back(v); }
+        }
+    }
+    proto::SkySet sky;
+    std::string err;
+    if (!server::parse_sky(words, sky, err)) return luaL_error(L, "dnp.sky: %s", err.c_str());
+    if (ctx.ui != nullptr) ctx.ui->set_level_sky(ctx.level, &sky);
+    return 0;
+}
+
 // dnp.path_length(tag) -> units along the curve, or nil
 //
 // HOW A CUTSCENE KNOWS WHEN ITS SHOT ENDS.
@@ -2973,6 +3021,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"ui_open", l_dnp_ui_open},
     {"camera", l_dnp_camera},
     {"level_camera", l_dnp_level_camera},
+    {"sky", l_dnp_sky},
     {"path_length", l_dnp_path_length},
     {"screen", l_dnp_screen},
     {"side_texture", l_dnp_side_texture},

@@ -32,6 +32,7 @@
 #include "lua/effects.hpp"
 #include "lua/vm.hpp"
 #include "props.hpp"
+#include "sky.hpp"
 #include "lua/world_binding.hpp"
 #include "lua/json.hpp"
 #include "world/metamap.hpp"
@@ -218,6 +219,10 @@ struct Level {
     // joins. Not simulation state; one CAMERA_SET per joining client.
     proto::CameraSet camera;
     bool             has_camera = false;
+    // The level's sky, when a script set one (dnp.sky); otherwise the
+    // module's for this level's name (Server::skies, docs/SKY.md).
+    proto::SkySet    sky;
+    bool             has_sky = false;
 
     // THE LEVEL'S OWN MAP: its bytes and its parse. Local coordinates, whatever
     // host simulates it. (Navigation is the host's: see Host::nav_graph.)
@@ -780,6 +785,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // 0 platformer, 1 fps. Sent in WELCOME; an fps player's body turns at once
     // to the view and walks relative to it (MoveParams::move_relative).
     u8 controls = 0;
+    // The modules' `sky` lines, first module first (docs/SKY.md).
+    std::vector<SkyEntry> skies;
     bool persist_levels = false;
     bool persist_saves = false;
     bool persist_server = false;
@@ -2062,6 +2069,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // And the level's camera, if its script set one: the angle the map was
         // made for, and whether it may be turned away from.
         if (L.has_camera) send_camera(s, L.camera);
+        // And its sky -- always, so a level without one clears the last's.
+        send_sky(s, li);
         // And the movement parameters. FULL, because a client arriving in a
         // level has no history to patch (docs/protocol.md 8.4). Sent before the
         // first snapshot so it is never predicting with rules it has not been
@@ -3195,6 +3204,34 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
     }
 
+    // THE SKY (docs/SKY.md): the level's own when a script set one, else the
+    // module's for its name, else none.
+    void set_level_sky(u32 level_index, const proto::SkySet* sky) override {
+        if (level_index >= level_count()) return;
+        Level& L = level(level_index);
+        L.has_sky = sky != nullptr;
+        if (sky) L.sky = *sky;
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (s.has_agent && s.level == level_index) send_sky(s, level_index);
+        }
+    }
+
+    void send_sky(Session& s, u32 li) {
+        const Level& L = level(li);
+        const proto::SkySet none{};
+        const proto::SkySet* sky = L.has_sky ? &L.sky : sky_for(skies, level_name(li));
+        u8 buf[1024];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_SKY_SET);
+        proto::encode_sky_set(w, sky ? *sky : none);
+        if (!w.ok()) return;
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(s.id, buf, w.size());
+    }
+
     void send_camera(Session& s, const proto::CameraSet& c) {
         u8 buf[256];
         ByteWriter w(buf, sizeof(buf));
@@ -3316,6 +3353,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             sync_neighbours(s, id);
             Level& L = level(now);
             if (L.has_camera) send_camera(s, L.camera);
+            send_sky(s, now);
             std::fprintf(stderr, "[srv] session %u walked from level %u into level %u\n",
                          id, was, now);
             moved = true;
@@ -4397,6 +4435,23 @@ int main(int argc, char** argv) {
                     else std::fprintf(stderr, "[srv] %s/module.txt: `game %s %s` -- the only modifier is `shared`\n",
                                       module_dirs[mi], gfile, gmod);
                 }
+                continue;
+            }
+            // `sky <level|default> <kind> <pictures...> [settings]` (docs/SKY.md).
+            // The first module to name a level's sky wins, as for its files.
+            if (std::strncmp(line, "sky ", 4) == 0) {
+                std::vector<std::string> w = sky_words(line + 4);
+                std::string err;
+                proto::SkySet sky;
+                if (w.empty() || !parse_sky(std::vector<std::string>(w.begin() + 1, w.end()), sky, err)) {
+                    std::fprintf(stderr, "[srv] %s/module.txt: sky %s -- %s\n", module_dirs[mi],
+                                 w.empty() ? "" : w[0].c_str(),
+                                 w.empty() ? "a sky line names a level (or default) and a kind" : err.c_str());
+                    continue;
+                }
+                bool named = false;
+                for (const auto& e : srv.skies) named = named || e.level == w[0];
+                if (!named) srv.skies.push_back({w[0], sky});
                 continue;
             }
             char scheme[32] = {0};

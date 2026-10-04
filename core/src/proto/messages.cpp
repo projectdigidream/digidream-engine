@@ -574,6 +574,42 @@ bool decode_screen_set(ByteReader& r, ScreenSet& out) noexcept {
     return true;
 }
 
+void encode_sky_set(ByteWriter& w, const SkySet& s) noexcept {
+    w.u8v(static_cast<u8>(s.kind));
+    const u8 n = s.images > SKY_MAX_IMAGES ? static_cast<u8>(SKY_MAX_IMAGES) : s.images;
+    w.u8v(n);
+    for (u8 i = 0; i < n; ++i) encode_text(w, s.image[i]);
+    const u16 f = s.count > SKY_MAX_FIELDS ? static_cast<u16>(SKY_MAX_FIELDS) : s.count;
+    w.u16v(f);
+    for (u16 i = 0; i < f; ++i) {
+        w.u8v(s.fields[i].id);
+        w.i32v(s.fields[i].milli);
+    }
+}
+
+bool decode_sky_set(ByteReader& r, SkySet& out) noexcept {
+    SkySet s;
+    const u8 k = r.u8v();
+    // An unknown kind is refused: a picture wrapped the wrong way round the
+    // world is a stranger result than the sky staying as it was.
+    if (!r.ok() || k > static_cast<u8>(SkyKind::Cube)) return false;
+    s.kind = static_cast<SkyKind>(k);
+    const u8 n = r.u8v();
+    if (!r.ok() || n > SKY_MAX_IMAGES) return false;
+    for (u8 i = 0; i < n; ++i) if (!decode_text(r, s.image[i])) return false;
+    s.images = n;
+    const u16 f = r.u16v();
+    if (!r.ok() || f > SKY_MAX_FIELDS) return false;
+    for (u16 i = 0; i < f; ++i) {
+        s.fields[i].id = r.u8v();
+        s.fields[i].milli = r.i32v();
+    }
+    if (!r.ok()) return false;
+    s.count = f;
+    out = s;
+    return true;
+}
+
 void encode_side_texture(ByteWriter& w, const SideTexture& t) noexcept {
     w.u32v(t.side);
     w.u8v(static_cast<u8>(t.field));

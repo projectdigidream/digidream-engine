@@ -482,6 +482,17 @@ function EXEC.set_wall_texture(g, n, ev, pull)
   return "then"
 end
 
+-- The level's sky (docs/SKY.md). `yaw` in degrees here, turns on the wire.
+function EXEC.set_sky(g, n, ev, pull)
+  if dnp.sky == nil then return "then" end
+  if n.kind == "default" then dnp.sky(nil); return "then" end
+  local words = { n.kind, n.image or "" }
+  if n["repeat"] ~= nil then words[#words + 1] = "repeat " .. tostring(n["repeat"]) end
+  if n.yaw ~= nil then words[#words + 1] = "yaw " .. tostring(n.yaw / 360) end
+  dnp.sky(table.concat(words, " "))
+  return "then"
+end
+
 -- ---------------------------------------------------- CINEMATIC AND CAMERA
 --
 -- The players a cutscene node acts on: every one in the level with

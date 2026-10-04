@@ -967,6 +967,39 @@ static void test_screen_set_round_trip() {
     CHECK(!decode_screen_set(r2, got));
 }
 
+// The sky (docs/SKY.md): a kind, six pictures at most, fields as CameraSet's.
+static void test_sky_set_round_trip() {
+    std::printf("sky: a cube's six pictures and its fields survive the wire\n");
+    SkySet s;
+    s.kind = SkyKind::Cube;
+    s.images = 6;
+    const char* faces[6] = {"px", "nx", "py", "ny", "pz", "nz"};
+    for (int i = 0; i < 6; ++i) set_text(s.image[i], faces[i]);
+    s.count = 2;
+    s.fields[0] = {2, 250};
+    s.fields[1] = {9, -7};      // a field this reader may not know: carried, not refused
+    u8 buf[1024];
+    ByteWriter w(buf, sizeof(buf));
+    encode_sky_set(w, s);
+    CHECK(w.ok());
+    ByteReader r(buf, w.size());
+    SkySet got;
+    CHECK(decode_sky_set(r, got));
+    CHECK(got.kind == SkyKind::Cube && got.images == 6 && got.count == 2);
+    CHECK(got.image[5].len == 2 && std::memcmp(got.image[5].text, "nz", 2) == 0);
+    CHECK(got.fields[0].id == 2 && got.fields[0].milli == 250 && got.fields[1].milli == -7);
+
+    // CONTROL: an unknown kind and a seventh picture are refused, not guessed at.
+    for (int bad = 0; bad < 2; ++bad) {
+        ByteWriter w2(buf, sizeof(buf));
+        w2.u8v(bad == 0 ? 4 : 1);
+        w2.u8v(bad == 0 ? 0 : 7);
+        w2.u16v(0);
+        ByteReader r2(buf, w2.size());
+        CHECK(!decode_sky_set(r2, got));
+    }
+}
+
 // The decoder runs on bytes from the network, so every length in the message is
 // a number an attacker picks. Each of these is a way to be handed one.
 static void test_ui_rejects_hostile_input() {
@@ -1144,6 +1177,7 @@ int main() {
     test_self_block_carries_its_animation_state();
     test_camera_set_round_trip();
     test_screen_set_round_trip();
+    test_sky_set_round_trip();
     test_ui_rejects_hostile_input();
     test_ui_truncation_at_every_length();
     std::printf("== core/proto test suite ==\n");

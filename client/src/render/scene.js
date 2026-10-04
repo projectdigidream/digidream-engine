@@ -15,6 +15,7 @@ import {
   MAX_ACTIVE_LIGHTS
 } from './lighting.js'
 import { distanceForFraming } from '../camera.js'
+import { isSkyName } from './sky.js'
 
 function geometryFromGroup (g) {
   const geo = new THREE.BufferGeometry()
@@ -27,6 +28,9 @@ function geometryFromGroup (g) {
 }
 
 export class MapView {
+  /** The renderer's Sky (render/sky.js), whose material sky flats wear. */
+  static sky = null
+
   /**
    * `opts.prebuilt` is geometry somebody else already derived -- the seam
    * worker, which runs this file's own mapgeom pipeline off the main thread and
@@ -239,6 +243,9 @@ export class MapView {
 
   materialFor (texture, alpha = 1) {
     if (texture === NO_TEXTURE) return this.missing
+    // A window onto the sky (render/sky.js), once there is a sky to show:
+    // every view shares the one material, so every level's sky is one sky.
+    if (MapView.sky && isSkyName(this.map.textures[texture])) return MapView.sky.surface
     if (!(alpha < 1)) return this.materials[texture] ?? this.missing
     const key = `${texture}:${alpha}`
     let m = this.clearMaterials.get(key)

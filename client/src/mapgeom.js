@@ -23,6 +23,7 @@
 //
 
 import { NO_TEXTURE, NO_SECTOR, PEG, SIDE_FLAG } from './mapdata.js'
+import { isSkyName } from './render/sky.js'
 
 // Engine (z-up) -> Three (y-up).
 export const toThreeX = (x) => x
@@ -342,7 +343,11 @@ export function buildSectorSurfaces (map, sectorIndex) {
         anchorZ: lowerAnchor(s, back, side.peg), a, b
       }))
     }
-    if (back.ceilZ < s.ceilZ && side.upper !== NO_TEXTURE) {
+    // DOOM'S SKY HACK: between two sectors open to the sky there is no upper
+    // wall. The step between their ceilings is sky on both sides, and a wall
+    // there would stand in the sky as a stripe of brick (docs/SKY.md).
+    const skyBoth = isSkyName(map.textures?.[s.ceilTex]) && isSkyName(map.textures?.[back.ceilTex])
+    if (back.ceilZ < s.ceilZ && side.upper !== NO_TEXTURE && !skyBoth) {
       out.push(wallQuad({
         kind: SURFACE.UPPER, sector: s, sectorIndex, side, sideIndex,
         texture: side.upper, zBot: back.ceilZ, zTop: s.ceilZ,

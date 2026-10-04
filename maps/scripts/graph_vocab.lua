@@ -430,6 +430,17 @@ graph_vocab = {
       exec_in = { "in" }, exec_out = { "then" },
       data_in = {}, data_out = {},
       doc = "Change what a wall shows: a switch flipped, a screen lit." },
+    { name = "set_sky", category = "wall", level_only = true,
+      args = { { name = "kind", type = "enum", values = { "strip", "panorama", "cube", "default" },
+                 doc = "strip: one picture round the horizon, as DOOM's. panorama: one picture of the whole sphere. " ..
+                       "cube: six. default: the module's sky for this level again." },
+               { name = "image", type = "string", optional = true,
+                 doc = "A texture name: strip and panorama's picture, or cube's six separated by spaces (+x -x +y -y +z -z)." },
+               { name = "repeat", type = "number", optional = true, doc = "strip: times round the horizon. Defaults to 4." },
+               { name = "yaw", type = "number", optional = true, doc = "Turns the sky, in degrees." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = {}, data_out = {},
+      doc = "Change this level's sky, for everyone in it and everyone who arrives." },
 
     -- --------------------------------------------------------- CINEMATICS
     -- A cutscene: the player's controls taken (movement and attacks -- both

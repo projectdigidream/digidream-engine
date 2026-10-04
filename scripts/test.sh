@@ -558,6 +558,9 @@ suite_client () {
   # area, the budget scales every effect evenly, and the fog integral the
   # shader computes is held to a numeric one and to a whole box.
   node client/test/sectorfx.test.js | grep -E 'FAIL|failures'
+  # The sky (docs/SKY.md): SKY_SET as the server writes it, where a direction
+  # lands on DOOM's sky, DOOM's sky hack, and pictures loaded once.
+  node client/test/sky.test.js | grep -E 'FAIL|failures'
   # The first-person weapon: Doom's frame timing, its 320x200 placement, and
   # that every frame the module names has a picture with its offsets.
   node client/test/viewmodel.test.js | grep -E 'FAIL|failures'

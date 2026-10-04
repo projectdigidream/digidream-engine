@@ -1433,6 +1433,51 @@
     {
       "args": [
         {
+          "doc": "strip: one picture round the horizon, as DOOM's. panorama: one picture of the whole sphere. cube: six. default: the module's sky for this level again.",
+          "name": "kind",
+          "type": "enum",
+          "values": [
+            "strip",
+            "panorama",
+            "cube",
+            "default"
+          ]
+        },
+        {
+          "doc": "A texture name: strip and panorama's picture, or cube's six separated by spaces (+x -x +y -y +z -z).",
+          "name": "image",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "strip: times round the horizon. Defaults to 4.",
+          "name": "repeat",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Turns the sky, in degrees.",
+          "name": "yaw",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "wall",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Change this level's sky, for everyone in it and everyone who arrives.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "set_sky"
+    },
+    {
+      "args": [
+        {
           "name": "everyone",
           "optional": true,
           "type": "bool"

@@ -15,6 +15,7 @@
 
 #include "dnp/sim/world.hpp"
 #include "dnp/geom/mapstore.hpp"
+#include "sky.hpp"
 #include "lua/vm.hpp"
 #include "lua/world_binding.hpp"
 #include "lua/json.hpp"
@@ -77,6 +78,13 @@ struct RecordingUi : server::lua::UiSink {
         for (u16 i = 0; i < c.count; ++i) cams[c.fields[i].id] = c.fields[i].milli;
     }
     void set_level_camera(u32, const proto::CameraSet&) override {}
+    // The level's sky: -1 kind for "the module's again", as dnp.sky(nil) says.
+    int sky_kind = -2;
+    proto::SkySet sky{};
+    void set_level_sky(u32, const proto::SkySet* s) override {
+        sky_kind = s ? static_cast<int>(s->kind) : -1;
+        if (s) sky = *s;
+    }
     void set_side_texture(u32, const proto::SideTexture&) override {}
     void music(u32, i32, const proto::MusicCue&) override {}
     void screen(u32, i32, const proto::ScreenSet& sc) override {
@@ -704,6 +712,58 @@ int main(int argc, char** argv) {
     CHECK(!load_graph(R"({ "graph": 1, "name": "to_nowhere",
       "nodes": [ { "id": "go", "type": "on_call", "name": "x" }, { "id": "t", "type": "teleport", "spawn": "nope" } ],
       "links": [ ["go.then", "t.in"] ] })"));
+
+    std::printf("-- the sky (docs/SKY.md) --\n");
+    {
+        // The words a module.txt `sky` line and dnp.sky both take.
+        proto::SkySet s;
+        std::string err;
+        CHECK(server::parse_sky(server::sky_words("strip SKY2 repeat 4 yaw 0.25"), s, err));
+        CHECK(s.kind == proto::SkyKind::Strip && s.images == 1 && s.count == 2 &&
+              s.fields[0].id == server::SKY_FIELD_REPEAT && s.fields[0].milli == 4000 && s.fields[1].milli == 250);
+        CHECK(server::parse_sky(server::sky_words("cube a b c d e f"), s, err) && s.images == 6);
+        // CONTROLS: each is refused, saying why.
+        for (const char* bad : {"cube a b c", "strip", "dome SKY1", "strip ../x", "panorama P repeat 2", "strip S repeat 0",
+                                "strip S yaw"}) {
+            err.clear();
+            const bool ok = server::parse_sky(server::sky_words(bad), s, err);
+            if (ok || err.empty()) std::printf("  accepted '%s'\n", bad);
+            CHECK(!ok && !err.empty());
+        }
+        // Which level gets which: its own name, then dw_map12's map12, then default.
+        std::vector<server::SkyEntry> skies;
+        proto::SkySet one, two;
+        server::parse_sky(server::sky_words("strip SKY1"), one, err);
+        server::parse_sky(server::sky_words("strip SKY2"), two, err);
+        skies.push_back({"default", one});
+        skies.push_back({"map12", two});
+        CHECK(server::sky_for(skies, "map12") == &skies[1].sky);
+        CHECK(server::sky_for(skies, "dw_map12") == &skies[1].sky);
+        CHECK(server::sky_for(skies, "map01") == &skies[0].sky);
+        CHECK(server::sky_for({}, "map01") == nullptr);
+    }
+    CHECK(run("dnp.sky('panorama dusk yaw 0.5')", "dnp.sky words"));
+    CHECK(g_ui.sky_kind == static_cast<int>(proto::SkyKind::Panorama) && g_ui.sky.image[0].len == 4);
+    CHECK(run("dnp.sky{ kind = 'cube', faces = { 'a', 'b', 'c', 'd', 'e', 'f' } }", "dnp.sky table"));
+    CHECK(g_ui.sky_kind == static_cast<int>(proto::SkyKind::Cube) && g_ui.sky.images == 6);
+    CHECK(run("dnp.sky(nil)", "dnp.sky nil"));
+    CHECK(g_ui.sky_kind == -1);
+    CHECK(run("sky_ok, sky_err = pcall(dnp.sky, 'strip')", "dnp.sky refused"));
+    CHECK(!truthy("sky_ok"));
+    // The graph node: degrees in, turns on the wire; `default` is dnp.sky(nil).
+    CHECK(load_graph(R"({ "graph": 1, "name": "skies",
+      "nodes": [ { "id": "go", "type": "on_call", "name": "dusk" },
+                 { "id": "s", "type": "set_sky", "kind": "strip", "image": "SKY3", "repeat": 2, "yaw": 90 },
+                 { "id": "back", "type": "on_call", "name": "back" },
+                 { "id": "d", "type": "set_sky", "kind": "default" } ],
+      "links": [ ["go.then", "s.in"], ["back.then", "d.in"] ] })"));
+    CHECK(run("graphs.call('dusk', nil, nil)", "set_sky"));
+    std::printf("  set_sky: kind %d, picture %.*s, repeat %d, yaw %d\n", g_ui.sky_kind,
+                static_cast<int>(g_ui.sky.image[0].len), g_ui.sky.image[0].text, g_ui.sky.fields[0].milli, g_ui.sky.fields[1].milli);
+    CHECK(g_ui.sky_kind == static_cast<int>(proto::SkyKind::Strip) && g_ui.sky.fields[0].milli == 2000 &&
+          g_ui.sky.fields[1].milli == 250);
+    CHECK(run("graphs.call('back', nil, nil)", "set_sky default"));
+    CHECK(g_ui.sky_kind == -1);
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

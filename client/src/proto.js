@@ -41,6 +41,8 @@ export const MSG = {
   // (docs/WEAPON_PREDICTION.md): the core's encoding, handed to the wasm core
   // as it came.
   WEAPON_DEFS: 0x35,
+  // The sky the player's level is drawn under (docs/SKY.md).
+  SKY_SET: 0x36,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -367,6 +369,27 @@ export function decodeControlMessage (buf) {
       fields.push({ id, value: milli / 1000 })
     }
     return r.ok ? { type, fields } : null
+  }
+
+  // The sky (docs/SKY.md): a kind, its pictures by texture name, and
+  // {id, milli} fields as CAMERA_SET's. An unknown kind refuses the message.
+  if (type === MSG.SKY_SET) {
+    const kind = r.u8()
+    const n = r.u8()
+    if (!r.ok || kind > 3 || n > 6) return null
+    const images = []
+    for (let i = 0; i < n; i++) {
+      const len = r.u16()
+      if (!r.ok || len > UI_MAX_TEXT) return null
+      const b = r.bytes(len)
+      if (b === null) return null
+      images.push(new TextDecoder().decode(b))
+    }
+    const count = r.u16()
+    if (!r.ok || count > 8) return null
+    const fields = []
+    for (let i = 0; i < count; i++) fields.push({ id: r.u8(), milli: r.i32() })
+    return r.ok ? { type, kind, images, fields } : null
   }
 
   if (type === MSG.CAMERA_SET) {
