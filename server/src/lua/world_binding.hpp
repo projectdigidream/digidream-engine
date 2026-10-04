@@ -78,8 +78,10 @@ struct PropCatalogueView {
 
 struct MapChangeSink {
     virtual ~MapChangeSink() = default;
-    // `to` is a level index, or negative for "the next one".
-    virtual void request_map_change(u32 level, u32 agent, i32 to) = 0;
+    // `to` is a level index, or negative for "the next one". `spawn_tag`, when
+    // not null, is the spawn point in that level to arrive at (a map's `spawn`
+    // entities carry tags); null, or a tag the level lacks, is its start.
+    virtual void request_map_change(u32 level, u32 agent, i32 to, const char* spawn_tag) = 0;
 };
 
 // Where a panel goes. Implemented by the server, which owns the sessions.

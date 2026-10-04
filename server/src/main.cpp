@@ -2879,7 +2879,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // Requested by agent rather than by session, because that is what a script
     // has: an entity handle. Resolved to a session here, where the mapping
     // lives.
-    struct MapChange { u32 from_level; u32 agent; u32 to_level; };
+    struct MapChange { u32 from_level; u32 agent; u32 to_level; std::string spawn_tag; };
     std::vector<MapChange> pending_changes;
 
     // --- LevelListSink --------------------------------------------------------
@@ -3233,7 +3233,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     }
 
     // Called from the Lua binding. Queued, never applied here -- see tick().
-    void request_map_change(u32 from_level, u32 agent, i32 to_level) override {
+    void request_map_change(u32 from_level, u32 agent, i32 to_level, const char* spawn_tag) override {
         if (from_level >= level_count() || agent >= sim::MAX_AGENTS) return;
         // A negative target means "the next one". The end of the last map is
         // not an error: a script asking to advance past the final level is a
@@ -3262,7 +3262,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         for (const MapChange& c : pending_changes) {
             if (c.from_level == from_level && c.agent == agent) return;
         }
-        pending_changes.push_back(MapChange{from_level, agent, target});
+        pending_changes.push_back(MapChange{from_level, agent, target, spawn_tag ? spawn_tag : ""});
     }
 
     // WHERE A LEVEL'S OWN COORDINATES SIT IN THE WORLD.
@@ -3353,7 +3353,27 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             for (auto& [id, s] : sessions) {
                 if (!same_world(s, c.from_level) || s.agent != c.agent) continue;
                 const std::string from = levels[c.from_level].path;
-                if (!place_in_level(s, id, c.to_level)) {
+                // AT A NAMED SPAWN POINT, when the change asked for one: the
+                // destination is loaded first so its spawns can be read, and a
+                // tag it lacks is said and arrives at its start.
+                fx3 at{};
+                const fx3* arrive = nullptr;
+                if (!c.spawn_tag.empty() && load_level(c.to_level)) {
+                    Level& T = level(c.to_level);
+                    const u32 tl = static_cast<u32>(c.spawn_tag.size());
+                    if (T.map_store.has_spawn_tag(c.spawn_tag.c_str(), tl)) {
+                        at = T.map_store.spawn_for_tag(c.spawn_tag.c_str(), tl);
+                        if (in_region(c.to_level)) {
+                            const fx2 o = origin_of(c.to_level);
+                            at = fx3{at.x + o.x, at.y + o.y, at.z};
+                        }
+                        arrive = &at;
+                    } else {
+                        std::fprintf(stderr, "[srv] %s has no spawn tagged '%s'; arriving at its start\n",
+                                     levels[c.to_level].path.c_str(), c.spawn_tag.c_str());
+                    }
+                }
+                if (!place_in_level(s, id, c.to_level, arrive)) {
                     std::fprintf(stderr, "[srv] session %u cannot enter level %u (full)\n",
                                  id, c.to_level);
                     break;

@@ -57,6 +57,7 @@ struct Room {
             store.add_side(0, i, static_cast<u16>((i + 1) % 4), i == 1 ? 1 : (i == 3 ? 2 : geom::NO_SECTOR), 0);
         for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), i == 3 ? 0 : geom::NO_SECTOR, 0);
         for (u16 i = 0; i < 4; ++i) store.add_side(2, i, static_cast<u16>((i + 1) % 4), i == 1 ? 0 : geom::NO_SECTOR, 0);
+        store.add_spawn("pad", 3, fx3{-F(22), F(5), fx::zero()});   // on the platform
         view = store.view();
     }
 };
@@ -684,6 +685,25 @@ int main(int argc, char** argv) {
     CHECK(!load_graph(R"({ "graph": 1, "name": "fly",
       "nodes": [ { "id": "go", "type": "when_level_starts" }, { "id": "f", "type": "camera_flythrough", "path": 7 } ],
       "links": [ ["go.then", "f.in"] ] })"));
+
+    // ================================================================
+    // A SPAWN POINT BY ITS TAG: teleport there; a tag the map lacks is refused.
+    std::printf("-- spawn points --\n");
+    CHECK(load_graph(R"({ "graph": 1, "name": "to_pad",
+      "nodes": [ { "id": "go", "type": "when_level_starts" },
+                 { "id": "t", "type": "teleport", "spawn": "pad", "entity_from": null } ],
+      "links": [ ["go.then", "t.in"] ] })") == false);   // an unknown field: refused, as any is
+    CHECK(load_graph(R"({ "graph": 1, "name": "to_pad",
+      "nodes": [ { "id": "go", "type": "on_call", "name": "pad" }, { "id": "t", "type": "teleport", "spawn": "pad" } ],
+      "links": [ ["go.then", "t.in"] ] })"));
+    CHECK(run("graphs.call('pad', dnp.players()[1], nil)", "the call"));
+    ticks(2);
+    CHECK(run("local p = dnp.players()[1]:pos(); sp_x = p.x.raw / 4294967296; sp_y = p.y.raw / 4294967296", "where"));
+    std::printf("  teleported to spawn 'pad': %.2f, %.2f\n", num("sp_x"), num("sp_y"));
+    CHECK(num("sp_x") == -22 && num("sp_y") == 5);
+    CHECK(!load_graph(R"({ "graph": 1, "name": "to_nowhere",
+      "nodes": [ { "id": "go", "type": "on_call", "name": "x" }, { "id": "t", "type": "teleport", "spawn": "nope" } ],
+      "links": [ ["go.then", "t.in"] ] })"));
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

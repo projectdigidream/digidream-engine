@@ -228,6 +228,19 @@ fx3 MapStorage::spawn_for_tag(const char* tag, u32 tag_len) const noexcept {
     return fx3::zero();
 }
 
+bool MapStorage::has_spawn_tag(const char* tag, u32 tag_len) const noexcept {
+    for (u32 i = 0; i < spawn_count_; ++i) {
+        const SpawnPoint& sp = spawns_[i];
+        if (sp.tag_len != tag_len) continue;
+        bool same = true;
+        for (u32 k = 0; k < tag_len; ++k) {
+            if (sp.tag[k] != tag[k]) { same = false; break; }
+        }
+        if (same) return true;
+    }
+    return false;
+}
+
 u32 MapStorage::add_sector(const fx2* pts, u32 n, fx floor_z, fx ceil_z, u16 tag) noexcept {
     if (sector_count_ >= MAX_MAP_SECTORS) return MAX_MAP_SECTORS;
     if (n < 3 || n > MAX_POLY_POINTS) return MAX_MAP_SECTORS;

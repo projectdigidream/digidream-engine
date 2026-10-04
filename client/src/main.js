@@ -1878,6 +1878,15 @@ function enterLevel (w, streamed) {
   })
   if (params.get('autowalk') === 'shuttle') autowalkDir = -autowalkDir
 
+  // A NEW MAP IS SEEN. A curtain or bars left from the map before -- a map
+  // change faded out to black, a cutscene cut short by an exit -- are lifted,
+  // the curtain fading in. The rule the screen already has for a join ("not
+  // remembered": a player arrives at a screen they can see out of), for an
+  // arrival. A cutscene the new map starts on arrival comes after this, since
+  // the welcome is what runs it.
+  curtainEl.style.transitionDuration = '600ms'
+  curtainEl.style.opacity = '0'
+  for (const el of [lbTopEl, lbBotEl]) { el.style.transitionDuration = '300ms'; el.style.height = '0%' }
   // A NEW MAP IS A NEW TRACK, crossfaded rather than cut. music.play() is a
   // no-op when the track is the same, so two maps sharing a song do not
   // restart it at the door.

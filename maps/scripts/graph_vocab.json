@@ -696,6 +696,12 @@
     {
       "args": [
         {
+          "doc": "A spawn point on this map, by its tag: go there.",
+          "name": "spawn",
+          "optional": true,
+          "type": "string"
+        },
+        {
           "name": "x",
           "optional": true,
           "type": "number"
@@ -720,7 +726,7 @@
         "z"
       ],
       "data_out": [],
-      "doc": "Put an entity somewhere: onto the entity linked to `to`, or at x, y, z (the map's units; an axis not given stays as it is).",
+      "doc": "Put an entity somewhere: at a spawn point by its tag, onto the entity linked to `to`, or at x, y, z (the map's units; an axis not given stays as it is).",
       "exec_in": [
         "in"
       ],
@@ -729,6 +735,45 @@
       ],
       "level_only": true,
       "name": "teleport"
+    },
+    {
+      "args": [
+        {
+          "doc": "Which map: its name as the server lists it (map01), or its number.",
+          "name": "level",
+          "type": "value"
+        },
+        {
+          "doc": "The spawn point there to arrive at, by its tag -- the door on the far side. Without it, the map's start.",
+          "name": "spawn",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "Seconds of fading to black before going. The new map fades in.",
+          "name": "fade",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "maps",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Send a player to another map, arriving at a chosen spawn point.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "change_map"
     },
     {
       "args": [

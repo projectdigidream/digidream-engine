@@ -265,13 +265,30 @@ graph_vocab = {
 
     -- entities
     { name = "teleport", category = "entity", level_only = true,
-      args = { { name = "x", type = "number", optional = true },
+      args = { { name = "spawn", type = "string", optional = true,
+                 doc = "A spawn point on this map, by its tag: go there." },
+               { name = "x", type = "number", optional = true },
                { name = "y", type = "number", optional = true },
                { name = "z", type = "number", optional = true } },
       exec_in = { "in" }, exec_out = { "then" },
       data_in = { "entity", "to", "x", "y", "z" }, data_out = {},
-      doc = "Put an entity somewhere: onto the entity linked to `to`, or at " ..
-            "x, y, z (the map's units; an axis not given stays as it is)." },
+      doc = "Put an entity somewhere: at a spawn point by its tag, onto the " ..
+            "entity linked to `to`, or at x, y, z (the map's units; an axis not " ..
+            "given stays as it is)." },
+
+    -- maps
+    { name = "change_map", category = "maps",
+      args = { { name = "level", type = "value",
+                 doc = "Which map: its name as the server lists it (map01), or its number." },
+               { name = "spawn", type = "string", optional = true,
+                 doc = "The spawn point there to arrive at, by its tag -- the door " ..
+                       "on the far side. Without it, the map's start." },
+               { name = "fade", type = "number", optional = true,
+                 doc = "Seconds of fading to black before going. The new map fades in." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Send a player to another map, arriving at a chosen spawn point." },
     { name = "push", category = "entity",
       args = { { name = "direction", type = "enum", values = { "forward", "backward", "away", "toward", "up", "angle" },
                  doc = "Which way: the way the entity faces, the other way, away " ..

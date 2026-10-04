@@ -163,7 +163,11 @@ int l_entity_teleport(lua_State* L) {
     return 0;
 }
 
-// entity:change_map([index]) -> true if the request was accepted
+// entity:change_map([index [, spawn_tag]]) -> true if the request was accepted
+//
+// `spawn_tag` names the spawn point in the destination to arrive at -- the
+// door you came through, not the start of the map. A tag the level does not
+// have arrives at its start, said on the server's output.
 //
 // With no argument, the next level in the server's progression -- which is the
 // order the maps were given on the command line. With an index, that level.
@@ -187,7 +191,8 @@ int l_entity_change_map(lua_State* L) {
         return 1;
     }
     const i32 to = lua_isnoneornil(L, 2) ? -1 : static_cast<i32>(luaL_checknumber(L, 2));
-    ctx.map_changes->request_map_change(ctx.level, static_cast<u32>(a), to);
+    const char* tag = lua_isnoneornil(L, 3) ? nullptr : luaL_checkstring(L, 3);
+    ctx.map_changes->request_map_change(ctx.level, static_cast<u32>(a), to, tag);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1494,6 +1499,22 @@ static proto::UiWidgetKind ui_kind_of(lua_State* L, const char* name) {
 // list the script had to be told.
 int l_dnp_level(lua_State* L) {
     lua_pushnumber(L, ctx_of(L).level);
+    return 1;
+}
+
+// dnp.spawn_point(tag) -> vec3, or nil when this level has no spawn so tagged
+//
+// Where a map's tagged spawn point is, in this level's coordinates: what a
+// script needs to send somebody to it without a map change.
+int l_dnp_spawn_point(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    size_t n = 0;
+    const char* tag = luaL_checklstring(L, 1, &n);
+    if (ctx.map_store == nullptr || !ctx.map_store->has_spawn_tag(tag, static_cast<u32>(n))) {
+        lua_pushnil(L);
+        return 1;
+    }
+    push_vec3(L, ctx.map_store->spawn_for_tag(tag, static_cast<u32>(n)));
     return 1;
 }
 
@@ -2917,6 +2938,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"restoring", l_dnp_restoring},
     {"export", l_dnp_export},
     {"call_game", l_dnp_call_game},
+    {"spawn_point", l_dnp_spawn_point},
     {"game_has", l_dnp_game_has},
     {"call_level", l_dnp_call_level},
     {"call_owner", l_dnp_call_owner},

@@ -241,6 +241,10 @@ public:
     // cannot land anywhere is a worse outcome than one who lands in the wrong
     // place.
     fx3 spawn_for_tag(const char* tag, u32 tag_len) const noexcept;
+    // Whether a spawn point carries this tag -- spawn_for_tag falls back to the
+    // first one when none does, which a caller choosing an arrival must tell
+    // apart from finding it.
+    bool has_spawn_tag(const char* tag, u32 tag_len) const noexcept;
 
     // --- access ---
     // --- rendering attributes (design §4) ---

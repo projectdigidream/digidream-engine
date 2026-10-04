@@ -788,6 +788,9 @@ suite_stack () {
      `# The clock steered: after a burst ahead the server holds a few ticks` \
      `# of our input again, not the burst's lead; not steering, it does.` \
      && node test/clock.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# A graph sends a player to another map, at a spawn point picked by tag;` \
+     `# a tag the map lacks arrives at its start.` \
+     && node test/maptravel.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      && node test/enemies.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# WHICH entities a full snapshot spends its budget on. A datagram holds` \
      `# about 46 and a real level has more, so the choice is the whole question,` \

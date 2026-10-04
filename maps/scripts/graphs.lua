@@ -305,7 +305,9 @@ function EXEC.teleport(g, n, ev, pull)
   if e == nil then return "then" end
   local p = e:pos()
   local onto = entity_of(pull, ev, "to", g.data_src[n.id])
-  if onto ~= nil then p = onto:pos()
+  local spawn = n.spawn ~= nil and dnp.spawn_point ~= nil and dnp.spawn_point(n.spawn) or nil
+  if spawn ~= nil then p = spawn
+  elseif onto ~= nil then p = onto:pos()
   else
     local x, y, z = pull("x"), pull("y"), pull("z")
     p = vec3.new(x ~= nil and fxn(x) or p.x, y ~= nil and fxn(y) or p.y, z ~= nil and fxn(z) or p.z)
@@ -554,6 +556,37 @@ function EXEC.clear_subtitle(g, n, ev, pull)
   for _, p in ipairs(audience(n, g, ev, pull)) do
     spoken[p:index()] = (spoken[p:index()] or 0) + 1
     dnp.hud(p, { subtitle = false, subtitle_speaker = false })
+  end
+  return "then"
+end
+
+-- A map by what the author calls it: the name the server lists (dnp.levels),
+-- forgiving the extension and the case, or its number.
+local function level_index(want)
+  if type(want) == "number" then return want end
+  if type(want) ~= "string" or dnp.levels == nil then return nil end
+  local list = dnp.levels() or {}
+  local base = want:gsub("%.dnpm$", ""):gsub("%.map$", "")
+  for i, name in ipairs(list) do if name == base then return i - 1 end end
+  for i, name in ipairs(list) do if name:lower() == base:lower() then return i - 1 end end
+  return nil
+end
+M.level_index = level_index
+
+function EXEC.change_map(g, n, ev, pull)
+  local to = level_index(n.level)
+  local players = audience(n, g, ev, pull)
+  if to == nil or #players == 0 then return "then" end
+  local function go()
+    for _, p in ipairs(players) do
+      if p:valid() then p:change_map(to, n.spawn) end
+    end
+  end
+  if n.fade ~= nil and n.fade > 0 then
+    for _, p in ipairs(players) do dnp.screen(p, { fade = 1, fade_ms = math.floor(n.fade * 1000) }) end
+    later(ticks_of(n.fade), go)
+  else
+    go()
   end
   return "then"
 end
@@ -1095,6 +1128,19 @@ function M.load(data, label)
         -- A level's node in a game graph: the game has no level of its own.
         if spec.level_only and in_game() then
           bad("%s: a %s acts on a level, and a game graph has none -- `call` a level's graph", where, n.type)
+        end
+        -- A map named must be one the server has, and a spawn point picked on
+        -- this map must be on it.
+        if n.type == "change_map" and dnp.levels ~= nil and #(dnp.levels() or {}) > 0 then
+          local to = level_index(n.level)
+          if to == nil or to < 0 or to >= #dnp.levels() then
+            bad("%s: there is no map '%s' -- the server has %s", where, tostring(n.level),
+                table.concat(dnp.levels(), ", "))
+          end
+        end
+        if n.type == "teleport" and n.spawn ~= nil and has_map() and dnp.spawn_point ~= nil
+           and dnp.spawn_point(n.spawn) == nil then
+          bad("%s: this map has no spawn point tagged '%s'", where, n.spawn)
         end
         -- A camera path picked on the map must be there.
         if (n.type == "camera_flythrough" or n.type == "camera_track") and type(n.path) == "number"
