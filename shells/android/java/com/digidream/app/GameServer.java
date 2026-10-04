@@ -90,11 +90,22 @@ final class GameServer {
    * can see why a level would not load.
    */
   void start(File exe, File workDir, int port, List<File> modules, File map, File logFile) throws IOException {
+    start(exe, workDir, port, modules, java.util.Collections.singletonList(map), logFile);
+  }
+
+  /**
+   * As above with several levels: the first is where players start, the rest
+   * are what a script may send them to (change_map). A play-test passes the
+   * map being tested and then every other map of its module -- with only the
+   * first declared, a graph going to another map is refused as naming one the
+   * server does not have.
+   */
+  void start(File exe, File workDir, int port, List<File> modules, List<File> maps, File logFile) throws IOException {
     List<String> cmd = new java.util.ArrayList<>();
     cmd.add(exe.getAbsolutePath());
     cmd.add("--port"); cmd.add(String.valueOf(port));
     for (File m : modules) { cmd.add("--module"); cmd.add(m.getAbsolutePath()); }
-    cmd.add("--map"); cmd.add(map.getAbsolutePath());
+    for (File m : maps) { cmd.add("--map"); cmd.add(m.getAbsolutePath()); }
     cmd.add("--spawn"); cmd.add("start");
     ProcessBuilder pb = new ProcessBuilder(cmd);
     pb.directory(workDir);

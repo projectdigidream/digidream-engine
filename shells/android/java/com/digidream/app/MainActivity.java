@@ -220,9 +220,13 @@ public final class MainActivity extends Activity {
   }
 
   private void startServer(List<File> modules, File map, File logFile) throws IOException {
+    startServer(modules, java.util.Collections.singletonList(map), logFile);
+  }
+
+  private void startServer(List<File> modules, List<File> maps, File logFile) throws IOException {
     int port = GameServer.freePort();
-    Log.i(TAG, "starting server on 127.0.0.1:" + port + " for " + map);
-    server.start(exe, gameDir, port, modules, map, logFile);
+    Log.i(TAG, "starting server on 127.0.0.1:" + port + " for " + maps.get(0) + (maps.size() > 1 ? " and " + (maps.size() - 1) + " more" : ""));
+    server.start(exe, gameDir, port, modules, maps, logFile);
     server.connect(port, 20000, new GameServer.Sink() {
       @Override public void onBytes(byte[] data, int length) {
         down(Base64.encodeToString(Arrays.copyOf(data, length), Base64.NO_WRAP));
@@ -383,8 +387,17 @@ public final class MainActivity extends Activity {
         os.write(("[shell] play-test of " + module + "/maps/" + map + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
       }
     }
+    // The map being tested first -- where players start -- then every other
+    // map of the module, so a graph's change_map finds the one it names.
+    List<File> maps = new ArrayList<>();
+    maps.add(mapFile);
+    File[] others = new File(modDir, "maps").listFiles((d, n) -> n.endsWith(".dnpm"));
+    if (others != null) {
+      Arrays.sort(others);
+      for (File f : others) if (!f.equals(mapFile) && maps.size() < 64) maps.add(f);
+    }
     try {
-      startServer(modules, mapFile, new File(logs, "play-server.log"));
+      startServer(modules, maps, new File(logs, "play-server.log"));
     } catch (IOException e) {
       playLog("[shell] the game did not start: " + e.getMessage());
       throw e;

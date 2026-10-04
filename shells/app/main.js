@@ -40,7 +40,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
 import { readFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync } from 'node:fs'
-import { readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises'
+import { readFile as readFileAsync, writeFile as writeFileAsync, readdir } from 'node:fs/promises'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startStatic } from './static.js'
@@ -109,7 +109,13 @@ function spawnServer (linkPort, extra = {}) {
   const roots = new Set(manifest.modules.map((m) => join(bundledRoot, m)))
   for (const m of extra.modules ?? []) roots.add(m)
   for (const m of roots) args.push('--module', m)
-  if (extra.map) args.push('--map', extra.map, '--spawn', 'start')
+  // The first map is where players start; the rest are what a script may send
+  // them to (change_map). A play-test passes the map being tested, then every
+  // other map of its module: with only the first, a graph going to another
+  // map is refused as naming one the server does not have.
+  const maps = extra.maps ?? (extra.map ? [extra.map] : [])
+  for (const m of maps) args.push('--map', m)
+  if (maps.length) args.push('--spawn', 'start')
 
   // cwd is the GAME directory, not wherever the app was launched from. The
   // server resolves assets/props.txt and modules/ against its working
@@ -203,7 +209,9 @@ async function launch ({ module, map }) {
   appendFileSync(gameLog, '', { flag: 'w' })
   playLog(`[shell] play-test of ${module}/maps/${map}`)
   try {
-    await restartServer({ modules: [modDir], map: join(modDir, 'maps', map), logFile: join(logs, 'play-server.log') })
+    const entry = join(modDir, 'maps', map)
+    const others = (await readdir(join(modDir, 'maps')).catch(() => [])).filter((n) => n.endsWith('.dnpm') && n !== map).sort().map((n) => join(modDir, 'maps', n))
+    await restartServer({ modules: [modDir], map: entry, maps: [entry, ...others].slice(0, 64), logFile: join(logs, 'play-server.log') })
   } catch (e) { playLog(`[shell] the game did not start: ${e.message ?? e}`); throw e }
   await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
   announceWhenUp()
