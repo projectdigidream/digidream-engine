@@ -65,7 +65,7 @@ import { Sfx } from './audio/sfx.js'
 import { OwnSounds } from './audio/ownsounds.js'
 import { SCHEME, FpsLook, fpsPush, TOUCH_SENSITIVITY } from './controls.js'
 import { ViewModel } from './render/viewmodel.js'
-import { HudView, parseLayout, layoutFileFor, DEFAULT_LAYOUT } from './render/layout.js'
+import { HudView, parseLayout, layoutFileFor, DEFAULT_LAYOUT, UiAssets } from './render/layout.js'
 import { soundHash } from './proto.js'
 
 const TICK_HZ = 60
@@ -304,6 +304,7 @@ const viewModel = new ViewModel({ host: document.body })
 const hudView = new HudView({ host: document.body, touch: wantsTouch(params) })
 let uiLayout = DEFAULT_LAYOUT
 let uiIndex = null
+const uiAssets = new UiAssets()
 let uiLayoutFile = null
 async function loadLayout (levelName) {
   try {
@@ -318,15 +319,24 @@ async function loadLayout (levelName) {
     if (file) {
       const r = await fetch(`/ui/${file}`)
       const parsed = parseLayout(r.ok ? await r.text() : '{}')
-      // A layout that fails to parse is SAID, on screen -- a phone has no
-      // console -- and the default is used rather than a half-read one.
-      if (!parsed.ok) say(`ui layout ${file}: ${parsed.errors.slice(0, 2).join('; ')} (using the default)`)
+      // A layout's errors are SAID, on screen -- a phone has no console. What
+      // failed was dropped and replaced by the default (parseLayout's rule),
+      // and the rest of it is used: one bad font or style does not take a
+      // module's whole HUD away (docs/UI_STYLES.md 3).
+      if (!parsed.ok) say(`ui layout ${file}: ${parsed.errors.slice(0, 2).join('; ')} (that part is dropped)`)
       for (const w of parsed.warnings) console.warn(`[ui] ${file}: ${w}`)
-      layout = parsed.ok ? parsed.layout : DEFAULT_LAYOUT
+      layout = parsed.layout
     }
     uiLayout = layout
     hudView.setLayout(layout)
     ui?.setLayout(layout)
+    // Its fonts and skins: drawn with fallbacks at once, and again when they
+    // are in, so the first frame never keeps the fallback for good.
+    uiAssets.load(layout).then(() => {
+      if (uiLayout !== layout) return
+      hudView.setLayout(layout)
+      ui?.setLayout(layout)
+    })
     touch?.setLayout(layout, isFps() ? 'fps' : 'platformer')
   } catch (e) {
     console.warn(`[ui] layout: ${e.message}`)

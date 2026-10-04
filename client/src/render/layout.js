@@ -136,6 +136,89 @@ export const DEFAULT_LAYOUT = Object.freeze({
   panels: {}
 })
 
+// --- fonts and skins, loaded (docs/UI_STYLES.md 2.1, 3) --------------------
+//
+// What the studio checks to say honestly what the game draws yet.
+export const UI_STYLES = Object.freeze({ version: 1, fonts: true, skins: true, hudFont: true, hudBox: true })
+
+// Every picture a layout's styles name: panel, title, button (and pressed),
+// close, in named styles, inline template styles and slot styles.
+export function layoutImages (layout) {
+  const out = new Set()
+  const walk = (o) => {
+    if (!o || typeof o !== 'object') return
+    if (typeof o.image === 'string') out.add(o.image)
+    for (const v of Object.values(o)) if (v && typeof v === 'object') walk(v)
+  }
+  walk(layout.styles)
+  for (const p of Object.values(layout.panels ?? {})) {
+    if (p.style && typeof p.style === 'object') walk(p.style)
+    for (const sl of p.slots ?? []) walk(sl.style)
+  }
+  return [...out]
+}
+
+/**
+ * The fonts and pictures a layout names, loaded once each. A font is FETCHED
+ * and its bytes handed to FontFace -- so a shell that serves it without a font
+ * MIME type still works -- and added to the document's fonts; a picture is
+ * preloaded so a missing one is said. Either failing is said ONCE, naming the
+ * file, and the text or the style's colours stay as they were: nothing becomes
+ * invisible. `load` resolves when everything asked for has settled, which is
+ * when the views draw again (main.js).
+ */
+export class UiAssets {
+  constructor ({ fetch = globalThis.fetch, FontFace = globalThis.FontFace, fonts = globalThis.document?.fonts,
+                 Image = globalThis.Image, base = '/ui/', warn = (m) => console.warn(m) } = {}) {
+    Object.assign(this, { fetch, FontFace, fonts, Image, base, warn })
+    this.asked = new Map()       // key -> Promise<boolean>
+  }
+
+  #font (f) {
+    const key = `font|${f.family}|${f.file}|${f.weight ?? ''}|${f.style ?? ''}`
+    if (!this.asked.has(key)) {
+      this.asked.set(key, (async () => {
+        try {
+          if (!this.fetch || !this.FontFace) throw new Error('this client cannot load fonts')
+          const r = await this.fetch(this.base + f.file)
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          const face = new this.FontFace(f.family, await r.arrayBuffer(),
+            { weight: f.weight ? String(f.weight) : 'normal', style: f.style ?? 'normal' })
+          await face.load()
+          this.fonts?.add(face)
+          return true
+        } catch (e) {
+          this.warn(`[ui] font ${f.file} (${f.family}) did not load: ${e.message} -- its text uses the next font in the list`)
+          return false
+        }
+      })())
+    }
+    return this.asked.get(key)
+  }
+
+  #image (file) {
+    const key = `image|${file}`
+    if (!this.asked.has(key)) {
+      this.asked.set(key, new Promise((resolve) => {
+        if (!this.Image) { resolve(false); return }
+        const img = new this.Image()
+        img.onload = () => resolve(true)
+        img.onerror = () => {
+          this.warn(`[ui] skin ${file} did not load -- the style's colours are drawn instead`)
+          resolve(false)
+        }
+        img.src = this.base + file
+      }))
+    }
+    return this.asked.get(key)
+  }
+
+  load (layout) {
+    return Promise.all([...(layout.fonts ?? []).map((f) => this.#font(f)),
+                        ...layoutImages(layout).map((i) => this.#image(i))])
+  }
+}
+
 // --- parsing ---------------------------------------------------------------
 
 /**
@@ -155,7 +238,7 @@ export function parseLayout (json) {
     try { src = JSON.parse(json) } catch (e) { return { ok: false, layout: DEFAULT_LAYOUT, errors: [`not JSON: ${e.message}`], warnings } }
   }
   if (!src || typeof src !== 'object') return { ok: false, layout: DEFAULT_LAYOUT, errors: ['not an object'], warnings }
-  const known = ['version', 'scale', 'theme', 'hud', 'touch', 'touch_fps', 'panels', '_about']
+  const known = ['version', 'scale', 'theme', 'hud', 'touch', 'touch_fps', 'panels', 'fonts', 'styles', '_about']
   for (const k of Object.keys(src)) if (!known.includes(k)) warnings.push(`unknown key '${k}', ignored`)
   if (src.version !== undefined && src.version !== 1) warnings.push(`version ${src.version}: read as version 1`)
 
@@ -166,7 +249,22 @@ export function parseLayout (json) {
     hud: src.hud === undefined ? DEFAULT_LAYOUT.hud : [],
     touch: src.touch === undefined ? DEFAULT_LAYOUT.touch : touchOf(src.touch, 'touch', DEFAULT_LAYOUT.touch, errors, warnings),
     touch_fps: src.touch_fps === undefined ? DEFAULT_LAYOUT.touch_fps : touchOf(src.touch_fps, 'touch_fps', DEFAULT_LAYOUT.touch_fps, errors, warnings),
-    panels: {}
+    panels: {},
+    fonts: [],
+    styles: {}
+  }
+  if (src.fonts !== undefined) {
+    if (!Array.isArray(src.fonts)) errors.push('`fonts` must be a list')
+    else src.fonts.forEach((f, i) => { const v = fontOf(f, i, errors); if (v) layout.fonts.push(v) })
+  }
+  if (src.styles !== undefined) {
+    if (!src.styles || typeof src.styles !== 'object' || Array.isArray(src.styles)) errors.push('`styles` must be an object of named styles')
+    else {
+      for (const [name, st] of Object.entries(src.styles)) {
+        const v = styleOf(name, st, errors, warnings)
+        if (v) layout.styles[name] = v
+      }
+    }
   }
   if (src.panels !== undefined) {
     if (!src.panels || typeof src.panels !== 'object' || Array.isArray(src.panels)) errors.push('`panels` must be an object of templates')
@@ -176,6 +274,12 @@ export function parseLayout (json) {
         if (p) layout.panels[name] = p
       }
     }
+  }
+  // A panel naming a style the layout lacks draws the default look (ui.js);
+  // said here once, by panel, where the author can see it.
+  for (const [name, p] of Object.entries(layout.panels)) {
+    const use = typeof p.style === 'string' ? p.style : p.style?.use
+    if (use !== undefined && layout.styles[use] === undefined) warnings.push(`panel '${name}': no style '${use}'; the default look is used`)
   }
   if (src.hud !== undefined) {
     if (!Array.isArray(src.hud)) errors.push('`hud` must be a list of elements')
@@ -223,6 +327,56 @@ function elementOf (el, where, errors, warnings, ids) {
 // it has the wire's rule; anything that would put the panel or a widget
 // somewhere nobody can draw is an error, and the template is dropped -- the
 // panel then draws as the default one, never misplaced.
+// --- fonts and styles (docs/UI_STYLES.md) ---------------------------------
+//
+// A path under the layout's own directory (assets/ui/, served at /ui/): not
+// absolute, no `..`, no backslash -- a layout file cannot reach elsewhere.
+function assetPath (p) {
+  return typeof p === 'string' && p.length > 0 && p.length <= 200 && !p.startsWith('/') &&
+         !p.includes('\\') && !p.split('/').includes('..') && /^[A-Za-z0-9_./-]+$/.test(p)
+}
+function fontOf (f, i, errors) {
+  const at = `font ${i}`
+  if (!f || typeof f !== 'object') { errors.push(`${at}: must be an object`); return null }
+  if (typeof f.family !== 'string' || !/^[\x20-\x7e]{1,48}$/.test(f.family) || /[,;"'{}]/.test(f.family)) {
+    errors.push(`${at}: a family is 1..48 printable characters`); return null
+  }
+  if (!assetPath(f.file)) { errors.push(`${at} '${f.family}': file must be a path under the layout's directory`); return null }
+  if (f.weight !== undefined && !(Number.isInteger(f.weight) && f.weight >= 1 && f.weight <= 1000)) {
+    errors.push(`${at} '${f.family}': weight is 1..1000`); return null
+  }
+  if (f.style !== undefined && f.style !== 'normal' && f.style !== 'italic') {
+    errors.push(`${at} '${f.family}': style is normal or italic`); return null
+  }
+  return { family: f.family, file: f.file, weight: f.weight, style: f.style }
+}
+// What each part of a style may say. Anything else is warned of and ignored.
+const STYLE_PARTS = {
+  '': ['font', 'size', 'color', 'weight', 'accent', 'panel', 'title', 'button', 'close'],
+  panel: ['bg', 'border', 'radius', 'padding', 'image', 'slice'],
+  title: ['bg', 'color', 'size', 'weight', 'align', 'image', 'slice'],
+  button: ['bg', 'color', 'border', 'radius', 'image', 'slice', 'pressed'],
+  pressed: ['bg', 'color', 'image'],
+  close: ['color', 'image']
+}
+function stylePart (part, obj, at, errors, warnings) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) { errors.push(`${at}: must be an object`); return false }
+  for (const [k, v] of Object.entries(obj)) {
+    if (!STYLE_PARTS[part].includes(k)) { warnings.push(`${at}: unknown key '${k}', ignored`); continue }
+    if (k === 'slice' && !(Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && n >= 0))) {
+      errors.push(`${at}: slice is four numbers >= 0 (top, right, bottom, left)`); return false
+    }
+    if (k === 'image' && !assetPath(v)) { errors.push(`${at}: image must be a path under the layout's directory`); return false }
+    if (STYLE_PARTS[k] && !stylePart(k, v, `${at}.${k}`, errors, warnings)) return false
+  }
+  return true
+}
+function styleOf (name, st, errors, warnings) {
+  const at = `style '${name}'`
+  if (!/^[a-z0-9_]{1,24}$/.test(name)) { errors.push(`${at}: a style name is 1..24 of [a-z0-9_]`); return null }
+  return stylePart('', st, at, errors, warnings) ? st : null
+}
+
 const PANEL_KEYS = ['anchor', 'x', 'y', 'w', 'h', 'modal', 'closeable', 'title', 'slots', 'decor', 'style', '_about']
 const SLOT_KEYS = ['widget', 'anchor', 'x', 'y', 'w', 'h', 'style']
 function panelOf (name, t, errors, warnings) {
@@ -415,11 +569,21 @@ export class HudView {
   #make (el, theme) {
     const d = this.doc.createElement('div')
     const st = el.style ?? {}
+    // `style.font` is a family (or a list) over the theme's; `style.shadow`
+    // the text-shadow ("none" for none); and on text, numbers and groups,
+    // `bg`, `radius` and `padding` draw a box behind it -- a subtitle's
+    // backdrop (docs/UI_STYLES.md 2.3). A bar keeps its own.
     Object.assign(d.style, {
-      font: `${st.weight ?? 400} ${st.size ?? 12}px/1.5 ${theme.font}`, color: st.color ?? theme.text,
-      textShadow: '0 1px 2px #000', whiteSpace: st.wrap ? 'normal' : 'pre', textAlign: st.align ?? 'left'
+      font: `${st.weight ?? 400} ${st.size ?? 12}px/1.5 ${st.font ? `${st.font}, ${theme.font}` : theme.font}`,
+      color: st.color ?? theme.text,
+      textShadow: st.shadow ?? '0 1px 2px #000', whiteSpace: st.wrap ? 'normal' : 'pre', textAlign: st.align ?? 'left'
     })
     if (st.opacity !== undefined) d.style.opacity = String(st.opacity)
+    if (el.type === 'text' || el.type === 'number' || el.type === 'group') {
+      if (typeof st.bg === 'string') d.style.background = st.bg
+      if (typeof st.radius === 'number') d.style.borderRadius = `${st.radius}px`
+      if (typeof st.padding === 'number') d.style.padding = `${st.padding}px`
+    }
     const node = { el, dom: d, kids: [] }
     if (el.type === 'group') {
       if (el.stack === 'row') Object.assign(d.style, { display: 'flex', alignItems: 'baseline', gap: `${el.gap ?? 0}px` })

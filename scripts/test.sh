@@ -505,7 +505,8 @@ suite_client () {
   # The UI layout (docs/UI_LAYOUT.md): parsing that warns rather than fails on
   # a newer file, the nine anchors inside the safe area, scaling, the HUD drawn
   # and bound -- and the built-in default held to the CSS it replaced, to half a
-  # pixel, at a portrait and a landscape phone.
+  # pixel, at a portrait and a landscape phone. Plus fonts, named styles and the
+  # HUD's font/shadow/box (docs/UI_STYLES.md), and fonts loaded once from /ui/.
   node client/test/layout.test.js | grep -E 'FAIL|failures'
   node client/test/entities.test.js | grep -E 'FAIL|failures'
   node client/test/lighting.test.js | grep -E 'FAIL|failures'
@@ -520,7 +521,8 @@ suite_client () {
   node client/test/atlas.test.js | grep -E 'FAIL|failures'
   node client/test/swing.test.js | grep -E 'FAIL|failures'
   node client/test/vfx.test.js | grep -E 'FAIL|failures'
-  # Panels: the client's decoder against real bytes from the C++ encoder.
+  # Panels: the client's decoder against real bytes from the C++ encoder, and a
+  # named style's skin, title, buttons and pressed look on the DOM (UI_STYLES.md).
   node client/test/ui.test.js | grep -E 'FAIL|failures'
   # The MUSIC message: a cue name, a fade and a moment survive the wire as the
   # server writes them, and a moment the protocol does not know is refused.

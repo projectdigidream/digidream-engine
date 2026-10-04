@@ -8,7 +8,8 @@
 // rather than to itself.
 //
 import {
-  parseLayout, place, uiScale, sizeOf, isVisible, layoutFileFor, HudView, DEFAULT_LAYOUT, ANCHORS
+  parseLayout, place, uiScale, sizeOf, isVisible, layoutFileFor, HudView, DEFAULT_LAYOUT, ANCHORS,
+  UiAssets, UI_STYLES, layoutImages
 } from '../src/render/layout.js'
 import { touchLayout } from '../src/render/touchui.js'
 
@@ -233,6 +234,107 @@ for (const [W, H] of [[390, 844], [844, 390]]) {
 }
 const CONTROL = place({ ...touchLayout(DEFAULT_LAYOUT).buttons[0], x: -23 }, DEFAULT_LAYOUT, 390, 844)
 check(Math.abs(CONTROL.left - (390 - 22 - 74)) > 0.5, 'CONTROL: a button one pixel off is caught')
+
+// --- fonts and styles (docs/UI_STYLES.md) ------------------------------------
+console.log('\n--- fonts, styles and HUD looks ---')
+export const PARCHMENT = {
+  font: 'Bitter', size: 13, color: '#3a2a1a', accent: '#8a5a2a',
+  panel: { bg: '#e9dcc0', image: 'skins/parchment.png', slice: [24, 24, 24, 24], padding: 12, radius: 0, border: 'none' },
+  title: { color: '#5a2a10', size: 15, weight: 700, align: 'center', bg: 'transparent', image: 'skins/ribbon.png', slice: [8, 30, 8, 30] },
+  button: { bg: '#c9a86a', color: '#2a1a0a', image: 'skins/button.png', slice: [10, 10, 10, 10], radius: 4,
+            pressed: { image: 'skins/button_down.png' } },
+  close: { color: '#5a2a10' }
+}
+{
+  const r = parseLayout({
+    version: 1,
+    fonts: [{ family: 'Bitter', file: 'fonts/bitter.woff2', weight: 400 },
+            { family: 'Bitter', file: 'fonts/bitter-bold.woff2', weight: 700 }],
+    theme: { font: 'Bitter, ui-monospace, monospace' },
+    styles: { parchment: PARCHMENT },
+    panels: { shop: { anchor: 'c', w: 320, style: 'parchment', slots: [] },
+              talk: { anchor: 'b', w: 420, style: { use: 'parchment', bg: '#f4ecd8' }, slots: [] } }
+  })
+  check(r.ok && r.warnings.length === 0, `a layout with fonts and styles parses clean (${r.errors.concat(r.warnings).join('; ')})`)
+  check(r.layout.fonts.length === 2 && r.layout.styles.parchment.panel.slice[0] === 24, 'its fonts and styles are kept')
+  check(layoutImages(r.layout).sort().join(',') === 'skins/button.png,skins/button_down.png,skins/parchment.png,skins/ribbon.png',
+        'and every picture its styles name is found, for loading')
+  check(UI_STYLES.version === 1 && UI_STYLES.fonts && UI_STYLES.skins && UI_STYLES.hudFont && UI_STYLES.hudBox,
+        'UI_STYLES says what is drawn')
+}
+{
+  // Each bad entry is an error and is DROPPED; the rest of the layout loads.
+  const r = parseLayout({
+    fonts: [{ family: 'A,B', file: 'fonts/a.woff2' }, { family: 'Up', file: '../secrets.ttf' },
+            { family: 'Good', file: 'fonts/good.ttf' }],
+    styles: { 'Bad Name': { color: '#000' }, cut: { panel: { image: 'skins/x.png', slice: [1, 2, 3] } },
+              fine: { color: '#111' } },
+    hud: [{ id: 'kept', type: 'text', text: 'still here' }]
+  })
+  const said = r.errors.join(' | ')
+  check(/family/.test(said), 'a bad family is an error')
+  check(/path under/.test(said), 'a path with .. is an error')
+  check(/style name/.test(said), 'a bad style name is an error')
+  check(/slice is four/.test(said), 'a slice of three numbers is an error')
+  check(r.layout.fonts.map((f) => f.family).join() === 'Good' && Object.keys(r.layout.styles).join() === 'fine',
+        'each is dropped, and only it')
+  check(r.layout.hud.some((e) => e.id === 'kept'), 'the rest of the layout loads')
+}
+{
+  // CONTROL: an older layout -- no fonts, no styles -- parses exactly as before.
+  const old = { hud: [{ id: 'ammo', type: 'text', text: '{hud.ammo}', anchor: 'br' }], panels: { shop: { w: 300, style: { bg: '#123' } } } }
+  const r = parseLayout(old)
+  check(r.ok && r.warnings.length === 0 && r.layout.fonts.length === 0 && Object.keys(r.layout.styles).length === 0 &&
+        r.layout.panels.shop.style.bg === '#123' && r.layout.hud[0].text === '{hud.ammo}',
+        'CONTROL: an older layout parses exactly as before')
+  check(parseLayout({ panels: { p: { style: 'nope' } } }).warnings.some((w) => /no style 'nope'/.test(w)),
+        'a panel naming a style the layout lacks is warned of')
+}
+{
+  // HUD: font, shadow and a box on a text and on a group (the subtitle backdrop).
+  const doc = fakeDoc()
+  const hud = new HudView({ host: doc.createElement('body'), doc, size: { width: 800, height: 600 } })
+  hud.setLayout(parseLayout({ theme: { font: 'mono' }, hud: [
+    { id: 'line', type: 'text', text: 'hi', style: { font: 'Bitter', shadow: 'none', bg: '#000a', radius: 6, padding: 8 } },
+    { id: 'box', type: 'group', style: { bg: 'rgba(0,0,0,.55)', radius: 6, padding: 8 },
+      children: [{ id: 'in', type: 'text', text: 'x' }] }
+  ] }).layout)
+  const line = hud.nodes.find((n) => n.el.id === 'line').dom.style
+  const box = hud.nodes.find((n) => n.el.id === 'box').dom.style
+  check(/Bitter, mono/.test(line.font) && line.textShadow === 'none' && line.background === '#000a' &&
+        line.borderRadius === '6px' && line.padding === '8px', `a text's font, shadow and box land (${line.font})`)
+  check(box.background === 'rgba(0,0,0,.55)' && box.padding === '8px', 'a group\'s box: the subtitle backdrop')
+  const plain = hud.nodes.find((n) => n.el.id === 'box').kids[0].dom.style
+  check(plain.textShadow === '0 1px 2px #000' && plain.background === undefined, 'CONTROL: without them, today\'s look')
+}
+{
+  // FONT LOADING: each font fetched once from /ui/<file>, handed over as bytes;
+  // load() settles so the views draw again; a failing one warns once.
+  const fetched = []
+  const added = []
+  const warned = []
+  const env = {
+    fetch: async (url) => {
+      fetched.push(url)
+      return url.includes('missing') ? { ok: false, status: 404 } : { ok: true, arrayBuffer: async () => new ArrayBuffer(4) }
+    },
+    FontFace: class { constructor (f, b, d) { this.family = f; this.desc = d; this.bytes = b } async load () { return this } },
+    fonts: { add: (f) => added.push(f) },
+    Image: class { set src (v) { setTimeout(() => (v.includes('gone') ? this.onerror() : this.onload()), 0) } },
+    warn: (m) => warned.push(m)
+  }
+  const assets = new UiAssets(env)
+  const lay = parseLayout({ fonts: [{ family: 'Bitter', file: 'fonts/bitter.woff2', weight: 700 },
+                                    { family: 'Gone', file: 'fonts/missing.ttf' }],
+                            styles: { s: { panel: { image: 'skins/gone.png', slice: [1, 1, 1, 1] } } } }).layout
+  await assets.load(lay)
+  await assets.load(lay)
+  check(fetched.filter((u) => u === '/ui/fonts/bitter.woff2').length === 1, 'each font is fetched once, from /ui/<file>')
+  check(added.length === 1 && added[0].family === 'Bitter' && added[0].desc.weight === '700' && added[0].bytes.byteLength === 4,
+        'and handed to FontFace as bytes, with its weight, and added to the document')
+  check(warned.filter((w) => /missing\.ttf/.test(w)).length === 1, 'a font that fails warns once, naming the file')
+  check(warned.filter((w) => /gone\.png/.test(w)).length === 1, 'and so does a missing skin')
+}
 
 console.log(`\nlayout: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

@@ -251,5 +251,88 @@ const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.cl
         `CONTROL: a bad name, anchor or slot is an error and the template is dropped (${bad.errors.length})`)
 }
 
+// --- named styles (docs/UI_STYLES.md 2.2) -------------------------------------
+console.log('\n--- named styles: fonts, skins, title, buttons ---')
+const PARCHMENT = {
+  font: 'Bitter', size: 13, color: '#3a2a1a', accent: '#8a5a2a',
+  panel: { bg: '#e9dcc0', image: 'skins/parchment.png', slice: [24, 24, 24, 24], padding: 12, radius: 0, border: 'none' },
+  title: { color: '#5a2a10', size: 15, weight: 700, align: 'center', bg: 'transparent', image: 'skins/ribbon.png', slice: [8, 30, 8, 30] },
+  button: { bg: '#c9a86a', color: '#2a1a0a', image: 'skins/button.png', slice: [10, 10, 10, 10], radius: 4,
+            pressed: { image: 'skins/button_down.png' } },
+  close: { color: '#5a2a10' }
+}
+const STYLED = parseLayout({
+  scale: { reference: 390, min: 1, max: 1 },
+  theme: { font: 'ui-monospace, monospace' },
+  styles: { parchment: PARCHMENT },
+  panels: {
+    shop: { anchor: 'c', w: 320, style: 'parchment' },
+    talk: { anchor: 'c', w: 320, style: { use: 'parchment', bg: '#f4ecd8' } },
+    odd: { anchor: 'c', w: 320, style: 'velvet' },
+    plain: { anchor: 'c', w: 320 },
+    slotted: { anchor: 'c', w: 320, style: 'parchment',
+               slots: [{ widget: 5, x: 10, y: 10, w: 100, style: { bg: '#a00', image: 'skins/red.png', slice: [4, 4, 4, 4] } }] }
+  }
+})
+check(STYLED.ok, `a layout with a named style parses (${STYLED.errors.concat(STYLED.warnings).join('; ')})`)
+const withButton = { ...msg, widgets: [...msg.widgets, { kind: UI_KIND.BUTTON, id: 5, label: 'Buy' }] }
+const openStyled = (template) => {
+  const doc = makeDom()
+  const view = new UiView({ onEvent: () => {}, doc, layout: STYLED.layout, size: { width: 800, height: 600 } })
+  view.open({ ...withButton, template })
+  return rootOf(doc)
+}
+{
+  const root = openStyled('shop')
+  check(/^Bitter, ui-monospace/.test(root.style.fontFamily) && root.style.fontSize === '13px' &&
+        root.style.color === '#3a2a1a' && root.style.accentColor === '#8a5a2a',
+        `the style's font, size, colour and accent are the panel's (${root.style.fontFamily})`)
+  check(root.style.borderImage === 'url("/ui/skins/parchment.png") 24 24 24 24 fill stretch' &&
+        root.style.borderWidth === '24px 24px 24px 24px' && root.style.background === '#e9dcc0',
+        `the box is a 9-slice skin with its slice, over its colour (${root.style.borderImage})`)
+  const title = all(root).find((e) => e.className === 'dnp-ui-title')
+  check(title.style.color === '#5a2a10' && title.style.textAlign === 'center' && title.style.fontWeight === '700' &&
+        /ribbon\.png"\) 8 30 8 30/.test(title.style.borderImage), 'the title bar has the title look')
+  const x = all(root).find((e) => /dnp-ui-x/.test(e.className))
+  check(x.style.color === '#5a2a10', 'and the × its colour')
+  const b = all(root).find((e) => e.tag === 'button')
+  check(b.style.background === '#c9a86a' && b.style.color === '#2a1a0a' && /button\.png/.test(b.style.borderImage),
+        'a button has the button look')
+  b.onpointerdown()
+  check(/button_down\.png/.test(b.style.borderImage) && b.style.background === '#c9a86a', 'held, its pressed picture')
+  b.onpointerup()
+  check(/\/button\.png/.test(b.style.borderImage), 'released, back to its own')
+}
+{
+  const root = openStyled('talk')
+  check(root.style.background === '#f4ecd8' && /parchment\.png/.test(root.style.borderImage) && root.style.color === '#3a2a1a',
+        '{ use, bg } overrides bg alone')
+}
+{
+  const warn = console.warn
+  const said = []
+  console.warn = (s) => said.push(s)
+  const doc = makeDom()
+  const view = new UiView({ onEvent: () => {}, doc, layout: STYLED.layout, size: { width: 800, height: 600 } })
+  view.open({ ...withButton, template: 'odd' })
+  view.open({ ...withButton, uiId: 9, template: 'odd' })
+  console.warn = warn
+  const odd = rootOf(doc)
+  const plain = openStyled('plain')
+  check(shape(odd) === shape(plain) && !odd.style.borderImage && !odd.style.fontFamily,
+        'an unknown style name draws the default panel')
+  check(said.filter((s) => /velvet/.test(s)).length === 1, `and warns once (${said.length})`)
+  const pb = all(plain).find((e) => e.tag === 'button')
+  check(!pb.style.background && !pb.onpointerdown, 'CONTROL: without a style a button is drawn as before')
+}
+{
+  const root = openStyled('slotted')
+  const slot = all(root).find((e) => /dnp-ui-slot/.test(e.className))
+  const b = all(slot).find((e) => e.tag === 'button')
+  check(slot.style.background === '#a00' && /red\.png/.test(slot.style.borderImage), 'a slot\'s style lands on its slot')
+  check(b.style.background === '#a00' && /red\.png/.test(b.style.borderImage) && b.style.color === '#2a1a0a',
+        'and wins over the style\'s button look for its widget, keeping what it does not say')
+}
+
 console.log(`\nui: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

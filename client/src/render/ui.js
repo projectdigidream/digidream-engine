@@ -48,6 +48,32 @@ const STYLE = `
 .dnp-ui-x.dnp-ui-x-free{position:absolute;top:4px;right:6px;z-index:2}
 .dnp-ui-dim{position:absolute;inset:0;background:rgba(0,0,0,.45);pointer-events:auto}
 `
+// --- named styles (docs/UI_STYLES.md 2.2) ----------------------------------
+//
+// A 9-SLICE SKIN: the picture as border-image, its four insets (px of the
+// picture) the slices, the middle filled and stretched; the border as wide as
+// the slices, in UI units, scaled like every UI unit.
+function nineSlice (el, image, slice, scale) {
+  const [t, r, b, l] = Array.isArray(slice) ? slice : [0, 0, 0, 0]
+  el.style.borderStyle = 'solid'
+  el.style.borderWidth = `${t * scale}px ${r * scale}px ${b * scale}px ${l * scale}px`
+  el.style.borderImage = `url("/ui/${image}") ${t} ${r} ${b} ${l} fill stretch`
+}
+// One part of a style (the panel box, the title, a button) on an element.
+function skin (el, part, scale) {
+  if (!part || typeof part !== 'object') return
+  if (typeof part.bg === 'string') el.style.background = part.bg
+  if (typeof part.color === 'string') el.style.color = part.color
+  if (typeof part.border === 'string') el.style.border = part.border
+  if (typeof part.radius === 'number') el.style.borderRadius = `${part.radius * scale}px`
+  if (typeof part.padding === 'number') el.style.padding = `${part.padding * scale}px`
+  if (typeof part.size === 'number') el.style.fontSize = `${part.size * scale}px`
+  if (typeof part.weight === 'number') el.style.fontWeight = String(part.weight)
+  if (typeof part.align === 'string') el.style.textAlign = part.align
+  if (typeof part.font === 'string') el.style.fontFamily = part.font
+  if (typeof part.image === 'string') nineSlice(el, part.image, part.slice, scale)
+}
+
 // The slot's own look, from the template. Colours and sizes only: a template
 // is presentation, so nothing here can change what a widget does.
 const SLOT_STYLE = { bg: 'background', color: 'color', border: 'border' }
@@ -58,6 +84,9 @@ function styleSlot (el, st, scale) {
   if (typeof st.size === 'number') el.style.fontSize = `${st.size * scale}px`
   if (typeof st.weight === 'number') el.style.fontWeight = String(st.weight)
   if (typeof st.opacity === 'number') el.style.opacity = String(st.opacity)
+  // A slot may also name a font and a 9-slice picture (docs/UI_STYLES.md 2.2).
+  if (typeof st.font === 'string') el.style.fontFamily = st.font
+  if (typeof st.image === 'string') nineSlice(el, st.image, st.slice, scale)
 }
 
 /**
@@ -219,16 +248,42 @@ export class UiView {
     root.dataset.template = msg.template
     const pw = sizeOf(tpl.w ?? 320, s, area.width, area.height)
     root.style.width = `${pw}px`
-    styleSlot(root, tpl.style, s)
+    // THE PANEL'S STYLE: a named one (a string, or `{ use, ... }` with inline
+    // values over it) and/or inline values as before. The named style's text
+    // look is the panel's, inherited by every widget; its parts go on the
+    // box, the title, the buttons and the ×. Inline values come after, so
+    // they win; a slot's style comes after those, for its widget.
+    const { named, inline } = this.#style(tpl.style)
+    if (named) {
+      if (typeof named.font === 'string') root.style.fontFamily = `${named.font}, ${this.layout?.theme?.font ?? 'ui-monospace, monospace'}`
+      if (typeof named.size === 'number') root.style.fontSize = `${named.size * s}px`
+      if (typeof named.color === 'string') root.style.color = named.color
+      if (typeof named.weight === 'number') root.style.fontWeight = String(named.weight)
+      if (typeof named.accent === 'string') root.style.accentColor = named.accent
+      skin(root, named.panel, s)
+    }
+    styleSlot(root, inline, s)
+    this.button = named?.button ?? null
+    this.buildScale = s
 
     const closeable = tpl.closeable !== false
     const x = doc.createElement('span')
     x.className = 'dnp-ui-x'
     x.textContent = '×'
     x.onclick = () => this.close(msg.uiId)
+    if (named?.close) {
+      if (typeof named.close.color === 'string') x.style.color = named.close.color
+      // A picture in place of the ×.
+      if (typeof named.close.image === 'string') {
+        x.textContent = ''
+        Object.assign(x.style, { display: 'inline-block', width: '1.2em', height: '1.2em',
+                                 background: `url("/ui/${named.close.image}") center / contain no-repeat` })
+      }
+    }
     if (tpl.title?.show !== false) {
       const title = doc.createElement('div')
       title.className = 'dnp-ui-title'
+      skin(title, named?.title, s)
       const t = doc.createElement('span')
       t.textContent = msg.title
       title.append(t)
@@ -266,7 +321,10 @@ export class UiView {
       decor.setLayout({ ...this.layout, hud: tpl.decor })
     }
     for (const sl of slots) {
+      // A slot's style wins for its widget: over the style's button look too.
+      this.slotStyle = sl.style ?? null
       const el = this.#widget(msg.uiId, byId.get(sl.widget))
+      this.slotStyle = null
       el.className = `${el.className} dnp-ui-slot`
       const r = place({ anchor: 'tl', ...sl, h: sl.h ?? 32 }, this.layout, pw, sh, {}, { w: pw, h: 32 * s })
       Object.assign(el.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` })
@@ -303,6 +361,25 @@ export class UiView {
     placeIt()
     this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, msg, dim, decor, place: placeIt })
     this.pendingInputs = new Map()
+    this.button = null
+  }
+
+  // A template's `style`: { named, inline }. A name the layout lacks is the
+  // default look, said once.
+  #style (st) {
+    if (st === undefined || st === null) return { named: null, inline: null }
+    const name = typeof st === 'string' ? st : st.use
+    let named = null
+    if (name !== undefined) {
+      named = this.layout?.styles?.[name] ?? null
+      if (!named && !this.warned.has(`style:${name}`)) {
+        this.warned.add(`style:${name}`)
+        console.warn(`[ui] no style '${name}' in this layout; drawing the default look`)
+      }
+    }
+    let inline = null
+    if (typeof st === 'object') { inline = { ...st }; delete inline.use }
+    return { named, inline }
   }
 
   #widget (uiId, wgt) {
@@ -320,6 +397,17 @@ export class UiView {
       const b = doc.createElement('button')
       b.textContent = wgt.label
       b.onclick = () => send(1)
+      // The style's button look, and its `pressed` look while held.
+      const bs = this.button && (this.slotStyle ? { ...this.button, ...this.slotStyle } : this.button)
+      if (bs) {
+        const sc = this.buildScale ?? 1
+        skin(b, bs, sc)
+        if (bs.pressed) {
+          const down = { ...bs, ...bs.pressed }
+          b.onpointerdown = () => skin(b, down, sc)
+          b.onpointerup = b.onpointerleave = () => skin(b, bs, sc)
+        }
+      }
       row.appendChild(b)
       return row
     }
