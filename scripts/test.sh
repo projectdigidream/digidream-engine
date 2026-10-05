@@ -658,6 +658,10 @@ suite_studio () {
   # The sky: the server reads every sky line the studio writes (a broken one
   # it reports), and the client reads the preview message as written.
   node ../studio/test/sky.test.js | tail -2
+  # Climbing: what the studio says a climbable side does (a wall, a step's
+  # face, too low, the wrong side) is what the engine's controller does with
+  # it, a body pushed into each on a studio-drawn, mapc-baked course.
+  node ../studio/test/climb.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
