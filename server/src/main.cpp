@@ -26,6 +26,7 @@
 #include "dnp/math/rng.hpp"
 #include "dnp/nav/navgraph.hpp"
 #include "dnp/physics/params_table.hpp"
+#include "dnp/physics/param_text.hpp"
 #include "dnp/sim/testmap.hpp"
 #include "dnp/sim/world.hpp"
 #include "lua/commands.hpp"
@@ -785,6 +786,55 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // 0 platformer, 1 fps. Sent in WELCOME; an fps player's body turns at once
     // to the view and walks relative to it (MoveParams::move_relative).
     u8 controls = 0;
+    // The modules' `player` lines (docs/PLAYER.md): a parameter for every
+    // level (`level` empty) or for one, in module order -- a later module's
+    // line for the same key wins, as its `controls` does.
+    struct PlayerRule {
+        std::string level;
+        physics::ParamText p;
+    };
+    std::vector<PlayerRule> player_rules;
+    // Does a per-level rule's level name this level? Its own name, or
+    // dw_map12's map12 (the sky's and the music's rule).
+    static bool rule_names(const std::string& rule, const std::string& level) {
+        if (rule == level) return true;
+        const size_t cut = level.rfind('_');
+        return cut != std::string::npos && level.compare(cut + 1, std::string::npos, rule) == 0;
+    }
+    void apply_player_rules(physics::MoveParams& p, const std::string& level, bool per_level) const {
+        for (const PlayerRule& r : player_rules) {
+            if (per_level != !r.level.empty()) continue;
+            if (per_level && !rule_names(r.level, level)) continue;
+            physics::param_set_raw(p, r.p.id, r.p.raw);
+        }
+    }
+    // A player's body as the rules say (docs/PLAYER.md). Every player spawn
+    // comes through here, the --test-player stand-in included.
+    void seat_player(Level& L, u32 li, u32 agent) {
+        physics::MoveParams& p = L.world.params_mut(agent);
+        // FIRST PERSON: the view is the aim. The body faces it at once -- a
+        // turn rate that covers a whole turn in a tick is a snap -- and the push
+        // is relative to it. Both replicated, so the client predicts the same.
+        if (controls == 1) {
+            p.turn_speed = fx::from_int(1000);
+            p.move_relative = true;
+        }
+        const std::string lname = level_name(li);
+        apply_player_rules(p, lname, false);
+        // A map's body is what its doorways were built for, so it beats a
+        // module-wide size. The file always stores one; one that is the
+        // engine's default is a map that did not say.
+        const physics::MoveParams engine{};
+        if (L.map_store.body_radius() != engine.radius || L.map_store.body_height() != engine.height) {
+            p.radius = L.map_store.body_radius();
+            p.height = L.map_store.body_height();
+        }
+        apply_player_rules(p, lname, true);
+        // Spawn filled the tanks from the engine's defaults; a module that
+        // changed their size starts its players full of ITS fuel.
+        L.world.agent_mut(agent).mv.hover_fuel = p.hover_fuel_max;
+        L.world.agent_mut(agent).mv.flight_fuel = p.flight_fuel_max;
+    }
     // The modules' `sky` lines, first module first (docs/SKY.md).
     std::vector<SkyEntry> skies;
     bool persist_levels = false;
@@ -1974,16 +2024,12 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // Both fields are replicated parameters (ids 0 and 1), so the full
         // PARAM_UPDATE below carries them and prediction agrees from the first
         // tick. Per LEVEL, because two maps may be at different scales.
-        physics::MoveParams& p = L.world.params_mut(agent);
-        p.radius = L.map_store.body_radius();
-        p.height = L.map_store.body_height();
-        // FIRST PERSON: the view is the aim. The body faces it at once -- a
-        // turn rate that covers a whole turn in a tick is a snap -- and the push
-        // is relative to it. Both replicated, so the client predicts the same.
-        if (controls == 1) {
-            p.turn_speed = fx::from_int(1000);
-            p.move_relative = true;
-        }
+        //
+        // THE PLAYER'S RULES, lowest first (docs/PLAYER.md): the engine's
+        // defaults, the control scheme's, the modules' `player` lines, the
+        // map's own body if it names one, the modules' lines for this level.
+        // Scripts come after all of these, through effects.
+        seat_player(L, li, agent);
 
         // Capture the authored parameters as this agent's base. Everything
         // effects do is computed from here, never from the live value --
@@ -4444,6 +4490,31 @@ int main(int argc, char** argv) {
                 }
                 continue;
             }
+            // `player [<level>] <parameter> <value>` (docs/PLAYER.md): the
+            // replicated movement rules a player spawns with.
+            if (std::strncmp(line, "player ", 7) == 0) {
+                std::vector<std::string> w = sky_words(line + 7);
+                if (w.size() != 2 && w.size() != 3) {
+                    std::fprintf(stderr, "[srv] %s/module.txt: `player %s` -- want `player <parameter> <value>` "
+                                 "or `player <level> <parameter> <value>`\n", module_dirs[mi], w.empty() ? "" : w[0].c_str());
+                    continue;
+                }
+                const bool per = w.size() == 3;
+                physics::ParamText pt;
+                const char* err = "";
+                const std::string& name = w[per ? 1 : 0];
+                if (!physics::parse_param_text(name.c_str(), w[per ? 2 : 1].c_str(), pt, err)) {
+                    std::fprintf(stderr, "[srv] %s/module.txt: player %s %s -- %s; ignored\n", module_dirs[mi],
+                                 name.c_str(), w[per ? 2 : 1].c_str(), err);
+                    continue;
+                }
+                if ((name == "radius" || name == "height") && pt.raw <= 0) {
+                    std::fprintf(stderr, "[srv] %s/module.txt: player %s must be above 0; ignored\n", module_dirs[mi], name.c_str());
+                    continue;
+                }
+                srv.player_rules.push_back({per ? w[0] : std::string(), pt});
+                continue;
+            }
             // `sky <level|default> <kind> <pictures...> [settings]` (docs/SKY.md).
             // The first module to name a level's sky wins, as for its files.
             if (std::strncmp(line, "sky ", 4) == 0) {
@@ -4668,9 +4739,7 @@ int main(int argc, char** argv) {
         const u32 a = L.world.spawn(at);
         if (a < sim::MAX_AGENTS) {
             L.hp[a] = 100;
-            physics::MoveParams& p = L.world.params_mut(a);
-            p.radius = L.map_store.body_radius();
-            p.height = L.map_store.body_height();
+            srv.seat_player(L, 0, a);
             L.effects.set_base(a, L.world.params(a));
             // kind 0 and NOT scripted, which together are what every mob
             // script means by "a player": nobody placed it, so it walked in.

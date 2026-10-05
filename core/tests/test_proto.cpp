@@ -12,6 +12,7 @@
 
 #include "dnp/math/rng.hpp"
 #include "dnp/physics/params_table.hpp"
+#include "dnp/physics/param_text.hpp"
 #include "dnp/proto/messages.hpp"
 
 using namespace dnp;
@@ -630,6 +631,37 @@ static void test_param_update() {
 // The parameter table is addressed by WIRE id, so a mistake in it is a protocol
 // bug rather than a local one: the server would encode `jump_impulse` and the
 // client would apply it to `friction`.
+// A parameter as a module's `player` line writes it (docs/PLAYER.md).
+static void test_param_text() {
+    std::printf("params: text to parameters, exactly\n");
+    using namespace dnp::physics;
+    ParamText t;
+    const char* err = "";
+    CHECK(parse_param_text("jump_impulse", "9.5", t, err) && t.id == param_id_by_name("jump_impulse") &&
+          t.raw == fx::from_frac(19, 2).raw);
+    // No float in the path: 0.1 is from_frac(1, 10) to the last bit.
+    CHECK(parse_param_text("friction", "0.1", t, err) && t.raw == fx::from_frac(1, 10).raw);
+    CHECK(parse_param_text("gravity_scale", "-0.25", t, err) && t.raw == -fx::from_frac(1, 4).raw);
+    CHECK(parse_param_text("hover_enabled", "on", t, err) && t.raw == 1);
+    CHECK(parse_param_text("climb_enabled", "no", t, err) && t.raw == 0);
+    CHECK(parse_param_text("max_jumps", "3", t, err) && t.raw == 3);
+    // And it lands in the field the name says.
+    MoveParams p;
+    CHECK(parse_param_text("dash_speed", "12.25", t, err));
+    param_set_raw(p, t.id, t.raw);
+    CHECK(p.dash_speed == fx::from_frac(49, 4));
+    // CONTROLS: each is refused, with a reason.
+    static const char* const BAD[][2] = {
+        {"jump_height", "9"}, {"jump_impulse", "fast"}, {"jump_impulse", "1e3"}, {"jump_impulse", ""},
+        {"hover_enabled", "maybe"}, {"max_jumps", "256"}, {"max_jumps", "1.5"}, {"max_jumps", "-1"}};
+    for (const auto& bad : BAD) {
+        err = "";
+        const bool ok = parse_param_text(bad[0], bad[1], t, err);
+        if (ok || *err == '\0') std::printf("  accepted %s %s\n", bad[0], bad[1]);
+        CHECK(!ok && *err != '\0');
+    }
+}
+
 static void test_param_table() {
     std::printf("params: every field round-trips through its wire id\n");
 
@@ -1192,6 +1224,7 @@ int main() {
     test_snapshot_hostile();
     test_param_update();
     test_param_table();
+    test_param_text();
     test_fuzz();
     // ------------------------------------------- a full snapshot still carries events
     //

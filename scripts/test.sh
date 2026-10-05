@@ -821,6 +821,9 @@ suite_stack () {
      `# Persistence: save and load a game, refused without the module's say-so,` \
      `# and a level that survives a server restart (docs/SAVING.md).` \
      && node test/persist.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# The player's rules from a module's player lines (docs/PLAYER.md): what a` \
+     `# joining client is sent. CONTROL: a line for another level does not land.` \
+     && node test/player.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \
