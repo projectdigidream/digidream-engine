@@ -477,6 +477,35 @@ function EXEC.stop_sector(g, n, ev, pull)
   for _, idx in ipairs(sectors_for(n, pull)) do triggers.verbs.action({ a = "sector_stop", sector = idx }, ev) end
   return "then"
 end
+-- Sector looks (SECTOR_SET): kept by the server, so a player arriving later
+-- sees the lights already out.
+function EXEC.set_floor_texture(g, n, ev, pull)
+  if dnp.set_sector_texture == nil then return "then" end
+  for _, idx in ipairs(sectors_for(n, pull)) do dnp.set_sector_texture(idx, "floor", n.texture) end
+  return "then"
+end
+function EXEC.set_ceiling_texture(g, n, ev, pull)
+  if dnp.set_sector_texture == nil then return "then" end
+  for _, idx in ipairs(sectors_for(n, pull)) do dnp.set_sector_texture(idx, "ceiling", n.texture) end
+  return "then"
+end
+function EXEC.set_sector_light(g, n, ev, pull)
+  if dnp.set_sector_light == nil then return "then" end
+  for _, idx in ipairs(sectors_for(n, pull)) do dnp.set_sector_light(idx, n.light, n.seconds or 0) end
+  return "then"
+end
+function EXEC.set_sector_effect(g, n, ev, pull)
+  if dnp.set_sector_effect == nil then return "then" end
+  local settings = false
+  if n.on ~= false then
+    settings = {}
+    if n.density ~= nil then settings.density = n.density end
+    if n.color ~= nil then settings.color = n.color end
+  end
+  for _, idx in ipairs(sectors_for(n, pull)) do dnp.set_sector_effect(idx, n.effect, settings) end
+  return "then"
+end
+
 function EXEC.set_wall_texture(g, n, ev, pull)
   if dnp.set_side_texture ~= nil then dnp.set_side_texture(n.side, n.part or "middle", n.texture) end
   return "then"

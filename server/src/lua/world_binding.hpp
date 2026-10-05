@@ -134,6 +134,10 @@ struct UiSink {
     // level and remembered, because a switch thrown before you arrived is part
     // of the world you are arriving in.
     virtual void set_side_texture(u32 level, const proto::SideTexture& t) = 0;
+    // A sector's look changes: its floor or ceiling picture, its light, or an
+    // effect. Kept and broadcast as a side texture is. Not pure, so a test's
+    // sink need not care.
+    virtual void set_sector(u32 /*level*/, const proto::SectorSet& /*s*/) {}
     // The map's music changes cue, for whoever is watching `agent` -- or for
     // everyone in the level when it is negative. Not remembered: a cue is a
     // moment, and a player joining later starts on the map's default cue.

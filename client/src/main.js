@@ -19,7 +19,7 @@ import { RenderClock } from './render/renderclock.js'
 import { GhostMissiles } from './render/ghostmissiles.js'
 import { KnockLayer, shoveOf } from './render/knock.js'
 import { NearPresent, presentWeight } from './render/nearnow.js'
-import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag } from './mapdata.js'
+import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag, effectFrom } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
 import {
@@ -386,6 +386,9 @@ let simStore = null                      // the world's store: the region's, or 
 const chunkMaps = new Map()              // level -> its own parse, for every level held (region)
 const motionNames = new Set()            // every sector name a motion has been declared for
 const sideTextureLog = new Map()         // level -> switches thrown in it, for when it is home
+// Sector lights fading (SECTOR_SET with a fade): local sector -> { from, to,
+// start, ms }. Kept in the rebuilt-every-frame half of the mesh while they run.
+const lightFades = new Map()
 
 let conn = null
 let welcome = null
@@ -462,6 +465,15 @@ let sectorFxFor = null
 dnpStats.sectorFx = () => sectorFx
   ? { counts: sectorFx.counts, fogs: sectorFx.fogCount, meshes: sectorFx.meshes.length, fx: mapData?.fx }
   : { none: true, fx: mapData?.fx ?? null }
+// One sector's look as this client holds it: what a page test reads to see a
+// SECTOR_SET arrive (its light, its pictures, its effects).
+dnpStats.sectorLook = (i) => {
+  const s = mapData?.sectors?.[i]
+  if (!s) return null
+  return { light: s.light, floor: view.map.textures[s.floorTex], ceiling: view.map.textures[s.ceilTex],
+           effects: (mapData.fx ?? []).filter((e) => e.sector === i).map((e) => ({ kind: e.kind, ...e.params })),
+           fogs: sectorFx?.fogCount ?? 0 }
+}
 let camPathTag = -1
 let camPaths = []
 let camPathSpline = null
@@ -617,6 +629,8 @@ if (LIVE) {
       // Every neighbour of it was already a queue drained in the frame loop --
       // motion sets, parameter updates, welcomes. This was the one that was not.
       else if (m.type === MSG.SIDE_TEXTURE) sideTextures.push(m)
+      // Sector looks share the switches' queue, and so their region bookkeeping.
+      else if (m.type === MSG.SECTOR_SET) sideTextures.push(m)
       else if (m.type === MSG.UI_SET) ui.set(m.uiId, m.widgetId, m.value)
       // How the camera should follow (design §4.1). The server never says where
       // the camera IS -- only how it behaves -- so this is applied to the
@@ -1299,6 +1313,8 @@ function walkInto (level, name = null) {
     loadMapTextures().catch((e) => say(`textures failed to load: ${e.message}`))
   }
   movers = [...motionNames].map(homeLocal).filter((i) => i >= 0)
+  // A fade in the level left is over: its sector indices mean nothing here.
+  lightFades.clear()
   if (movers.length) view.setDynamicSectors(movers)
   // Switches thrown in it while it was next door, now that it can show them.
   for (const m of sideTextureLog.get(level) ?? []) sideTextures.push(m)
@@ -2386,6 +2402,41 @@ function takeWeaponWanted () {
   return world.hasWeapons ? world.weaponSlot(agent, n) : NO_WEAPON
 }
 
+// The sectors whose mesh is rebuilt every frame it changes: the movers, and
+// any sector whose light is fading.
+function dynamicSectors (extra = []) {
+  return [...new Set([...movers, ...lightFades.keys(), ...extra])]
+}
+
+// A sector's look changed (SECTOR_SET; the server's set_sector): a floor or
+// ceiling picture, its light -- at once or fading -- or one of its effects.
+function applySectorSet (local, m) {
+  const s = mapData?.sectors?.[local]
+  if (!s) return
+  if (m.what === 'floor' || m.what === 'ceiling') {
+    const changed = view.setSectorTexture(local, m.what, m.texture.toUpperCase(),
+      { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
+    if (changed >= 0) view.setDynamicSectors(dynamicSectors([changed]))
+  } else if (m.what === 'light') {
+    if (m.fadeMs > 0) {
+      lightFades.set(local, { from: s.light, to: m.light, start: performance.now(), ms: m.fadeMs })
+    } else {
+      lightFades.delete(local)
+      s.light = m.light
+    }
+    view.setDynamicSectors(dynamicSectors([local]))
+  } else {
+    // An effect: that kind's entry replaced, or taken away, and the effects
+    // drawn again from the list (the frame loop rebuilds when it changes).
+    const list = (mapData.fx ??= [])
+    const at = list.findIndex((e) => e.sector === local && e.kind === m.kind)
+    const e = m.on ? effectFrom(core, local, m.kind, m.params) : null
+    if (at >= 0) list.splice(at, 1)
+    if (e) list.push(e)
+    sectorFxFor = null
+  }
+}
+
 function frame (now) {
   requestAnimationFrame(frame)
   const tFrame = performance.now()
@@ -2513,10 +2564,11 @@ function frame (now) {
     }
     while (sideTextures.length) {
       const m = sideTextures.shift()
+      const name = m.type === MSG.SECTOR_SET ? m.sector : m.side
       // By name: a switch thrown in another level of the region waits until
       // that level is home, when its full view exists to show it.
-      if (region && (m.side >>> 16) !== homeLevel) {
-        const k = m.side >>> 16
+      if (region && (name >>> 16) !== homeLevel) {
+        const k = name >>> 16
         if (!sideTextureLog.has(k)) sideTextureLog.set(k, [])
         sideTextureLog.get(k).push(m)
         continue
@@ -2524,6 +2576,10 @@ function frame (now) {
       if (region) {
         if (!sideTextureLog.has(homeLevel)) sideTextureLog.set(homeLevel, [])
         sideTextureLog.get(homeLevel).push(m)
+      }
+      if (m.type === MSG.SECTOR_SET) {
+        applySectorSet(homeLocal(m.sector), m)
+        continue
       }
       const side = homeLocal(m.side)
       const sector = view.setSideTexture(side, m.field, m.name.toUpperCase(),
@@ -2555,8 +2611,22 @@ function frame (now) {
   // frame for the rest of the map once any door had opened once -- see
   // mapmovers.js, which is where that reasoning lives.
   const tMesh = performance.now()
-  if (fresh) view.setDynamicSectors(movers)   // rebuilds both halves itself
+  if (fresh) view.setDynamicSectors(dynamicSectors())   // rebuilds both halves itself
   else if (moved) view.rebuildDynamic()
+  // Sector lights fading: the light written, the fading sectors rebuilt; one
+  // that has arrived leaves the per-frame half again.
+  if (lightFades.size) {
+    const t = performance.now()
+    let ended = false
+    for (const [i, f] of lightFades) {
+      const k = Math.min(1, (t - f.start) / f.ms)
+      const s = mapData.sectors[i]
+      if (s) s.light = Math.round(f.from + (f.to - f.from) * k)
+      if (k >= 1) { lightFades.delete(i); ended = true }
+    }
+    if (ended) view.setDynamicSectors(dynamicSectors())
+    else view.rebuildDynamic()
+  }
   blend('mesh', performance.now() - tMesh)
 
   let a = world.readAgent(agent)

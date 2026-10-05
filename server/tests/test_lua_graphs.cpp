@@ -86,6 +86,8 @@ struct RecordingUi : server::lua::UiSink {
         if (s) sky = *s;
     }
     void set_side_texture(u32, const proto::SideTexture&) override {}
+    std::vector<proto::SectorSet> sectors;
+    void set_sector(u32, const proto::SectorSet& s) override { sectors.push_back(s); }
     void music(u32, i32, const proto::MusicCue&) override {}
     void screen(u32, i32, const proto::ScreenSet& sc) override {
         for (u16 i = 0; i < sc.count; ++i) scr[sc.fields[i].id] = sc.fields[i].milli;
@@ -779,6 +781,65 @@ int main(int argc, char** argv) {
           g_ui.sky.fields[1].milli == 250);
     CHECK(run("graphs.call('back', nil, nil)", "set_sky default"));
     CHECK(g_ui.sky_kind == -1);
+
+    std::printf("-- sector looks (SECTOR_SET) --\n");
+    {
+        g_ui.sectors.clear();
+        CHECK(run("dnp.set_sector_texture(2, 'floor', 'LAVA1')", "floor"));
+        CHECK(run("dnp.set_sector_light(0, 40, 2.5)", "light"));
+        CHECK(run("dnp.set_sector_effect(0, 'fog', { density = 0.5, color = '#203040' })", "fog"));
+        CHECK(run("dnp.set_sector_effect(0, 'rain', false)", "rain off"));
+        CHECK(g_ui.sectors.size() == 4);
+        if (g_ui.sectors.size() == 4) {
+            const auto& f = g_ui.sectors[0];
+            CHECK(f.sector == 2 && f.what == proto::SectorWhat::Floor && f.texture.len == 5);
+            const auto& l = g_ui.sectors[1];
+            CHECK(l.what == proto::SectorWhat::Light && l.light == 40 && l.fade_ms == 2500);
+            const auto& g = g_ui.sectors[2];
+            CHECK(g.what == proto::SectorWhat::Effect && g.on && g.fx.kind == 5 && g.fx.count == 2);
+            bool colour = false, dense = false;
+            for (u8 i = 0; i < g.fx.count; ++i) {
+                colour = colour || (g.fx.params[i].key == 8 && g.fx.params[i].raw == 0x203040);
+                dense = dense || (g.fx.params[i].key == 1 && g.fx.params[i].raw == fx::from_frac(1, 2).raw);
+            }
+            CHECK(colour && dense);
+            CHECK(!g_ui.sectors[3].on && g_ui.sectors[3].fx.kind == 1);
+        }
+        // CONTROLS: a sector the map lacks, an effect that is not one, and a
+        // setting fog does not take are each a script error, said.
+        for (const char* bad : {"dnp.set_sector_light(9, 10)", "dnp.set_sector_effect(0, 'smoke')",
+                                "dnp.set_sector_effect(0, 'fog', { speed = 3 })",
+                                "dnp.set_sector_texture(0, 'wall', 'X')"}) {
+            const std::string src = std::string("sx_ok = pcall(function() ") + bad + " end)";
+            CHECK(run(src.c_str(), bad));
+            if (truthy("sx_ok")) std::printf("  accepted: %s\n", bad);
+            CHECK(!truthy("sx_ok"));
+        }
+        // The graph nodes, by tag: light fading, ceiling opened to the sky, snow.
+        g_ui.sectors.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "looks",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "dusk" },
+                     { "id": "l", "type": "set_sector_light", "tag": 1, "light": 60, "seconds": 3 },
+                     { "id": "c", "type": "set_ceiling_texture", "tag": 3, "texture": "F_SKY1" },
+                     { "id": "s", "type": "set_sector_effect", "tag": 1, "effect": "snow", "density": 2 },
+                     { "id": "o", "type": "set_sector_effect", "tag": 3, "effect": "fog", "on": false } ],
+          "links": [ ["go.then", "l.in"], ["l.then", "c.in"], ["c.then", "s.in"], ["s.then", "o.in"] ] })"));
+        CHECK(run("graphs.call('dusk', nil, nil)", "the looks"));
+        CHECK(g_ui.sectors.size() == 4);
+        if (g_ui.sectors.size() == 4) {
+            CHECK(g_ui.sectors[0].sector == 0 && g_ui.sectors[0].light == 60 && g_ui.sectors[0].fade_ms == 3000);
+            CHECK(g_ui.sectors[1].sector == 2 && g_ui.sectors[1].what == proto::SectorWhat::Ceiling);
+            CHECK(g_ui.sectors[2].fx.kind == 2 && g_ui.sectors[2].on && g_ui.sectors[2].fx.params[0].raw == F(2).raw);
+            CHECK(g_ui.sectors[3].fx.kind == 5 && !g_ui.sectors[3].on);
+        }
+        // CONTROL: a tag no sector carries changes nothing.
+        g_ui.sectors.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "nowhere",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "nowhere" },
+                     { "id": "l", "type": "set_sector_light", "tag": 77, "light": 0 } ],
+          "links": [ ["go.then", "l.in"] ] })"));
+        CHECK(run("graphs.call('nowhere', nil, nil)", "nowhere") && g_ui.sectors.empty());
+    }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

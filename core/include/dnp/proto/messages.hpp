@@ -9,6 +9,7 @@
 //
 #include "dnp/proto/bytes.hpp"
 #include "dnp/sim/weapon.hpp"
+#include "dnp/geom/sector_fx.hpp"
 
 namespace dnp::proto {
 
@@ -125,6 +126,10 @@ inline constexpr u8  MSG_WEAPON_DEFS = 0x35;
 // whenever a script changes it. Not simulation state -- never hashed, never
 // predicted.
 inline constexpr u8  MSG_SKY_SET     = 0x36;
+// A sector's look changes (docs/GRAPHS.md "sectors"): its floor or ceiling
+// picture, its light (with a fade), or one of its effects. Kept per level and
+// sent to whoever arrives, as a switch thrown is. Not simulation state.
+inline constexpr u8  MSG_SECTOR_SET  = 0x37;
 inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
 inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
 inline constexpr u32 HUD_NAME_MAX    = 24;
@@ -575,6 +580,25 @@ struct SkySet {
 
 void encode_sky_set(ByteWriter& w, const SkySet& s) noexcept;
 bool decode_sky_set(ByteReader& r, SkySet& out) noexcept;
+
+// What a SECTOR_SET changes, and the change. One record per (sector, what,
+// and for an effect its kind): the server keeps the latest of each.
+enum class SectorWhat : u8 { Floor = 0, Ceiling = 1, Light = 2, Effect = 3 };
+
+struct SectorSet {
+    // On the wire, the sector's NAME (geom::MapStorage::sector_name): chunk key
+    // high, index low. Held as the sender's own index until it is sent.
+    u32        sector = 0;
+    SectorWhat what = SectorWhat::Floor;
+    UiText     texture{};      // Floor, Ceiling
+    u8         light = 0;      // Light: 0..255, the map's own scale
+    u16        fade_ms = 0;    // Light: how long the change takes
+    bool       on = false;     // Effect: false takes the kind off the sector
+    geom::SectorFx fx{};       // Effect: kind and settings (fx.sector unused)
+};
+
+void encode_sector_set(ByteWriter& w, const SectorSet& s) noexcept;
+bool decode_sector_set(ByteReader& r, SectorSet& out) noexcept;
 
 struct UiEvent {
     u32 ui_id = 0;

@@ -43,6 +43,8 @@ export const MSG = {
   WEAPON_DEFS: 0x35,
   // The sky the player's level is drawn under (docs/SKY.md).
   SKY_SET: 0x36,
+  // A sector's look changes: floor or ceiling picture, light, an effect.
+  SECTOR_SET: 0x37,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -373,6 +375,33 @@ export function decodeControlMessage (buf) {
 
   // The sky (docs/SKY.md): a kind, its pictures by texture name, and
   // {id, milli} fields as CAMERA_SET's. An unknown kind refuses the message.
+  // A sector's look (core encode_sector_set): what 0 floor, 1 ceiling (a
+  // texture name), 2 light (u8, fade ms), 3 an effect (kind, on, settings).
+  if (type === MSG.SECTOR_SET) {
+    const sector = r.u32()
+    const what = r.u8()
+    if (!r.ok || what > 3) return null
+    const m = { type, sector, what: ['floor', 'ceiling', 'light', 'effect'][what] }
+    if (what <= 1) {
+      const n = r.u16()
+      if (!r.ok || n > UI_MAX_TEXT) return null
+      const b = r.bytes(n)
+      if (b === null) return null
+      m.texture = new TextDecoder().decode(b)
+    } else if (what === 2) {
+      m.light = r.u8()
+      m.fadeMs = r.u16()
+    } else {
+      m.kind = r.u8()
+      m.on = r.u8() !== 0
+      const n = r.u8()
+      if (!r.ok || m.kind < 1 || m.kind > 5 || n > 32) return null
+      m.params = []
+      for (let i = 0; i < n; i++) m.params.push({ key: r.u8(), raw: r.i64() })
+    }
+    return r.ok ? m : null
+  }
+
   if (type === MSG.SKY_SET) {
     const kind = r.u8()
     const n = r.u8()

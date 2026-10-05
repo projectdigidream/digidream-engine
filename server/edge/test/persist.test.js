@@ -96,6 +96,7 @@ async function start (persist, stateDir) {
   run.welcomes = 0
   run.results = []
   run.skies = []
+  run.sectors = []
   ;(async () => {
     const r = control.readable.getReader()
     let buf = Buffer.alloc(0)
@@ -112,6 +113,7 @@ async function start (persist, stateDir) {
           if (m?.type === MSG.WELCOME) run.welcomes++
           else if (m?.type === MSG.GAME_RESULT) run.results.push(m)
           else if (m?.type === MSG.SKY_SET) run.skies.push(m)
+          else if (m?.type === MSG.SECTOR_SET) run.sectors.push(m)
         }
       }
     } catch {}
@@ -209,6 +211,9 @@ try {
     const restored = Number(second.log.match(/restored (\d) keys/)?.[1])
     check(restored === 2, `it comes back as it was left: two keys (${restored})`)
     check(skyOf(second) === '1:SKY2:2000', `and with the sky its script gave it, which nothing set again (${skyOf(second)})`)
+    const looks = (run) => run.sectors.map((m) => m.what === 'light' ? `light ${m.light}` : `${m.what} ${m.texture ?? ''}`).sort().join(', ')
+    check(looks(first) === 'ceiling F_SKY1, light 77', `CONTROL: the fresh start's script changed a sector (${looks(first)})`)
+    check(looks(second) === 'ceiling F_SKY1, light 77', `and the restart keeps it, from the saved state (${looks(second)})`)
     check(/saved level state\(s\) read/.test(second.log), 'and says where it read them from')
 
     // A new game forgets the kept state ON DISK too, or the next restart would

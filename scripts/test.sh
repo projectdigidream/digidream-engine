@@ -831,6 +831,9 @@ suite_stack () {
      `# Climbing on modules/climbtest's course: a vine ledge climbed and mantled` \
      `# onto, never the air above it. CONTROL: the bare ledge beside it never grabs.` \
      && node test/climb.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Sector looks (SECTOR_SET): a floor, fog and a fading light set by a script;` \
+     `# whoever arrives later is told the state. CONTROL: not told to fade.` \
+     && node test/sector.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \

@@ -155,6 +155,32 @@ export function readMap (map) {
  * from core's own table through the bindings. Numbers are doubles; a colour is
  * 0xRRGGBB.
  */
+/**
+ * A runtime effect (SECTOR_SET) as readEffects would have read it from the
+ * map: every key the kind takes, the message's where it names one, the
+ * kind's default where it does not. `params` is [{ key, raw }].
+ */
+export function effectFrom (core, sector, kind, params) {
+  const M = core.M
+  if (!M._dnp_fx_default) return null      // a core built before runtime effects
+  const keys = M._dnp_fx_key_count()
+  const namePtr = M._malloc(32)
+  const e = { sector, kind, params: {} }
+  const b64 = core.buf64 / 8
+  for (let k = 1; k <= keys; k++) {
+    if (!M._dnp_fx_takes(kind, k)) continue
+    const len = M._dnp_fx_key_name(k, namePtr, 32)
+    const name = new TextDecoder().decode(M.HEAPU8.subarray(namePtr, namePtr + len))
+    const given = params.find((p) => p.key === k)
+    let raw
+    if (given) raw = given.raw
+    else { M._dnp_fx_default(kind, k, core.buf64); raw = core.views.i64[b64] }
+    e.params[name] = M._dnp_fx_key_is_color(k) ? Number(raw) : fxToFloat(raw)
+  }
+  M._free(namePtr)
+  return e
+}
+
 export function readEffects (map) {
   const core = map.core
   const M = core.M

@@ -28,6 +28,9 @@ if not dnp.restoring() then
   -- And a sky (docs/SKY.md), only here: a restored level must get it back from
   -- its saved state, since this line does not run again.
   dnp.sky("strip SKY2 repeat 2")
+  -- And a sector's light and floor (SECTOR_SET), the same way.
+  dnp.set_sector_light(0, 77)
+  dnp.set_sector_texture(0, "ceiling", "F_SKY1")
 end
 
 local next_at = dnp.tick() + 120

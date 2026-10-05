@@ -216,6 +216,9 @@ struct Level {
     // the event to know the state would show every returning player a different
     // wall. Same reasoning as the sector motions re-sent on join.
     std::vector<proto::SideTexture> side_textures;
+    // Sector looks a script has changed (SECTOR_SET): the latest of each
+    // (sector, what, effect kind), kept for whoever arrives, as switches are.
+    std::vector<proto::SectorSet> sector_sets;
     // The level's camera defaults (dnp.level_camera), sent to everyone who
     // joins. Not simulation state; one CAMERA_SET per joining client.
     proto::CameraSet camera;
@@ -1184,6 +1187,23 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
         // The sky a script gave the level (docs/SKY.md), as its words.
         if (L.has_sky) out += "sky " + sky_text(L.sky) + "\n";
+        // Sector looks, as words: `look <sector> floor|ceiling NAME`,
+        // `look <sector> light N`, `look <sector> fx KIND off|on key=raw...`.
+        for (const proto::SectorSet& t : L.sector_sets) {
+            const u32 local = c ? t.sector - c->sectors.first : t.sector;
+            std::string l = "look " + std::to_string(local) + " ";
+            if (t.what == proto::SectorWhat::Floor || t.what == proto::SectorWhat::Ceiling) {
+                l += t.what == proto::SectorWhat::Floor ? "floor " : "ceiling ";
+                l += std::string(t.texture.text, t.texture.len);
+            } else if (t.what == proto::SectorWhat::Light) {
+                l += "light " + std::to_string(t.light);
+            } else {
+                l += "fx " + std::to_string(t.fx.kind) + (t.on ? " on" : " off");
+                for (u8 i = 0; t.on && i < t.fx.count; ++i)
+                    l += " " + std::to_string(t.fx.params[i].key) + "=" + std::to_string(t.fx.params[i].raw);
+            }
+            out += l + "\n";
+        }
         if (L.vm.is_open()) {
             std::string parts, err;
             lua::persist_capture(L.vm.state(), parts, err);
@@ -1234,6 +1254,34 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     static_cast<sim::MotionTarget>(target), pivot,
                     static_cast<i64>(angle), static_cast<i64>(angle));
                 ++motions;
+            } else if (ln.compare(0, 5, "look ") == 0) {
+                std::vector<std::string> w = sky_words(ln.substr(5));
+                proto::SectorSet t;
+                bool ok = w.size() >= 3;
+                if (ok) t.sector = (c ? c->sectors.first : 0) + static_cast<u32>(std::strtoul(w[0].c_str(), nullptr, 10));
+                if (ok && (w[1] == "floor" || w[1] == "ceiling")) {
+                    t.what = w[1] == "floor" ? proto::SectorWhat::Floor : proto::SectorWhat::Ceiling;
+                    t.texture.len = static_cast<u16>(std::min<size_t>(w[2].size(), proto::UI_MAX_TEXT));
+                    std::memcpy(t.texture.text, w[2].data(), t.texture.len);
+                } else if (ok && w[1] == "light") {
+                    t.what = proto::SectorWhat::Light;
+                    t.light = static_cast<u8>(std::min(255L, std::max(0L, std::strtol(w[2].c_str(), nullptr, 10))));
+                } else if (ok && w[1] == "fx" && w.size() >= 4) {
+                    t.what = proto::SectorWhat::Effect;
+                    t.fx.kind = static_cast<u8>(std::strtoul(w[2].c_str(), nullptr, 10));
+                    t.on = w[3] == "on";
+                    for (size_t k = 4; k < w.size() && t.fx.count < geom::MAX_FX_PARAMS; ++k) {
+                        const size_t eq = w[k].find('=');
+                        if (eq == std::string::npos) continue;
+                        t.fx.params[t.fx.count].key = static_cast<u8>(std::strtoul(w[k].c_str(), nullptr, 10));
+                        t.fx.params[t.fx.count].raw = std::strtoll(w[k].c_str() + eq + 1, nullptr, 10);
+                        ++t.fx.count;
+                    }
+                    ok = t.fx.kind >= 1 && t.fx.kind <= geom::FX_KIND_COUNT;
+                } else {
+                    ok = false;
+                }
+                if (ok) set_sector(li, t);
             } else if (ln.compare(0, 5, "side ") == 0) {
                 unsigned local = 0, field = 0;
                 char name[64] = {0};
@@ -1925,6 +1973,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 if (same_world(s, m.level)) {
                     send_motion_sets(N, id);
                     for (const auto& t : N.side_textures) send_side_texture(s, m.level, t);
+                    for (const auto& t : N.sector_sets) send_sector_set(s, m.level, t, true);
                 }
             }
         }
@@ -2125,6 +2174,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // And the switches already thrown in this level. A wall that changed
         // before you arrived is part of the world you are arriving in.
         for (const auto& t : L.side_textures) send_side_texture(s, li, t);
+        // And sectors re-lit or re-floored before you arrived -- at once, not
+        // faded: a fade is a moment, and you were not there for it.
+        for (const auto& t : L.sector_sets) send_sector_set(s, li, t, true);
         // And the level's camera, if its script set one: the angle the map was
         // made for, and whether it may be turned away from.
         if (L.has_camera) send_camera(s, L.camera);
@@ -3032,6 +3084,46 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             Session& s = kv.second;
             if (same_world(s, level_index)) send_side_texture(s, level_index, t);
         }
+    }
+
+    void set_sector(u32 level_index, const proto::SectorSet& t) override {
+        if (level_index >= level_count()) return;
+        Level& L = level(level_index);
+        // The latest of each (sector, what, and an effect's kind): a light set
+        // twice is one state, and a join must not replay a history.
+        const auto same = [&](const proto::SectorSet& e) {
+            return e.sector == t.sector && e.what == t.what &&
+                   (t.what != proto::SectorWhat::Effect || e.fx.kind == t.fx.kind);
+        };
+        bool replaced = false;
+        for (auto& e : L.sector_sets) if (same(e)) { e = t; replaced = true; break; }
+        if (!replaced) {
+            if (L.sector_sets.size() >= 1024) {
+                std::fprintf(stderr, "[srv] level %u: too many sector changes, ignoring\n", level_index);
+                return;
+            }
+            L.sector_sets.push_back(t);
+        }
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (same_world(s, level_index)) send_sector_set(s, level_index, t, false);
+        }
+    }
+
+    // `instant` drops the fade: what an arrival is told is the state now.
+    void send_sector_set(Session& s, u32 owner_level, const proto::SectorSet& t, bool instant) {
+        u8 buf[512];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_SECTOR_SET);
+        proto::SectorSet named = t;
+        named.sector = level(owner_level).host->store->sector_name(static_cast<i32>(t.sector));
+        if (instant) named.fade_ms = 0;
+        proto::encode_sector_set(w, named);
+        if (!w.ok()) return;
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(s.id, buf, w.size());
     }
 
     void send_side_texture(Session& s, u32 owner_level, const proto::SideTexture& t) {

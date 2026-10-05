@@ -2,6 +2,7 @@
 #include "mobs/mob_runtime.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1873,6 +1874,108 @@ int l_dnp_set_side_texture(lua_State* L) {
     return 0;
 }
 
+// --- SECTOR LOOKS (SECTOR_SET; docs/GRAPHS.md "sectors") -------------------
+//
+// What a sector shows, changed while the game runs: kept by the server for
+// whoever arrives, saved with the level, never simulated.
+
+static u32 sector_arg(lua_State* L, WorldContext& ctx, int idx) {
+    const geom::MapData* m = ctx.world->map();
+    const lua_Number n = luaL_checknumber(L, idx);
+    if (m == nullptr || n < 0 || n >= m->sector_count) {
+        luaL_error(L, "no sector %d in this map", static_cast<int>(n));
+        return 0;
+    }
+    return static_cast<u32>(n);
+}
+
+// dnp.set_sector_texture(sector, "floor" | "ceiling", name)
+int l_dnp_set_sector_texture(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (ctx.ui == nullptr || ctx.world->map() == nullptr) return 0;
+    proto::SectorSet t;
+    t.sector = sector_arg(L, ctx, 1);
+    const char* part = luaL_checkstring(L, 2);
+    if (std::strcmp(part, "floor") == 0) t.what = proto::SectorWhat::Floor;
+    else if (std::strcmp(part, "ceiling") == 0) t.what = proto::SectorWhat::Ceiling;
+    else return luaL_error(L, "a sector's picture is its 'floor' or its 'ceiling', got '%s'", part);
+    if (!ui_text(L, 3, t.texture, "texture name")) return 0;
+    ctx.ui->set_sector(ctx.level, t);
+    return 0;
+}
+
+// dnp.set_sector_light(sector, level [, seconds]) -- level 0..255, the map's
+// own `light` scale; seconds is the fade, on every client at once.
+int l_dnp_set_sector_light(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (ctx.ui == nullptr || ctx.world->map() == nullptr) return 0;
+    proto::SectorSet t;
+    t.sector = sector_arg(L, ctx, 1);
+    t.what = proto::SectorWhat::Light;
+    const lua_Number v = luaL_checknumber(L, 2);
+    t.light = static_cast<u8>(v < 0 ? 0 : (v > 255 ? 255 : std::lround(v)));
+    const lua_Number sec = luaL_optnumber(L, 3, 0);
+    t.fade_ms = static_cast<u16>(sec <= 0 ? 0 : (sec >= 65.535 ? 65535 : std::lround(sec * 1000)));
+    ctx.ui->set_sector(ctx.level, t);
+    return 0;
+}
+
+// An effect setting from Lua: a number (rendering, so a double is exact
+// enough), an fx, or a decimal string; a colour also as "#rrggbb".
+static bool fx_setting(lua_State* L, int idx, bool is_color, i64& raw) {
+    if (is_color && lua_type(L, idx) == LUA_TSTRING) {
+        const char* s = lua_tostring(L, idx);
+        if (s[0] == '#') ++s;
+        char* end = nullptr;
+        const unsigned long v = std::strtoul(s, &end, 16);
+        if (end == s || *end != '\0' || v > 0xFFFFFF) return false;
+        raw = static_cast<i64>(v);
+        return true;
+    }
+    if (lua_type(L, idx) == LUA_TNUMBER) {
+        const lua_Number n = lua_tonumber(L, idx);
+        raw = is_color ? static_cast<i64>(n) : static_cast<i64>(std::llround(n * 4294967296.0));
+        return !is_color || (n >= 0 && n <= 0xFFFFFF);
+    }
+    if (is_fx(L, idx) || lua_type(L, idx) == LUA_TSTRING) {
+        raw = check_fx(L, idx).raw;
+        return true;
+    }
+    return false;
+}
+
+// dnp.set_sector_effect(sector, kind [, settings | false])
+//   kind: "rain" "snow" "dust" "embers" "fog"; settings by the map's own `fx`
+//   key names (density, color, ...), each optional; false takes it off.
+int l_dnp_set_sector_effect(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    if (ctx.ui == nullptr || ctx.world->map() == nullptr) return 0;
+    proto::SectorSet t;
+    t.sector = sector_arg(L, ctx, 1);
+    t.what = proto::SectorWhat::Effect;
+    const char* kind = luaL_checkstring(L, 2);
+    for (u8 k = 1; k <= geom::FX_KIND_COUNT; ++k) if (std::strcmp(kind, geom::fx_kind_name(k)) == 0) t.fx.kind = k;
+    if (t.fx.kind == 0) return luaL_error(L, "no sector effect '%s' (rain, snow, dust, embers, fog)", kind);
+    t.on = !(lua_isboolean(L, 3) && !lua_toboolean(L, 3));
+    if (t.on && lua_istable(L, 3)) {
+        lua_pushnil(L);
+        while (lua_next(L, 3) != 0) {
+            const char* key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : "";
+            u8 id = 0;
+            for (u8 k = 1; k <= geom::FX_KEY_COUNT; ++k) if (std::strcmp(key, geom::FX_KEYS[k - 1].name) == 0) id = k;
+            if (id == 0 || !geom::fx_takes(t.fx.kind, id))
+                return luaL_error(L, "%s takes no setting '%s'", kind, key);
+            i64 raw = 0;
+            if (!fx_setting(L, -1, geom::FX_KEYS[id - 1].is_color, raw))
+                return luaL_error(L, "%s's %s is not a value it can take", kind, key);
+            if (t.fx.count < geom::MAX_FX_PARAMS) t.fx.params[t.fx.count++] = geom::FxParam{id, raw};
+            lua_pop(L, 1);
+        }
+    }
+    ctx.ui->set_sector(ctx.level, t);
+    return 0;
+}
+
 // dnp.music(entity_or_nil, cue [, fade_ms [, at]])
 //
 // A cue change for whoever is watching `entity`, or for everyone in the level
@@ -3022,6 +3125,9 @@ const luaL_Reg DNP_FUNCS[] = {
     {"camera", l_dnp_camera},
     {"level_camera", l_dnp_level_camera},
     {"sky", l_dnp_sky},
+    {"set_sector_texture", l_dnp_set_sector_texture},
+    {"set_sector_light", l_dnp_set_sector_light},
+    {"set_sector_effect", l_dnp_set_sector_effect},
     {"path_length", l_dnp_path_length},
     {"screen", l_dnp_screen},
     {"side_texture", l_dnp_side_texture},

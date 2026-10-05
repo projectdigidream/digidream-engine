@@ -169,26 +169,47 @@ export class MapView {
   setSideTexture (sideIndex, field, name, loadOpts = {}) {
     const side = this.map.sides?.[sideIndex]
     if (!side) return -1
-
-    let slot = this.map.textures.indexOf(name)
-    if (slot < 0) {
-      slot = this.map.textures.length
-      this.map.textures.push(name)
-      const tex = makeTextureSet(THREE, [name])[0]
-      this.textures.push(tex)
-      this.materials.push(this.#material(tex))
-      // Loaded after the material exists, so a slow fetch shows the
-      // placeholder rather than nothing. Deliberately not awaited: a switch
-      // should change the moment it is thrown.
-      loadRealTextures(THREE, [name], [this.materials[slot]], loadOpts)
-        .then((r) => { for (const [n, t] of r.frames ?? []) this.frameTextures?.set(n, t) })
-        .catch(() => {})
-    }
+    const slot = this.#slotFor(name, loadOpts)
 
     const key = field === 0 ? 'upper' : field === 2 ? 'lower' : 'middle'
     if (side[key] === slot) return -1
     side[key] = slot
     return side.sector ?? this.#sectorOf(sideIndex)
+  }
+
+  /**
+   * A texture name's slot, created when the map never named it -- built
+   * exactly like every other material, and loaded after it exists, so a slow
+   * fetch shows the placeholder rather than nothing. Not awaited: a switch
+   * should change the moment it is thrown.
+   */
+  #slotFor (name, loadOpts) {
+    let slot = this.map.textures.indexOf(name)
+    if (slot >= 0) return slot
+    slot = this.map.textures.length
+    this.map.textures.push(name)
+    const tex = makeTextureSet(THREE, [name])[0]
+    this.textures.push(tex)
+    this.materials.push(this.#material(tex))
+    loadRealTextures(THREE, [name], [this.materials[slot]], loadOpts)
+      .then((r) => { for (const [n, t] of r.frames ?? []) this.frameTextures?.set(n, t) })
+      .catch(() => {})
+    return slot
+  }
+
+  /**
+   * A sector's floor or ceiling picture, by name (SECTOR_SET). Returns the
+   * sector to rebuild, or -1 if nothing changed -- the caller rebuilds, as for
+   * a side.
+   */
+  setSectorTexture (sectorIndex, part, name, loadOpts = {}) {
+    const s = this.map.sectors?.[sectorIndex]
+    if (!s) return -1
+    const slot = this.#slotFor(name, loadOpts)
+    const key = part === 'ceiling' ? 'ceilTex' : 'floorTex'
+    if (s[key] === slot) return -1
+    s[key] = slot
+    return sectorIndex
   }
 
   /** Which sector owns a side. Linear, and called once per switch. */

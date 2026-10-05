@@ -270,6 +270,17 @@ int dnp_map_fx_param(const geom::MapStorage* m, unsigned i, unsigned key, long l
     return 0;
 }
 
+// A kind's default for a key, as the map loader falls back to it: what a
+// runtime effect (SECTOR_SET) fills in for the settings it does not name.
+EMSCRIPTEN_KEEPALIVE
+void dnp_fx_default(unsigned kind, unsigned key, long long* out64) {
+    out64[0] = 0;
+    if (kind < 1 || kind > geom::FX_KIND_COUNT || key < 1 || key > geom::FX_KEY_COUNT) return;
+    const geom::FxKeyDef& d = geom::FX_KEYS[key - 1];
+    const long long def = d.defaults[kind - 1];
+    out64[0] = d.is_color ? def : fx::from_frac(def, 1000).raw;
+}
+
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_fx_key_count() { return geom::FX_KEY_COUNT; }
 

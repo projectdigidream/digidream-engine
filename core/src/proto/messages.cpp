@@ -610,6 +610,60 @@ bool decode_sky_set(ByteReader& r, SkySet& out) noexcept {
     return true;
 }
 
+void encode_sector_set(ByteWriter& w, const SectorSet& s) noexcept {
+    w.u32v(s.sector);
+    w.u8v(static_cast<u8>(s.what));
+    switch (s.what) {
+        case SectorWhat::Floor:
+        case SectorWhat::Ceiling: encode_text(w, s.texture); break;
+        case SectorWhat::Light: w.u8v(s.light); w.u16v(s.fade_ms); break;
+        case SectorWhat::Effect: {
+            w.u8v(s.fx.kind);
+            w.u8v(s.on ? 1 : 0);
+            const u8 n = s.on ? (s.fx.count > geom::MAX_FX_PARAMS ? geom::MAX_FX_PARAMS : s.fx.count) : 0;
+            w.u8v(n);
+            for (u8 i = 0; i < n; ++i) { w.u8v(s.fx.params[i].key); w.i64v(s.fx.params[i].raw); }
+            break;
+        }
+    }
+}
+
+bool decode_sector_set(ByteReader& r, SectorSet& out) noexcept {
+    SectorSet s;
+    s.sector = r.u32v();
+    const u8 what = r.u8v();
+    // An unknown change is refused: drawn as some other one, it would be wrong.
+    if (!r.ok() || what > static_cast<u8>(SectorWhat::Effect)) return false;
+    s.what = static_cast<SectorWhat>(what);
+    switch (s.what) {
+        case SectorWhat::Floor:
+        case SectorWhat::Ceiling:
+            if (!decode_text(r, s.texture)) return false;
+            break;
+        case SectorWhat::Light:
+            s.light = r.u8v();
+            s.fade_ms = r.u16v();
+            break;
+        case SectorWhat::Effect: {
+            s.fx.kind = r.u8v();
+            s.on = r.u8v() != 0;
+            const u8 n = r.u8v();
+            if (!r.ok() || s.fx.kind < 1 || s.fx.kind > geom::FX_KIND_COUNT || n > geom::MAX_FX_PARAMS) return false;
+            for (u8 i = 0; i < n; ++i) {
+                s.fx.params[i].key = r.u8v();
+                s.fx.params[i].raw = r.i64v();
+                // A setting this kind does not take is refused, as the map loader does.
+                if (!r.ok() || !geom::fx_takes(s.fx.kind, s.fx.params[i].key)) return false;
+            }
+            s.fx.count = n;
+            break;
+        }
+    }
+    if (!r.ok()) return false;
+    out = s;
+    return true;
+}
+
 void encode_side_texture(ByteWriter& w, const SideTexture& t) noexcept {
     w.u32v(t.side);
     w.u8v(static_cast<u8>(t.field));

@@ -1032,6 +1032,63 @@ static void test_sky_set_round_trip() {
     }
 }
 
+// A sector's look (SECTOR_SET): each kind of change round-trips, and what the
+// renderer could not draw honestly is refused.
+static void test_sector_set_round_trip() {
+    std::printf("sector set: pictures, light with a fade, and effects survive the wire\n");
+    u8 buf[512];
+    auto trip = [&](const SectorSet& s, SectorSet& got) {
+        ByteWriter w(buf, sizeof(buf));
+        encode_sector_set(w, s);
+        ByteReader r(buf, w.size());
+        return w.ok() && decode_sector_set(r, got);
+    };
+    SectorSet tex;
+    tex.sector = 0x00030007;
+    tex.what = SectorWhat::Ceiling;
+    set_text(tex.texture, "F_SKY1");
+    SectorSet got;
+    CHECK(trip(tex, got) && got.sector == 0x00030007 && got.what == SectorWhat::Ceiling &&
+          got.texture.len == 6 && std::memcmp(got.texture.text, "F_SKY1", 6) == 0);
+    SectorSet light;
+    light.what = SectorWhat::Light;
+    light.light = 40;
+    light.fade_ms = 2500;
+    CHECK(trip(light, got) && got.light == 40 && got.fade_ms == 2500);
+    SectorSet fog;
+    fog.what = SectorWhat::Effect;
+    fog.on = true;
+    fog.fx.kind = 5;
+    fog.fx.count = 2;
+    fog.fx.params[0] = {1, fx::from_frac(1, 2).raw};     // density
+    fog.fx.params[1] = {8, 0x203040};                    // color
+    CHECK(trip(fog, got) && got.on && got.fx.kind == 5 && got.fx.count == 2 &&
+          got.fx.params[1].raw == 0x203040);
+    SectorSet off = fog;
+    off.on = false;
+    CHECK(trip(off, got) && !got.on && got.fx.count == 0);
+    // CONTROLS: an unknown change, an unknown effect, and a setting the
+    // effect does not take (fog has no `speed`) are each refused.
+    {
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1); w.u8v(4);
+        ByteReader r(buf, w.size());
+        CHECK(!decode_sector_set(r, got));
+    }
+    {
+        ByteWriter w(buf, sizeof(buf));
+        w.u32v(1); w.u8v(3); w.u8v(9); w.u8v(1); w.u8v(0);
+        ByteReader r(buf, w.size());
+        CHECK(!decode_sector_set(r, got));
+    }
+    {
+        SectorSet bad = fog;
+        bad.fx.count = 1;
+        bad.fx.params[0] = {2, 0};    // speed
+        CHECK(!trip(bad, got));
+    }
+}
+
 // The decoder runs on bytes from the network, so every length in the message is
 // a number an attacker picks. Each of these is a way to be handed one.
 static void test_ui_rejects_hostile_input() {
@@ -1210,6 +1267,7 @@ int main() {
     test_camera_set_round_trip();
     test_screen_set_round_trip();
     test_sky_set_round_trip();
+    test_sector_set_round_trip();
     test_ui_rejects_hostile_input();
     test_ui_truncation_at_every_length();
     std::printf("== core/proto test suite ==\n");

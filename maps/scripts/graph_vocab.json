@@ -1397,6 +1397,168 @@
     {
       "args": [
         {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "A texture name, as the map's floors use.",
+          "name": "texture",
+          "type": "string"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Change the picture on a sector's floor: lava cools, a rug is laid.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "set_floor_texture"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "A texture name; F_SKY1 opens it to the sky.",
+          "name": "texture",
+          "type": "string"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Change the picture on a sector's ceiling.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "set_ceiling_texture"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "0 (dark) to 255 (full), the map's own sector light scale.",
+          "name": "light",
+          "type": "int"
+        },
+        {
+          "doc": "How long the change takes. Defaults to at once.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Light or darken a sector, at once or fading: the power goes out, a torch is lit.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "set_sector_light"
+    },
+    {
+      "args": [
+        {
+          "name": "sector",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "tag",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "effect",
+          "type": "enum",
+          "values": [
+            "rain",
+            "snow",
+            "dust",
+            "embers",
+            "fog"
+          ]
+        },
+        {
+          "doc": "Defaults to on; off takes the effect away.",
+          "name": "on",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "doc": "How thick it is. Defaults to the effect's own.",
+          "name": "density",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "As #rrggbb. Defaults to the effect's own.",
+          "name": "color",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "sector",
+      "data_in": [
+        "sector"
+      ],
+      "data_out": [],
+      "doc": "Start or stop rain, snow, dust, embers or fog in a sector (docs/SECTOR_FX.md).",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "set_sector_effect"
+    },
+    {
+      "args": [
+        {
           "doc": "The wall, picked on the map.",
           "name": "side",
           "type": "int"
