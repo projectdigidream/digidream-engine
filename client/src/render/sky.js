@@ -262,7 +262,16 @@ export class Sky {
         // so west, east, up, down, south, north.
         const [e, w, n, s, up, down] = sky.images
         new THREE.CubeTextureLoader().load([w, e, up, down, s, n].map(url),
-          (t) => { this.cache.set(cacheKey, t); done(() => { u.cube.value = t }) },
+          (t) => {
+            // CubeTextureLoader marks its faces sRGB, and three would decode
+            // them to linear before this shader saw them -- which never encodes
+            // back, so a painted (0,200,0) drew as (0,147,0). Raw, as strips,
+            // panoramas and every map texture are.
+            t.colorSpace = THREE.NoColorSpace
+            t.needsUpdate = true
+            this.cache.set(cacheKey, t)
+            done(() => { u.cube.value = t })
+          },
           undefined, () => { sky.images.forEach(fail); resolve(false) })
         return
       }
