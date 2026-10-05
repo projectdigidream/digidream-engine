@@ -15,7 +15,10 @@
 //   2. the body's position is one continuous path in world coordinates --
 //      through the boundary at x = 40 with no jump -- and it keeps its speed
 //      and its handle, because it is the same body in the same world;
-//   3. the neighbourhood is re-stated from the new home (moves, no maps).
+//   3. the neighbourhood is re-stated from the new home (moves, no maps);
+//   4. the player's rules for the level walked into apply (docs/PLAYER.md):
+//      a module says `player seam_b move_speed 5`, and the walk sends exactly
+//      that -- not the jump_impulse line, which says the engine's own 9.
 //
 // The CONTROL is the same walk with the metamap withheld. Without a pitch the
 // cells are not composed in world space, there is no region and no seam, and
@@ -23,7 +26,8 @@
 // to mean the metamap did something.
 //
 import { spawn } from 'node:child_process'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Buffer } from 'node:buffer'
@@ -33,6 +37,7 @@ import {
   encodeHello, decodeControlMessage, encodeInputBundle, decodeSnapshot,
   axisFromNumber, fxToNumber, MSG
 } from '../../../client/src/proto.js'
+import { Core } from '../../../client/src/core.js'
 import { serverBin } from './serverbin.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -76,7 +81,12 @@ if (!A || !B || !C) { console.error('no baked seam_a/seam_b/seam_c'); process.ex
 const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 
-const args = ['--port', String(LINK_PORT), '--map', A, '--map', B, '--map', C]
+// A module with rules for seam_b only (docs/PLAYER.md).
+const modDir = mkdtempSync(join(tmpdir(), 'dnp-seam-'))
+writeFileSync(join(modDir, 'module.txt'), 'name Seam\nid seam\nplayer seam_b move_speed 5\nplayer seam_b jump_impulse 9\n')
+process.on('exit', () => rmSync(modDir, { recursive: true, force: true }))
+const pworld = (await Core.load()).createWorld()
+const args = ['--port', String(LINK_PORT), '--map', A, '--map', B, '--map', C, '--module', modDir]
 if (!NO_METAMAP) args.push('--metamap', join(ROOT, 'maps', 'seam_metamap.txt'))
 
 const server = spawn(serverBin, args, { stdio: ['ignore', 'ignore', 'pipe'] })
@@ -103,6 +113,7 @@ const cw = control.writable.getWriter()
 const dw = wt.datagrams.createWritable().getWriter()
 
 const welcomes = []
+const paramUpdates = []
 const homes = []
 const snapshots = []
 const nbr = []
@@ -126,6 +137,7 @@ const streamsAfter = []
         buf = buf.subarray(4 + len)
         if (m?.type === MSG.WELCOME) welcomes.push(m)
         else if (m?.type === MSG.HOME) homes.push({ ...m, afterSnapshots: snapshots.length })
+        else if (m?.type === MSG.PARAM_UPDATE) paramUpdates.push({ ...m, afterHomes: homes.length })
         // The cells next door, and the streams that follow them. Counted here
         // rather than reassembled: what this asserts is that the observer is
         // TOLD about the level across its boundary and where it sits, which is
@@ -199,6 +211,7 @@ if (NO_METAMAP) {
   // of the corridor and falls out of the world.
   check(homes.length === 0, `CONTROL: with no metamap nobody is re-homed (${homes.length})`)
   check(nbr.length === 0, `CONTROL: and no neighbour is announced (${nbr.length})`)
+  check(!paramUpdates.some((u) => u.afterHomes > 0), 'CONTROL: and no rules change on the way')
   const lowest = Math.min(...path.map((p) => p.z))
   check(lowest < 0, `CONTROL: and they fall off the end instead (lowest z=${lowest.toFixed(2)})`)
 } else {
@@ -248,6 +261,16 @@ if (NO_METAMAP) {
         `nor any home map (${streamsAfter.length} stream(s), all at the join)`)
   check(!movedAfter.some((m) => m.level === east?.level),
         'and the level walked into is not moved: it is underfoot')
+
+  // (4) THE RULES OF THE LEVEL WALKED INTO (docs/PLAYER.md).
+  const speed = pworld.paramId('move_speed')
+  const onJoin4 = paramUpdates.find((u) => u.afterHomes === 0)
+  const joinSpeed = Number(onJoin4?.fields.find((f) => f.id === speed)?.raw) / 2 ** 32
+  check(joinSpeed === 8, `CONTROL: seam_a's player runs at the engine's 8 (${joinSpeed})`)
+  const walked = paramUpdates.filter((u) => u.afterHomes > 0)
+  const sent = walked.flatMap((u) => u.fields)
+  check(walked.length === 1 && sent.length === 1 && sent[0].id === speed && Number(sent[0].raw) / 2 ** 32 === 5,
+        `walking into seam_b sends its move_speed 5, and only that (${sent.map((f) => `${f.id}=${Number(f.raw) / 2 ** 32}`).join(' ')})`)
 }
 
 try { await cw.close() } catch {}

@@ -808,10 +808,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             physics::param_set_raw(p, r.p.id, r.p.raw);
         }
     }
-    // A player's body as the rules say (docs/PLAYER.md). Every player spawn
-    // comes through here, the --test-player stand-in included.
-    void seat_player(Level& L, u32 li, u32 agent) {
-        physics::MoveParams& p = L.world.params_mut(agent);
+    // A player's rules in a level (docs/PLAYER.md), built from nothing:
+    // what a spawn seats and what walking into a region's level re-seats.
+    physics::MoveParams rules_for(const Level& L, u32 li) const {
+        physics::MoveParams p{};
         // FIRST PERSON: the view is the aim. The body faces it at once -- a
         // turn rate that covers a whole turn in a tick is a snap -- and the push
         // is relative to it. Both replicated, so the client predicts the same.
@@ -830,6 +830,12 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             p.height = L.map_store.body_height();
         }
         apply_player_rules(p, lname, true);
+        return p;
+    }
+    // Every player spawn comes through here, the --test-player stand-in too.
+    void seat_player(Level& L, u32 li, u32 agent) {
+        physics::MoveParams& p = L.world.params_mut(agent);
+        p = rules_for(L, li);
         // Spawn filled the tanks from the engine's defaults; a module that
         // changed their size starts its players full of ITS fuel.
         L.world.agent_mut(agent).mv.hover_fuel = p.hover_fuel_max;
@@ -2692,27 +2698,33 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             if (!same_world(s, li)) continue;
             const u32 a = s.agent;
 
-            const physics::MoveParams want = L.effects.compute(a);
-            physics::MoveParams& live = L.world.params_mut(a);
+            push_effective_params(L, li, a);
+        }
+    }
 
-            u16 changed[physics::PARAM_COUNT];
-            u16 n = 0;
-            for (u16 f = 0; f < physics::PARAM_COUNT; ++f) {
-                const i64 target = physics::param_get_raw(want, f);
-                if (physics::param_get_raw(live, f) == target) continue;
-                physics::param_set_raw(live, f, target);
-                changed[n++] = f;
-            }
-            if (n == 0) continue;
+    // One body's effective parameters, from its base and effects, into the
+    // world, and what changed to everyone who sees it.
+    void push_effective_params(Level& L, u32 li, u32 a) {
+        const physics::MoveParams want = L.effects.compute(a);
+        physics::MoveParams& live = L.world.params_mut(a);
 
-            // One epoch bump and one message for the whole batch, not one per
-            // field: an effect touching four parameters is one change to the
-            // rules, and four epochs would make the client look stale three
-            // extra times for no reason.
-            L.param_epoch[a] = static_cast<u8>(L.param_epoch[a] + 1);
-            for (auto& [oid, os] : sessions) {
-                if (os.hello_done && same_world(os, li)) send_param_update(L, oid, a, false, changed, n);
-            }
+        u16 changed[physics::PARAM_COUNT];
+        u16 n = 0;
+        for (u16 f = 0; f < physics::PARAM_COUNT; ++f) {
+            const i64 target = physics::param_get_raw(want, f);
+            if (physics::param_get_raw(live, f) == target) continue;
+            physics::param_set_raw(live, f, target);
+            changed[n++] = f;
+        }
+        if (n == 0) return;
+
+        // One epoch bump and one message for the whole batch, not one per
+        // field: an effect touching four parameters is one change to the
+        // rules, and four epochs would make the client look stale three
+        // extra times for no reason.
+        L.param_epoch[a] = static_cast<u8>(L.param_epoch[a] + 1);
+        for (auto& [oid, os] : sessions) {
+            if (os.hello_done && same_world(os, li)) send_param_update(L, oid, a, false, changed, n);
         }
     }
 
@@ -3407,6 +3419,21 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             Level& L = level(now);
             if (L.has_camera) send_camera(s, L.camera);
             send_sky(s, now);
+            // THE PLAYER'S RULES FOR THIS LEVEL (docs/PLAYER.md): a walk is not
+            // an arrival, so nothing re-seated the body. Re-based here when the
+            // level's rules differ; effects and weapons carry over on top, and
+            // only what changed is sent, as an effect's change would be.
+            {
+                const physics::MoveParams want = rules_for(L, now);
+                bool differs = false;
+                for (u16 f = 0; f < physics::PARAM_COUNT && !differs; ++f) {
+                    differs = physics::param_get_raw(want, f) != physics::param_get_raw(L.effects.base(s.agent), f);
+                }
+                if (differs) {
+                    L.effects.set_base(s.agent, want);
+                    push_effective_params(L, now, s.agent);
+                }
+            }
             std::fprintf(stderr, "[srv] session %u walked from level %u into level %u\n",
                          id, was, now);
             moved = true;
