@@ -21,6 +21,17 @@ fx2 approach2(fx2 v, fx2 target, fx rate, fx dt) noexcept {
     return fx2{approach(v.x, target.x, rate, dt), approach(v.y, target.y, rate, dt)};
 }
 
+// How high a climbable side reaches, from the climber's sector: a wall to the
+// ceiling, a step up to the floor beyond it. A side with nothing above the
+// floor here (a step DOWN) has no climbable face and reaches nowhere.
+fx climb_top(const MapData& map, u32 side, i32 sector) noexcept {
+    const Sector& s = map.sector(static_cast<u32>(sector));
+    const Side& sd = map.side(side);
+    if (sd.neighbor == NO_SECTOR) return s.ceil_z;
+    const Sector& back = map.sector(static_cast<u32>(sd.neighbor));
+    return back.floor_z > s.floor_z ? back.floor_z : s.floor_z;
+}
+
 // Tick a timer down without letting it go negative.
 fx decay(fx t, fx dt) noexcept {
     const fx n = t - dt;
@@ -110,13 +121,42 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     }
 
     // ---------------------------------------------------------------- climbing
+    //
+    // A climbable side is grabbed by holding CLIMB, or -- with climb_auto -- by
+    // pushing into it. On it: toward the wall climbs up, away climbs down,
+    // along it slides, JUMP leaps off, CROUCH lets go (and so, held, does
+    // letting CLIMB go). A wall counts only where it IS: below its top, so a
+    // short one cannot be climbed into thin air, and reaching the top of a
+    // step is a MANTLE onto the ledge beyond it.
+
+    // How hard the stick pushes into a wall whose inward normal is `n`.
+    const auto into = [&](fx2 n) { return -dot(wish, n); };
+    const fx push_grab = fx::from_frac(3, 10);   // a deliberate push, not a graze
+    const fx reach = p.radius + fx::from_frac(1, 8);
 
     if (st.climbing) {
-        const bool still_touching =
-            find_side_with_flag(map, st.sector, fx2{pos.x, pos.y},
-                                p.radius + fx::from_frac(1, 8), side_flag::CLIMBABLE,
-                                st.climb_normal) >= 0;
-        if (!climb_down || !still_touching || jump_pressed) {
+        fx2 n{};
+        const i32 side = find_side_with_flag(map, st.sector, fx2{pos.x, pos.y}, reach,
+                                             side_flag::CLIMBABLE, n);
+        const fx top = side >= 0 ? climb_top(map, static_cast<u32>(side), st.sector) : fx::zero();
+        if (side >= 0) st.climb_normal = n;
+        const bool holding = p.climb_auto || climb_down;
+        const bool let_go = cmd.up < fx::zero();
+        const fx v = into(st.climb_normal);
+        // Climbed down onto the floor: back on your feet. (The mover never
+        // calls a climber grounded, so the feet are asked directly.)
+        const bool landed = v <= fx::zero() &&
+            pos.z <= map.sector(static_cast<u32>(st.sector)).floor_z + fx::from_frac(1, 64);
+        if (side >= 0 && holding && !let_go && !jump_pressed && !landed && v > fx::zero() &&
+            pos.z + v * p.climb_speed * dt >= top && top < map.sector(static_cast<u32>(st.sector)).ceil_z) {
+            // THE MANTLE: over the top of a step, onto its ledge. Still rising at
+            // climb speed (16 units/s^2 of gravity takes that 4/s to a further
+            // 0.5 -- a step's height) and moving onto the ledge, which the body
+            // clears and lands on.
+            st.climbing = false;
+            handoff_to_standard(st, vel, fx3{-st.climb_normal.x * p.climb_speed,
+                                             -st.climb_normal.y * p.climb_speed, p.climb_speed});
+        } else if (side < 0 || pos.z >= top || !holding || let_go || jump_pressed || landed) {
             // Letting go, moving off the surface, or jumping off all end the
             // state the same way: carry whatever velocity there is into
             // standard physics.
@@ -131,13 +171,19 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
             st.climbing = false;
             handoff_to_standard(st, vel, carried);
         }
-    } else if (climb_down && p.climb_enabled && !st.grappling) {
+    } else if (p.climb_enabled && !st.grappling && cmd.up >= fx::zero() && !jump_pressed) {
         fx2 n{};
-        if (find_side_with_flag(map, st.sector, fx2{pos.x, pos.y},
-                                p.radius + fx::from_frac(1, 8), side_flag::CLIMBABLE, n) >= 0) {
+        const i32 side = find_side_with_flag(map, st.sector, fx2{pos.x, pos.y}, reach,
+                                             side_flag::CLIMBABLE, n);
+        // Something to climb: more of it above the feet than a step, which
+        // the body walks up anyway.
+        const bool face = side >= 0 &&
+            climb_top(map, static_cast<u32>(side), st.sector) - pos.z > sim::STEP_HEIGHT;
+        if (face && (climb_down || (p.climb_auto && into(n) > push_grab))) {
             st.climbing = true;
             st.climb_normal = n;
             vel = fx3::zero();   // grabbing the surface kills momentum
+            st.jumps_used = 0;   // a wall you hold is ground enough to jump from
         }
     }
 
@@ -183,11 +229,14 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         // Gravity suspended, movement locked to the surface plane, climb speed
         // rather than ground speed.
         effective_gravity_scale = fx::zero();
+        // Along the wall slides; toward it climbs, away from it descends. The
+        // stick's own direction, so it is the same on any camera and in first
+        // person: push at the wall to go up it.
         const fx2 along = fx2{-st.climb_normal.y, st.climb_normal.x};
         const fx2 lateral = along * dot(wish, along);
         vel.x = lateral.x * p.climb_speed;
         vel.y = lateral.y * p.climb_speed;
-        vel.z = cmd.up * p.climb_speed;
+        vel.z = fx_clamp(-dot(wish, st.climb_normal), -fx::one(), fx::one()) * p.climb_speed;
     } else if (st.flying) {
         // Gravity off; input maps to full 3D velocity rather than lateral only.
         effective_gravity_scale = fx::zero();

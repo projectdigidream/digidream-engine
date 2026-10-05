@@ -209,6 +209,10 @@ struct MoveParams {
     // way I am looking". Off is a platformer's world-space push, unchanged.
     // Replicated, so the client turns its own push exactly as the server does.
     bool move_relative = false;
+    // HOW A WALL IS GRABBED (docs/PLAYER.md): off, by holding CLIMB; on, by
+    // pushing into a climbable wall. The module's choice -- a ladder game wants
+    // the second, a game where walls must not catch you by accident the first.
+    bool climb_auto = false;
 };
 
 // Runtime state the abilities carry between ticks.

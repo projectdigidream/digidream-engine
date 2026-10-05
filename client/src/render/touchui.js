@@ -62,10 +62,12 @@ export const TOUCH_BUTTONS = TOUCH_IDS.map((id) => ({ id }))
  * The buttons a layout's touch section places, resolved: every engine button,
  * with where it goes, how big, what it says, and whether it is shown at all.
  */
-export function touchLayout (layout, scheme = 'platformer') {
+export function touchLayout (layout, scheme = 'platformer', shown = new Set()) {
   const t = (scheme === 'fps' ? layout?.touch_fps : layout?.touch) ??
             (scheme === 'fps' ? DEFAULT_LAYOUT.touch_fps : DEFAULT_LAYOUT.touch)
-  return { zone: t.stick.zone, buttons: t.buttons.filter((b) => !b.hidden) }
+  // A hidden button is shown when the GAME asks for it (setShown): GRAB while
+  // walls are held onto. The layout still decides where it goes.
+  return { zone: t.stick.zone, buttons: t.buttons.filter((b) => !b.hidden || shown.has(b.id)) }
 }
 
 /** The safe-area insets, read through a probe element (only CSS can see them). */
@@ -87,7 +89,8 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
   const style = document.createElement('style')
   style.textContent = STYLE
   host.append(style)
-  let current = touchLayout(layout, scheme)
+  let shown = new Set()
+  let current = touchLayout(layout, scheme, shown)
   const probe = document.createElement('div')
   probe.className = 'dnp-touch-insets'
   host.append(probe)
@@ -246,7 +249,17 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
     setLayout (next = layout, nextScheme = scheme) {
       layout = next ?? DEFAULT_LAYOUT
       scheme = nextScheme
-      current = touchLayout(layout, scheme)
+      current = touchLayout(layout, scheme, shown)
+      build()
+      measure()
+      paint()
+    },
+    /** Show hidden buttons the game's rules call for, by id; the rest stay hidden. */
+    setShown (ids) {
+      const next = new Set(ids)
+      if (next.size === shown.size && [...next].every((id) => shown.has(id))) return
+      shown = next
+      current = touchLayout(layout, scheme, shown)
       build()
       measure()
       paint()

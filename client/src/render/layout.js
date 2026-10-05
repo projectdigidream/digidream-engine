@@ -27,7 +27,7 @@ const OPS = ['gt', 'lt', 'eq', 'ne', 'set']
 
 /** The touch buttons the engine has, each one a fixed input bit. A layout can
  *  move, resize, relabel and hide them; it cannot invent one. */
-export const TOUCH_IDS = ['jump', 'attack', 'use', 'dash', 'alt']
+export const TOUCH_IDS = ['jump', 'attack', 'use', 'dash', 'alt', 'grab']
 
 /** What the client knows itself. */
 export const CLIENT_BINDINGS = [
@@ -107,7 +107,10 @@ const BUTTONS = [
   { id: 'attack', anchor: 'br', x: -104, y: -78, size: 74, label: 'ATK' },
   { id: 'use', anchor: 'br', x: -22, y: -72, size: 74, label: 'USE' },
   { id: 'dash', anchor: 'br', x: -104, y: -158, size: 60, label: 'DASH' },
-  { id: 'alt', anchor: 'br', x: -186, y: -78, size: 64, label: 'ALT', hidden: true }
+  { id: 'alt', anchor: 'br', x: -186, y: -78, size: 64, label: 'ALT', hidden: true },
+  // Held to stay on a climbable wall. Shown by the game while its rules say
+  // walls are grabbed by holding (climb_auto off); pushing into one needs none.
+  { id: 'grab', anchor: 'br', x: -186, y: -158, size: 60, label: 'GRAB', hidden: true }
 ]
 
 export const DEFAULT_LAYOUT = Object.freeze({
@@ -130,7 +133,8 @@ export const DEFAULT_LAYOUT = Object.freeze({
       { id: 'alt', anchor: 'br', x: -150, y: -60, size: 64, label: 'ALT' },
       { id: 'jump', anchor: 'br', x: -40, y: -200, size: 64, label: 'JUMP' },
       { id: 'use', anchor: 'br', x: -150, y: -150, size: 60, label: 'USE' },
-      { id: 'dash', anchor: 'br', x: -110, y: -230, size: 52, label: 'DASH', hidden: true }
+      { id: 'dash', anchor: 'br', x: -110, y: -230, size: 52, label: 'DASH', hidden: true },
+      { id: 'grab', anchor: 'br', x: -220, y: -150, size: 56, label: 'GRAB', hidden: true }
     ]
   },
   panels: {}

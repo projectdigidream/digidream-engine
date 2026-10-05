@@ -824,6 +824,9 @@ suite_stack () {
      `# The player's rules from a module's player lines (docs/PLAYER.md): what a` \
      `# joining client is sent. CONTROL: a line for another level does not land.` \
      && node test/player.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Climbing on modules/climbtest's course: a vine ledge climbed and mantled` \
+     `# onto, never the air above it. CONTROL: the bare ledge beside it never grabs.` \
+     && node test/climb.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \

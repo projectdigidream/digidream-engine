@@ -293,9 +293,11 @@ static void test_climbing() {
     a.run(room.map, C(act::CLIMB), 30);
     CHECK(a.pos.z == z);
 
-    // Vertical input climbs at climb_speed, not move_speed.
-    a.run(room.map, C(act::CLIMB, fx::zero(), fx::zero(), fx::one()), 30);
+    // Pushing at the wall climbs it, at climb_speed rather than move_speed.
+    a.run(room.map, C(act::CLIMB, -fx::one(), fx::zero()), 30);
     CHECK(a.pos.z > z + F(1));
+    // CONTROL: JUMP is not "up" on a wall any more -- it leaps off (see the
+    // wall jump), which is why climbing went by the stick.
 
     // Releasing hands control back to standard physics and gravity resumes.
     a.run(room.map, C(0), 5);
@@ -317,6 +319,99 @@ static void test_wall_jump() {
     CHECK(!a.st.climbing);
     CHECK(a.vel.z > fx::zero());   // upward
     CHECK(a.vel.x > fx::zero());   // and away from the west wall
+}
+
+// A room and a step: sector 0 (x 0..20, floor 0) and sector 1 (x 20..40),
+// whose floor is `step` up. The step's face, seen from sector 0, climbs.
+struct StepRoom {
+    fx2 pts[8];
+    Sector secs[2];
+    Side sides[8];
+    MapData map;
+
+    explicit StepRoom(fx step) {
+        pts[0] = {F(0), F(0)};  pts[1] = {F(20), F(0)}; pts[2] = {F(20), F(40)}; pts[3] = {F(0), F(40)};
+        pts[4] = {F(20), F(0)}; pts[5] = {F(40), F(0)}; pts[6] = {F(40), F(40)}; pts[7] = {F(20), F(40)};
+        secs[0] = {0, 4, 0, 4, F(0), F(40), fx::zero(), 0};
+        secs[1] = {4, 4, 4, 4, step, F(40), fx::zero(), 0};
+        sides[0] = {0, 1, NO_SECTOR, 0};
+        sides[1] = {1, 2, 1, side_flag::CLIMBABLE};   // the step's face
+        sides[2] = {2, 3, NO_SECTOR, 0};
+        sides[3] = {3, 0, NO_SECTOR, 0};
+        sides[4] = {4, 5, NO_SECTOR, 0};
+        sides[5] = {5, 6, NO_SECTOR, 0};
+        sides[6] = {6, 7, NO_SECTOR, 0};
+        sides[7] = {7, 4, 0, 0};
+        map = MapData{pts, 8, secs, 2, sides, 8};
+    }
+};
+
+static void test_climb_rules() {
+    std::printf("ability: climbing goes by the stick, knows its wall's height, mantles at the top\n");
+    const MoveCommand push = C(act::CLIMB, fx::one(), fx::zero());     // east: into the step
+    const MoveCommand pull = C(act::CLIMB, -fx::one(), fx::zero());
+    {
+        // Up the step's face, then OVER it: the climb ends at the top with the
+        // body rising and moving onto the ledge -- not climbing the air above.
+        StepRoom room(F(3));
+        Agent a(fx3{Ff(194, 10), F(20), F(0)});
+        a.step(room.map, push);
+        CHECK(a.st.climbing);
+        int ticks = 0;
+        while (a.st.climbing && ticks < 300) { a.step(room.map, push); ++ticks; }
+        std::printf("  mantled after %d ticks at z %.2f, vel (%.2f, %.2f)\n", ticks,
+                    a.pos.z.raw / 4294967296.0, a.vel.x.raw / 4294967296.0, a.vel.z.raw / 4294967296.0);
+        CHECK(!a.st.climbing && ticks < 300);
+        CHECK(a.pos.z <= F(3) + Ff(1, 4));            // at the top, not above it
+        CHECK(a.vel.z > fx::zero() && a.vel.x > fx::zero());   // up and onto the ledge
+    }
+    {
+        // Down again, and onto the floor: the climb ends with the feet down.
+        StepRoom room(F(3));
+        Agent a(fx3{Ff(194, 10), F(20), F(0)});
+        a.run(room.map, push, 30);
+        CHECK(a.st.climbing && a.pos.z > F(1));
+        int ticks = 0;
+        while (a.st.climbing && ticks < 300) { a.step(room.map, pull); ++ticks; }
+        CHECK(!a.st.climbing && a.pos.z <= Ff(1, 32));
+    }
+    {
+        // CROUCH lets go; so, held, does releasing CLIMB.
+        StepRoom room(F(3));
+        Agent a(fx3{Ff(194, 10), F(20), F(0)});
+        a.run(room.map, push, 20);
+        a.step(room.map, C(act::CLIMB, fx::zero(), fx::zero(), -fx::one()));
+        CHECK(!a.st.climbing);
+        Agent b(fx3{Ff(194, 10), F(20), F(0)});
+        b.run(room.map, push, 20);
+        b.step(room.map, C(0, fx::one(), fx::zero()));
+        CHECK(!b.st.climbing);
+    }
+    {
+        // HOW A WALL IS GRABBED. Held: pushing alone does nothing (CONTROL);
+        // with climb_auto, pushing grabs -- and stays on with no button.
+        StepRoom room(F(3));
+        Agent held(fx3{Ff(194, 10), F(20), F(0)});
+        held.run(room.map, C(0, fx::one(), fx::zero()), 10);
+        CHECK(!held.st.climbing);
+        Agent aut(fx3{Ff(194, 10), F(20), F(0)});
+        aut.p.climb_auto = true;
+        aut.run(room.map, C(0, fx::one(), fx::zero()), 10);
+        CHECK(aut.st.climbing && aut.pos.z > fx::zero());
+        // A graze along the wall is not a push.
+        Agent graze(fx3{Ff(194, 10), F(20), F(0)});
+        graze.p.climb_auto = true;
+        graze.run(room.map, C(0, Ff(1, 10), fx::one()), 10);
+        CHECK(!graze.st.climbing);
+    }
+    {
+        // A step the body walks up anyway is nothing to climb, even pushing.
+        StepRoom room(Ff(4, 10));
+        Agent a(fx3{Ff(194, 10), F(20), F(0)});
+        a.p.climb_auto = true;
+        a.run(room.map, push, 5);
+        CHECK(!a.st.climbing);
+    }
 }
 
 // ------------------------------------------------------------------- grapple
@@ -540,6 +635,7 @@ int main() {
     test_flight();
     test_shared_fuel();
     test_climbing();
+    test_climb_rules();
     test_wall_jump();
     test_grapple_swing();
     test_grapple_occlusion();

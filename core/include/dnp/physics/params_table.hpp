@@ -98,6 +98,7 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     DNP_PARAM(attack_half_pitch,    ParamType::Fx),     // 42
     // Appended: this table's ORDER is the wire format.
     DNP_PARAM(move_relative,        ParamType::Bool),   // 43
+    DNP_PARAM(climb_auto,           ParamType::Bool),   // 44
 };
 
 #undef DNP_PARAM

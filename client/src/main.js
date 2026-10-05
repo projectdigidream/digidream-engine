@@ -136,7 +136,9 @@ const TOUCH_BITS = {
   use: BUTTON.INTERACT,
   attack: BUTTON.ATTACK_PRIMARY,
   // The second trigger: shown by an FPS layout (render/layout.js touch_fps).
-  alt: BUTTON.ATTACK_SECONDARY
+  alt: BUTTON.ATTACK_SECONDARY,
+  // Held onto a climbable wall, where the module's rules say walls are held.
+  grab: BUTTON.CLIMB
 }
 
 const MAP_URL = params.get('map') ?? '/maps/test.dnpm'
@@ -1348,6 +1350,8 @@ const texturesReady = loadMapTextures()
 // capsule would be a body you can see standing in walls its real one clears --
 // which is the exact opposite of what a debug view is for.
 const RADIUS_ID = 0
+const CLIMB_ENABLED_ID = world.paramId('climb_enabled')
+const CLIMB_AUTO_ID = world.paramId('climb_auto')
 const HEIGHT_ID = 1
 let bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
 let bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
@@ -2093,6 +2097,8 @@ function fpsInput () {
   if (held.has('ShiftLeft') || held.has('ShiftRight')) buttons |= BUTTON.DASH
   if (held.has('KeyE')) buttons |= BUTTON.INTERACT
   if (held.has('KeyC')) buttons |= BUTTON.CROUCH
+  // G holds onto a climbable wall (climb_auto off; docs/PLAYER.md).
+  if (held.has('KeyG')) buttons |= BUTTON.CLIMB
   if (held.has('KeyF') || mouseHeld.has(0)) buttons |= BUTTON.ATTACK_PRIMARY
   if (mouseHeld.has(2)) buttons |= BUTTON.ATTACK_SECONDARY
   if (touch) buttons |= touch.state.buttons(TOUCH_BITS)
@@ -2144,6 +2150,8 @@ function currentInput () {
   // would make the change look like a regression in whatever it lands on.
   if (held.has('KeyE')) buttons |= BUTTON.INTERACT
   if (held.has('KeyC')) buttons |= BUTTON.CROUCH
+  // G holds onto a climbable wall (climb_auto off; docs/PLAYER.md).
+  if (held.has('KeyG')) buttons |= BUTTON.CLIMB
   // Left mouse would be the obvious binding and is not wired yet: the canvas
   // has no pointer capture, so a click would leave the page rather than swing.
   if (held.has('KeyF')) buttons |= BUTTON.ATTACK_PRIMARY
@@ -3005,6 +3013,13 @@ function frame (now) {
     sectorFx.update(now / 1000)
   }
 
+  // GRAB on the touch controls while this body's rules hold walls by a
+  // button (climb_enabled on, climb_auto off: docs/PLAYER.md). setShown does
+  // nothing when the answer has not changed, which is almost every frame.
+  if (touch) {
+    const holds = world.getParamRaw(agent, CLIMB_ENABLED_ID) !== 0n && world.getParamRaw(agent, CLIMB_AUTO_ID) === 0n
+    touch.setShown(holds ? ['grab'] : [])
+  }
   const tDraw = performance.now()
   sky.update(cam3)
   renderer.render(scene, cam3)
