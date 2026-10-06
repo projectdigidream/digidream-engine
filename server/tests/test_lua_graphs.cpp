@@ -1064,6 +1064,27 @@ int main(int argc, char** argv) {
           "links": [ ["go.then", "a.in"] ] })"));
     }
 
+    std::printf("-- a camera turned by a timer (every -> add_var -> camera_follow) --\n");
+    {
+        // The user's graph: an `every` adds to a variable, and the camera's
+        // angle is that variable. A timer has no player in its event; the
+        // camera node must still reach the players.
+        g_ui.cams.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "spin", "vars": { "camangle": 0 },
+          "nodes": [ { "id": "t", "type": "every", "seconds": 0.1 },
+                     { "id": "add", "type": "add_var", "var": "camangle", "value": 10 },
+                     { "id": "a", "type": "get_var", "var": "camangle" },
+                     { "id": "cam", "type": "camera_follow" } ],
+          "links": [ ["t.then", "add.in"], ["add.then", "cam.in"], ["a.value", "cam.angle"] ] })"));
+        ticks(13);
+        const bool sent = g_ui.cams.count(8) == 1;   // field 8: yaw, in thousandths of a turn
+        std::printf("  yaw sent: %s (%d thousandths)\n", sent ? "yes" : "no", sent ? g_ui.cams[8] : -1);
+        CHECK(sent && g_ui.cams[8] > 0);
+        const i32 first = sent ? g_ui.cams[8] : 0;
+        ticks(12);
+        CHECK(g_ui.cams.count(8) == 1 && g_ui.cams[8] > first);   // and it keeps turning
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

@@ -692,6 +692,12 @@ end
 -- `everyone`, else the linked entity or the event's -- if it is a player.
 local function audience(n, g, ev, pull)
   if n.everyone then return dnp.players() or {} end
+  -- A run with NO player in it -- a timer, the level starting -- and nothing
+  -- linked to `entity`: there is no "the player" to mean, so the node means
+  -- everyone here. Before, it meant nobody, silently: an `every` turning the
+  -- camera turned no camera. A link that yields nobody still means nobody.
+  local linked = g.data_src[n.id] and g.data_src[n.id].entity
+  if not linked and ev.entity == nil then return dnp.players() or {} end
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   if e ~= nil and e.kind ~= nil and e:kind() == 0 then return { e } end
   return {}

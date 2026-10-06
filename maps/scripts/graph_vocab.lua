@@ -647,7 +647,8 @@ graph_vocab = {
     -- replicated rules, so the client predicts a frozen player exactly), bars
     -- across the screen, lines spoken at the bottom of it, and the camera
     -- flown along a path. Each acts on the event's player, or on every player
-    -- in the level with `everyone`.
+    -- in the level with `everyone` -- or when the run has no player at all (a
+    -- timer) and nothing is linked to `entity`.
     { name = "start_cinematic", category = "cinematic",
       args = { { name = "everyone", type = "bool", optional = true },
                { name = "letterbox", type = "number", optional = true,

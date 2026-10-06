@@ -458,6 +458,9 @@ let yaw = START_YAW
 // input is built before the camera runs, so the stick is mapped through the
 // view the player was looking at when they pushed it.
 let camViewYaw = 0
+// The camera's angle as this client holds it, in degrees: what a page test
+// reads to see a CAMERA_SET (a graph's camera node) arrive.
+dnpStats.camera = () => ({ yaw: yaw * 180 / Math.PI, viewYaw: camViewYaw * 180 / Math.PI })
 // The home level's sector effects (render/sectorfx.js), and which map they are of.
 let sectorFx = null
 let sectorFxFor = null
