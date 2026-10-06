@@ -248,8 +248,15 @@ end
 -- can both call this. A COLLISION is refused rather than merged silently --
 -- two files disagreeing about what "shotgun" means is a bug, and the later one
 -- winning quietly is how it survives to production.
+-- THE WEAPON PANEL IS OPT-IN: weapons.load{ panel = true } shows each player
+-- the panel of what they hold and carry. Off by default, so a module does not
+-- get a debug-looking window it never asked for; switching weapons by key and
+-- the HUD are unaffected. Any load that says `panel` decides it.
+W.panel = false
+
 function W.load(t)
   t = t or {}
+  if t.panel ~= nil then W.panel = t.panel == true end
 
   -- Ammunition first: weapons name pools, so the pools have to exist to be
   -- named. The deferred list below is what lets a weapon name one declared in
@@ -1649,7 +1656,11 @@ function on_tick()
   for _, e in ipairs(dnp.players()) do
     local idx = key_of(e)
     if idx ~= nil then
-      refresh_panel(e, idx)
+      if W.panel then refresh_panel(e, idx)
+      elseif panel_of[idx] ~= nil then
+        -- Turned off after it was shown: taken away.
+        dnp.ui_close(e, panel_of[idx]); panel_of[idx] = nil; shown[idx] = nil
+      end
       W.tick_player(e, idx, now)
     end
   end
