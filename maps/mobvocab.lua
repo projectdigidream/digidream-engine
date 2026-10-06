@@ -26,6 +26,9 @@ mobs.load{
       sight = mobs.du(2048),
       turn_speed = 8,
       pain_chance = 128,
+      -- A flinch that grows with the hit, so both runtimes have to agree on
+      -- its length: a 4-point shot holds it 8 + 6 ticks.
+      pain_time = { per_damage = '1.5', max = 20 },
       infighting = true,
       corpse = true,
       -- `wander` by name: `move = "wander"` reads this variable, and before

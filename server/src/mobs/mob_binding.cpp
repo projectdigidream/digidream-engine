@@ -375,10 +375,12 @@ int l_mobs_tick(lua_State* L) {
     return 2;
 }
 
-// dnp.mob_enter(entity, state) -> true if it moved
+// dnp.mob_enter(entity, state) -> true if it moved, and how many ticks the
+// state lasts this time (its `ticks` plus the jitter rolled; -1 for none)
 //
 // For the things outside the loop that move a mob: `hurt` sending it to pain
-// or death, and `revive` putting a corpse back on its feet.
+// or death, and `revive` putting a corpse back on its feet. The length is what
+// `hurt` starts from when the hit lengthens the flinch (mob `pain_time`).
 int l_mob_enter(lua_State* L) {
     const u32 e = static_cast<u32>(luaL_checknumber(L, 1));
     size_t n = 0;
@@ -386,7 +388,10 @@ int l_mob_enter(lua_State* L) {
     MobRuntime& rt = runtime_of(L);
     if (rt.world == nullptr) { lua_pushboolean(L, 0); return 1; }
     lua_pushboolean(L, mob_enter(rt, e, st, n, rt.world->tick()) ? 1 : 0);
-    return 1;
+    const Mob* m = mob_of(rt, e);
+    if (m == nullptr) return 1;
+    lua_pushnumber(L, m->state_ticks);
+    return 2;
 }
 
 // dnp.mob_state(entity) -> state name, hp, target entity index or nil, aim
@@ -425,6 +430,9 @@ int l_mob_set(lua_State* L) {
     else if (std::strcmp(field, "dead") == 0)   m->dead = lua_toboolean(L, 3) != 0;
     else if (std::strcmp(field, "aim") == 0)    m->aim = static_cast<u32>(luaL_checknumber(L, 3));
     else if (std::strcmp(field, "dormant") == 0) m->dormant = lua_toboolean(L, 3) != 0;
+    // How long the CURRENT state lasts, from its entry: `hurt` lengthening a
+    // flinch by the hit (mob `pain_time`, mobs.set_pain_ticks).
+    else if (std::strcmp(field, "state_ticks") == 0) m->state_ticks = static_cast<i32>(luaL_checknumber(L, 3));
     else if (std::strcmp(field, "target") == 0) {
         if (lua_isnil(L, 3)) { m->target = -1; }
         else {

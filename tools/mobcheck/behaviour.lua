@@ -516,5 +516,80 @@ do
   CHECK(mobs.live[a:index()].target == b, "a living opponent is kept")
 end
 
+-- ---------------------------------------------------------------------------
+print("mobs: a flinch lasts as long as the monster, the hit and a script say")
+do
+  local function zombie()
+    W.reset(); mobs.reset()
+    local z = mobs.spawn("zombieman", { x = W.mkfx(0), y = W.mkfx(0), z = W.mkfx(0) })
+    W.add("player", 5, 0, 0)
+    step(mobs.THINK + 1)
+    W.rolls = { 0 }                     -- always flinches
+    return z
+  end
+  local own = mobs.defs.zombieman.states.pain.ticks
+
+  -- CONTROL: no pain_time, no script -- the pain state's own ticks, whatever the hit.
+  local z = zombie()
+  mobs.hurt(z, 2, nil)
+  local small = rec(z).state_ticks
+  z = zombie()
+  mobs.hurt(z, 15, nil)
+  CHECK(small == own and rec(z).state_ticks == own,
+        ("CONTROL: without pain_time every flinch is the state's %d ticks (%s, %s)"):format(
+          own, tostring(small), tostring(rec(z).state_ticks)))
+
+  -- With pain_time: a tick for every two points of damage, on top.
+  local saved = mobs.defs.zombieman.pain_time
+  mobs.defs.zombieman.pain_time = { per_damage = fx.frac(1, 2) }
+  z = zombie()
+  mobs.hurt(z, 4, nil)
+  CHECK(rec(z).state_ticks == own + 2, ("a 4-point hit adds 2 ticks (%s)"):format(tostring(rec(z).state_ticks)))
+  local light = z
+  z = zombie()
+  mobs.hurt(z, 18, nil)
+  CHECK(rec(z).state_ticks == own + 9, ("an 18-point hit adds 9 (%s)"):format(tostring(rec(z).state_ticks)))
+
+  -- And it is the LENGTH, not just a number: two zombies, one hit lightly and
+  -- one hard, on the same tick. Some time later only the hard-hit one reels.
+  W.reset(); mobs.reset()
+  local a = mobs.spawn("zombieman", { x = W.mkfx(0), y = W.mkfx(0), z = W.mkfx(0) })
+  local b = mobs.spawn("zombieman", { x = W.mkfx(0), y = W.mkfx(3), z = W.mkfx(0) })
+  W.add("player", 5, 0, 0)
+  step(mobs.THINK + 1)
+  W.rolls = { 0 }
+  mobs.defs.zombieman.pain_time = { per_damage = fx.int(2) }
+  mobs.hurt(a, 1, nil)                  -- own + 2
+  mobs.hurt(b, 19, nil)                 -- own + 38
+  step(own + 2 + mobs.THINK * 2)
+  CHECK(state_of(a) ~= "pain", "the light hit's flinch is over (" .. state_of(a) .. ")")
+  CHECK(state_of(b) == "pain", "the hard hit's is not (" .. state_of(b) .. ")")
+  step(40)
+  CHECK(state_of(b) ~= "pain", "and it ends too (" .. state_of(b) .. ")")
+
+  -- `max` holds it.
+  mobs.defs.zombieman.pain_time = { per_damage = fx.int(3), max = 40 }
+  z = zombie()
+  mobs.hurt(z, 18, nil)
+  CHECK(rec(z).state_ticks == 40, ("an 18-point hit at 3 a point is held to max 40 (%s)"):format(tostring(rec(z).state_ticks)))
+  mobs.defs.zombieman.pain_time = saved
+
+  -- A SCRIPT's base: set, read back, used, and put back.
+  z = zombie()
+  CHECK(mobs.pain_ticks(z) == own, ("CONTROL: before a script sets one, the base is the state's (%s)"):format(tostring(mobs.pain_ticks(z))))
+  CHECK(mobs.set_pain_ticks(z, 45), "a script sets a live monster's pain length")
+  CHECK(mobs.pain_ticks(z) == 45, "and reads it back")
+  mobs.hurt(z, 2, nil)
+  CHECK(rec(z).state_ticks == 45, ("its next flinch lasts that long (%s)"):format(tostring(rec(z).state_ticks)))
+  mobs.set_pain_ticks(z, nil)
+  CHECK(mobs.pain_ticks(z) == own, "nil puts its own back")
+  CHECK(mobs.set_pain_ticks(W.add("player", 9, 9, 0), 10) == false, "a player has none to set")
+
+  -- DOOM's own lengths: an imp twitches, a cacodemon reels (S_*_PAIN).
+  local imp = mobs.defs.imp.states.pain.ticks
+  local caco = mobs.defs.cacodemon.states.pain.ticks
+  CHECK(imp < own and own < caco, ("imp %d < zombieman %d < cacodemon %d ticks"):format(imp, own, caco))
+end
+
 print(("== %d checks, %d failures =="):format(checks, fails))
 os.exit(fails == 0 and 0 or 1)

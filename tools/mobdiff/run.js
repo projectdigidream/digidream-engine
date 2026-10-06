@@ -234,6 +234,12 @@ check(cpp.hashes.size > 10, `there are hashes to compare (${cpp.hashes.size})`)
 // agree perfectly and mean nothing.
 const distinct = new Set([...cpp.hashes.values()]).size
 check(distinct > 5, `the world changed over the run (${distinct} distinct hashes)`)
+// Something flinched, in both. The fixture's monster has a `pain_time`, so a
+// flinch's length is decided in `hurt` and handed to the C++ loop
+// (mob_set state_ticks); a run where nobody was hurt agrees about it vacuously.
+const pains = (r) => r.decisions.filter((d) => d.endsWith(' pain')).length
+check(pains(cpp) > 0 && pains(cpp) === pains(lua),
+      `monsters flinched, as often in both (${pains(cpp)} and ${pains(lua)})`)
 
 // WHERE THE RNG PARTS, which is usually before where the world does: the two
 // runtimes share one stream, and a draw one makes and the other skips moves

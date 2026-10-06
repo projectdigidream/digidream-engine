@@ -2793,6 +2793,13 @@
       "type": "bool"
     },
     {
+      "access": "read_write",
+      "doc": "A monster's flinch length, ticks (60 a second), before what a big hit adds (its `pain_time`). Set it for a stun or a frenzy; it lasts until set again. Nothing on a player or a monster with no pain state.",
+      "name": "pain_ticks",
+      "of": "entity",
+      "type": "int"
+    },
+    {
       "access": "read",
       "doc": "Where it is: east-west, units.",
       "name": "x",

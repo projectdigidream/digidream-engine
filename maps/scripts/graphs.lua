@@ -352,6 +352,9 @@ prop_get = function(e, name)
     if name == "alive" then return hp ~= nil and hp > 0 end
     return hp
   end
+  if name == "pain_ticks" then
+    return mobs ~= nil and mobs.pain_ticks ~= nil and mobs.pain_ticks(e) or nil
+  end
   if name == "x" or name == "y" or name == "z" then return raw_num(e:pos()[name]) end
   if name == "speed" then
     local v = e:vel()
@@ -380,6 +383,10 @@ prop_set = function(e, name, value)
     local v = math.floor((tonumber(value) or 0) + 0.5)
     if mobs ~= nil and mobs.set_health ~= nil and mobs.health ~= nil and mobs.health(e) ~= nil then mobs.set_health(e, v)
     elseif e.set_hp ~= nil then e:set_hp(v) end
+    return
+  end
+  if name == "pain_ticks" then
+    if mobs ~= nil and mobs.set_pain_ticks ~= nil then mobs.set_pain_ticks(e, tonumber(value) or 1) end
     return
   end
   local v

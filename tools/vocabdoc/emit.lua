@@ -106,6 +106,7 @@ local SECTIONS = {
   { "mob_fields",     "Mob fields" },
   { "weapon_fields",  "Weapon fields" },
   { "swing_fields",   "`swing`" },
+  { "pain_time_fields", "`pain_time`" },
   { "drop_fields",    "`drops` entries" },
   { "drop_choice_fields", "`one_of` choices" },
   { "state_fields",   "State fields" },

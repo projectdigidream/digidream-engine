@@ -97,6 +97,7 @@ local ACT = index_by_name(vocab.actions)
 local STATE_FIELD = index_by_name(vocab.state_fields)
 local MOB_FIELD = index_by_name(vocab.mob_fields)
 local SWING_FIELD = index_by_name(vocab.swing_fields)
+local PAIN_FIELD = index_by_name(vocab.pain_time_fields)
 local DROP_FIELD = index_by_name(vocab.drop_fields or {})
 local DROP_CHOICE_FIELD = index_by_name(vocab.drop_choice_fields or {})
 local MISSILE_FIELD = index_by_name(vocab.missile_fields)
@@ -562,6 +563,24 @@ function M.load(data)
             d.swing[f.name] = check_value(f, d.swing[f.name], swhere)
           end
         end
+      end
+    end
+
+    -- HOW LONG A FLINCH LASTS, field by field, like `swing` above.
+    if d.pain_time ~= nil then
+      local pwhere = where .. " pain_time"
+      for k in pairs(d.pain_time) do
+        if PAIN_FIELD[k] == nil then complain("%s: has no field named `%s`", pwhere, k) end
+      end
+      for _, f in ipairs(vocab.pain_time_fields) do
+        if d.pain_time[f.name] ~= nil then
+          d.pain_time[f.name] = check_value(f, d.pain_time[f.name], pwhere)
+        end
+      end
+      local mx = d.pain_time.max
+      if mx ~= nil and is_int(mx) and mx < 1 then complain("%s: `max` must be at least 1", pwhere) end
+      if d.states == nil or d.states.pain == nil then
+        complain("%s: there is no `pain` state for it to lengthen", pwhere)
       end
     end
 
@@ -1034,8 +1053,8 @@ local function enter(m, name, tick)
   -- disagreeing about which state the mob is in, with the C++ one winning on
   -- the next think and the animation this set already sent.
   if m.cpp then
-    dnp.mob_enter(m.idx, name)
-    return
+    local _, ticks = dnp.mob_enter(m.idx, name)
+    return ticks
   end
   local st = m.def.states[name]
   if st == nil then return end
@@ -1053,6 +1072,7 @@ local function enter(m, name, tick)
   set_anim(m, st.anim)
   if st.solid ~= nil and m.e:valid() then m.e:set_solid(st.solid) end
   if st.move == "stop" then set_move(m, ZERO, ZERO, m.aim) end
+  return m.state_ticks
 end
 
 -- ------------------------------------------------------------- conditions
@@ -2369,6 +2389,26 @@ local function tell_graphs(what, target, by, amount, kind)
   if graphs ~= nil and graphs.notify ~= nil then graphs.notify(what, target, by and by.e or nil, amount, kind) end
 end
 
+
+-- HOW LONG THIS FLINCH LASTS (docs/MOBS.md, `pain_time`). `rolled` is what
+-- entering the pain state gave -- its `ticks` plus any `ticks_jitter`, rolled
+-- in `enter` so both runtimes draw the same numbers. A base a script set
+-- (M.set_pain_ticks) replaces it; the def's `pain_time` adds the hit's share
+-- and caps the total. Nil when the pain state has no length to change.
+local function pain_ticks_for(m, rolled, amount)
+  local ticks = rolled
+  if m.pain_base ~= nil then ticks = m.pain_base end
+  if ticks == nil or ticks < 0 then return nil end
+  local pt = m.def.pain_time
+  if pt ~= nil then
+    if pt.per_damage ~= nil and amount ~= nil and amount > 0 then
+      ticks = ticks + math.max(0, (fx.int(math.floor(amount)) * pt.per_damage).int)
+    end
+    if pt.max ~= nil and ticks > pt.max then ticks = pt.max end
+  end
+  return math.max(1, ticks)
+end
+
 function hurt(target, amount, by)
   if target == nil or not target:valid() then return end
   local m = live[target:index()]
@@ -2523,7 +2563,12 @@ function hurt(target, amount, by)
   -- does not desynchronises every later one.
   if chance ~= nil and st and st.interruptible ~= false and
      m.def.states.pain ~= nil and dnp.random(0, 255) < chance then
-    enter(m, "pain", dnp.tick())
+    local rolled = enter(m, "pain", dnp.tick())
+    local ticks = pain_ticks_for(m, rolled, amount)
+    if ticks ~= nil and ticks ~= rolled then
+      m.state_ticks = ticks
+      if m.cpp then dnp.mob_set(m.idx, "state_ticks", ticks) end
+    end
   end
 end
 M.hurt = hurt
@@ -2692,6 +2737,26 @@ function M.set_health(e, hp)
   if m == nil or m.dead then return false end
   m.hp = math.max(1, math.min(m.max_hp or hp, math.floor(hp)))
   if m.cpp and dnp.mob_set ~= nil then dnp.mob_set(m.idx, "hp", m.hp) end   -- as hurt mirrors it
+  return true
+end
+
+--- A live monster's base pain length, in ticks: what a script set, else its
+--- `pain` state's `ticks`. Nil for anything that is not a live monster here,
+--- or one with no pain state. The hit's share (`pain_time`) comes on top.
+function M.pain_ticks(e)
+  local m = e ~= nil and e.valid ~= nil and e:valid() and live[e:index()] or nil
+  if m == nil or m.dead then return nil end
+  if m.pain_base ~= nil then return m.pain_base end
+  local st = m.def.states and m.def.states.pain
+  return st and st.ticks or nil
+end
+--- Set a live monster's base pain length (a stun weapon, a frenzy), in ticks,
+--- at least 1; nil puts back its own. Takes effect from its next flinch.
+function M.set_pain_ticks(e, ticks)
+  local m = e ~= nil and e.valid ~= nil and e:valid() and live[e:index()] or nil
+  if m == nil or m.dead then return false end
+  if ticks == nil then m.pain_base = nil; return true end
+  m.pain_base = math.max(1, math.floor(tonumber(ticks) or 1))
   return true
 end
 

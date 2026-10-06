@@ -60,6 +60,8 @@ graph_vocab = {
     { name = "hp", type = "int", access = "read_write", of = "entity",
       doc = "Health. A monster's is its own record's, so it feels pain and dies as if hurt." },
     { name = "alive", type = "bool", access = "read", of = "entity", doc = "Whether it is there and has health left." },
+    { name = "pain_ticks", type = "int", access = "read_write", of = "entity",
+      doc = "A monster's flinch length, ticks (60 a second), before what a big hit adds (its `pain_time`). Set it for a stun or a frenzy; it lasts until set again. Nothing on a player or a monster with no pain state." },
     { name = "x", type = "number", access = "read", of = "entity", doc = "Where it is: east-west, units." },
     { name = "y", type = "number", access = "read", of = "entity", doc = "Where it is: north-south, units." },
     { name = "z", type = "number", access = "read", of = "entity", doc = "Where it is: its feet's height, units." },

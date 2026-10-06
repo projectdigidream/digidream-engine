@@ -98,6 +98,14 @@ mob_vocab = {
             "all. Doom's number, because it is a good one -- a monster that " ..
             "ALWAYS flinches can be stun-locked, and one that never does " ..
             "gives no feedback that a hit landed." },
+    { name = "pain_time", type = "table", optional = true,
+      doc = "How a flinch's length follows the hit (see pain_time_fields). " ..
+            "Absent, every flinch lasts what the `pain` state's `ticks` says. " ..
+            "With it, a bigger hit holds the mob in pain longer -- a pistol " ..
+            "shot is a twitch, a rocket a stagger -- capped so nothing can be " ..
+            "stun-locked by one blow. A script or graph can change the base " ..
+            "length per mob while the game runs (mobs.set_pain_ticks, the " ..
+            "`pain_ticks` property)." },
     { name = "turn_speed", type = "fx", optional = true,
       doc = "Turns per second the body may rotate. The engine's default is 4, " ..
             "which is a quarter of a second to come ninety degrees -- and a " ..
@@ -184,6 +192,23 @@ mob_vocab = {
       doc = "A catalogue name, or absent for nothing." },
     { name = "weight", type = "int",
       doc = "Its share against the others' weights, at least 1." },
+  },
+
+  -- ------------------------------------------------------------ pain_time
+  --
+  -- A flinch's length, from the hit that caused it. The base is the `pain`
+  -- state's `ticks` (with its `ticks_jitter`), or the mob's own base if a
+  -- script set one; to it is added the damage times `per_damage`, rounded
+  -- down, and the total is held to `max`.
+  pain_time_fields = {
+    { name = "per_damage", type = "fx", optional = true,
+      doc = "Extra ticks of pain per point of damage. '0.5' is a tick for " ..
+            "every two points: a 10-point hit adds 5, a 100-point one 50 " ..
+            "(before `max`). Absent adds nothing." },
+    { name = "max", type = "int", optional = true,
+      doc = "The longest a flinch may last, in ticks. Absent is no cap " ..
+            "beyond what `per_damage` gives -- which a big enough hit makes " ..
+            "a stun-lock, so set one." },
   },
 
   -- ---------------------------------------------------------------- swing
