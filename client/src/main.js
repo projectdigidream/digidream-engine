@@ -113,20 +113,8 @@ const SERVER_URL = SERVER || 'https://127.0.0.1:34433/dnp'
 const touch = wantsTouch(params) ? mountTouch() : null
 if (touch) {
   document.documentElement.classList.add('dnp-touch-on')
-  // The two bindings with no button to label them. Shown until the first
-  // touch and then gone: a legend that stays is a legend in the way, and the
-  // first touch is proof it was read or proof it was not needed.
-  const hint = document.getElementById('touchhelp')
-  if (hint) {
-    hint.hidden = false
-    const dismiss = () => {
-      hint.style.opacity = '0'
-      setTimeout(() => { hint.hidden = true }, 500)
-      removeEventListener('pointerdown', dismiss)
-    }
-    addEventListener('pointerdown', dismiss, { once: true, passive: true })
-    setTimeout(dismiss, 8000)
-  }
+  // No "drag to turn / pinch to zoom" tip any more (the user's call): the
+  // controls speak for themselves, and a module can put its own words up.
 }
 
 /** Which protocol bit each touch button holds down. */
@@ -1383,6 +1371,11 @@ const texturesReady = loadMapTextures()
 const RADIUS_ID = 0
 const CLIMB_ENABLED_ID = world.paramId('climb_enabled')
 const CLIMB_AUTO_ID = world.paramId('climb_auto')
+// THE CONTROLS ARE TAKEN (a cinematic: input_scale 0, predicted like every
+// rule): the player neither moves nor turns the view, and on a touch screen
+// the joystick is not drawn. The camera is still the graph's to turn.
+const INPUT_SCALE_ID = world.paramId('input_scale')
+const controlsTaken = () => world.getParamRaw(agent, INPUT_SCALE_ID) === 0n
 // Whether the home level has a climbable wall at all, and of which map that was.
 let climbableHere = false
 let climbableFor = null
@@ -2093,7 +2086,7 @@ addEventListener('mouseup', (e) => mouseHeld.delete(e.button))
 // The right button is the second trigger, not the browser's menu.
 addEventListener('contextmenu', (e) => { if (isFps()) e.preventDefault() })
 addEventListener('mousemove', (e) => {
-  if (isFps() && document.pointerLockElement === renderer.domElement) fpsLook.move(e.movementX, e.movementY)
+  if (isFps() && document.pointerLockElement === renderer.domElement && !controlsTaken()) fpsLook.move(e.movementX, e.movementY)
 })
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== renderer.domElement) mouseHeld.clear()
@@ -2116,7 +2109,7 @@ function axis (v) {
 function fpsInput () {
   if (touch) {
     const d = touch.state.takeDrag()
-    if (d.dx || d.dy) fpsLook.move(d.dx, d.dy, TOUCH_SENSITIVITY)
+    if ((d.dx || d.dy) && !controlsTaken()) fpsLook.move(d.dx, d.dy, TOUCH_SENSITIVITY)
   }
   const stick = touch ? touch.state.move2d() : null
   const push = fpsPush({
@@ -2476,16 +2469,19 @@ function frame (now) {
   // with it every other word about which levels are held, in the order said.
   if (LIVE) drainSeam()
 
-  if (!camLockYaw && held.has('KeyQ')) yaw -= 1.5 * dt
-  if (!camLockYaw && held.has('KeyR')) yaw += 1.5 * dt
+  // Turning the view is the player's -- unless a cinematic took the controls.
+  const turnable = !camLockYaw && !controlsTaken()
+  if (turnable && held.has('KeyQ')) yaw -= 1.5 * dt
+  if (turnable && held.has('KeyR')) yaw += 1.5 * dt
   if (touch) {
+    touch.setStickHidden(controlsTaken())
     // TAKEN once per frame, which zeroes them. A drag accumulates between
     // frames and is applied whole; reading without clearing would turn by the
     // same drag every frame until the thumb moved again, which is a camera
     // that spins when you stop touching it. Taken even when locked, so the
     // drag does not pile up and land the moment the lock lifts.
     const dyaw = touch.state.takeYaw()
-    if (!camLockYaw) yaw += dyaw
+    if (turnable) yaw += dyaw
     const pinch = touch.state.takeZoom()
     // Pixels of pinch to a zoom factor. Exponential rather than linear so that
     // the same finger movement is the same proportional change however far in

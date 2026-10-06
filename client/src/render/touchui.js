@@ -103,6 +103,7 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
   style.textContent = STYLE
   host.append(style)
   let shown = new Set()
+  let stickHidden = false
   let keys = []
   let current = touchLayout(layout, scheme, shown, keys)
   const probe = document.createElement('div')
@@ -275,6 +276,17 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
       build()
       measure()
       paint()
+    },
+    /**
+     * The joystick hidden while the controls are taken (a cinematic): its pad,
+     * its knob and the zone a thumb lands in, so a touch there grabs nothing.
+     * Idempotent: called every frame, it touches the DOM only on a change.
+     */
+    setStickHidden (on) {
+      if (on === stickHidden) return
+      stickHidden = on
+      for (const el of [zone, pad, knob]) el.style.display = on ? 'none' : ''
+      if (on) onLost()
     },
     /** Show hidden buttons the game's rules call for, by id; the rest stay hidden. */
     setShown (ids) {

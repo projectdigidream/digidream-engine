@@ -131,8 +131,8 @@ try {
     // The class the page's own CSS keys off to move the HUD out of the way.
     check(/<html[^>]*class="[^"]*dnp-touch-on/.test(dom),
           'the page knows it is being played with a thumb')
-    check(/id="touchhelp"/.test(dom),
-          'and the two bindings with no button to label them are said once')
+    check(!/id="touchhelp"/.test(dom),
+          'and no "drag to turn" tip is shown (the user asked for it gone)')
   }
 
   console.log('\n--- CONTROL: and gone when they are not wanted ---')
