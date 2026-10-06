@@ -143,6 +143,21 @@ const PROJECTION = PROJECTIONS.includes(params.get('proj')) ? params.get('proj')
 const FOV = Number(params.get('fov') ?? 50)
 
 const hud = document.getElementById('hud')
+// THE DEBUG OVERLAY: the numbers block above and the controls legend. The
+// module decides whether a game launches with it (module.txt `debug off`, told
+// in WELCOME.debug); ?debug=0 or ?debug=1 on the page overrides the module
+// either way. Hidden, the block is not written at all, not merely not shown.
+const DEBUG_PARAM = params.get('debug')
+let debugShown = DEBUG_PARAM !== '0'
+let helpShown = false
+function showDebug (on) {
+  debugShown = on
+  hud.style.display = on ? '' : 'none'
+  if (!on) hud.textContent = ''
+  const help = document.getElementById('help')
+  if (help) help.style.display = on && helpShown ? 'block' : 'none'
+}
+showDebug(debugShown)
 const status = document.getElementById('status')
 const say = (m) => { status.textContent = m }
 
@@ -453,6 +468,7 @@ let yaw = START_YAW
 let camViewYaw = 0
 // The camera's angle as this client holds it, in degrees: what a page test
 // reads to see a CAMERA_SET (a graph's camera node) arrive.
+dnpStats.debug = () => ({ shown: debugShown, hud: hud.style.display !== 'none', text: hud.textContent.length })
 dnpStats.camera = () => ({ yaw: yaw * 180 / Math.PI, viewYaw: camViewYaw * 180 / Math.PI })
 // The home level's sector effects (render/sectorfx.js), and which map they are of.
 let sectorFx = null
@@ -528,6 +544,7 @@ if (LIVE) {
       if (m.type === MSG.WELCOME) {
         dnpStats.welcomes++
         scheme = m.controls ?? SCHEME.PLATFORMER
+        if (DEBUG_PARAM !== '0' && DEBUG_PARAM !== '1') showDebug(m.debug !== 0)
         // The touch controls follow the scheme, and the layout the level.
         touch?.setLayout(uiLayout, scheme === SCHEME.FPS ? 'fps' : 'platformer')
         loadLayout(m.levelName ?? null)
@@ -2736,11 +2753,12 @@ function frame (now) {
     // because that one is about WHEN rather than about shape.
     // Not in first person: a wedge on the floor drawn from the eyes is a slab
     // across the view, and the weapon on screen says what the swing does.
-    swingWhole.visible = !isFps()
+    // Debug drawings, so they go with the overlay (module.txt `debug off`).
+    swingWhole.visible = !isFps() && debugShown
     swingWhole.position.set(subject.x, at - 0.02, subject.z)
     aimSwing(swingWhole, facingTurns, swingMid, swingPitchMid)
 
-    swing.visible = off !== null && !isFps()
+    swing.visible = off !== null && !isFps() && debugShown
     if (off !== null) {
       swing.position.set(subject.x, at, subject.z)
       aimSwing(swing, facingTurns, off, pitch)
@@ -2749,7 +2767,7 @@ function frame (now) {
     // One segment per TICK of the swing, at the angle the collider held then.
     // Offered every frame and added only when the countdown moves, so the trail
     // has as many segments as the swing had ticks whatever the display rate is.
-    swingTrail.offer({
+    if (debugShown) swingTrail.offer({
       shape: swingShape, left: a.attackLeft, offsetTurns: off,
       pitchTurns: pitch, facingTurns,
       x: subject.x, y: at - 0.01, z: subject.z, now: performance.now() / 1000
@@ -2794,7 +2812,7 @@ function frame (now) {
   // and the occlusion window fades the walls between a camera and a body that,
   // here, are in the same place.
   if (arrow) {
-    arrow.visible = !isFps()
+    arrow.visible = !isFps() && debugShown
     // From the body's middle, which is roughly where a reach comes from and is
     // where you look when you are judging whether a door is in range.
     aimFacingArrow(arrow, middle, facingDirection(a.facing))
@@ -3163,73 +3181,75 @@ function frame (now) {
   // that is struggling sound alike; steals, drops and queue depth are what
   // separate them, and the sample rate is there because the engine renders at a
   // fixed 48 kHz and does not resample.
-  const musicLine = LIVE ? music.health() : null
+  const musicLine = LIVE && debugShown ? music.health() : null
 
   const st = predictor?.stats
-  hud.textContent =
-    `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps\n` +
-    `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
-    `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
-    `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
-    `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}\n` +
-    `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
-    // Which half is which, and no allocation to read it: `view.meshes` builds a
-    // combined array, which is fine once on a map change and wasteful sixty
-    // times a second for a length.
-    `meshes ${view.staticMeshes.length}+${view.dynamicMeshes.length}\n` +
-    // Rebuilds per second, and the two counters that only ever go up if
-    // something is leaking. renderer.info.memory is the renderer's own count of
-    // what it is holding, not a guess from this side.
-    `rebuilds/s ${rebuildRate}   geo ${renderer.info.memory.geometries}   ` +
-    `tex ${renderer.info.memory.textures}` +
-    `${props ? `   props ${props.animated.size}` : ''}\n` +
-    // "of 16.7" is the budget the frame is being spent against, not a second
-    // measurement -- it is the display's interval, derived from fps. Blank
-    // until fps has a sample, because "of 1000.0" in the first half second
-    // reads as a number rather than as a missing one.
-    `frame ${cost.frame.toFixed(2)}ms${fps > 0 ? ` of ${(1000 / fps).toFixed(1)}` : ''}   ` +
-    `sim ${cost.sim.toFixed(2)}   follow ${cost.follow.toFixed(2)}   ` +
-    `mesh ${cost.mesh.toFixed(2)}   draw ${cost.draw.toFixed(2)}\n` +
-    `vfx  seen ${vfxSeen}   live ${vfx ? vfx.live.length : 0}   ` +
-    `pool ${vfx ? vfx.pool.length : 'NO VIEW'}\n` +
-    // The swing as the renderer sees it. Three numbers rather than a
-    // description, because "the arc does not move much" and "the arc is drawn
-    // once and never updated" look identical from a chair and are told apart
-    // by whether `left` counts down and `off` changes with it.
-    `swing left ${a.attackLeft}   off ${swingLastOff === null ? '-' : swingLastOff.toFixed(3)}` +
-    `   trail ${swingTrail ? swingTrail.count : '-'}\n` +
-    // The weapon, in numbers. The wedge shows the shape; these show what it is
-    // made of, which is what you read while dragging a slider to see whether
-    // the value you set is the value the engine took.
-    (swingShape
-      ? `atk  reach ${swingShape.reach.toFixed(2)}` +
-        (swingShape.inner > 0 ? `-${swingShape.inner.toFixed(2)}` : '') +
-        `   arc ${(swingShape.halfArc * 2).toFixed(3)}t` +
-        `   sweep ${swingShape.from.toFixed(3)}..${swingShape.to.toFixed(3)}` +
-        `   ${swingShape.ticks}t/${swingShape.cooldown}cd`
-      : '') +
-    (vfxNoView ? `   dropped-no-view ${vfxNoView}` : '') +
-    (falls ? `   falls ${falls}` : '') +
-    (LIVE
-      ? `\nothers ${others.count}   exact ${st.exactMatches}   misp ${st.mispredictions}` +
-        `   starved ${st.starvedDivergences}   resync ${st.hardResyncs}`
-      : '')
-  // Inside frame(), where musicLine is. This sat after the closing brace,
-  // which put it at module scope reading a const declared in the function --
-  // "musicLine is not defined", on the first frame.
-  if (musicLine) hud.textContent += `\nmusic ${musicLine}`
+  if (debugShown) {
+    hud.textContent =
+      `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps\n` +
+      `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
+      `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
+      `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
+      `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}\n` +
+      `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
+      // Which half is which, and no allocation to read it: `view.meshes` builds a
+      // combined array, which is fine once on a map change and wasteful sixty
+      // times a second for a length.
+      `meshes ${view.staticMeshes.length}+${view.dynamicMeshes.length}\n` +
+      // Rebuilds per second, and the two counters that only ever go up if
+      // something is leaking. renderer.info.memory is the renderer's own count of
+      // what it is holding, not a guess from this side.
+      `rebuilds/s ${rebuildRate}   geo ${renderer.info.memory.geometries}   ` +
+      `tex ${renderer.info.memory.textures}` +
+      `${props ? `   props ${props.animated.size}` : ''}\n` +
+      // "of 16.7" is the budget the frame is being spent against, not a second
+      // measurement -- it is the display's interval, derived from fps. Blank
+      // until fps has a sample, because "of 1000.0" in the first half second
+      // reads as a number rather than as a missing one.
+      `frame ${cost.frame.toFixed(2)}ms${fps > 0 ? ` of ${(1000 / fps).toFixed(1)}` : ''}   ` +
+      `sim ${cost.sim.toFixed(2)}   follow ${cost.follow.toFixed(2)}   ` +
+      `mesh ${cost.mesh.toFixed(2)}   draw ${cost.draw.toFixed(2)}\n` +
+      `vfx  seen ${vfxSeen}   live ${vfx ? vfx.live.length : 0}   ` +
+      `pool ${vfx ? vfx.pool.length : 'NO VIEW'}\n` +
+      // The swing as the renderer sees it. Three numbers rather than a
+      // description, because "the arc does not move much" and "the arc is drawn
+      // once and never updated" look identical from a chair and are told apart
+      // by whether `left` counts down and `off` changes with it.
+      `swing left ${a.attackLeft}   off ${swingLastOff === null ? '-' : swingLastOff.toFixed(3)}` +
+      `   trail ${swingTrail ? swingTrail.count : '-'}\n` +
+      // The weapon, in numbers. The wedge shows the shape; these show what it is
+      // made of, which is what you read while dragging a slider to see whether
+      // the value you set is the value the engine took.
+      (swingShape
+        ? `atk  reach ${swingShape.reach.toFixed(2)}` +
+          (swingShape.inner > 0 ? `-${swingShape.inner.toFixed(2)}` : '') +
+          `   arc ${(swingShape.halfArc * 2).toFixed(3)}t` +
+          `   sweep ${swingShape.from.toFixed(3)}..${swingShape.to.toFixed(3)}` +
+          `   ${swingShape.ticks}t/${swingShape.cooldown}cd`
+        : '') +
+      (vfxNoView ? `   dropped-no-view ${vfxNoView}` : '') +
+      (falls ? `   falls ${falls}` : '') +
+      (LIVE
+        ? `\nothers ${others.count}   exact ${st.exactMatches}   misp ${st.mispredictions}` +
+          `   starved ${st.starvedDivergences}   resync ${st.hardResyncs}`
+        : '')
+    // Inside frame(), where musicLine is. This sat after the closing brace,
+    // which put it at module scope reading a const declared in the function --
+    // "musicLine is not defined", on the first frame.
+    if (musicLine) hud.textContent += `\nmusic ${musicLine}`
 
-  // The camera path, when there is one. `mix` is the part worth watching: it
-  // is the crossfade between the free camera and the path, so an attach or a
-  // detach is visible as a number easing rather than as a cut you have to
-  // catch by eye.
-  if (camPathSpline) {
-    const ps = camera.pathState
-    hud.textContent +=
-      `\npath ${camPathTag} along ${ps.along.toFixed(1)}/${camPathSpline.length.toFixed(1)}` +
-      ` mix ${ps.mix.toFixed(2)}${ps.attached ? '' : ' (free)'}${ps.clamped ? ' clamped' : ''}`
-  } else if (camPathTag >= 0) {
-    hud.textContent += `\npath ${camPathTag} UNRESOLVED`
+    // The camera path, when there is one. `mix` is the part worth watching: it
+    // is the crossfade between the free camera and the path, so an attach or a
+    // detach is visible as a number easing rather than as a cut you have to
+    // catch by eye.
+    if (camPathSpline) {
+      const ps = camera.pathState
+      hud.textContent +=
+        `\npath ${camPathTag} along ${ps.along.toFixed(1)}/${camPathSpline.length.toFixed(1)}` +
+        ` mix ${ps.mix.toFixed(2)}${ps.attached ? '' : ' (free)'}${ps.clamped ? ' clamped' : ''}`
+    } else if (camPathTag >= 0) {
+      hud.textContent += `\npath ${camPathTag} UNRESOLVED`
+    }
   }
 
   // The capture. One line a second, comma-separated, headed once -- a minute of
@@ -3394,5 +3414,6 @@ async function playMapMusic (hash, name, fadeMs = 0) {
 playMapMusic(map.hash, homeName)
 
 say('')
-document.getElementById('help').style.display = 'block'
+helpShown = true
+showDebug(debugShown)
 requestAnimationFrame(frame)

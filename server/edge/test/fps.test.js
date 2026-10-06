@@ -156,6 +156,7 @@ console.log('fps')
 {
   const run = await session(['--controls', 'fps'], EAST_FORWARD, 2500)
   check(run.welcome?.controls === 1, `WELCOME says the scheme is fps (${run.welcome?.controls})`)
+  check(run.welcome?.debug === 1, `and, with no module saying otherwise, to show the debug overlay (${run.welcome?.debug})`)
   const m = moved(run)
   console.log(`  aim east, push forward: moved (${m.dx.toFixed(2)}, ${m.dy.toFixed(2)})`)
   check(m.dx > 2 && Math.abs(m.dy) < 0.2, 'the push is relative to the view: it walked east')

@@ -135,12 +135,13 @@ try {
           'and no "drag to turn" tip is shown (the user asked for it gone)')
   }
 
+  let off = ''
   console.log('\n--- CONTROL: and gone when they are not wanted ---')
   {
     // Without this, every check above passes for a client that mounts a
     // thumbstick over a desktop game that has a keyboard. `?touch=0` is the
     // same override a touchscreen laptop would use.
-    const off = dump(url('touch=0'))
+    off = dump(url('touch=0'))
     check(!/^error:/.test(statusOf(off).trim()),
           `it still loads (${JSON.stringify(statusOf(off).trim().slice(0, 120))})`)
     check(!/class="dnp-touch-btn/.test(off), 'no buttons')
@@ -149,6 +150,25 @@ try {
           'and the page does not think it is a phone')
     // The keyboard legend is the thing that takes the corner back.
     check(/WASD move/.test(off), 'the keyboard legend is the one shown')
+  }
+
+  console.log('\n--- launching without the debug overlay (?debug=0) ---')
+  {
+    // The numbers block, written every frame, and the legend under it. The
+    // control is the default launch (`off`, above): the same block, there.
+    const hudOf = (d) => /<div id="hud"([^>]*)>([\s\S]*?)<\/div>/.exec(d)
+    const helpOf = (d) => /<div id="help"([^>]*)>/.exec(d)?.[1] ?? ''
+    const shown = hudOf(off)
+    check(shown && /tick \d+/.test(shown[2]) && !/display: none/.test(shown[1]),
+          'CONTROL: by default the debug block is drawn and written')
+    check(/display: block/.test(helpOf(off)), 'CONTROL: and so is the legend')
+    const clean = dump(url('touch=0&debug=0'))
+    check(!/^error:/.test(statusOf(clean).trim()) && statusOf(clean).trim() === '',
+          `it loads to the end (${JSON.stringify(statusOf(clean).trim().slice(0, 120))})`)
+    const h = hudOf(clean)
+    check(h && /display: none/.test(h[1]), 'the debug block is hidden')
+    check(h && h[2] === '', 'and never written, not merely hidden')
+    check(/display: none/.test(helpOf(clean)), 'the legend is hidden too')
   }
 
   console.log('\n--- CONTROL: a headless desktop is not asked to guess ---')

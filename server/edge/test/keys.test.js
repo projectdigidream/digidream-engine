@@ -33,7 +33,7 @@ mkdirSync(join(mod, 'maps'))
 for (const f of ['trigger_vocab.lua', 'triggers.lua', 'graph_vocab.lua', 'graphs.lua']) {
   writeFileSync(join(mod, 'maps', f), readFileSync(join(ROOT, 'maps', 'scripts', f)))
 }
-writeFileSync(join(mod, 'module.txt'), 'name Keys\nid keys\nkey reload KeyR touch RELOAD\nkey map KeyM\n')
+writeFileSync(join(mod, 'module.txt'), 'name Keys\nid keys\nkey reload KeyR touch RELOAD\nkey map KeyM\ndebug off\n')
 writeFileSync(join(mod, 'maps', 'keys.graph.json'), JSON.stringify({
   graph: 1, name: 'keys', vars: { n: 0 },
   nodes: [{ id: 'p', type: 'when_button_pressed', button: 'reload' }, { id: 'a', type: 'add_var', var: 'n', value: 1 },
@@ -68,6 +68,7 @@ try {
   const cw = control.writable.getWriter()
   const dw = wt.datagrams.createWritable().getWriter()
   let keys = null
+  let welcome = null
   const hud = {}
   const snaps = []
   ;(async () => {
@@ -79,7 +80,8 @@ try {
         while (buf.length >= 4) {
           const len = buf.readUInt32LE(0); if (buf.length < 4 + len) break
           const m = decodeControlMessage(buf.subarray(0, 4 + len)); buf = buf.subarray(4 + len)
-          if (m?.type === MSG.KEYS) keys = m.keys
+          if (m?.type === MSG.WELCOME) welcome = m
+          else if (m?.type === MSG.KEYS) keys = m.keys
           else if (m?.type === MSG.HUD_SET) for (const f of m.fields) hud[f.name] = f.value
         }
       }
@@ -94,6 +96,9 @@ try {
   console.log('keys: a module key, told to the client and answered by a graph')
   check(keys.length === 2 && keys[0].name === 'reload' && keys[0].code === 'KeyR' && keys[0].label === 'RELOAD' &&
         keys[1].name === 'map' && keys[1].label === '', `the client is told the module's keys (${JSON.stringify(keys)})`)
+  // The module launches without the debug overlay (`debug off`); fps.test.js
+  // is the control, a module that says nothing and gets it.
+  check(welcome?.debug === 0, `WELCOME tells the client to hide its debug overlay (${welcome?.debug})`)
   let tick = 0
   let hist = []
   const send = async (actions, ms) => {

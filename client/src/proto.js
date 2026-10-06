@@ -532,6 +532,9 @@ export function decodeControlMessage (buf) {
     // The module's control scheme, appended after the name: 0 platformer, 1
     // fps (client/src/controls.js). Absent from an older server: a platformer.
     msg.controls = r.ok && r.pos < r.buf.length ? r.u8() : 0
+    // Whether to show the debug overlay (module.txt `debug off`), after it.
+    // Absent from an older server: shown, as it always was.
+    msg.debug = r.ok && r.pos < r.buf.length ? r.u8() : 1
     return r.ok ? msg : null
   }
   if (type === MSG.SECTOR_MOTION_SET) {

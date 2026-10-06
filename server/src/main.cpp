@@ -791,6 +791,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // 0 platformer, 1 fps. Sent in WELCOME; an fps player's body turns at once
     // to the view and walks relative to it (MoveParams::move_relative).
     u8 controls = 0;
+    // THE DEBUG OVERLAY, the module's to choose (module.txt `debug off`): 1
+    // the client draws its numbers block and the controls legend, 0 it launches
+    // clean. Sent in WELCOME after `controls`; the page's ?debug= overrides it.
+    u8 debug_overlay = 1;
     // The modules' `player` lines (docs/PLAYER.md): a parameter for every
     // level (`level` empty) or for one, in module order -- a later module's
     // line for the same key wins, as its `controls` does.
@@ -2153,6 +2157,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         write_level_name(w, li);
         // The control scheme (0 platformer, 1 fps), appended.
         w.u8v(controls);
+        // Whether the client shows its debug overlay, appended.
+        w.u8v(debug_overlay);
         const size_t end = w.size();
         const u32 body_len = static_cast<u32>(end - len_pos - 4);
         buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -4738,6 +4744,12 @@ int main(int argc, char** argv) {
                 if (std::strcmp(scheme, "fps") == 0) srv.controls = 1;
                 else if (std::strcmp(scheme, "platformer") == 0) srv.controls = 0;
                 else std::fprintf(stderr, "[srv] %s/module.txt: unknown controls '%s'\n", module_dirs[mi], scheme);
+                continue;
+            }
+            if (std::sscanf(line, "debug %31s", scheme) == 1) {
+                if (std::strcmp(scheme, "off") == 0) srv.debug_overlay = 0;
+                else if (std::strcmp(scheme, "on") == 0) srv.debug_overlay = 1;
+                else std::fprintf(stderr, "[srv] %s/module.txt: debug is on or off, not '%s'\n", module_dirs[mi], scheme);
                 continue;
             }
             if (std::sscanf(line, "persist %63s", what) != 1) continue;
