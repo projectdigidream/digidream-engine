@@ -368,8 +368,12 @@ public final class MainActivity extends Activity {
    * <p>The bundled module comes along for its catalogue and art; the studio's
    * module comes after it, exactly as the desktop shell orders them.
    */
+  /** The module the studio last pressed Play on: served first (serveFromTree). */
+  private volatile File playModule = null;
+
   private void launch(String module, String map) throws IOException {
     File modDir = rwFile(module);
+    playModule = modDir;
     File mapFile = new File(modDir, "maps/" + map);
     if (!mapFile.isFile()) throw new IOException("no such level: " + module + "/maps/" + map);
     server.stop();
@@ -638,6 +642,16 @@ public final class MainActivity extends Activity {
     File bundledTree = gameDir == null || bundledModule == null ? null : new File(gameDir, "modules/" + bundledModule);
     boolean haveBundled = bundledTree != null && bundledTree.isDirectory();
     if (haveBundled) mods.add(bundledTree);
+    // THE MODULE BEING PLAYED FIRST. Every lookup here is first-wins (a file,
+    // the UI index's default, a map's layout), and the modules come in name
+    // order -- so with two modules on the phone, the one that sorted first
+    // gave a play-test of the other its hud.json: the user's module-wide HUD
+    // never showed, and a map's own (a name no other module has) did.
+    if (playModule != null) {
+      for (int i = 0; i < mods.size(); i++) {
+        if (mods.get(i).getCanonicalPath().equals(playModule.getCanonicalPath())) { mods.add(0, mods.remove(i)); break; }
+      }
+    }
     if (mods.isEmpty()) return null;
     if (path.equals("props.txt") || path.equals("animations.txt")) {
       ByteArrayOutputStream bo = new ByteArrayOutputStream();

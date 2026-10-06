@@ -78,12 +78,18 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
   // Every module root, the writable tree's first. Read on each request: the
   // studio creates modules while the app runs, and a directory listing on a
   // desktop costs nothing anybody can measure.
+  // The module a play-test runs, first of all: every lookup is first-wins (a
+  // file, the UI index's default, a map's layout), and the writable tree's
+  // modules come in name order -- so another module's hud.json used to win a
+  // play-test of this one. Set by the studio's Play (main.js launch).
+  let first = null
   const moduleRoots = async () => {
     const roots = []
+    if (first) roots.push(first)
     if (rwRoot) {
       try {
         for (const e of await readdir(join(rwRoot, 'modules'), { withFileTypes: true })) {
-          if (e.isDirectory()) roots.push(join(rwRoot, 'modules', e.name))
+          if (e.isDirectory() && join(rwRoot, 'modules', e.name) !== first) roots.push(join(rwRoot, 'modules', e.name))
         }
       } catch {}
     }
@@ -213,7 +219,8 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address()
       log(`static http://127.0.0.1:${port}/`)
-      resolve_({ server, port })
+      // setFirst(dir): the module a play-test runs, looked in first (null: none).
+      resolve_({ server, port, setFirst: (dir) => { first = dir ?? null } })
     })
   })
 }

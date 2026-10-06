@@ -719,6 +719,8 @@ suite_app () {
   # /ui/index.json merged across modules by the asset rule (first wins), in the
   # app and the devserver, and each file served from the module that named it.
   node shells/app/test/ui_route.test.js | tail -2
+  # A play-test serves its own module first: another module's hud.json no longer wins it.
+  node shells/app/test/play_first.test.js | tail -2
   node shells/app/test/local_transport.test.js 2>/dev/null | tail -2
 }
 

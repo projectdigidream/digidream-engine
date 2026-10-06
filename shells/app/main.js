@@ -213,6 +213,8 @@ async function launch ({ module, map }) {
     const others = (await readdir(join(modDir, 'maps')).catch(() => [])).filter((n) => n.endsWith('.dnpm') && n !== map).sort().map((n) => join(modDir, 'maps', n))
     await restartServer({ modules: [modDir], map: entry, maps: [entry, ...others].slice(0, 64), logFile: join(logs, 'play-server.log') })
   } catch (e) { playLog(`[shell] the game did not start: ${e.message ?? e}`); throw e }
+  // Its files first, ahead of every other module in the tree (static.js).
+  statics.setFirst?.(modDir)
   await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
   announceWhenUp()
   return true
