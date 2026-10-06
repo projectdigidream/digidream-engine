@@ -836,6 +836,9 @@ suite_stack () {
      `# Sector looks (SECTOR_SET): a floor, fog and a fading light set by a script;` \
      `# whoever arrives later is told the state. CONTROL: not told to fade.` \
      && node test/sector.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Panels by name (docs/PANELS.md): a game graph opens, answers a press and` \
+     `# the × over the real protocol. CONTROL: a press after the × is dropped.` \
+     && node test/panels.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \

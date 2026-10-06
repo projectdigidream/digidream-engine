@@ -53,6 +53,12 @@
       "type": "table"
     },
     {
+      "doc": "The panels this graph opens, fills or answers, by name: each a title, an optional layout template, and its widgets -- the five kinds a trigger table's panels take, each with a `name` the nodes use (docs/PANELS.md).",
+      "name": "panels",
+      "optional": true,
+      "type": "table"
+    },
+    {
       "doc": "The nodes, as an ARRAY: its order is the order event nodes for the same event run in.",
       "name": "nodes",
       "type": "table"
@@ -1636,6 +1642,188 @@
       ],
       "level_only": true,
       "name": "set_sky"
+    },
+    {
+      "args": [
+        {
+          "doc": "One of this graph's panels.",
+          "name": "panel",
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Show a panel to the player. Opened again, it replaces itself rather than appearing twice.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "open_panel"
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Take the panel away, if the player has it open.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "close_panel"
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        },
+        {
+          "doc": "A toggle, slider or select of that panel.",
+          "name": "widget",
+          "type": "string"
+        },
+        {
+          "doc": "A toggle's 0 or 1, a slider's position, a select's index. Or linked.",
+          "name": "value",
+          "optional": true,
+          "type": "number"
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity",
+        "value"
+      ],
+      "data_out": [],
+      "doc": "Change what one widget of an open panel shows. Nothing if it is not open.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_widget"
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        },
+        {
+          "doc": "One widget; any without it.",
+          "name": "widget",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "widget",
+        "value"
+      ],
+      "doc": "A player pressed a button, flipped a toggle, moved a slider or chose an option on the panel. `widget` is its name; `value` what it sent.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_panel_used",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "A player closed the panel with its ×. Not by close_panel, nor by leaving the level.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_panel_closed",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "Whether the player has the panel open.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "panel_is_open"
+    },
+    {
+      "args": [
+        {
+          "doc": "The HUD value: what {hud.<name>} shows on a panel or the HUD.",
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "doc": "A number or text; false clears it. Or linked.",
+          "name": "value",
+          "optional": true,
+          "type": "value"
+        },
+        {
+          "doc": "Defaults to the player.",
+          "name": "to",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "player",
+            "everyone"
+          ]
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity",
+        "value"
+      ],
+      "data_out": [],
+      "doc": "Write a HUD value: a panel's changing text (gold, a timer) is a template's {hud.<name>}, so this is how a graph writes on a panel.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_hud"
     },
     {
       "args": [

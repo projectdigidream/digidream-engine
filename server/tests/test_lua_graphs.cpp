@@ -71,9 +71,15 @@ static server::lua::Vm vm;
 struct RecordingUi : server::lua::UiSink {
     std::map<u8, i32> cams, scr;
     std::map<std::string, std::string> huds;
-    u32  open_ui(u32, u32, const proto::UiPanel&) override { return 0; }
-    void close_ui(u32, u32, u32) override {}
-    void set_ui(u32, u32, u32, u16, i32) override {}
+    // Panels: each open gets the next id, as the server's do.
+    std::vector<proto::UiPanel> opened;
+    std::vector<u32> closed_ids;
+    struct Set { u32 ui; u16 widget; i32 value; };
+    std::vector<Set> sets;
+    u32  next_ui = 100;
+    u32  open_ui(u32, u32, const proto::UiPanel& p) override { opened.push_back(p); return ++next_ui; }
+    void close_ui(u32, u32, u32 id) override { closed_ids.push_back(id); }
+    void set_ui(u32, u32, u32 id, u16 w, i32 v) override { sets.push_back({id, w, v}); }
     void set_camera(u32, u32, const proto::CameraSet& c) override {
         for (u16 i = 0; i < c.count; ++i) cams[c.fields[i].id] = c.fields[i].milli;
     }
@@ -839,6 +845,105 @@ int main(int argc, char** argv) {
                      { "id": "l", "type": "set_sector_light", "tag": 77, "light": 0 } ],
           "links": [ ["go.then", "l.in"] ] })"));
         CHECK(run("graphs.call('nowhere', nil, nil)", "nowhere") && g_ui.sectors.empty());
+    }
+
+    std::printf("-- panels by name (docs/PANELS.md) --\n");
+    {
+        CHECK(load_graph(R"({ "graph": 1, "name": "shopg",
+          "vars": { "pressed": 0, "last": "", "closed": 0, "open_now": false },
+          "panels": { "shop": { "title": "Shop", "template": "shop", "widgets": [
+              { "kind": "label",  "id": 1, "name": "gold",  "label": "Gold" },
+              { "kind": "button", "id": 2, "name": "buy",   "label": "Buy" },
+              { "kind": "slider", "id": 3, "name": "count", "label": "How many", "lo": 1, "hi": 5, "value": 1 } ] } },
+          "nodes": [ { "id": "o",  "type": "on_call", "name": "open" },  { "id": "op", "type": "open_panel", "panel": "shop" },
+                     { "id": "c",  "type": "on_call", "name": "close" }, { "id": "cp", "type": "close_panel", "panel": "shop" },
+                     { "id": "s",  "type": "on_call", "name": "set" },   { "id": "sw", "type": "set_widget", "panel": "shop", "widget": "count", "value": 4 },
+                     { "id": "ub", "type": "when_panel_used", "panel": "shop", "widget": "buy" },
+                     { "id": "ap", "type": "add_var", "var": "pressed", "value": 1 },
+                     { "id": "ua", "type": "when_panel_used", "panel": "shop" },
+                     { "id": "sl", "type": "set_var", "var": "last" },
+                     { "id": "cl", "type": "when_panel_closed", "panel": "shop" },
+                     { "id": "ac", "type": "add_var", "var": "closed", "value": 1 },
+                     { "id": "k",  "type": "on_call", "name": "check" },
+                     { "id": "io", "type": "panel_is_open", "panel": "shop" },
+                     { "id": "so", "type": "set_var", "var": "open_now" } ],
+          "links": [ ["o.then", "op.in"], ["c.then", "cp.in"], ["s.then", "sw.in"], ["ub.then", "ap.in"],
+                     ["ua.then", "sl.in"], ["ua.widget", "sl.value"], ["cl.then", "ac.in"],
+                     ["k.then", "so.in"], ["io.value", "so.value"] ] })"));
+        auto var = [&](const char* v) {
+            const std::string src = std::string("pv = graphs.var('shopg', '") + v + "')";
+            run(src.c_str(), v);
+            lua_getglobal(L, "pv");
+            std::string out = lua_isboolean(L, -1) ? (lua_toboolean(L, -1) ? "true" : "false")
+                                                   : (lua_tostring(L, -1) ? lua_tostring(L, -1) : "nil");
+            lua_pop(L, 1);
+            return out;
+        };
+        g_ui.opened.clear(); g_ui.closed_ids.clear(); g_ui.sets.clear();
+        CHECK(run("graphs.call('open', dnp.players()[1], nil)", "open"));
+        CHECK(g_ui.opened.size() == 1 && g_ui.opened[0].count == 3 && g_ui.opened[0].template_len == 4 &&
+              g_ui.opened[0].title.len == 4);
+        const u32 first = g_ui.next_ui;
+        CHECK(run("graphs.call('open', dnp.players()[1], nil)", "open again"));
+        CHECK(g_ui.opened.size() == 2 && g_ui.closed_ids.size() == 1 && g_ui.closed_ids[0] == first);
+        const u32 id = g_ui.next_ui;
+        // A press by number arrives; the graph hears it by name.
+        const std::string press = "graphs.ui_event(dnp.players()[1], " + std::to_string(id) + ", 2, 1)";
+        CHECK(run(press.c_str(), "press buy"));
+        CHECK(var("pressed") == "1" && var("last") == "buy");
+        const std::string slide = "graphs.ui_event(dnp.players()[1], " + std::to_string(id) + ", 3, 4)";
+        CHECK(run(slide.c_str(), "slide"));
+        CHECK(var("pressed") == "1" && var("last") == "count");   // `widget` given: only its own
+        // CONTROL: a panel this VM's graphs did not open (a trigger table's) fires nothing.
+        CHECK(run("graphs.ui_event(dnp.players()[1], 9999, 2, 1)", "a trigger table's press"));
+        CHECK(var("pressed") == "1");
+        CHECK(run("graphs.call('set', dnp.players()[1], nil)", "set"));
+        CHECK(g_ui.sets.size() == 1 && g_ui.sets[0].ui == id && g_ui.sets[0].widget == 3 && g_ui.sets[0].value == 4);
+        CHECK(run("graphs.call('check', dnp.players()[1], nil)", "check") && var("open_now") == "true");
+        // The ×: widget 0. Fires when_panel_closed, and the panel is forgotten.
+        const std::string x = "graphs.ui_event(dnp.players()[1], " + std::to_string(id) + ", 0, 0)";
+        CHECK(run(x.c_str(), "the x"));
+        CHECK(var("closed") == "1");
+        CHECK(run("graphs.call('check', dnp.players()[1], nil)", "check") && var("open_now") == "false");
+        CHECK(run("graphs.call('set', dnp.players()[1], nil)", "set when closed") && g_ui.sets.size() == 1);
+        CHECK(run("graphs.call('close', dnp.players()[1], nil)", "close when closed") && g_ui.closed_ids.size() == 1);
+        CHECK(run(press.c_str(), "a press after the x") && var("pressed") == "1");   // gone, and quiet
+        // close_panel on an open one closes it, and fires no when_panel_closed.
+        CHECK(run("graphs.call('open', dnp.players()[1], nil)", "open"));
+        CHECK(run("graphs.call('close', dnp.players()[1], nil)", "close"));
+        CHECK(g_ui.closed_ids.size() == 2 && g_ui.closed_ids[1] == g_ui.next_ui && var("closed") == "1");
+
+        // LOAD ERRORS, each refused.
+        const char* bad[] = {
+          R"({ "graph": 1, "name": "b1", "nodes": [ { "id": "o", "type": "open_panel", "panel": "nope" } ], "links": [] })",
+          R"({ "graph": 1, "name": "b2", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "a", "label": "A" } ] } },
+               "nodes": [ { "id": "u", "type": "when_panel_used", "panel": "p", "widget": "zz" } ], "links": [] })",
+          R"({ "graph": 1, "name": "b3", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "a", "label": "A" },
+               { "kind": "button", "id": 2, "name": "a", "label": "B" } ] } }, "nodes": [], "links": [] })",
+          R"({ "graph": 1, "name": "b4", "panels": { "p": { "widgets": [ { "kind": "dial", "id": 1, "name": "a", "label": "A" } ] } },
+               "nodes": [], "links": [] })",
+          R"({ "graph": 1, "name": "b5", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "a", "label": "A" } ] } },
+               "nodes": [ { "id": "s", "type": "set_widget", "panel": "p", "widget": "a", "value": 1 } ], "links": [] })",
+          R"({ "graph": 1, "name": "b6", "panels": { "Bad Name": { "widgets": [] } }, "nodes": [], "links": [] })",
+          R"({ "graph": 1, "name": "b7", "panels": { "p": { "widgets": [ { "kind": "button", "id": 0, "name": "a", "label": "A" } ] } },
+               "nodes": [], "links": [] })" };
+        for (const char* b : bad) CHECK(!load_graph(b));
+        {
+            std::string many = R"({ "graph": 1, "name": "b8", "panels": { "p": { "widgets": [ )";
+            for (int i = 1; i <= 33; ++i)
+                many += (i > 1 ? "," : "") + std::string(R"({ "kind": "button", "id": )") + std::to_string(i) +
+                        R"(, "name": "w)" + std::to_string(i) + R"(", "label": "W" })";
+            many += " ] } }, \"nodes\": [], \"links\": [] }";
+            CHECK(!load_graph(many.c_str()));
+        }
+        // set_hud: to the player, and to everyone.
+        g_ui.huds.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "hudg",
+          "nodes": [ { "id": "c", "type": "on_call", "name": "gold" },
+                     { "id": "h", "type": "set_hud", "name": "gold", "value": 40 } ],
+          "links": [ ["c.then", "h.in"] ] })"));
+        CHECK(run("graphs.call('gold', dnp.players()[1], nil)", "set_hud"));
+        CHECK(g_ui.huds.count("gold") == 1);
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

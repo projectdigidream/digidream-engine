@@ -251,6 +251,22 @@ const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.cl
         `CONTROL: a bad name, anchor or slot is an error and the template is dropped (${bad.errors.length})`)
 }
 
+// --- the × tells the server (docs/PANELS.md 4) --------------------------------
+{
+  const doc = makeDom()
+  const sent = []
+  const view = new UiView({ onEvent: (...a) => sent.push(a), doc })
+  view.open(msg)
+  const x = all(doc.body).find((e) => /dnp-ui-x/.test(e.className))
+  x.onclick()
+  x.onclick()
+  check(sent.length === 1 && sent[0][0] === msg.uiId && sent[0][1] === 0 && sent[0][2] === 0,
+        `the player's × sends widget 0 for its panel, once (${JSON.stringify(sent)})`)
+  view.open(msg)
+  view.close(msg.uiId)
+  check(sent.length === 1, 'CONTROL: a panel the server closes tells nobody')
+}
+
 // --- named styles (docs/UI_STYLES.md 2.2) -------------------------------------
 console.log('\n--- named styles: fonts, skins, title, buttons ---')
 const PARCHMENT = {

@@ -2386,9 +2386,48 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // the range the widget itself declared. A script written against a UI is
     // not written against an adversary, which is why this layer has to be the
     // thing that makes that true.
+    // A panel event to the script that owns the panel: the game VM for a
+    // game panel, else the level whose script opened it.
+    void ui_event_to_owner(Session& s, u32 owner, u32 ui_id, u16 widget_id, i32 value) {
+        if (!s.has_agent) return;
+        if (owner == Session::UI_GAME) {
+            game_hook(s.level, "on_ui_event", 4, [&](lua_State* T) {
+                lua::push_entity(T, game_ctx, s.agent);
+                lua_pushnumber(T, static_cast<double>(ui_id));
+                lua_pushnumber(T, static_cast<double>(widget_id));
+                lua_pushnumber(T, static_cast<double>(value));
+            });
+            return;
+        }
+        Level& L = level(s.level);
+        if (!L.vm.is_open()) return;
+        for (u32 h = 0; h < L.vm.hook_count("on_ui_event"); ++h) {
+            if (!L.vm.begin_hook_at("on_ui_event", h)) continue;
+            lua::push_entity(L.vm.state(), L.ctx, s.agent);
+            lua_pushnumber(L.vm.state(), static_cast<double>(ui_id));
+            lua_pushnumber(L.vm.state(), static_cast<double>(widget_id));
+            lua_pushnumber(L.vm.state(), static_cast<double>(value));
+            L.vm.end_hook("on_ui_event", L.world.tick(), 4);
+        }
+    }
+
     void on_ui_event(Session& s, const proto::UiEvent& ev) {
         proto::UiPanel* panel = s.find_ui(ev.ui_id);
         if (panel == nullptr) return;          // closed, or never opened
+
+        // WIDGET 0 IS THE PLAYER'S ×: widget ids start at 1, so 0 is free to
+        // mean "closed" (docs/protocol.md 11.3, docs/PANELS.md 4). The panel is
+        // forgotten here, and its owner told -- with widget 0, which a trigger
+        // table's widget_is never matches, so only a graph's when_panel_closed
+        // answers it.
+        if (ev.widget_id == 0) {
+            const u32 owner = s.ui_owner(ev.ui_id);
+            for (size_t i = 0; i < s.open_ui.size(); ++i) {
+                if (s.open_ui[i].ui_id == ev.ui_id) { s.remove_ui_at(i); break; }
+            }
+            ui_event_to_owner(s, owner, ev.ui_id, 0, 0);
+            return;
+        }
 
         const proto::UiWidget* widget = nullptr;
         for (u16 i = 0; i < panel->count; ++i) {
@@ -2412,27 +2451,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             default: return;
         }
 
-        if (!s.has_agent) return;
         // The GAME's panel: its handlers are in the game VM.
-        if (s.ui_owner(ev.ui_id) == Session::UI_GAME) {
-            game_hook(s.level, "on_ui_event", 4, [&](lua_State* T) {
-                lua::push_entity(T, game_ctx, s.agent);
-                lua_pushnumber(T, static_cast<double>(ev.ui_id));
-                lua_pushnumber(T, static_cast<double>(ev.widget_id));
-                lua_pushnumber(T, static_cast<double>(value));
-            });
-            return;
-        }
-        Level& L = level(s.level);
-        if (!L.vm.is_open()) return;
-        for (u32 h = 0; h < L.vm.hook_count("on_ui_event"); ++h) {
-            if (!L.vm.begin_hook_at("on_ui_event", h)) continue;
-            lua::push_entity(L.vm.state(), L.ctx, s.agent);
-            lua_pushnumber(L.vm.state(), static_cast<double>(ev.ui_id));
-            lua_pushnumber(L.vm.state(), static_cast<double>(ev.widget_id));
-            lua_pushnumber(L.vm.state(), static_cast<double>(value));
-            L.vm.end_hook("on_ui_event", L.world.tick(), 4);
-        }
+        ui_event_to_owner(s, s.ui_owner(ev.ui_id), ev.ui_id, ev.widget_id, value);
     }
 
     void on_control(u32 id, const u8* data, size_t len) {

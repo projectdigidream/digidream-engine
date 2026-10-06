@@ -58,6 +58,12 @@ for _, a in ipairs(V.game.actions) do GAME_OK.action[a] = true end
 
 local loaded = {}      -- graphs in load order
 local timers = {}      -- { tick, graph, node, pin, ev }
+-- PANELS (docs/PANELS.md), per VM: the definitions the loaded graphs carry, by
+-- name (the first graph to carry one wins); which player has which open, by
+-- "<player>/<panel>" -> ui_id; and the way back, ui_id -> what it is.
+local panel_defs = {}  -- name -> { def, label }
+local open_panels = {} -- "<player>/<panel>" -> ui_id
+local by_ui = {}       -- ui_id -> { key, panel, player }
 local call_depth = 0
 
 -- A verb's argument specs, by kind and name, from the trigger vocabulary.
@@ -508,6 +514,74 @@ end
 
 function EXEC.set_wall_texture(g, n, ev, pull)
   if dnp.set_side_texture ~= nil then dnp.set_side_texture(n.side, n.part or "middle", n.texture) end
+  return "then"
+end
+
+-- ------------------------------------------------------------------ PANELS
+--
+-- A panel by name from the graph's own `panels` (docs/PANELS.md). Keyed by the
+-- player's session (e:player()), as game scripts key players, so the game's
+-- panel follows its player into the next level.
+local function player_key(e)
+  local p = e.player ~= nil and e:player() or nil
+  return p ~= nil and ("p" .. p) or ("e" .. e:index())
+end
+local function panel_player(n, g, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  if e == nil or e.kind == nil or e:kind() ~= 0 then return nil end   -- players only
+  return e
+end
+local function forget_panel(key)
+  local id = open_panels[key]
+  if id ~= nil then by_ui[id] = nil end
+  open_panels[key] = nil
+  return id
+end
+function EXEC.open_panel(g, n, ev, pull)
+  local e = panel_player(n, g, ev, pull)
+  local def = g.panels[n.panel]
+  if e == nil or def == nil or dnp.ui_open == nil then return "then" end
+  local key = player_key(e) .. "/" .. n.panel
+  -- Never twice: an open copy is closed first.
+  local old = forget_panel(key)
+  if old ~= nil then dnp.ui_close(e, old) end
+  local id = dnp.ui_open(e, { title = def.title, template = def.template, widgets = def.widgets })
+  if id ~= nil and id ~= 0 then
+    open_panels[key] = id
+    by_ui[id] = { key = key, panel = n.panel, player = e:player() }
+  end
+  return "then"
+end
+function EXEC.close_panel(g, n, ev, pull)
+  local e = panel_player(n, g, ev, pull)
+  if e == nil then return "then" end
+  local id = forget_panel(player_key(e) .. "/" .. n.panel)
+  if id ~= nil and dnp.ui_close ~= nil then dnp.ui_close(e, id) end
+  return "then"
+end
+function EXEC.set_widget(g, n, ev, pull)
+  local e = panel_player(n, g, ev, pull)
+  if e == nil or dnp.ui_set == nil then return "then" end
+  local id = open_panels[player_key(e) .. "/" .. n.panel]
+  local w = g.panels[n.panel] and g.panels[n.panel].by_name[n.widget]
+  local v = tonumber(pull("value"))
+  if id ~= nil and w ~= nil and v ~= nil then dnp.ui_set(e, id, w.id, math.floor(v + 0.5)) end
+  return "then"
+end
+function PURE.panel_is_open(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  return e ~= nil and open_panels[player_key(e) .. "/" .. n.panel] ~= nil
+end
+function EXEC.set_hud(g, n, ev, pull)
+  if dnp.hud == nil then return "then" end
+  local v = pull("value")
+  if v == nil then v = false end
+  if n.to == "everyone" then
+    dnp.hud(nil, { [n.name] = v })
+  else
+    local e = entity_of(pull, ev, nil, g.data_src[n.id])
+    if e ~= nil then dnp.hud(e, { [n.name] = v }) end
+  end
   return "then"
 end
 
@@ -1030,14 +1104,38 @@ function on_prop_use(entity, prop)
 end
 function on_attack(entity, target) fire("on_attack", { entity = entity, target = target }) end
 function on_crush(entity, sector, kind) fire("on_crush", { entity = entity, sector = sector, crush_kind = kind }) end
-function on_ui_event(entity, ui_id, widget_id, value)
+local function ui_event(entity, ui_id, widget_id, value)
+  -- A panel this VM's graphs opened: its press, or its × (widget 0), by name.
+  -- A trigger table's panel is not in `by_ui`, so it fires nothing here.
+  local open = by_ui[ui_id]
+  if open ~= nil then
+    if widget_id == 0 then
+      forget_panel(open.key)
+      fire_start("when_panel_closed", function(n) return n.panel == open.panel end, { entity = entity })
+    else
+      local def = panel_defs[open.panel] and panel_defs[open.panel].def
+      local w = def and def.by_id[widget_id]
+      if w ~= nil then
+        fire_start("when_panel_used", function(n)
+          return n.panel == open.panel and (n.widget == nil or n.widget == w.name)
+        end, { entity = entity, widget = w.name, value = value })
+      end
+    end
+  end
   fire("on_ui_event", { entity = entity, ui_id = ui_id, widget_id = widget_id, value = value })
 end
+on_ui_event = ui_event
+-- Reachable for a test, as touched is: the VM harvests the hook itself.
+M.ui_event = ui_event
 function on_player_enter(entity)
   fire("on_player_enter", { entity = entity })
   fire_start("when_player_arrives", nil, { entity = entity })
 end
 function on_player_leave(player)
+  -- The panels it had from this VM went with it.
+  for id, o in pairs(by_ui) do
+    if o.player == player then open_panels[o.key] = nil; by_ui[id] = nil end
+  end
   fire("on_player_leave", { value = player })
   fire_start("when_player_leaves", nil, { value = player })
 end
@@ -1124,6 +1222,61 @@ function M.load(data, label)
     elseif type(v) ~= "number" and type(v) ~= "string" and type(v) ~= "boolean" then
       bad("variable '%s' starts as a %s; a number, string or boolean only", k, type(v))
     else vars[k] = v end
+  end
+
+  -- PANELS (docs/PANELS.md 2): each checked as a trigger table's panel is --
+  -- the same widget kinds and limits, from trigger_vocab when it is loaded --
+  -- plus names a node can say. A problem refuses the graph: dnp.ui_open
+  -- raises on a bad widget, inside the callback that opened it.
+  local panels = {}
+  local NAME = "^[a-z0-9_]+$"
+  local pv = trigger_vocab ~= nil and trigger_vocab.panels or nil
+  local kinds = {}
+  if pv ~= nil then for _, k in ipairs(pv.widgets) do kinds[k.name] = k end
+  else for _, k in ipairs({ "label", "button", "toggle", "slider", "select" }) do kinds[k] = true end end
+  local max_widgets = pv and pv.max_widgets or 32
+  local max_options = pv and pv.max_options or 32
+  for pname, p in pairs(data.panels or {}) do
+    local where = ("panel '%s'"):format(tostring(pname))
+    if type(pname) ~= "string" or #pname > 24 or not pname:match(NAME) then
+      bad("%s: a panel's name is 1..24 of a-z, 0-9 and _", where)
+    elseif type(p) ~= "table" then bad("%s: is not a table", where)
+    else
+      if p.title ~= nil and type(p.title) ~= "string" then bad("%s: its title is not a string", where) end
+      if p.template ~= nil and (type(p.template) ~= "string" or #p.template > 24 or not p.template:match(NAME)) then
+        bad("%s: its template is 1..24 of a-z, 0-9 and _", where)
+      end
+      local widgets = p.widgets or {}
+      if type(widgets) ~= "table" then widgets = {}; bad("%s: its widgets are a list", where) end
+      if #widgets > max_widgets then bad("%s: %d widgets, the protocol's limit is %d", where, #widgets, max_widgets) end
+      local def = { title = p.title, template = p.template, widgets = {}, by_name = {}, by_id = {} }
+      for i, w in ipairs(widgets) do
+        local ww = ("%s widget %d"):format(where, i)
+        if type(w) ~= "table" then bad("%s: is not a table", ww)
+        elseif kinds[w.kind] == nil then bad("%s: no widget kind '%s'", ww, tostring(w.kind))
+        else
+          if type(w.name) ~= "string" or #w.name > 24 or not w.name:match(NAME) then
+            bad("%s: needs a `name`, 1..24 of a-z, 0-9 and _", ww)
+          elseif def.by_name[w.name] ~= nil then bad("%s: two widgets are named '%s'", where, w.name) end
+          if type(w.id) ~= "number" or w.id ~= math.floor(w.id) or w.id < 1 or w.id > 65535 then
+            bad("%s: `id` is a whole number from 1 (0 means the panel was closed)", ww)
+          elseif def.by_id[w.id] ~= nil then bad("%s: two widgets are id %d", where, w.id) end
+          if type(w.label) ~= "string" then bad("%s: needs a `label`", ww) end
+          if w.kind == "slider" and (type(w.lo) ~= "number" or type(w.hi) ~= "number") then
+            bad("%s: a slider needs `lo` and `hi`", ww)
+          end
+          if w.kind == "select" then
+            if type(w.options) ~= "table" or #w.options == 0 then bad("%s: a select needs `options`", ww)
+            elseif #w.options > max_options then bad("%s: %d options, the protocol's limit is %d", ww, #w.options, max_options) end
+          end
+          if type(w.name) == "string" then def.by_name[w.name] = w end
+          if type(w.id) == "number" then def.by_id[w.id] = w end
+          -- `name` rides along: dnp.ui_open reads the keys it knows and no others.
+          def.widgets[#def.widgets + 1] = w
+        end
+      end
+      panels[pname] = def
+    end
   end
 
   local events = event_names()
@@ -1271,6 +1424,24 @@ function M.load(data, label)
     end
   end
 
+  -- A PANEL NODE NAMES ONE OF THIS GRAPH'S PANELS, and a widget it has.
+  for _, n in ipairs(order) do
+    local spec = SPEC[n.type]
+    if spec ~= nil and spec.category == "panel" and n.type ~= "set_hud" then
+      local def = panels[n.panel]
+      if type(n.panel) == "string" and def == nil then
+        bad("node '%s': this graph carries no panel '%s'", n.id, n.panel)
+      elseif def ~= nil and n.widget ~= nil and def.by_name[n.widget] == nil then
+        bad("node '%s': panel '%s' has no widget '%s'", n.id, n.panel, tostring(n.widget))
+      elseif def ~= nil and n.type == "set_widget" then
+        local w = def.by_name[n.widget]
+        if w ~= nil and (w.kind == "label" or w.kind == "button") then
+          bad("node '%s': a %s has no value to set -- a toggle, slider or select does", n.id, w.kind)
+        end
+      end
+    end
+  end
+
   -- A SECTOR NODE NEEDS A SECTOR: picked, linked, or a tag.
   for _, n in ipairs(order) do
     local spec = SPEC[n.type]
@@ -1395,8 +1566,27 @@ function M.load(data, label)
       table.insert(by_call[n.name], n.id)
     end
   end
+  -- THE FIRST GRAPH TO CARRY A PANEL DEFINES IT in this VM; a second that
+  -- carries a different one is said, and uses the first's.
+  for pname, def in pairs(panels) do
+    local have = panel_defs[pname]
+    if have == nil then
+      panel_defs[pname] = { def = def, label = label }
+    else
+      local same = #have.def.widgets == #def.widgets and have.def.title == def.title and have.def.template == def.template
+      for i, w in ipairs(def.widgets) do
+        local o = have.def.widgets[i]
+        same = same and o ~= nil and o.name == w.name and o.id == w.id and o.kind == w.kind and o.label == w.label
+      end
+      if not same then
+        say("%s: panel '%s' differs from %s's; %s's is the one used", label, pname, have.label, have.label)
+      end
+      panels[pname] = have.def
+    end
+  end
   local g = { name = data.name, label = label, vars = vars, by_id = by_id, exec_next = exec_next,
-              data_src = data_src, by_event = by_event, by_call = by_call, by_start = by_start, spent = {} }
+              data_src = data_src, by_event = by_event, by_call = by_call, by_start = by_start, spent = {},
+              panels = panels }
   loaded[#loaded + 1] = g
   say("%s: %d nodes, %d links", label, #order, #data.links)
   return true
@@ -1412,4 +1602,5 @@ end
 function M.count() return #loaded end
 function M.pending() return #timers end
 --- Forget every graph and timer. For a test.
-function M.reset() loaded = {}; timers = {}; jobs = {}; track = {}; touch_seen = {}; t0 = nil; frozen = {}; spoken = {} end
+function M.reset() loaded = {}; timers = {}; jobs = {}; track = {}; touch_seen = {}; t0 = nil; frozen = {}; spoken = {}
+  panel_defs = {}; open_panels = {}; by_ui = {} end

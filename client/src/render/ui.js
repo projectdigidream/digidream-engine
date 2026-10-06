@@ -220,7 +220,7 @@ export class UiView {
     // it; dismissing the window is not the same as telling the script the
     // player is done, and conflating them would make a stray click destroy
     // state the script is holding.
-    x.onclick = () => this.close(msg.uiId)
+    x.onclick = () => this.dismiss(msg.uiId)
     title.append(t, x)
 
     const body = doc.createElement('div')
@@ -274,7 +274,7 @@ export class UiView {
     const x = doc.createElement('span')
     x.className = 'dnp-ui-x'
     x.textContent = '×'
-    x.onclick = () => this.close(msg.uiId)
+    x.onclick = () => this.dismiss(msg.uiId)
     if (named?.close) {
       if (typeof named.close.color === 'string') x.style.color = named.close.color
       // A picture in place of the ×.
@@ -504,6 +504,18 @@ export class UiView {
     p.decor?.destroy()
     this.panels.delete(uiId)
     this.onChange?.()
+    return true
+  }
+
+  /**
+   * The PLAYER closed it, with its ×: closed here and the server told, as
+   * UI_EVENT widget 0 (widget ids start at 1, so 0 means "closed";
+   * docs/PANELS.md 4). Once -- a second click finds nothing open. A panel the
+   * server closes goes by close(), which tells nobody.
+   */
+  dismiss (uiId) {
+    if (!this.close(uiId)) return false
+    this.onEvent(uiId, 0, 0)
     return true
   }
 

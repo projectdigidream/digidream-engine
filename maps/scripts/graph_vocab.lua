@@ -57,6 +57,10 @@ graph_vocab = {
     { name = "vars", type = "table", optional = true,
       doc = "The graph's variables, by name, with their starting values: " ..
             "numbers, strings or booleans." },
+    { name = "panels", type = "table", optional = true,
+      doc = "The panels this graph opens, fills or answers, by name: each a title, an " ..
+            "optional layout template, and its widgets -- the five kinds a trigger " ..
+            "table's panels take, each with a `name` the nodes use (docs/PANELS.md)." },
     { name = "nodes", type = "table",
       doc = "The nodes, as an ARRAY: its order is the order event nodes for " ..
             "the same event run in." },
@@ -473,6 +477,57 @@ graph_vocab = {
       exec_in = { "in" }, exec_out = { "then" },
       data_in = {}, data_out = {},
       doc = "Change this level's sky, for everyone in it and everyone who arrives." },
+
+    -- -------------------------------------------------------------- PANELS
+    -- A panel by NAME, from the graph's own `panels`, and its widgets by name:
+    -- the runtime keeps which player has which open, so nothing here needs a
+    -- panel's number. Not level_only: the game's graph opens the game's
+    -- panels, which survive a level change (docs/PANELS.md).
+    { name = "open_panel", category = "panel",
+      args = { { name = "panel", type = "string", doc = "One of this graph's panels." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Show a panel to the player. Opened again, it replaces itself rather than " ..
+            "appearing twice." },
+    { name = "close_panel", category = "panel",
+      args = { { name = "panel", type = "string" } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Take the panel away, if the player has it open." },
+    { name = "set_widget", category = "panel",
+      args = { { name = "panel", type = "string" },
+               { name = "widget", type = "string", doc = "A toggle, slider or select of that panel." },
+               { name = "value", type = "number", optional = true,
+                 doc = "A toggle's 0 or 1, a slider's position, a select's index. Or linked." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "value" }, data_out = {},
+      doc = "Change what one widget of an open panel shows. Nothing if it is not open." },
+    { name = "when_panel_used", category = "panel", starts = true,
+      args = { { name = "panel", type = "string" },
+               { name = "widget", type = "string", optional = true, doc = "One widget; any without it." } },
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity", "widget", "value" },
+      doc = "A player pressed a button, flipped a toggle, moved a slider or chose an " ..
+            "option on the panel. `widget` is its name; `value` what it sent." },
+    { name = "when_panel_closed", category = "panel", starts = true,
+      args = { { name = "panel", type = "string" } },
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity" },
+      doc = "A player closed the panel with its ×. Not by close_panel, nor by leaving the level." },
+    { name = "panel_is_open", category = "panel",
+      args = { { name = "panel", type = "string" } },
+      exec_in = {}, exec_out = {},
+      data_in = { "entity" }, data_out = { "value" },
+      doc = "Whether the player has the panel open." },
+    { name = "set_hud", category = "panel",
+      args = { { name = "name", type = "string", doc = "The HUD value: what {hud.<name>} shows on a panel or the HUD." },
+               { name = "value", type = "value", optional = true, doc = "A number or text; false clears it. Or linked." },
+               { name = "to", type = "enum", values = { "player", "everyone" }, optional = true,
+                 doc = "Defaults to the player." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "value" }, data_out = {},
+      doc = "Write a HUD value: a panel's changing text (gold, a timer) is a template's " ..
+            "{hud.<name>}, so this is how a graph writes on a panel." },
 
     -- --------------------------------------------------------- CINEMATICS
     -- A cutscene: the player's controls taken (movement and attacks -- both
