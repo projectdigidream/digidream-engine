@@ -21,6 +21,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+#include "platform.hpp"
+
 #include "dnp/proto/messages.hpp"
 #include "dnp/geom/mapfile.hpp"
 #include "dnp/math/rng.hpp"
@@ -1119,8 +1121,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     static bool make_dirs(const std::string& path) {
         std::string at;
         for (size_t i = 0; i <= path.size(); ++i) {
-            if (i == path.size() || path[i] == '/') {
-                if (!at.empty()) ::mkdir(at.c_str(), 0755);
+            // Either separator: on Windows the shell hands over backslash paths.
+            if (i == path.size() || path[i] == '/' || path[i] == '\\') {
+                if (!at.empty()) dnp::server::make_dir(at.c_str());
             }
             if (i < path.size()) at += path[i];
         }
@@ -1139,7 +1142,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         const bool ok = std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
         std::fclose(f);
         if (!ok) return false;
-        return std::rename(tmp.c_str(), path.c_str()) == 0;
+        return dnp::server::replace_file(tmp.c_str(), path.c_str());
     }
 
     static bool read_file(const std::string& path, std::string& out) {

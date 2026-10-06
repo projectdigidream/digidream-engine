@@ -4,6 +4,22 @@
 #include <cstdio>
 #include <cstring>
 
+// THE ONE PLATFORM SEAM in the link: BSD sockets everywhere but Windows, which
+// has Winsock -- the same calls under other names, error codes from
+// WSAGetLastError() rather than errno, and WSAPoll for poll. Everything below
+// the shim is one code path. Socket handles are kept as int, as they always
+// were here: a Winsock SOCKET is a small kernel handle in practice, and
+// INVALID_SOCKET converts to -1, which is what the checks below test.
+#ifdef _WIN32
+// WSAPoll and inet_pton exist from Windows Vista; MinGW declares them only when
+// told the target is at least that new. Windows 10 is the floor anyway.
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0A00
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -11,13 +27,58 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace dnp::net {
 namespace {
 
+#ifdef _WIN32
+using sock_poll_t = WSAPOLLFD;
+int  sock_close(int fd) { return ::closesocket(static_cast<SOCKET>(fd)); }
+int  sock_last() { return ::WSAGetLastError(); }
+bool would_block(int e) { return e == WSAEWOULDBLOCK; }
+bool interrupted(int e) { return e == WSAEINTR; }
+int  sock_poll(sock_poll_t* f, int n, int ms) { return ::WSAPoll(f, static_cast<ULONG>(n), ms); }
+bool set_nonblocking(int fd) {
+    u_long on = 1;
+    return ::ioctlsocket(static_cast<SOCKET>(fd), FIONBIO, &on) == 0;
+}
+const char* sock_error(int e) {
+    static char buf[48];
+    std::snprintf(buf, sizeof(buf), "winsock error %d", e);
+    return buf;
+}
+// Winsock must be started once per process before the first socket call.
+bool sock_startup() {
+    static const bool ok = [] { WSADATA d; return ::WSAStartup(MAKEWORD(2, 2), &d) == 0; }();
+    return ok;
+}
+#else
+using sock_poll_t = pollfd;
+int  sock_close(int fd) { return ::close(fd); }
+int  sock_last() { return errno; }
+bool would_block(int e) { return e == EAGAIN || e == EWOULDBLOCK; }
+bool interrupted(int e) { return e == EINTR; }
+int  sock_poll(sock_poll_t* f, int n, int ms) { return ::poll(f, static_cast<nfds_t>(n), ms); }
 bool set_nonblocking(int fd) {
     const int flags = ::fcntl(fd, F_GETFL, 0);
     return flags >= 0 && ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+const char* sock_error(int e) { return std::strerror(e); }
+bool sock_startup() { return true; }
+#endif
+
+sock_poll_t poll_entry(int fd, short events) {
+    sock_poll_t p{};
+    p.fd = fd;
+    p.events = events;
+    return p;
+}
+
+// setsockopt's value is `const char*` under Winsock and `const void*` elsewhere;
+// a char pointer converts to both.
+void set_int_option(int fd, int level, int name, int value) {
+    ::setsockopt(fd, level, name, reinterpret_cast<const char*>(&value), sizeof(value));
 }
 
 u32 read_u32_le(const u8* p) {
@@ -37,11 +98,11 @@ void write_u32_le(u8* p, u32 v) {
 LinkServer::~LinkServer() { close(); }
 
 bool LinkServer::listen(u16 port, const char* host) {
-    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (!sock_startup()) return false;
+    listen_fd_ = static_cast<int>(::socket(AF_INET, SOCK_STREAM, 0));
     if (listen_fd_ < 0) return false;
 
-    int yes = 1;
-    ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    set_int_option(listen_fd_, SOL_SOCKET, SO_REUSEADDR, 1);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -49,7 +110,7 @@ bool LinkServer::listen(u16 port, const char* host) {
     if (::inet_pton(AF_INET, host, &addr.sin_addr) != 1) { close(); return false; }
 
     if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        std::fprintf(stderr, "[link] bind %s:%u failed: %s\n", host, port, std::strerror(errno));
+        std::fprintf(stderr, "[link] bind %s:%u failed: %s\n", host, port, sock_error(sock_last()));
         close();
         return false;
     }
@@ -63,17 +124,17 @@ bool LinkServer::listen(u16 port, const char* host) {
 
 void LinkServer::close() {
     drop_edge();
-    if (listen_fd_ >= 0) { ::close(listen_fd_); listen_fd_ = -1; }
+    if (listen_fd_ >= 0) { sock_close(listen_fd_); listen_fd_ = -1; }
 }
 
 void LinkServer::drop_edge() {
-    if (edge_fd_ >= 0) { ::close(edge_fd_); edge_fd_ = -1; }
+    if (edge_fd_ >= 0) { sock_close(edge_fd_); edge_fd_ = -1; }
     in_.clear();
     out_.clear();
 }
 
 void LinkServer::accept_edge() {
-    const int fd = ::accept(listen_fd_, nullptr, nullptr);
+    const int fd = static_cast<int>(::accept(listen_fd_, nullptr, nullptr));
     if (fd < 0) return;
 
     if (edge_fd_ >= 0) {
@@ -100,15 +161,14 @@ void LinkServer::accept_edge() {
                 "on this port -- see scripts/run_stack.sh.\n",
                 static_cast<unsigned long long>(rejected_edges_));
         }
-        ::close(fd);
+        sock_close(fd);
         return;
     }
 
-    int yes = 1;
     // Every frame here is small and latency-critical, so Nagle's batching is
     // exactly the wrong trade: it would hold a snapshot for up to 40 ms to save
     // a header, adding more delay than the network path it sits in front of.
-    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    set_int_option(fd, IPPROTO_TCP, TCP_NODELAY, 1);
     set_nonblocking(fd);
     edge_fd_ = fd;
     std::fprintf(stderr, "[link] edge connected\n");
@@ -117,16 +177,17 @@ void LinkServer::accept_edge() {
 void LinkServer::read_edge() {
     u8 buf[65536];
     for (;;) {
-        const ssize_t n = ::recv(edge_fd_, buf, sizeof(buf), 0);
+        const long n = ::recv(edge_fd_, reinterpret_cast<char*>(buf), static_cast<int>(sizeof(buf)), 0);
         if (n > 0) {
             in_.insert(in_.end(), buf, buf + n);
             if (static_cast<size_t>(n) < sizeof(buf)) break;
             continue;
         }
         if (n == 0) { std::fprintf(stderr, "[link] edge disconnected\n"); drop_edge(); return; }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-        if (errno == EINTR) continue;
-        std::fprintf(stderr, "[link] recv failed: %s\n", std::strerror(errno));
+        const int e = sock_last();
+        if (would_block(e)) break;
+        if (interrupted(e)) continue;
+        std::fprintf(stderr, "[link] recv failed: %s\n", sock_error(e));
         drop_edge();
         return;
     }
@@ -176,10 +237,12 @@ void LinkServer::read_edge() {
 void LinkServer::flush_out() {
     size_t sent = 0;
     while (sent < out_.size()) {
-        const ssize_t n = ::send(edge_fd_, out_.data() + sent, out_.size() - sent, 0);
+        const long n = ::send(edge_fd_, reinterpret_cast<const char*>(out_.data() + sent),
+                              static_cast<int>(out_.size() - sent), 0);
         if (n > 0) { sent += static_cast<size_t>(n); continue; }
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-        if (n < 0 && errno == EINTR) continue;
+        const int e = n < 0 ? sock_last() : 0;
+        if (n < 0 && would_block(e)) break;
+        if (n < 0 && interrupted(e)) continue;
         drop_edge();
         return;
     }
@@ -224,17 +287,17 @@ void LinkServer::close_session(u32 session, u16 reason) {
 bool LinkServer::poll(int timeout_ms) {
     if (listen_fd_ < 0) return false;
 
-    pollfd fds[2];
+    sock_poll_t fds[2];
     int n = 0;
-    fds[n++] = pollfd{listen_fd_, POLLIN, 0};
+    fds[n++] = poll_entry(listen_fd_, POLLIN);
     if (edge_fd_ >= 0) {
         short events = POLLIN;
         if (!out_.empty()) events = static_cast<short>(events | POLLOUT);
-        fds[n++] = pollfd{edge_fd_, events, 0};
+        fds[n++] = poll_entry(edge_fd_, events);
     }
 
-    const int rc = ::poll(fds, static_cast<nfds_t>(n), timeout_ms);
-    if (rc < 0) return errno == EINTR;
+    const int rc = sock_poll(fds, n, timeout_ms);
+    if (rc < 0) return interrupted(sock_last());
     if (rc == 0) return true;
 
     if (fds[0].revents & POLLIN) accept_edge();

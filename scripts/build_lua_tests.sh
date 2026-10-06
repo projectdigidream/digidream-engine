@@ -135,7 +135,7 @@ echo "[lua-tests] $OUT/trigger_vocab_json $OUT/triggercheck"
 if grep -q 'int dnp_server_run' "$ROOT/server/src/main.cpp"; then
   clang++ "${FLAGS[@]}" -Wno-unused-parameter "${RANGE_SRCS[@]}" \
           "$ROOT/server/src/net/link.cpp" "$ROOT/server/src/world/metamap.cpp" \
-          "$ROOT/server/src/main.cpp" \
+          "$ROOT/server/src/main.cpp" "$ROOT/server/src/platform.cpp" \
           "$ROOT/server/tests/test_server_run.cpp" "${LINK[@]}" -lpthread \
           -o "$OUT/test_server_run"
   echo "[lua-tests] $OUT/test_server_run"

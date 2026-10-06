@@ -29,8 +29,12 @@ using u8   = std::uint8_t;
 using u16  = std::uint16_t;
 using u32  = std::uint32_t;
 using u64  = std::uint64_t;
-using i128 = __int128;
-using u128 = unsigned __int128;
+// `__extension__` because GCC's -Wpedantic rejects __int128 as non-ISO (clang
+// does not). It marks the typedef as a known extension and changes nothing
+// else: same type, same code. GCC is the compiler of the Windows server
+// (MinGW-w64, packager/scripts/docker), and MSVC has no __int128 at all.
+__extension__ typedef __int128 i128;
+__extension__ typedef unsigned __int128 u128;
 
 inline constexpr i64 I64_MIN = (-9223372036854775807LL - 1);
 inline constexpr i64 I64_MAX = 9223372036854775807LL;

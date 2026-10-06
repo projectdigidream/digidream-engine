@@ -69,6 +69,7 @@ target_compile_definitions(dnp_core PRIVATE DNP_CORE_BUILD=1)
 if(NOT EMSCRIPTEN)
   add_executable(dnp-server
     server/src/main.cpp
+    server/src/platform.cpp
     server/src/net/link.cpp
     server/src/world/metamap.cpp
   )

@@ -26,12 +26,27 @@ mkdir -p "$OUT"
 # that: the wasm client, the sanitizer build and the determinism gate must never
 # see it, because the client predicts by running the same core and Lua is the
 # thing it must not run.
-if [[ ! -f "$ROOT/third_party/luajit/src/libluajit.a" ]]; then
-  echo "[build] LuaJIT missing -- run scripts/setup_luajit.sh" >&2
+#
+# Building for ANOTHER platform (packager/scripts/build_kits.sh does, in a
+# container) goes through this same script and this same source list, with:
+#   DNP_SERVER_CXX      the compiler (default clang++), e.g. a MinGW g++
+#   DNP_LUAJIT_DIR      a LuaJIT built for that platform (default third_party/luajit)
+#   DNP_SERVER_SYSLIBS  system libraries (default -ldl off macOS), e.g. -lws2_32
+#   DNP_SERVER_LDFLAGS  extra link flags, e.g. -static
+#   DNP_SERVER_EXE      the output name (default dnp-server), e.g. dnp-server.exe
+CXX="${DNP_SERVER_CXX:-clang++}"
+LUAJIT_DIR="${DNP_LUAJIT_DIR:-$ROOT/third_party/luajit}"
+EXE="${DNP_SERVER_EXE:-dnp-server}"
+if [[ ! -f "$LUAJIT_DIR/src/libluajit.a" ]]; then
+  echo "[build] LuaJIT missing at $LUAJIT_DIR -- run scripts/setup_luajit.sh" >&2
   exit 2
 fi
-LUA_EXTRA_LIBS=""
-[[ "$(uname -s)" == "Darwin" ]] || LUA_EXTRA_LIBS="-ldl"
+if [[ -n "${DNP_SERVER_SYSLIBS+set}" ]]; then
+  LUA_EXTRA_LIBS="$DNP_SERVER_SYSLIBS"
+else
+  LUA_EXTRA_LIBS=""
+  [[ "$(uname -s)" == "Darwin" ]] || LUA_EXTRA_LIBS="-ldl"
+fi
 
 # DNP_SERVER_SAN=1 builds with AddressSanitizer and UBSan.
 #
@@ -48,8 +63,8 @@ if [[ -n "${DNP_SERVER_SAN:-}" ]]; then
   echo "[build] AddressSanitizer + UBSan enabled (slower; for diagnosing a crash)"
 fi
 
-clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
-  -I"$ROOT/core/include" -I"$ROOT/server/src" -I"$ROOT/third_party/luajit/src" \
+"$CXX" -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
+  -I"$ROOT/core/include" -I"$ROOT/server/src" -I"$LUAJIT_DIR/src" \
   "$ROOT/core/src/math/trig.cpp" \
   "$ROOT/core/src/proto/messages.cpp" \
   "$ROOT/core/src/sim/world.cpp" \
@@ -76,14 +91,15 @@ clang++ -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
   "$ROOT/server/src/mobs/mob_runtime.cpp" \
   "$ROOT/server/src/mobs/mob_binding.cpp" \
   "$ROOT/server/src/world/metamap.cpp" \
+  "$ROOT/server/src/platform.cpp" \
   "$ROOT/server/src/main.cpp" \
-  "$ROOT/third_party/luajit/src/libluajit.a" \
-  -lm $LUA_EXTRA_LIBS \
-  -o "$OUT/dnp-server.new"
+  "$LUAJIT_DIR/src/libluajit.a" \
+  -lm $LUA_EXTRA_LIBS ${DNP_SERVER_LDFLAGS:-} \
+  -o "$OUT/$EXE.new"
 
 # ATOMIC, even into the default directory. `mv` replaces the directory entry
 # while a running process keeps the inode it already opened, so a server that
 # is mid-game survives a rebuild -- where writing in place corrupts it.
-mv -f "$OUT/dnp-server.new" "$OUT/dnp-server"
+mv -f "$OUT/$EXE.new" "$OUT/$EXE"
 
-echo "[build] $OUT/dnp-server"
+echo "[build] $OUT/$EXE"
