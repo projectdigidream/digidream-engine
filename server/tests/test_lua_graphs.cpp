@@ -946,6 +946,63 @@ int main(int argc, char** argv) {
         CHECK(g_ui.huds.count("gold") == 1);
     }
 
+    std::printf("-- entity properties through get_var / set_var / add_var --\n");
+    {
+        // The movement list is the engine's parameter table, both ways.
+        int listed = 0, missing = 0;
+        for (u16 i = 0; i < physics::PARAM_COUNT; ++i) {
+            const std::string src = std::string("pp = false; for _, p in ipairs(graph_vocab.properties) do "
+                                                "if p.name == '") + physics::PARAM_TABLE[i].name +
+                                    "' and p.of == 'movement' then pp = true end end";
+            run(src.c_str(), "parity");
+            if (truthy("pp")) ++listed; else { ++missing; std::printf("  not listed: %s\n", physics::PARAM_TABLE[i].name); }
+        }
+        CHECK(missing == 0 && listed == physics::PARAM_COUNT && listed > 40);
+        CHECK(run("extra = 0; for _, p in ipairs(graph_vocab.properties) do if p.of == 'movement' then "
+                  "local ok = pcall(function() return dnp.players()[1]:param(p.name) end); if not ok then extra = extra + 1 end end end",
+                  "every listed movement property is the engine's"));
+        CHECK(num("extra") == 0);
+
+        CHECK(load_graph(R"({ "graph": 1, "name": "props", "vars": { "seen_x": 0, "seen_hp": 0 },
+          "nodes": [ { "id": "r", "type": "on_call", "name": "read" },
+                     { "id": "gx", "type": "get_var", "var": "x" }, { "id": "sx", "type": "set_var", "var": "seen_x" },
+                     { "id": "gh", "type": "get_var", "var": "hp" }, { "id": "sh", "type": "set_var", "var": "seen_hp" },
+                     { "id": "w", "type": "on_call", "name": "write" },
+                     { "id": "hp", "type": "set_var", "var": "hp", "value": 40 },
+                     { "id": "heal", "type": "add_var", "var": "hp", "value": 15 },
+                     { "id": "ms", "type": "set_var", "var": "move_speed", "value": 3.5 },
+                     { "id": "fast", "type": "on_call", "name": "fast" },
+                     { "id": "ms2", "type": "set_var", "var": "move_speed", "value": 12 } ],
+          "links": [ ["r.then", "sx.in"], ["gx.value", "sx.value"], ["sx.then", "sh.in"], ["gh.value", "sh.value"],
+                     ["w.then", "hp.in"], ["hp.then", "heal.in"], ["heal.then", "ms.in"], ["fast.then", "ms2.in"] ] })"));
+        CHECK(run("dnp.players()[1]:set_hp(100); graphs.call('read', dnp.players()[1], nil)", "read"));
+        CHECK(run("px = dnp.players()[1]:pos().x.raw / 4294967296", "x") );
+        CHECK(run("sx = graphs.var('props', 'seen_x'); sh = graphs.var('props', 'seen_hp')", "seen"));
+        std::printf("  read: x %.2f (body %.2f), hp %g\n", num("sx"), num("px"), num("sh"));
+        CHECK(num("sx") == num("px") && num("sh") == 100);
+        CHECK(run("graphs.call('write', dnp.players()[1], nil)", "write"));
+        CHECK(run("hpnow = dnp.players()[1]:hp()", "hp") && num("hpnow") == 55);   // set 40, then +15
+        const physics::MoveParams slow = effects.compute(player);
+        CHECK(slow.move_speed == fx::from_frac(7, 2));
+        // A second set REPLACES the first, rather than stacking another effect.
+        CHECK(run("graphs.call('fast', dnp.players()[1], nil)", "fast"));
+        const physics::MoveParams fast = effects.compute(player);
+        std::printf("  move_speed set 3.5 then 12: %g, %g\n", slow.move_speed.raw / 4294967296.0, fast.move_speed.raw / 4294967296.0);
+        CHECK(fast.move_speed == F(12));
+
+        // REFUSED AT LOAD: a variable taking a property's name, setting what
+        // can only be read, adding to what is not a number, a name that is neither.
+        const char* bad[] = {
+          R"({ "graph": 1, "name": "v1", "vars": { "hp": 1 }, "nodes": [], "links": [] })",
+          R"({ "graph": 1, "name": "v2", "nodes": [ { "id": "s", "type": "set_var", "var": "x", "value": 1 } ], "links": [] })",
+          R"({ "graph": 1, "name": "v3", "nodes": [ { "id": "s", "type": "add_var", "var": "climb_enabled", "value": 1 } ], "links": [] })",
+          R"({ "graph": 1, "name": "v4", "nodes": [ { "id": "s", "type": "get_var", "var": "luck" } ], "links": [] })" };
+        for (const char* b : bad) CHECK(!load_graph(b));
+        // CONTROL: a graph's own variable is still a variable.
+        CHECK(load_graph(R"({ "graph": 1, "name": "v5", "vars": { "luck": 3 },
+          "nodes": [ { "id": "g", "type": "get_var", "var": "luck" } ], "links": [] })"));
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

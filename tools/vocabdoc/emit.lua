@@ -59,7 +59,10 @@ end
 local function bullets(list)
   for _, a in ipairs(list or {}) do
     w(("- `%s` — *%s*, %s"):format(a.name, type_of(a),
-                                  a.optional and "optional" or "**required**"))
+                                  -- A property is read, or read and set; never "required".
+                                  a.access == "read" and "read only"
+                                  or a.access == "read_write" and "read and set"
+                                  or a.optional and "optional" or "**required**"))
     if a.doc then w("  " .. wrap(a.doc, "  ")) end
   end
 end
@@ -115,6 +118,7 @@ local SECTIONS = {
   { "health_fields",  "Health" },
   { "graph_fields",   "Graph fields" },
   { "node_fields",    "Every node" },
+  { "properties",     "Entity properties (get_var, set_var, add_var)" },
   { "nodes",          "Nodes",       entries },
 }
 

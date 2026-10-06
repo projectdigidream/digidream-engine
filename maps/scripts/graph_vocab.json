@@ -2217,16 +2217,18 @@
     {
       "args": [
         {
-          "doc": "A name in the graph's `vars`.",
+          "doc": "A name in the graph's `vars`, or one of the `properties` an entity has (hp, x, move_speed ...).",
           "name": "var",
           "type": "string"
         }
       ],
-      "data_in": [],
+      "data_in": [
+        "entity"
+      ],
       "data_out": [
         "value"
       ],
-      "doc": "A variable's value.",
+      "doc": "A variable's value, or an entity's property: the event's entity, or the linked one.",
       "exec_in": [],
       "exec_out": [],
       "name": "get_var"
@@ -2234,7 +2236,7 @@
     {
       "args": [
         {
-          "doc": "A name in the graph's `vars`.",
+          "doc": "A name in the graph's `vars`, or a property an entity lets a graph set (hp, move_speed ...).",
           "name": "var",
           "type": "string"
         },
@@ -2246,10 +2248,11 @@
         }
       ],
       "data_in": [
+        "entity",
         "value"
       ],
       "data_out": [],
-      "doc": "Set a variable.",
+      "doc": "Set a variable, or an entity's property: the event's entity, or the linked one.",
       "exec_in": [
         "in"
       ],
@@ -2261,7 +2264,7 @@
     {
       "args": [
         {
-          "doc": "A numeric variable.",
+          "doc": "A numeric variable, or a numeric property an entity lets a graph set (hp ...).",
           "name": "var",
           "type": "string"
         },
@@ -2273,10 +2276,11 @@
         }
       ],
       "data_in": [
+        "entity",
         "value"
       ],
       "data_out": [],
-      "doc": "Add to a numeric variable: a counter.",
+      "doc": "Add to a numeric variable -- a counter -- or to an entity's property: heal by 10.",
       "exec_in": [
         "in"
       ],
@@ -2439,6 +2443,414 @@
     "enum",
     "sector",
     "value"
+  ],
+  "properties": [
+    {
+      "access": "read_write",
+      "doc": "Health. A monster's is its own record's, so it feels pain and dies as if hurt.",
+      "name": "hp",
+      "of": "entity",
+      "type": "int"
+    },
+    {
+      "access": "read",
+      "doc": "Whether it is there and has health left.",
+      "name": "alive",
+      "of": "entity",
+      "type": "bool"
+    },
+    {
+      "access": "read",
+      "doc": "Where it is: east-west, units.",
+      "name": "x",
+      "of": "entity",
+      "type": "number"
+    },
+    {
+      "access": "read",
+      "doc": "Where it is: north-south, units.",
+      "name": "y",
+      "of": "entity",
+      "type": "number"
+    },
+    {
+      "access": "read",
+      "doc": "Where it is: its feet's height, units.",
+      "name": "z",
+      "of": "entity",
+      "type": "number"
+    },
+    {
+      "access": "read",
+      "doc": "How fast it moves across the ground, units a second.",
+      "name": "speed",
+      "of": "entity",
+      "type": "number"
+    },
+    {
+      "access": "read",
+      "doc": "How fast it rises (or, below 0, falls).",
+      "name": "vertical_speed",
+      "of": "entity",
+      "type": "number"
+    },
+    {
+      "access": "read",
+      "doc": "Whether it stands on something.",
+      "name": "grounded",
+      "of": "entity",
+      "type": "bool"
+    },
+    {
+      "access": "read",
+      "doc": "Which way it faces, degrees.",
+      "name": "facing",
+      "of": "entity",
+      "type": "number"
+    },
+    {
+      "access": "read",
+      "doc": "The sector it is in.",
+      "name": "sector",
+      "of": "entity",
+      "type": "int"
+    },
+    {
+      "access": "read",
+      "doc": "Its catalogue kind; 0 is a player.",
+      "name": "kind",
+      "of": "entity",
+      "type": "int"
+    },
+    {
+      "access": "read",
+      "doc": "Its catalogue name, as `spawn` takes it.",
+      "name": "name",
+      "of": "entity",
+      "type": "string"
+    },
+    {
+      "access": "read",
+      "doc": "Whether it is a player.",
+      "name": "is_player",
+      "of": "entity",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "The body's radius, units.",
+      "name": "radius",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "The body's height, units.",
+      "name": "height",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Top running speed, units a second.",
+      "name": "move_speed",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Acceleration on the ground, units a second squared.",
+      "name": "ground_accel",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Acceleration in the air.",
+      "name": "air_accel",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Slowing on the ground with no input.",
+      "name": "friction",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "A multiplier on gravity.",
+      "name": "gravity_scale",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "A jump's upward speed, units a second.",
+      "name": "jump_impulse",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Jumps before landing again.",
+      "name": "max_jumps",
+      "of": "movement",
+      "type": "int"
+    },
+    {
+      "access": "read_write",
+      "doc": "Whether it climbs walls marked climbable.",
+      "name": "climb_enabled",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Climbing speed, units a second.",
+      "name": "climb_speed",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Whether holding hover keeps altitude.",
+      "name": "hover_enabled",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Seconds of hover in a full tank.",
+      "name": "hover_fuel_max",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Hover fuel used a second.",
+      "name": "hover_drain",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Gravity while hovering.",
+      "name": "hover_gravity_scale",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "The fastest it rises or sinks hovering.",
+      "name": "hover_vspeed_clamp",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Whether it can fly.",
+      "name": "flight_enabled",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Seconds of flight in a full tank.",
+      "name": "flight_fuel_max",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Flight fuel used a second.",
+      "name": "flight_drain",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Flying speed, units a second.",
+      "name": "flight_speed",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Hover and flight on one tank.",
+      "name": "shared_fuel",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Dash speed, units a second.",
+      "name": "dash_speed",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "How long a dash lasts, seconds.",
+      "name": "dash_duration",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Seconds before the next dash.",
+      "name": "dash_cooldown",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Dashes before landing again.",
+      "name": "max_dashes",
+      "of": "movement",
+      "type": "int"
+    },
+    {
+      "access": "read_write",
+      "doc": "Whether it has a grapple.",
+      "name": "grapple_enabled",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "How far the grapple reaches.",
+      "name": "grapple_range",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Energy lost a tick swinging.",
+      "name": "swing_damping",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Reeling-in speed.",
+      "name": "pull_speed",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "How far the melee swing reaches.",
+      "name": "attack_reach",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Half the swing's arc, turns.",
+      "name": "attack_half_arc",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Where the sweep starts, turns.",
+      "name": "attack_sweep_from",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Where the sweep ends, turns.",
+      "name": "attack_sweep_to",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "How long the swing is live, ticks.",
+      "name": "attack_ticks",
+      "of": "movement",
+      "type": "int"
+    },
+    {
+      "access": "read_write",
+      "doc": "The swing's inner edge.",
+      "name": "attack_min_reach",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Ticks before another swing.",
+      "name": "attack_cooldown",
+      "of": "movement",
+      "type": "int"
+    },
+    {
+      "access": "read_write",
+      "doc": "How fast it turns, turns a second.",
+      "name": "turn_speed",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "A multiplier on the movement stick; 0 freezes it.",
+      "name": "input_scale",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Whether attack swings.",
+      "name": "attack_enabled",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Aim snaps to this many directions; 0 is free.",
+      "name": "aim_snap",
+      "of": "movement",
+      "type": "int"
+    },
+    {
+      "access": "read_write",
+      "doc": "The swing's vertical start, turns.",
+      "name": "attack_pitch_from",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "The swing's vertical end, turns.",
+      "name": "attack_pitch_to",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Half the vertical arc; 0 does not check.",
+      "name": "attack_half_pitch",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Moves relative to its facing (first person).",
+      "name": "move_relative",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Grabs a climbable wall by pushing into it.",
+      "name": "climb_auto",
+      "of": "movement",
+      "type": "bool"
+    }
   ],
   "version": 1
 }

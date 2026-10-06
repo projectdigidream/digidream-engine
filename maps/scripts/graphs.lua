@@ -124,11 +124,22 @@ local function verb_entry(g, n, pull)
 end
 
 -- Pure nodes: a value from their inputs. `pull(pin)` reads an input.
+-- ENTITY PROPERTIES (graph_vocab.properties): what get_var, set_var and
+-- add_var reach on an entity when `var` is not one of the graph's own.
+local PROPERTY = {}
+for _, p in ipairs(V.properties or {}) do PROPERTY[p.name] = p end
+local entity_of, prop_get, prop_set   -- defined with the world's nodes below
+
 local PURE = {}
 function PURE.event(g, n, ev, pull, pin) return ev[pin] end
 -- An on_call's outputs are what the call sent, carried as its run's event.
 PURE.on_call = PURE.event
-function PURE.get_var(g, n) return g.vars[n.var] end
+function PURE.get_var(g, n, ev, pull)
+  if g.vars[n.var] == nil and PROPERTY[n.var] ~= nil then
+    return prop_get(entity_of(pull, ev, nil, g.data_src[n.id]), n.var)
+  end
+  return g.vars[n.var]
+end
 function PURE.literal(g, n) return n.value end
 function PURE.compare(g, n, ev, pull)
   local a, b, op = pull("a"), pull("b"), n.op
@@ -207,8 +218,23 @@ function EXEC.delay(g, n, ev)
   return nil
 end
 function EXEC.once(g, n) if g.spent[n.id] then return nil end g.spent[n.id] = true return "then" end
-function EXEC.set_var(g, n, ev, pull) g.vars[n.var] = pull("value") return "then" end
-function EXEC.add_var(g, n, ev, pull) g.vars[n.var] = (tonumber(g.vars[n.var]) or 0) + (tonumber(pull("value")) or 0) return "then" end
+function EXEC.set_var(g, n, ev, pull)
+  if g.vars[n.var] == nil and PROPERTY[n.var] ~= nil then
+    prop_set(entity_of(pull, ev, nil, g.data_src[n.id]), n.var, pull("value"))
+    return "then"
+  end
+  g.vars[n.var] = pull("value")
+  return "then"
+end
+function EXEC.add_var(g, n, ev, pull)
+  if g.vars[n.var] == nil and PROPERTY[n.var] ~= nil then
+    local e = entity_of(pull, ev, nil, g.data_src[n.id])
+    prop_set(e, n.var, (tonumber(prop_get(e, n.var)) or 0) + (tonumber(pull("value")) or 0))
+    return "then"
+  end
+  g.vars[n.var] = (tonumber(g.vars[n.var]) or 0) + (tonumber(pull("value")) or 0)
+  return "then"
+end
 
 -- Declared here, defined below: nodes that continue a run later (a fade's
 -- `done`, a subtitle's) call it from their timers.
@@ -271,7 +297,7 @@ local function ticks_of(seconds) return math.floor((tonumber(seconds) or 0) * 60
 -- nothing, NOTHING, never the event's entity in its place (a `spawn` that
 -- could not spawn, feeding a `kill`, must not kill the player who set it
 -- off). Unlinked, the `entity` input is the event's own.
-local function entity_of(pull, ev, pin, linked)
+entity_of = function(pull, ev, pin, linked)
   pin = pin or "entity"
   local e
   if linked ~= nil and linked[pin] ~= nil then e = pull(pin)
@@ -304,6 +330,69 @@ end
 local function hurt(e, amount)
   if mobs ~= nil and mobs.hurt ~= nil then mobs.hurt(e, amount, nil)
   elseif e.set_hp ~= nil and e.hp ~= nil then e:set_hp((e:hp() or 0) - amount) end
+end
+
+-- Reading and setting an entity's properties. Movement parameters on a
+-- PLAYER go as a lasting "set" effect, one per (player, parameter), a later
+-- set replacing it: the engine will not let a script rewrite a player's body,
+-- whose rules the client predicts. On anything else, into the body itself.
+local prop_effects = {}   -- "<entity>/<param>" -> effect id
+local function raw_num(f) return f == nil and nil or unfx(f) end
+prop_get = function(e, name)
+  local p = PROPERTY[name]
+  if p == nil or e == nil or (e.valid ~= nil and not e:valid()) then
+    if name == "alive" then return false end
+    return nil
+  end
+  if name == "hp" or name == "alive" then
+    local m = mobs ~= nil and mobs.health ~= nil and mobs.health(e) or nil
+    local hp = m ~= nil and m or (e.hp ~= nil and e:hp() or nil)
+    if name == "alive" then return hp ~= nil and hp > 0 end
+    return hp
+  end
+  if name == "x" or name == "y" or name == "z" then return raw_num(e:pos()[name]) end
+  if name == "speed" then
+    local v = e:vel()
+    local vx, vy = raw_num(v.x), raw_num(v.y)
+    return math.sqrt(vx * vx + vy * vy)
+  end
+  if name == "vertical_speed" then return raw_num(e:vel().z) end
+  if name == "grounded" then return e:grounded() == true end
+  if name == "facing" then return ((e:facing() or 0) % 4294967296) / 4294967296 * 360 end
+  if name == "sector" then return index_of(e:sector()) end
+  if name == "kind" then return e:kind() end
+  if name == "name" then return e.name ~= nil and e:name() or nil end
+  if name == "is_player" then return e:kind() == 0 end
+  -- A movement parameter: what the physics uses now.
+  local v = e:param(name)
+  if v == nil then return nil end
+  local x = unfx(v)
+  if p.type == "bool" then return x ~= 0 end
+  if p.type == "int" then return math.floor(x + 0.5) end
+  return x
+end
+prop_set = function(e, name, value)
+  local p = PROPERTY[name]
+  if p == nil or p.access ~= "read_write" or e == nil or (e.valid ~= nil and not e:valid()) then return end
+  if name == "hp" then
+    local v = math.floor((tonumber(value) or 0) + 0.5)
+    if mobs ~= nil and mobs.set_health ~= nil and mobs.health ~= nil and mobs.health(e) ~= nil then mobs.set_health(e, v)
+    elseif e.set_hp ~= nil then e:set_hp(v) end
+    return
+  end
+  local v
+  if p.type == "bool" then v = (value ~= nil and value ~= false and value ~= 0) and 1 or 0
+  else v = tonumber(value); if v == nil then return end end
+  -- An exact decimal for the engine (check_fx refuses a fractional double).
+  local text = (p.type == "number") and string.format("%.6f", v):gsub("0+$", ""):gsub("%.$", "") or tostring(math.floor(v + 0.5))
+  if e:kind() == 0 then
+    local key = (e.player ~= nil and e:player() or e:index()) .. "/" .. name
+    if prop_effects[key] ~= nil then e:remove_effect(prop_effects[key]) end
+    local id = e:add_effect(name, "set", text)
+    prop_effects[key] = (id ~= nil and id ~= 0) and id or nil
+  else
+    e:set_body_param(name, text)
+  end
 end
 
 function EXEC.teleport(g, n, ev, pull)
@@ -1219,6 +1308,8 @@ function M.load(data, label)
   local vars = {}
   for k, v in pairs(data.vars or {}) do
     if type(k) ~= "string" then bad("a variable name must be a string")
+    elseif PROPERTY[k] ~= nil then
+      bad("variable '%s' has an entity property's name -- get_var and set_var would not know which you meant", k)
     elseif type(v) ~= "number" and type(v) ~= "string" and type(v) ~= "boolean" then
       bad("variable '%s' starts as a %s; a number, string or boolean only", k, type(v))
     else vars[k] = v end
@@ -1367,9 +1458,15 @@ function M.load(data, label)
         if n.type == "delay" and type(n.ticks) == "number" and n.ticks < 1 then
           bad("%s: `ticks` is at least 1", where)
         end
-        if (n.type == "get_var" or n.type == "set_var" or n.type == "add_var")
-           and type(n.var) == "string" and vars[n.var] == nil then
-          bad("%s: no variable '%s' in `vars`", where, n.var)
+        if (n.type == "get_var" or n.type == "set_var" or n.type == "add_var") and type(n.var) == "string" then
+          local prop = vars[n.var] == nil and PROPERTY[n.var] or nil
+          if vars[n.var] == nil and prop == nil then
+            bad("%s: no variable '%s' in `vars`, and no entity property by that name", where, n.var)
+          elseif prop ~= nil and n.type ~= "get_var" and prop.access ~= "read_write" then
+            bad("%s: an entity's '%s' can be read, not set", where, n.var)
+          elseif prop ~= nil and n.type == "add_var" and prop.type ~= "int" and prop.type ~= "number" then
+            bad("%s: '%s' is not a number to add to", where, n.var)
+          end
         end
         if verb then
           if triggers == nil or triggers.verbs == nil then
