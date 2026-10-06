@@ -21,6 +21,8 @@ import {
   STICK_RADIUS, STICK_DEADZONE
 } from '../src/touch.js'
 import { screenRelativeMove } from '../src/camera.js'
+import { touchLayout } from '../src/render/touchui.js'
+import { DEFAULT_LAYOUT, parseLayout } from '../src/render/layout.js'
 
 let checks = 0
 let fails = 0
@@ -264,6 +266,27 @@ console.log('\n--- whether to show the controls at all ---')
   // thumbstick over a game that has a keyboard.
   check(wantsTouch(new URLSearchParams(''), undefined) === false,
         'and no matchMedia at all is not a phone')
+}
+
+// THE MODULE'S OWN KEYS on the touch screen (docs/KEYS.md): those with a
+// label get a button; placed by the layout when it says, otherwise in a column.
+{
+  const keys = [{ name: 'reload', code: 'KeyR', label: 'RELOAD' }, { name: 'map', code: 'KeyM', label: '' },
+                { name: 'inv', code: 'KeyI', label: 'BAG' }]
+  const plain = touchLayout(DEFAULT_LAYOUT, 'platformer')
+  const withKeys = touchLayout(DEFAULT_LAYOUT, 'platformer', new Set(), keys)
+  const extra = withKeys.buttons.filter((b) => b.id.startsWith('key:'))
+  check(extra.length === 2 && extra.map((b) => b.label).join() === 'RELOAD,BAG',
+        `a button for each key with a label, none for one without (${extra.map((b) => b.id).join(' ')})`)
+  check(withKeys.buttons.length === plain.buttons.length + 2, 'and the engine\'s buttons are all still there')
+  check(extra[0].x !== extra[1].x || extra[0].y !== extra[1].y, 'placed apart, not on top of each other')
+  const placed = parseLayout({ touch: { stick: DEFAULT_LAYOUT.touch.stick,
+                                        buttons: [...DEFAULT_LAYOUT.touch.buttons, { id: 'key:reload', anchor: 'tr', x: -30, y: 30, size: 50 }] } })
+  check(placed.warnings.length === 0, `a layout may place key:<name> (${placed.warnings.join('; ')})`)
+  const at = touchLayout(placed.layout, 'platformer', new Set(), keys).buttons.find((b) => b.id === 'key:reload')
+  check(at?.anchor === 'tr' && at.x === -30 && at.label === 'RELOAD', 'and that is where it goes, with the key\'s label')
+  check(!touchLayout(placed.layout, 'platformer').buttons.some((b) => b.id === 'key:reload'),
+        'CONTROL: a placed key the server never named is not drawn')
 }
 
 console.log(`\ntouch: ${checks} checks, ${fails} failures`)

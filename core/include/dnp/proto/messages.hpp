@@ -130,6 +130,12 @@ inline constexpr u8  MSG_SKY_SET     = 0x36;
 // picture, its light (with a fade), or one of its effects. Kept per level and
 // sent to whoever arrives, as a switch thrown is. Not simulation state.
 inline constexpr u8  MSG_SECTOR_SET  = 0x37;
+// The module's own keys (docs/KEYS.md): u8 n, then per action its name, its
+// keyboard code (a KeyboardEvent.code, "KeyR") and its touch button's label
+// (empty for none), each u16 length + bytes. Bit i of InputFrame::actions is
+// action i. Sent once, after WELCOME.
+inline constexpr u8  MSG_KEYS        = 0x38;
+inline constexpr u32 MAX_KEY_ACTIONS = 8;
 inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
 inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
 inline constexpr u32 HUD_NAME_MAX    = 24;
@@ -206,6 +212,10 @@ struct InputFrame {
     // the same tick. Set for the one tick a key went down -- held, it would
     // undo every switch the machine makes by itself when a weapon runs dry.
     u8   weapon  = sim::NO_WEAPON;
+    // The MODULE'S OWN KEYS (module.txt `key` lines, docs/KEYS.md): bit i is
+    // the i-th declared action, held this tick. Nothing in the simulation reads
+    // it; scripts and graphs do (e:actions()). Appended after `view`.
+    u8   actions = 0;
     // THE TICK THIS CLIENT WAS DRAWING the others at when it sampled this frame
     // (lag compensation, docs/WEAPON_PREDICTION.md): view_byte(tick), and 0 for
     // none. One byte is enough because the server only ever rewinds a few
@@ -229,7 +239,7 @@ inline constexpr i16 MAX_PITCH = 14563;   // 80 degrees
 constexpr bool operator==(const InputFrame& a, const InputFrame& b) noexcept {
     return a.buttons == b.buttons && a.move_x == b.move_x &&
            a.move_y == b.move_y && a.aim == b.aim && a.pitch == b.pitch &&
-           a.weapon == b.weapon && a.view == b.view;
+           a.weapon == b.weapon && a.view == b.view && a.actions == b.actions;
 }
 
 struct InputBundle {
@@ -470,7 +480,13 @@ struct UiPanel {
     // templates existed.
     u8       template_len = 0;
     char     template_name[UI_MAX_TEMPLATE]{};
+    // UI_FLAG_*: trailing after the template (written with an empty template
+    // when there is none). A panel with no flags is byte-for-byte what it was.
+    u8       flags = 0;
 };
+// A PINNED panel has no ×: it stays until the script closes it -- a module's
+// own weapon window, a score board (docs/GRAPHS.md "Panels").
+inline constexpr u8 UI_FLAG_PINNED = 0x01;
 
 /** [a-z0-9_], 1..UI_MAX_TEMPLATE -- the one rule for a template name, both ends. */
 bool valid_template_name(const char* s, size_t n) noexcept;

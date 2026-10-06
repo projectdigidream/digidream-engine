@@ -438,6 +438,28 @@ int l_entity_buttons(lua_State* L) {
     return 1;
 }
 
+// entity:actions() -> the module's own keys held this tick, as a bitmask: bit
+// i is dnp.actions()[i + 1] (docs/KEYS.md). Read by graphs' button nodes.
+int l_entity_actions(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.world->input(static_cast<u32>(a)).actions);
+    return 1;
+}
+
+// dnp.actions() -> the module's own key names, in bit order.
+int l_dnp_actions(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    lua_newtable(L);
+    if (ctx.actions == nullptr) return 1;
+    for (size_t i = 0; i < ctx.actions->size(); ++i) {
+        lua_pushstring(L, (*ctx.actions)[i].c_str());
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+
 int l_entity_despawn(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -635,6 +657,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"name", l_entity_name},
     {"facing", l_entity_facing},
     {"buttons", l_entity_buttons},
+    {"actions", l_entity_actions},
     {"despawn", l_entity_despawn},
     {"change_map", l_entity_change_map},
     {"add_impulse", l_entity_add_impulse},
@@ -1550,6 +1573,11 @@ int l_dnp_ui_open(lua_State* L) {
     proto::UiPanel panel;
     lua_getfield(L, 2, "title");
     ui_text(L, -1, panel.title, "title");
+    lua_pop(L, 1);
+
+    // `pinned = true`: no ×, so it stays until the script closes it.
+    lua_getfield(L, 2, "pinned");
+    if (lua_toboolean(L, -1)) panel.flags |= proto::UI_FLAG_PINNED;
     lua_pop(L, 1);
 
     lua_getfield(L, 2, "template");
@@ -3125,6 +3153,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"camera", l_dnp_camera},
     {"level_camera", l_dnp_level_camera},
     {"sky", l_dnp_sky},
+    {"actions", l_dnp_actions},
     {"set_sector_texture", l_dnp_set_sector_texture},
     {"set_sector_light", l_dnp_set_sector_light},
     {"set_sector_effect", l_dnp_set_sector_effect},

@@ -191,15 +191,16 @@ TEST_FN void test_input_bundle() {
             // The weapon asked for, every byte value, NO_WEAPON included.
             in.frames[i].weapon = static_cast<u8>(rng.next_u32());
             in.frames[i].view   = static_cast<u8>(rng.next_u32());
+            in.frames[i].actions = static_cast<u8>(rng.next_u32());
         }
 
         u8 buf[512];
         ByteWriter w(buf, sizeof(buf));
         encode_input_bundle(w, in);
         CHECK(w.ok());
-        // Fourteen bytes a frame: buttons, two axes, the aim, the pitch, the
-        // weapon wanted, the tick being drawn.
-        CHECK(w.size() == 1u + 4 + 4 + 1 + 14u * in.frame_count);
+        // Fifteen bytes a frame: buttons, two axes, the aim, the pitch, the
+        // weapon wanted, the tick being drawn, the module's own keys.
+        CHECK(w.size() == 1u + 4 + 4 + 1 + 15u * in.frame_count);
 
         InputBundle out;
         ByteReader r(buf, w.size());
@@ -1040,6 +1041,28 @@ TEST_FN void test_sky_set_round_trip() {
 
 // A sector's look (SECTOR_SET): each kind of change round-trips, and what the
 // renderer could not draw honestly is refused.
+// A pinned panel's flag rides after the template, with an empty one when
+// there is none; a panel without flags is byte-for-byte what it was.
+TEST_FN void test_ui_pinned() {
+    std::printf("ui: a pinned panel's flag survives the wire, and costs nothing when unset\n");
+    UiPanel p;
+    p.ui_id = 7;
+    set_text(p.title, "Arms");
+    u8 a[256], b[256];
+    ByteWriter wa(a, sizeof(a)); encode_ui_open(wa, p);
+    p.flags = UI_FLAG_PINNED;
+    ByteWriter wb(b, sizeof(b)); encode_ui_open(wb, p);
+    CHECK(wb.size() == wa.size() + 3);            // u16 empty template + the flags byte
+    UiPanel got;
+    ByteReader rb(b, wb.size());
+    CHECK(decode_ui_open(rb, got) && got.flags == UI_FLAG_PINNED && got.template_len == 0);
+    ByteReader ra(a, wa.size());
+    CHECK(decode_ui_open(ra, got) && got.flags == 0);   // CONTROL: unset, none
+    // A cut-short empty template (no flags after it) is refused.
+    ByteReader rc(b, wb.size() - 1);
+    CHECK(!decode_ui_open(rc, got));
+}
+
 TEST_FN void test_sector_set_round_trip() {
     std::printf("sector set: pictures, light with a fade, and effects survive the wire\n");
     u8 buf[512];
@@ -1274,6 +1297,7 @@ int main() {
     test_screen_set_round_trip();
     test_sky_set_round_trip();
     test_sector_set_round_trip();
+    test_ui_pinned();
     test_ui_rejects_hostile_input();
     test_ui_truncation_at_every_length();
     std::printf("== core/proto test suite ==\n");

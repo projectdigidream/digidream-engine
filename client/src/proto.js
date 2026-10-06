@@ -45,6 +45,8 @@ export const MSG = {
   SKY_SET: 0x36,
   // A sector's look changes: floor or ceiling picture, light, an effect.
   SECTOR_SET: 0x37,
+  // The module's own keys (docs/KEYS.md): name, keyboard code, touch label.
+  KEYS: 0x38,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -341,15 +343,24 @@ export function decodeControlMessage (buf) {
     // Anything there that is not a whole valid name is a message cut short or
     // corrupted, and refused like any other.
     let template = null
-    if (r.pos < Math.min(r.buf.length, 4 + len)) {
+    let flags = 0
+    const end = Math.min(r.buf.length, 4 + len)
+    if (r.pos < end) {
       const tn = r.u16()
-      if (!r.ok || tn === 0 || tn > UI_MAX_TEMPLATE) return null
-      const b = r.bytes(tn)
-      if (b === null) return null
-      template = new TextDecoder().decode(b)
-      if (!/^[a-z0-9_]+$/.test(template)) return null
+      if (!r.ok || tn > UI_MAX_TEMPLATE) return null
+      if (tn > 0) {
+        const b = r.bytes(tn)
+        if (b === null) return null
+        template = new TextDecoder().decode(b)
+        if (!/^[a-z0-9_]+$/.test(template)) return null
+      }
+      // Flags after it (UI_FLAG_PINNED = 1: no ×). An empty template with
+      // nothing after it is a message cut short.
+      if (r.pos < end) flags = r.u8()
+      else if (tn === 0) return null
+      if (!r.ok) return null
     }
-    return { type, uiId, title, widgets, template }
+    return { type, uiId, title, widgets, template, flags }
   }
 
   if (type === MSG.UI_CLOSE) {
@@ -377,6 +388,24 @@ export function decodeControlMessage (buf) {
   // {id, milli} fields as CAMERA_SET's. An unknown kind refuses the message.
   // A sector's look (core encode_sector_set): what 0 floor, 1 ceiling (a
   // texture name), 2 light (u8, fade ms), 3 an effect (kind, on, settings).
+  if (type === MSG.KEYS) {
+    const n = r.u8()
+    if (!r.ok || n > 8) return null
+    const text = () => {
+      const len = r.u16()
+      if (!r.ok || len > 64) return null
+      const b = r.bytes(len)
+      return b === null ? null : new TextDecoder().decode(b)
+    }
+    const keys = []
+    for (let i = 0; i < n; i++) {
+      const name = text(); const code = text(); const label = text()
+      if (name === null || code === null || label === null) return null
+      keys.push({ name, code, label })
+    }
+    return r.ok ? { type, keys } : null
+  }
+
   if (type === MSG.SECTOR_SET) {
     const sector = r.u32()
     const what = r.u8()
@@ -680,7 +709,8 @@ export function encodeUiEvent (uiId, widgetId, value) {
 
 export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) {
   const n = Math.min(frames.length, 16)
-  const w = new Writer(16 + n * 14)
+  // 15 bytes a frame (the last is the module's own keys, docs/KEYS.md).
+  const w = new Writer(16 + n * 15)
   w.u8(MSG.INPUT_BUNDLE).u32(clientTick).u32(ackSnapshotTick).u8(n)
   for (let i = 0; i < n; i++) {
     const f = frames[i]
@@ -694,6 +724,8 @@ export function encodeInputBundle ({ clientTick, ackSnapshotTick = 0, frames }) 
     w.u8(f.weapon ?? NO_WEAPON)
     // The tick it was drawing the others at, 0 for none.
     w.u8(f.view ?? 0)
+    // The module's own keys held this tick (docs/KEYS.md): bit i, action i.
+    w.u8(f.actions ?? 0)
   }
   return w.done()
 }

@@ -846,6 +846,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     }
     // The modules' `sky` lines, first module first (docs/SKY.md).
     std::vector<SkyEntry> skies;
+    // THE MODULE'S OWN KEYS (module.txt `key <name> <code> [touch <label>]`,
+    // docs/KEYS.md): action i is bit i of every input frame's `actions`.
+    struct KeyDef { std::string name, code, label; };
+    std::vector<KeyDef> keys;
+    std::vector<std::string> key_names;   // what scripts see, in bit order
     bool persist_levels = false;
     bool persist_saves = false;
     bool persist_server = false;
@@ -1055,6 +1060,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.props       = &props;
         game_ctx.cross       = this;
         game_ctx.controls    = controls;
+        game_ctx.actions     = &key_names;
         game_ctx.rng         = Rng(0x47414D45ull, 13);
         game_bound_stack_.clear();
         vm_stack_.clear();
@@ -2182,6 +2188,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         if (L.has_camera) send_camera(s, L.camera);
         // And its sky -- always, so a level without one clears the last's.
         send_sky(s, li);
+        // And the module's own keys, so the client sends them (docs/KEYS.md).
+        if (!keys.empty()) send_keys(s);
         // And the movement parameters. FULL, because a client arriving in a
         // level has no history to patch (docs/protocol.md 8.4). Sent before the
         // first snapshot so it is never predicting with rules it has not been
@@ -2230,6 +2238,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.cross  = this;
         L.ctx.sounds = &L.host->sounds;
         L.ctx.controls = controls;
+        L.ctx.actions = &key_names;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable
         // to a client but replayable by the server. Per level, or two maps
@@ -3404,6 +3413,23 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         w.u32v(0);
         w.u8v(proto::MSG_SKY_SET);
         proto::encode_sky_set(w, sky ? *sky : none);
+        if (!w.ok()) return;
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(s.id, buf, w.size());
+    }
+
+    void send_keys(Session& s) {
+        u8 buf[1024];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_KEYS);
+        w.u8v(static_cast<u8>(keys.size()));
+        const auto text = [&](const std::string& t) {
+            w.u16v(static_cast<u16>(t.size()));
+            w.bytes(reinterpret_cast<const u8*>(t.data()), t.size());
+        };
+        for (const auto& k : keys) { text(k.name); text(k.code); text(k.label); }
         if (!w.ok()) return;
         finish_frame(buf, len_pos, w.size());
         link.send_control(s.id, buf, w.size());
@@ -4627,6 +4653,39 @@ int main(int argc, char** argv) {
                     else std::fprintf(stderr, "[srv] %s/module.txt: `game %s %s` -- the only modifier is `shared`\n",
                                       module_dirs[mi], gfile, gmod);
                 }
+                continue;
+            }
+            // `key <name> <code> [touch <label>]` (docs/KEYS.md): one of the
+            // module's own actions. The first module to name one wins.
+            if (std::strncmp(line, "key ", 4) == 0) {
+                std::vector<std::string> w = sky_words(line + 4);
+                const auto name_ok = [](const std::string& n, size_t max, bool lower) {
+                    if (n.empty() || n.size() > max) return false;
+                    for (char c : n) {
+                        const bool ok = (c >= '0' && c <= '9') || c == '_' || (c >= 'a' && c <= 'z') ||
+                                        (!lower && c >= 'A' && c <= 'Z');
+                        if (!ok) return false;
+                    }
+                    return true;
+                };
+                const bool shape = (w.size() == 2 || (w.size() == 4 && w[2] == "touch"));
+                if (!shape || !name_ok(w[0], 16, true) || !name_ok(w[1], 24, false) ||
+                    (w.size() == 4 && (w[3].empty() || w[3].size() > 12))) {
+                    std::fprintf(stderr, "[srv] %s/module.txt: `key %s` -- want `key <name> <KeyCode> [touch <LABEL>]`: "
+                                 "a name of a-z, 0-9 and _ (16 at most), a key code such as KeyR or Digit1, "
+                                 "a label of 12 at most; ignored\n", module_dirs[mi], line + 4);
+                    continue;
+                }
+                bool named = false;
+                for (const auto& k : srv.keys) named = named || k.name == w[0];
+                if (named) continue;
+                if (srv.keys.size() >= proto::MAX_KEY_ACTIONS) {
+                    std::fprintf(stderr, "[srv] %s/module.txt: key %s -- a game has %u keys of its own at most; ignored\n",
+                                 module_dirs[mi], w[0].c_str(), proto::MAX_KEY_ACTIONS);
+                    continue;
+                }
+                srv.keys.push_back({w[0], w[1], w.size() == 4 ? w[3] : std::string()});
+                srv.key_names.push_back(w[0]);
                 continue;
             }
             // `player [<level>] <parameter> <value>` (docs/PLAYER.md): the

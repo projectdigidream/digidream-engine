@@ -416,10 +416,15 @@ function touchOf (t, where, fallback, errors, warnings) {
   if (!t || typeof t !== 'object') { errors.push(`${where} must be an object`); return fallback }
   const byId = new Map(fallback.buttons.map((b) => [b.id, { ...b }]))
   for (const b of t.buttons ?? []) {
-    if (!TOUCH_IDS.includes(b.id)) { warnings.push(`${where}: no button '${b.id}' -- a layout places the engine's buttons, it cannot invent one`); continue }
+    // `key:<name>` places one of the module's own keys (docs/KEYS.md): hidden
+    // until the server's KEYS names it, so a layout may place keys a module
+    // declares without knowing which a game has.
+    const own = typeof b.id === 'string' && /^key:[a-z0-9_]{1,16}$/.test(b.id)
+    if (!TOUCH_IDS.includes(b.id) && !own) { warnings.push(`${where}: no button '${b.id}' -- a layout places the engine's buttons and the module's keys (key:<name>), it cannot invent one`); continue }
     if (b.anchor !== undefined && !ANCHORS.includes(b.anchor)) { errors.push(`${where} button '${b.id}': anchor '${b.anchor}'`); continue }
     // A button absent from the list keeps its default; one named is merged.
-    byId.set(b.id, { ...(byId.get(b.id) ?? { anchor: 'br', x: 0, y: 0, size: 74, label: b.id.toUpperCase() }), ...b })
+    // A key's label is the module's (KEYS) unless the layout gives one.
+    byId.set(b.id, { ...(byId.get(b.id) ?? { anchor: 'br', x: 0, y: 0, size: 74, label: own ? undefined : b.id.toUpperCase() }), ...b })
   }
   let zone = fallback.stick.zone
   if (t.stick?.zone) {

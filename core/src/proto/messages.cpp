@@ -34,6 +34,7 @@ void encode_input_bundle(ByteWriter& w, const InputBundle& b) noexcept {
         w.i16v(f.pitch);
         w.u8v(f.weapon);
         w.u8v(f.view);
+        w.u8v(f.actions);
     }
 }
 
@@ -55,6 +56,7 @@ bool decode_input_bundle(ByteReader& r, InputBundle& out) noexcept {
         f.pitch   = r.i16v();
         f.weapon  = r.u8v();
         f.view    = r.u8v();
+        f.actions = r.u8v();
     }
     return r.ok();
 }
@@ -471,10 +473,12 @@ void encode_ui_open(ByteWriter& w, const UiPanel& p) noexcept {
     // TRAILING and optional, so a panel without one is byte-for-byte what it
     // was, and a reader from before templates stops at the widgets and draws
     // the default panel.
-    if (p.template_len > 0) {
+    if (p.template_len > 0 || p.flags != 0) {
         const u16 n = p.template_len > UI_MAX_TEMPLATE ? static_cast<u16>(UI_MAX_TEMPLATE) : p.template_len;
         w.u16v(n);
         w.bytes(reinterpret_cast<const u8*>(p.template_name), n);
+        // Flags after it, only when set: an empty template then says "none".
+        if (p.flags != 0) w.u8v(p.flags);
     }
 }
 
@@ -516,10 +520,20 @@ bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept {
     if (r.remaining() > 0) {
         const u16 tn = r.u16v();
         if (!r.ok() || tn > UI_MAX_TEMPLATE) return false;
-        const u8* tp = r.bytes(tn);
-        if (tp == nullptr || !valid_template_name(reinterpret_cast<const char*>(tp), tn)) return false;
-        p.template_len = static_cast<u8>(tn);
-        for (u16 i = 0; i < tn; ++i) p.template_name[i] = static_cast<char>(tp[i]);
+        if (tn > 0) {
+            const u8* tp = r.bytes(tn);
+            if (tp == nullptr || !valid_template_name(reinterpret_cast<const char*>(tp), tn)) return false;
+            p.template_len = static_cast<u8>(tn);
+            for (u16 i = 0; i < tn; ++i) p.template_name[i] = static_cast<char>(tp[i]);
+        }
+        // Flags, when the message goes on. An empty template with no flags
+        // after it is a message cut short, and refused.
+        if (r.remaining() > 0) {
+            p.flags = r.u8v();
+            if (!r.ok()) return false;
+        } else if (tn == 0) {
+            return false;
+        }
     }
     p.count = n;
     out = p;

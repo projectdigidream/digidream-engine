@@ -270,6 +270,11 @@ let liveMapBytes = null
 const sideTextures = []
 // Music cues, for the same reason. See the MUSIC case in onControl.
 const musicCues = []
+// THE MODULE'S OWN KEYS (KEYS; docs/KEYS.md): [{ name, code, label }], bit i
+// of every frame's `actions` being key i. Read at input time, so the frame
+// loop needs no queue.
+let moduleKeys = []
+let keyBits = {}
 // The sky (docs/SKY.md), for the same reason: only the latest one matters.
 let skyMessage = null
 // Counters for the page tests (client/test/leak.test.js): how many times the
@@ -609,6 +614,11 @@ if (LIVE) {
       // join. A cue arriving then would have thrown the same ReferenceError.
       else if (m.type === MSG.MUSIC) musicCues.push(m)
       else if (m.type === MSG.SKY_SET) skyMessage = m
+      else if (m.type === MSG.KEYS) {
+        moduleKeys = m.keys
+        keyBits = Object.fromEntries(m.keys.map((k, i) => [`key:${k.name}`, 1 << i]))
+        touch?.setKeys(m.keys)
+      }
       // What to play the moment this client predicts its own jump or shot.
       else if (m.type === MSG.SOUND_PREDICT) ownSounds.set(m.group, m.entries)
       else if (m.type === MSG.HUD_SET) {
@@ -2128,7 +2138,7 @@ function fpsInput () {
   if (touch) buttons |= touch.state.buttons(TOUCH_BITS)
   lastAim = fpsLook.aimBrad()
   lastSampled = { buttons, moveX: axis(push.x), moveY: axis(push.y), aim: lastAim, pitch: fpsLook.pitchWire(),
-                  weapon: takeWeaponWanted(), view: drawnTick() }
+                  weapon: takeWeaponWanted(), view: drawnTick(), actions: heldActions() }
   return lastSampled
 }
 
@@ -2184,7 +2194,8 @@ function currentInput () {
   // Held across a stop, so letting go of the keys leaves the agent facing where
   // it was walking rather than snapping east. See aimFor.
   lastAim = aimFor(wx, wy, lastAim)
-  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim, weapon: takeWeaponWanted(), view: drawnTick() }
+  lastSampled = { buttons, moveX: axis(wx), moveY: axis(wy), aim: lastAim, weapon: takeWeaponWanted(), view: drawnTick(),
+                  actions: heldActions() }
   return lastSampled
 }
 
@@ -2443,6 +2454,14 @@ function applySectorSet (local, m) {
     if (e) list.push(e)
     sectorFxFor = null
   }
+}
+
+// The module's own keys held now: by keyboard code, and by touch button.
+function heldActions () {
+  let bits = 0
+  moduleKeys.forEach((k, i) => { if (held.has(k.code)) bits |= 1 << i })
+  if (touch) bits |= touch.state.buttons(keyBits)
+  return bits
 }
 
 function frame (now) {

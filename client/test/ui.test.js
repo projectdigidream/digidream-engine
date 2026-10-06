@@ -251,6 +251,20 @@ const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.cl
         `CONTROL: a bad name, anchor or slot is an error and the template is dropped (${bad.errors.length})`)
 }
 
+// --- a pinned panel has no × ------------------------------------------------
+{
+  const doc = makeDom()
+  const view = new UiView({ onEvent: () => {}, doc })
+  view.open({ ...msg, flags: 1 })
+  check(!all(doc.body).some((e) => /dnp-ui-x/.test(e.className)), 'a pinned panel is drawn with no ×')
+  const d2 = makeDom()
+  new UiView({ onEvent: () => {}, doc: d2, layout: TEMPLATES.layout, size: { width: 800, height: 600 } }).open({ ...msg, template: 'shop', flags: 1 })
+  check(!all(d2.body).some((e) => /dnp-ui-x/.test(e.className)), 'and so is a pinned one in a template that would have one')
+  const d3 = makeDom()
+  new UiView({ onEvent: () => {}, doc: d3 }).open(msg)
+  check(all(d3.body).some((e) => /dnp-ui-x/.test(e.className)), 'CONTROL: an ordinary panel keeps its ×')
+}
+
 // --- the × tells the server (docs/PANELS.md 4) --------------------------------
 {
   const doc = makeDom()

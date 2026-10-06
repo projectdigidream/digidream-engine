@@ -173,7 +173,8 @@ graph_vocab = {
     { name = "panels", type = "table", optional = true,
       doc = "The panels this graph opens, fills or answers, by name: each a title, an " ..
             "optional layout template, and its widgets -- the five kinds a trigger " ..
-            "table's panels take, each with a `name` the nodes use (docs/PANELS.md)." },
+            "table's panels take, each with a `name` the nodes use (docs/PANELS.md). " ..
+            "`pinned = true` draws it with no ×: it stays until a graph closes it." },
     { name = "nodes", type = "table",
       doc = "The nodes, as an ARRAY: its order is the order event nodes for " ..
             "the same event run in." },
@@ -641,6 +642,88 @@ graph_vocab = {
       data_in = { "entity", "value" }, data_out = {},
       doc = "Write a HUD value: a panel's changing text (gold, a timer) is a template's " ..
             "{hud.<name>}, so this is how a graph writes on a panel." },
+
+    -- --------------------------------------------------------------- INPUT
+    -- A player's buttons: the engine's own (jump, attack, ...) and the
+    -- module's own keys (module.txt `key` lines, docs/KEYS.md), by name.
+    { name = "when_button_pressed", category = "input", starts = true,
+      args = { { name = "button", type = "string",
+                 doc = "jump, dash, grab, hover, fly, grapple, use, attack, alt_attack, crouch, or one of the module's own keys." } },
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity" },
+      doc = "A player pressed the button: once, on the tick it went down." },
+    { name = "when_button_released", category = "input", starts = true,
+      args = { { name = "button", type = "string" } },
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity" },
+      doc = "A player let the button go." },
+    { name = "button_held", category = "input",
+      args = { { name = "button", type = "string" } },
+      exec_in = {}, exec_out = {},
+      data_in = { "entity" }, data_out = { "value" },
+      doc = "Whether the player is holding the button now." },
+
+    -- ------------------------------------------------------------- WEAPONS
+    -- A player's weapons and ammunition, by the module's own names: the
+    -- weapons and pools its weapons.load declares (docs/WEAPONS.md). In a
+    -- level's graph and the game's alike; the weapons may be either's.
+    { name = "give_weapon", category = "weapon",
+      args = { { name = "weapon", type = "string" },
+               { name = "select", type = "bool", optional = true, doc = "Put it in their hands too." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Give the player a weapon." },
+    { name = "take_weapon", category = "weapon",
+      args = { { name = "weapon", type = "string" } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Take a weapon away. Held, they switch to the best one left." },
+    { name = "select_weapon", category = "weapon",
+      args = { { name = "weapon", type = "string" } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Put a weapon the player has in their hands." },
+    { name = "give_ammo", category = "weapon",
+      args = { { name = "ammo", type = "string", doc = "An ammunition pool, as the module names it." },
+               { name = "amount", type = "int" } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "amount" }, data_out = {},
+      doc = "Add ammunition, up to the pool's maximum." },
+    { name = "set_ammo", category = "weapon",
+      args = { { name = "ammo", type = "string" }, { name = "amount", type = "int" } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "amount" }, data_out = {},
+      doc = "Set an ammunition pool's count." },
+    { name = "held_weapon", category = "weapon",
+      args = {},
+      exec_in = {}, exec_out = {},
+      data_in = { "entity" }, data_out = { "value" },
+      doc = "The name of the weapon in the player's hands." },
+    { name = "has_weapon", category = "weapon",
+      args = { { name = "weapon", type = "string" } },
+      exec_in = {}, exec_out = {},
+      data_in = { "entity" }, data_out = { "value" },
+      doc = "Whether the player has a weapon." },
+    { name = "ammo_of", category = "weapon",
+      args = { { name = "ammo", type = "string", optional = true, doc = "A pool; the held weapon's without it." } },
+      exec_in = {}, exec_out = {},
+      data_in = { "entity" }, data_out = { "value" },
+      doc = "How much ammunition the player has." },
+    { name = "when_weapon_changed", category = "weapon", starts = true,
+      args = {},
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity", "weapon" },
+      doc = "A player's weapon in hand changed: chosen, picked up, or run dry." },
+    { name = "when_fired", category = "weapon", starts = true,
+      args = { { name = "weapon", type = "string", optional = true, doc = "One weapon; any without it." } },
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity", "weapon" },
+      doc = "A player's weapon shot: a ray or a missile (a melee swing is not a shot)." },
+    { name = "when_out_of_ammo", category = "weapon", starts = true,
+      args = {},
+      exec_in = {}, exec_out = { "then" },
+      data_in = {}, data_out = { "entity", "weapon" },
+      doc = "The weapon in a player's hands just used its last ammunition." },
 
     -- --------------------------------------------------------- CINEMATICS
     -- A cutscene: the player's controls taken (movement and attacks -- both

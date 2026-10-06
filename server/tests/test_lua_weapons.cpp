@@ -155,6 +155,12 @@ static std::string str(const char* global) {
     lua_pop(L, 1);
     return out;
 }
+static bool truthy(const char* global) {
+    lua_getglobal(L, global);
+    const bool v = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    return v;
+}
 
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -2371,6 +2377,54 @@ int main(int argc, char** argv) {
         CHECK(broken != traces[0]);
     }
     if (!run("weapons.force_lua = false\nweapons.core_stale()", "restoring the path")) return 1;
+
+    // ------------------------------------- graphs manage a player's weapons
+    std::printf("-- graph weapon nodes (docs/GRAPHS.md \"Weapons\") --\n");
+    {
+        for (const char* s : { "maps/scripts/graph_vocab.lua", "maps/scripts/graphs.lua" }) {
+            if (!vm.run_file(s, s)) { std::printf("  FAIL loading %s: %s\n", s, vm.last_error()); return 1; }
+        }
+        CHECK(run("gw_ok, gw_err = graphs.load({ graph = 1, name = 'arms', vars = { fired = 0, changed = 0, dry = 0, held = '', shells = -1, has_ssg = true },\n"
+                  "  nodes = {\n"
+                  "    { id = 'g', type = 'on_call', name = 'arm' },\n"
+                  "    { id = 'tk', type = 'take_weapon', weapon = 'supershotgun' },\n"
+                  "    { id = 'give', type = 'give_weapon', weapon = 'shotgun', select = true },\n"
+                  "    { id = 'ammo', type = 'set_ammo', ammo = 'shells', amount = 2 },\n"
+                  "    { id = 'r', type = 'on_call', name = 'read' },\n"
+                  "    { id = 'hw', type = 'held_weapon' }, { id = 'sh', type = 'set_var', var = 'held' },\n"
+                  "    { id = 'ao', type = 'ammo_of' }, { id = 'sa', type = 'set_var', var = 'shells' },\n"
+                  "    { id = 'hs', type = 'has_weapon', weapon = 'supershotgun' }, { id = 'ss', type = 'set_var', var = 'has_ssg' },\n"
+                  "    { id = 'f', type = 'when_fired', weapon = 'shotgun' }, { id = 'af', type = 'add_var', var = 'fired', value = 1 },\n"
+                  "    { id = 'c', type = 'when_weapon_changed' }, { id = 'ac', type = 'add_var', var = 'changed', value = 1 },\n"
+                  "    { id = 'o', type = 'when_out_of_ammo' }, { id = 'ao2', type = 'add_var', var = 'dry', value = 1 } },\n"
+                  "  links = { { 'g.then', 'tk.in' }, { 'tk.then', 'give.in' }, { 'give.then', 'ammo.in' },\n"
+                  "            { 'r.then', 'sh.in' }, { 'hw.value', 'sh.value' }, { 'sh.then', 'sa.in' }, { 'ao.value', 'sa.value' },\n"
+                  "            { 'sa.then', 'ss.in' }, { 'hs.value', 'ss.value' },\n"
+                  "            { 'f.then', 'af.in' }, { 'c.then', 'ac.in' }, { 'o.then', 'ao2.in' } } }, 'arms')",
+                  "loading the weapon graph"));
+        CHECK(run("gw_tostr = tostring(gw_err and table.concat(gw_err, '; ') or '')", "load result"));
+        if (!truthy("gw_ok")) std::printf("  load problems: %s\n", str("gw_tostr").c_str());
+        CHECK(truthy("gw_ok"));
+        set_buttons(0);
+        for (int i = 0; i < 3; ++i) server_tick(0);
+        CHECK(run("graphs.call('arm', dnp.players()[1], nil)", "arming"));
+        for (int i = 0; i < 3; ++i) server_tick(0);
+        CHECK(run("graphs.call('read', dnp.players()[1], nil)\n"
+                  "gw_held = graphs.var('arms', 'held'); gw_sh = graphs.var('arms', 'shells'); gw_ssg = graphs.var('arms', 'has_ssg')",
+                  "reading"));
+        std::printf("  held %s, shells %g, has the super shotgun: %s\n", str("gw_held").c_str(), num("gw_sh"),
+                    truthy("gw_ssg") ? "yes" : "no");
+        CHECK(str("gw_held") == "shotgun" && num("gw_sh") == 2 && !truthy("gw_ssg"));
+        CHECK(run("gw_changed = graphs.var('arms', 'changed')", "changed") && num("gw_changed") >= 1);
+        // Fire both shells: two shots told, then the weapon runs dry.
+        for (int shot = 0; shot < 2; ++shot) {
+            for (int i = 0; i < 4; ++i) server_tick(0x0080);
+            for (int i = 0; i < 70; ++i) server_tick(0);
+        }
+        CHECK(run("gw_fired = graphs.var('arms', 'fired'); gw_dry = graphs.var('arms', 'dry')", "fired"));
+        std::printf("  fired %g shots, ran dry %g time(s)\n", num("gw_fired"), num("gw_dry"));
+        CHECK(num("gw_fired") == 2 && num("gw_dry") == 1);
+    }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

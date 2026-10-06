@@ -53,7 +53,7 @@
       "type": "table"
     },
     {
-      "doc": "The panels this graph opens, fills or answers, by name: each a title, an optional layout template, and its widgets -- the five kinds a trigger table's panels take, each with a `name` the nodes use (docs/PANELS.md).",
+      "doc": "The panels this graph opens, fills or answers, by name: each a title, an optional layout template, and its widgets -- the five kinds a trigger table's panels take, each with a `name` the nodes use (docs/PANELS.md). `pinned = true` draws it with no ×: it stays until a graph closes it.",
       "name": "panels",
       "optional": true,
       "type": "table"
@@ -1851,6 +1851,297 @@
         "then"
       ],
       "name": "set_hud"
+    },
+    {
+      "args": [
+        {
+          "doc": "jump, dash, grab, hover, fly, grapple, use, attack, alt_attack, crouch, or one of the module's own keys.",
+          "name": "button",
+          "type": "string"
+        }
+      ],
+      "category": "input",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "A player pressed the button: once, on the tick it went down.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_button_pressed",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "button",
+          "type": "string"
+        }
+      ],
+      "category": "input",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "A player let the button go.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_button_released",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "button",
+          "type": "string"
+        }
+      ],
+      "category": "input",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "Whether the player is holding the button now.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "button_held"
+    },
+    {
+      "args": [
+        {
+          "name": "weapon",
+          "type": "string"
+        },
+        {
+          "doc": "Put it in their hands too.",
+          "name": "select",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Give the player a weapon.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "give_weapon"
+    },
+    {
+      "args": [
+        {
+          "name": "weapon",
+          "type": "string"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Take a weapon away. Held, they switch to the best one left.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "take_weapon"
+    },
+    {
+      "args": [
+        {
+          "name": "weapon",
+          "type": "string"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Put a weapon the player has in their hands.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "select_weapon"
+    },
+    {
+      "args": [
+        {
+          "doc": "An ammunition pool, as the module names it.",
+          "name": "ammo",
+          "type": "string"
+        },
+        {
+          "name": "amount",
+          "type": "int"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity",
+        "amount"
+      ],
+      "data_out": [],
+      "doc": "Add ammunition, up to the pool's maximum.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "give_ammo"
+    },
+    {
+      "args": [
+        {
+          "name": "ammo",
+          "type": "string"
+        },
+        {
+          "name": "amount",
+          "type": "int"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity",
+        "amount"
+      ],
+      "data_out": [],
+      "doc": "Set an ammunition pool's count.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_ammo"
+    },
+    {
+      "args": [],
+      "category": "weapon",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "The name of the weapon in the player's hands.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "held_weapon"
+    },
+    {
+      "args": [
+        {
+          "name": "weapon",
+          "type": "string"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "Whether the player has a weapon.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "has_weapon"
+    },
+    {
+      "args": [
+        {
+          "doc": "A pool; the held weapon's without it.",
+          "name": "ammo",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value"
+      ],
+      "doc": "How much ammunition the player has.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "ammo_of"
+    },
+    {
+      "args": [],
+      "category": "weapon",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "weapon"
+      ],
+      "doc": "A player's weapon in hand changed: chosen, picked up, or run dry.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_weapon_changed",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "One weapon; any without it.",
+          "name": "weapon",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "weapon",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "weapon"
+      ],
+      "doc": "A player's weapon shot: a ray or a missile (a melee swing is not a shot).",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_fired",
+      "starts": true
+    },
+    {
+      "args": [],
+      "category": "weapon",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "weapon"
+      ],
+      "doc": "The weapon in a player's hands just used its last ammunition.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "name": "when_out_of_ammo",
+      "starts": true
     },
     {
       "args": [

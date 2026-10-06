@@ -329,6 +329,9 @@ struct WorldContext {
     // fps. What dnp.controls() answers, so a weapon aims by the view in an FPS
     // and by auto-aim in a platformer.
     u8                controls = 0;
+    // The module's own keys (module.txt `key` lines, docs/KEYS.md), in bit
+    // order: what dnp.actions() names and e:actions()'s bits mean.
+    const std::vector<std::string>* actions = nullptr;
     // Which player each body is, as a number that stays the same from level to
     // level (a session's id), or 0 for a body nobody plays. Borrowed from the
     // host. e:player() reads it; null means nobody is anybody (a test).

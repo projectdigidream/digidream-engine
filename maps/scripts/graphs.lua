@@ -240,6 +240,7 @@ end
 -- `done`, a subtitle's) call it from their timers.
 local run
 local view_of, start_view   -- a node's linked numbers; see run
+local any_start, fire_start -- the start nodes' dispatch, defined with them below
 
 -- ------------------------------------------------------- THE WORLD'S NODES
 --
@@ -635,7 +636,7 @@ function EXEC.open_panel(g, n, ev, pull)
   -- Never twice: an open copy is closed first.
   local old = forget_panel(key)
   if old ~= nil then dnp.ui_close(e, old) end
-  local id = dnp.ui_open(e, { title = def.title, template = def.template, widgets = def.widgets })
+  local id = dnp.ui_open(e, { title = def.title, template = def.template, widgets = def.widgets, pinned = def.pinned })
   if id ~= nil and id ~= 0 then
     open_panels[key] = id
     by_ui[id] = { key = key, panel = n.panel, player = e:player() }
@@ -673,6 +674,103 @@ function EXEC.set_hud(g, n, ev, pull)
     if e ~= nil then dnp.hud(e, { [n.name] = v }) end
   end
   return "then"
+end
+
+-- ------------------------------------------------------------------ INPUT
+--
+-- A button by name: the engine's own (proto::button), or one of the module's
+-- own keys (dnp.actions(), docs/KEYS.md), whose bits are e:actions()'.
+local BUTTON = { jump = 0x0001, dash = 0x0002, grab = 0x0004, hover = 0x0008, fly = 0x0010,
+                 grapple = 0x0020, use = 0x0040, attack = 0x0080, alt_attack = 0x0100, crouch = 0x0400 }
+M.BUTTON = BUTTON
+local function own_keys() return dnp.actions ~= nil and dnp.actions() or {} end
+-- { engine = bit } or { own = bit }, or nil for a name nobody has.
+local function button_of(name)
+  if BUTTON[name] ~= nil then return { engine = BUTTON[name] } end
+  for i, k in ipairs(own_keys()) do if k == name then return { own = 2 ^ (i - 1) } end end
+  return nil
+end
+local function bit_set(v, b) return v ~= nil and math.floor(v / b) % 2 == 1 end
+local function holding(e, b)
+  if b.engine then return bit_set(e:buttons(), b.engine) end
+  return e.actions ~= nil and bit_set(e:actions(), b.own)
+end
+function PURE.button_held(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  local b = button_of(n.button)
+  return e ~= nil and b ~= nil and holding(e, b) or false
+end
+-- Each player's buttons and keys last tick, so a press is told on the tick
+-- it went down and a release on the tick it came up.
+local last_input = {}
+local function tick_buttons()
+  if not any_start("when_button_pressed") and not any_start("when_button_released") then return end
+  for _, e in ipairs(dnp.players() or {}) do
+    local key = player_key(e)
+    local now = { b = e:buttons() or 0, a = e.actions ~= nil and e:actions() or 0 }
+    local was = last_input[key] or { b = 0, a = 0 }
+    last_input[key] = now
+    if now.b ~= was.b or now.a ~= was.a then
+      for _, kind in ipairs({ "when_button_pressed", "when_button_released" }) do
+        fire_start(kind, function(n)
+          local b = button_of(n.button)
+          if b == nil then return false end
+          local is, wasdown
+          if b.engine then is, wasdown = bit_set(now.b, b.engine), bit_set(was.b, b.engine)
+          else is, wasdown = bit_set(now.a, b.own), bit_set(was.a, b.own) end
+          if kind == "when_button_pressed" then return is and not wasdown end
+          return wasdown and not is
+        end, { entity = e })
+      end
+    end
+  end
+end
+
+-- ----------------------------------------------------------------- WEAPONS
+--
+-- The weapon runtime's one entry point: in this VM, or the game's.
+local function wapi(op, e, a, b)
+  if e == nil then return nil end
+  if weapons ~= nil and weapons.api ~= nil then return weapons.api(op, e, a, b) end
+  if dnp.game_has ~= nil and dnp.game_has("weapon_api") then return dnp.call_game("weapon_api", op, e, a, b) end
+  return nil
+end
+local function weapon_player(n, g, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  if e == nil or e.kind == nil or e:kind() ~= 0 then return nil end
+  return e
+end
+function EXEC.give_weapon(g, n, ev, pull) wapi("give", weapon_player(n, g, ev, pull), n.weapon, n.select == true) return "then" end
+function EXEC.take_weapon(g, n, ev, pull) wapi("take", weapon_player(n, g, ev, pull), n.weapon) return "then" end
+function EXEC.select_weapon(g, n, ev, pull) wapi("select", weapon_player(n, g, ev, pull), n.weapon) return "then" end
+function EXEC.give_ammo(g, n, ev, pull) wapi("give_ammo", weapon_player(n, g, ev, pull), n.ammo, n.amount) return "then" end
+function EXEC.set_ammo(g, n, ev, pull) wapi("set_ammo", weapon_player(n, g, ev, pull), n.ammo, n.amount) return "then" end
+function PURE.held_weapon(g, n, ev, pull)
+  local s = wapi("state", weapon_player(n, g, ev, pull))
+  return s and s.held or nil
+end
+function PURE.has_weapon(g, n, ev, pull)
+  local s = wapi("state", weapon_player(n, g, ev, pull))
+  if s == nil then return false end
+  for _, w in ipairs(s.have or {}) do if w == n.weapon then return true end end
+  return false
+end
+function PURE.ammo_of(g, n, ev, pull)
+  local s = wapi("state", weapon_player(n, g, ev, pull))
+  if s == nil then return nil end
+  local pool = n.ammo or s.pool
+  return pool and (s.ammo[pool] or 0) or nil
+end
+-- Told by the weapon runtime (weapons.lua tell_graphs).
+function M.weapon_event(kind, e, weapon)
+  local ev = { entity = e, weapon = weapon }
+  if kind == "changed" then fire_start("when_weapon_changed", nil, ev)
+  elseif kind == "fired" then fire_start("when_fired", function(n) return n.weapon == nil or n.weapon == weapon end, ev)
+  elseif kind == "out_of_ammo" then fire_start("when_out_of_ammo", nil, ev) end
+end
+-- From the game, when the weapons are game-wide and this graph is a level's.
+if dnp ~= nil and dnp.export ~= nil and not in_game() then
+  dnp.export("graph_weapon_event", function(e, kind, weapon) M.weapon_event(kind, e, weapon) end)
 end
 
 -- The level's sky (docs/SKY.md). `yaw` in degrees here, turns on the wire.
@@ -980,11 +1078,11 @@ local STARTS = {}
 for _, n in ipairs(V.nodes) do if n.starts then STARTS[n.name] = true end end
 for name in pairs(STARTS) do PURE[name] = PURE.event end   -- outputs: what the moment carried
 
-local function any_start(kind)
+any_start = function(kind)
   for _, g in ipairs(loaded) do if g.by_start[kind] ~= nil then return true end end
   return false
 end
-local function fire_start(kind, test, ev, exit)
+fire_start = function(kind, test, ev, exit)
   for _, g in ipairs(loaded) do
     for _, id in ipairs(g.by_start[kind] or {}) do
       local n = start_view(g, g.by_id[id])
@@ -1217,6 +1315,7 @@ end
 -- The hooks, one per event: harvested by the VM into its lists beside every
 -- other script's, so a map's triggers and its graphs both hear everything.
 function on_tick()
+  tick_buttons()
   drain_jobs(dnp.tick())
   drain_timers(dnp.tick())
   if #loaded > 0 then
@@ -1388,7 +1487,8 @@ function M.load(data, label)
       local widgets = p.widgets or {}
       if type(widgets) ~= "table" then widgets = {}; bad("%s: its widgets are a list", where) end
       if #widgets > max_widgets then bad("%s: %d widgets, the protocol's limit is %d", where, #widgets, max_widgets) end
-      local def = { title = p.title, template = p.template, widgets = {}, by_name = {}, by_id = {} }
+      if p.pinned ~= nil and type(p.pinned) ~= "boolean" then bad("%s: `pinned` is true or false", where) end
+      local def = { title = p.title, template = p.template, pinned = p.pinned == true, widgets = {}, by_name = {}, by_id = {} }
       for i, w in ipairs(widgets) do
         local ww = ("%s widget %d"):format(where, i)
         if type(w) ~= "table" then bad("%s: is not a table", ww)
@@ -1590,6 +1690,17 @@ function M.load(data, label)
     n._missing = nil
   end
 
+  -- A BUTTON NODE NAMES A BUTTON: the engine's, or one the module declared
+  -- (checked where the server is there to say which).
+  for _, n in ipairs(order) do
+    if (n.type == "when_button_pressed" or n.type == "when_button_released" or n.type == "button_held")
+       and type(n.button) == "string" and button_of(n.button) == nil and dnp.actions ~= nil then
+      bad("node '%s': no button '%s' -- the engine's are %s; the module's own are %s", n.id, n.button,
+          "jump, dash, grab, hover, fly, grapple, use, attack, alt_attack, crouch",
+          #own_keys() > 0 and table.concat(own_keys(), ", ") or "none (module.txt `key` lines)")
+    end
+  end
+
   -- A PANEL NODE NAMES ONE OF THIS GRAPH'S PANELS, and a widget it has.
   for _, n in ipairs(order) do
     local spec = SPEC[n.type]
@@ -1775,4 +1886,4 @@ function M.count() return #loaded end
 function M.pending() return #timers end
 --- Forget every graph and timer. For a test.
 function M.reset() loaded = {}; timers = {}; jobs = {}; track = {}; touch_seen = {}; t0 = nil; frozen = {}; spoken = {}
-  panel_defs = {}; open_panels = {}; by_ui = {} end
+  panel_defs = {}; open_panels = {}; by_ui = {}; last_input = {} end

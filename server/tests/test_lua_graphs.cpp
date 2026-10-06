@@ -1085,6 +1085,63 @@ int main(int argc, char** argv) {
         CHECK(g_ui.cams.count(8) == 1 && g_ui.cams[8] > first);   // and it keeps turning
     }
 
+    std::printf("-- buttons and the module's own keys (docs/KEYS.md) --\n");
+    {
+        static std::vector<std::string> keys = { "reload", "inventory" };
+        ctx.actions = &keys;
+        CHECK(load_graph(R"({ "graph": 1, "name": "keys", "vars": { "jumps": 0, "lets": 0, "reloads": 0, "inv": false },
+          "nodes": [ { "id": "jp", "type": "when_button_pressed", "button": "jump" }, { "id": "a1", "type": "add_var", "var": "jumps", "value": 1 },
+                     { "id": "jr", "type": "when_button_released", "button": "jump" }, { "id": "a2", "type": "add_var", "var": "lets", "value": 1 },
+                     { "id": "rp", "type": "when_button_pressed", "button": "reload" }, { "id": "a3", "type": "add_var", "var": "reloads", "value": 1 },
+                     { "id": "k", "type": "on_call", "name": "inv" },
+                     { "id": "bh", "type": "button_held", "button": "inventory" }, { "id": "si", "type": "set_var", "var": "inv" } ],
+          "links": [ ["jp.then", "a1.in"], ["jr.then", "a2.in"], ["rp.then", "a3.in"], ["k.then", "si.in"], ["bh.value", "si.value"] ] })"));
+        auto press = [&](u16 buttons, u8 actions, int n) {
+            proto::InputFrame f;
+            f.buttons = buttons;
+            f.actions = actions;
+            world.set_input(player, f);
+            ticks(n);
+        };
+        auto v = [&](const char* name) {
+            const std::string src = std::string("kv = graphs.var('keys', '") + name + "')";
+            run(src.c_str(), name);
+            lua_getglobal(L, "kv");
+            const double out = lua_isboolean(L, -1) ? (lua_toboolean(L, -1) ? 1 : 0) : lua_tonumber(L, -1);
+            lua_pop(L, 1);
+            return out;
+        };
+        press(0, 0, 2);
+        press(0x0001, 0, 5);                          // jump, held five ticks: one press
+        CHECK(v("jumps") == 1 && v("lets") == 0);
+        press(0, 0, 2);                               // let go: one release
+        CHECK(v("jumps") == 1 && v("lets") == 1);
+        press(0, 0x01, 3);                            // the module's `reload` (action 0)
+        press(0, 0x00, 1);
+        press(0, 0x01, 1);                            // and again
+        std::printf("  jump pressed %g, released %g; reload pressed %g\n", v("jumps"), v("lets"), v("reloads"));
+        CHECK(v("reloads") == 2);
+        press(0, 0x02, 1);                            // `inventory` (action 1) held
+        CHECK(run("graphs.call('inv', dnp.players()[1], nil)", "held") && v("inv") == 1);
+        press(0, 0x01, 1);                            // CONTROL: another key is not it
+        CHECK(run("graphs.call('inv', dnp.players()[1], nil)", "not held") && v("inv") == 0);
+        press(0, 0, 1);
+        // A button nobody has is refused at load, naming what there is.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "nokey",
+          "nodes": [ { "id": "x", "type": "when_button_pressed", "button": "teleport" } ], "links": [] })"));
+        ctx.actions = nullptr;
+    }
+    std::printf("-- a pinned panel --\n");
+    {
+        g_ui.opened.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "hud_panel",
+          "panels": { "arms": { "title": "Arms", "pinned": true, "widgets": [ { "kind": "label", "id": 1, "name": "gun", "label": "Gun" } ] } },
+          "nodes": [ { "id": "c", "type": "on_call", "name": "show" }, { "id": "o", "type": "open_panel", "panel": "arms" } ],
+          "links": [ ["c.then", "o.in"] ] })"));
+        CHECK(run("graphs.call('show', dnp.players()[1], nil)", "show"));
+        CHECK(g_ui.opened.size() == 1 && (g_ui.opened[0].flags & proto::UI_FLAG_PINNED) != 0);
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

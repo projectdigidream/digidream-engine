@@ -221,7 +221,10 @@ export class UiView {
     // player is done, and conflating them would make a stray click destroy
     // state the script is holding.
     x.onclick = () => this.dismiss(msg.uiId)
-    title.append(t, x)
+    // A PINNED panel (UI_FLAG_PINNED) has no ×: it stays until its script
+    // closes it -- a module's own weapon window, a score board.
+    if (msg.flags & 1) title.append(t)
+    else title.append(t, x)
 
     const body = doc.createElement('div')
     body.className = 'dnp-ui-body'
@@ -270,7 +273,7 @@ export class UiView {
     this.button = named?.button ?? null
     this.buildScale = s
 
-    const closeable = tpl.closeable !== false
+    const closeable = tpl.closeable !== false && !(msg.flags & 1)
     const x = doc.createElement('span')
     x.className = 'dnp-ui-x'
     x.textContent = '×'

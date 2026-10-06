@@ -561,6 +561,9 @@ suite_client () {
   # The sky (docs/SKY.md): SKY_SET as the server writes it, where a direction
   # lands on DOOM's sky, DOOM's sky hack, and pictures loaded once.
   node client/test/sky.test.js | grep -E 'FAIL|failures'
+  # The input bundle the client writes: 15 bytes a frame with the module's keys,
+  # at the full sixteen frames (it once overran past six).
+  node client/test/proto_input.test.js | grep -E 'FAIL|failures'
   # The first-person weapon: Doom's frame timing, its 320x200 placement, and
   # that every frame the module names has a picture with its offsets.
   node client/test/viewmodel.test.js | grep -E 'FAIL|failures'
@@ -843,6 +846,9 @@ suite_stack () {
      `# Panels by name (docs/PANELS.md): a game graph opens, answers a press and` \
      `# the × over the real protocol. CONTROL: a press after the × is dropped.` \
      && node test/panels.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# The module's own keys (docs/KEYS.md): told to the client, held in frames,` \
+     `# answered by a graph. CONTROL: frames without the key fire nothing.` \
+     && node test/keys.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \

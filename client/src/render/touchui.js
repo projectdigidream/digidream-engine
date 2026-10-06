@@ -62,12 +62,25 @@ export const TOUCH_BUTTONS = TOUCH_IDS.map((id) => ({ id }))
  * The buttons a layout's touch section places, resolved: every engine button,
  * with where it goes, how big, what it says, and whether it is shown at all.
  */
-export function touchLayout (layout, scheme = 'platformer', shown = new Set()) {
+export function touchLayout (layout, scheme = 'platformer', shown = new Set(), keys = []) {
   const t = (scheme === 'fps' ? layout?.touch_fps : layout?.touch) ??
             (scheme === 'fps' ? DEFAULT_LAYOUT.touch_fps : DEFAULT_LAYOUT.touch)
   // A hidden button is shown when the GAME asks for it (setShown): GRAB while
   // walls are held onto. The layout still decides where it goes.
-  return { zone: t.stick.zone, buttons: t.buttons.filter((b) => !b.hidden || shown.has(b.id)) }
+  const buttons = t.buttons.filter((b) => !/^key:/.test(b.id) && (!b.hidden || shown.has(b.id)))
+  // THE MODULE'S OWN KEYS that have a touch label (docs/KEYS.md): where the
+  // layout places `key:<name>`, there; otherwise in a column above the
+  // engine's buttons, bottom up.
+  let auto = 0
+  for (const k of keys) {
+    if (!k.label) continue
+    const id = `key:${k.name}`
+    const placed = t.buttons.find((b) => b.id === id)
+    if (placed) { buttons.push({ ...placed, label: placed.label ?? k.label, hidden: false }); continue }
+    buttons.push({ id, anchor: 'br', x: -22 - (auto % 2) * 82, y: -250 - Math.floor(auto / 2) * 70, size: 60, label: k.label })
+    auto++
+  }
+  return { zone: t.stick.zone, buttons }
 }
 
 /** The safe-area insets, read through a probe element (only CSS can see them). */
@@ -90,7 +103,8 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
   style.textContent = STYLE
   host.append(style)
   let shown = new Set()
-  let current = touchLayout(layout, scheme, shown)
+  let keys = []
+  let current = touchLayout(layout, scheme, shown, keys)
   const probe = document.createElement('div')
   probe.className = 'dnp-touch-insets'
   host.append(probe)
@@ -249,7 +263,15 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
     setLayout (next = layout, nextScheme = scheme) {
       layout = next ?? DEFAULT_LAYOUT
       scheme = nextScheme
-      current = touchLayout(layout, scheme, shown)
+      current = touchLayout(layout, scheme, shown, keys)
+      build()
+      measure()
+      paint()
+    },
+    /** The module's own keys (KEYS): those with a touch label get a button. */
+    setKeys (list) {
+      keys = list ?? []
+      current = touchLayout(layout, scheme, shown, keys)
       build()
       measure()
       paint()
@@ -259,7 +281,7 @@ export function mountTouch (host = document.body, { layout = DEFAULT_LAYOUT, sch
       const next = new Set(ids)
       if (next.size === shown.size && [...next].every((id) => shown.has(id))) return
       shown = next
-      current = touchLayout(layout, scheme, shown)
+      current = touchLayout(layout, scheme, shown, keys)
       build()
       measure()
       paint()

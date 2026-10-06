@@ -65,7 +65,23 @@ W.key_of = key_of
 -- WHAT THE WEAPON DOES TO THE WORLD, done by the mob runtime's
 -- M.weapon_runtime: here when this file runs in a level, in the level the
 -- player is in when it runs game-wide.
+-- GRAPHS ARE TOLD what happens to a player's weapons (docs/GRAPHS.md
+-- "Weapons"): the graphs in this VM directly, and -- game-wide -- the graphs
+-- of the level the player is in, through their export. A level with no graph
+-- has no export, and the call is a quiet nothing.
+local function tell_graphs(kind, e, weapon)
+  if graphs ~= nil and graphs.weapon_event ~= nil then pcall(graphs.weapon_event, kind, e, weapon) end
+  if GAME and dnp.call_level ~= nil then pcall(dnp.call_level, e, "graph_weapon_event", kind, weapon) end
+end
+W.tell_graphs = tell_graphs
+
 local function world(e, op, ...)
+  -- A SHOT, by any weapon and either path (the Lua phases or the predicted
+  -- machine's events both shoot through here).
+  if op == "hitscan" or op == "launch" then
+    local inv = W.of[key_of(e)]
+    tell_graphs("fired", e, inv and inv.current)
+  end
   if GAME then return dnp.call_level(e, "weapon_runtime", op, ...) end
   if mobs == nil or mobs.weapon_runtime == nil then return nil end
   return mobs.weapon_runtime(e, op, ...)
@@ -1364,6 +1380,61 @@ function W.rearm_player(idx)
   btn[idx] = nil
 end
 
+-- ------------------------------------------------------------ for graphs
+--
+-- WHAT A GRAPH CAN DO WITH A PLAYER'S WEAPONS (docs/GRAPHS.md "Weapons"),
+-- one entry point, called directly in this VM and exported game-wide as
+-- "weapon_api" for the levels' graphs. Names are the module's own: weapons as
+-- declared, ammunition pools as declared.
+function W.api(op, e, a, b)
+  local idx = key_of(e)
+  local inv = idx ~= nil and W.get(idx) or nil
+  if inv == nil then return nil end
+  if op == "state" then
+    local have = {}
+    for n in pairs(inv.have) do have[#have + 1] = n end
+    table.sort(have)
+    local pool = inv.current and W.defs[inv.current] and W.defs[inv.current].ammo
+    return { held = inv.current, have = have, ammo = inv.ammo, pool = pool }
+  elseif op == "give" then
+    if W.defs[a] == nil then return false end
+    inv.have[a] = true
+    if b then inv.current = a end
+    return true
+  elseif op == "take" then
+    if not inv.have[a] then return false end
+    inv.have[a] = nil
+    if inv.current == a then inv.current = nil; switch_to_usable(inv) end
+    return true
+  elseif op == "select" then
+    return W.select(idx, a)
+  elseif op == "give_ammo" or op == "set_ammo" then
+    local pool = W.ammo[a]
+    if pool == nil then return false end
+    local n = math.floor(tonumber(b) or 0)
+    local v = op == "give_ammo" and (inv.ammo[a] or 0) + n or n
+    v = math.max(0, pool.max ~= nil and math.min(v, pool.max) or v)
+    inv.ammo[a] = v
+    return true
+  end
+  return nil
+end
+if GAME then dnp.export("weapon_api", function(op, e, a, b) return W.api(op, e, a, b) end) end
+
+-- What each player held and had last tick, so a change is told once.
+local watched = {}
+local function watch_weapons(e, idx)
+  local inv = W.of[idx]
+  if inv == nil then return end
+  local pool = inv.current and W.defs[inv.current] and W.defs[inv.current].ammo
+  local n = pool and (inv.ammo[pool] or 0) or nil
+  local was = watched[idx]
+  watched[idx] = { current = inv.current, pool = pool, n = n }
+  if was == nil then return end
+  if was.current ~= inv.current then tell_graphs("changed", e, inv.current) end
+  if pool ~= nil and pool == was.pool and n == 0 and (was.n or 0) > 0 then tell_graphs("out_of_ammo", e, inv.current) end
+end
+
 --- Which phase a player's weapon is in. For tests and for a debug panel.
 function W.phase_of(idx)
   local st = run[idx]
@@ -1662,6 +1733,7 @@ function on_tick()
         dnp.ui_close(e, panel_of[idx]); panel_of[idx] = nil; shown[idx] = nil
       end
       W.tick_player(e, idx, now)
+      watch_weapons(e, idx)
     end
   end
 end
