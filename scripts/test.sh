@@ -664,6 +664,8 @@ suite_studio () {
   node ../studio/test/climb.test.js | tail -2
   # The studio's version: studio/VERSION and src/version.js say the same.
   node ../studio/test/version.test.js | tail -2
+  # Snapshots: what is kept (the newest, then one a day), fingerprints, maps compared.
+  node ../studio/test/snapshots.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
