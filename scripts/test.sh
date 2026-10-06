@@ -671,6 +671,8 @@ suite_studio () {
   node ../studio/test/snapshots.test.js | tail -2
   # Animated textures: the sheet lines the studio writes are what the client reads, cut where it cuts.
   node ../studio/test/texsheet.test.js | tail -2
+  # The module's keys: the server reads every key line the studio writes; a graph answering one loads.
+  node ../studio/test/keys.test.js | tail -2
   # The studio's sections: one mounted at a time, its address in the hash.
   node ../studio/test/router.test.js | tail -2
   # Map thumbnails: rooms fitted north up; a metamap cell frames them at its scale.
