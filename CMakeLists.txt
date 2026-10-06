@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 # The engine's version: VERSION beside this file, read here so the two cannot
-# differ. 0.1.0 is the first alpha; each feature bumps the last number.
+# differ. 0.1.0 was the first alpha; features count in the last place
+# (0.1.0.1, ...), the user deciding each bump. npm takes only three parts, so
+# the package.json files carry the first three.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DNP_VERSION LIMIT_COUNT 1)
 project(DoomNetPlatformer VERSION ${DNP_VERSION} LANGUAGES CXX)
 
