@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(DoomNetPlatformer CXX)
+# The engine's version: VERSION beside this file, read here so the two cannot
+# differ. 0.1.0 is the first alpha; each feature bumps the last number.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" DNP_VERSION LIMIT_COUNT 1)
+project(DoomNetPlatformer VERSION ${DNP_VERSION} LANGUAGES CXX)
 
 # NOTE: scripts/build_native.sh is the dependency-free fallback and must stay in
 # sync with the flags below. It exists so the determinism gate can run before
