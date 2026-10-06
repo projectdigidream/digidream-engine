@@ -544,6 +544,17 @@ public:
     const physics::MoveParams&  params(u32 i) const noexcept { return params_[i]; }
     physics::MoveParams&        params_mut(u32 i) noexcept { return params_[i]; }
     const proto::InputFrame&    input(u32 i) const noexcept { return inputs_[i]; }
+    // The input AS THE RULES LET IT ACT: a body whose input_scale is 0 -- a
+    // cinematic took its controls -- presses nothing and chooses no weapon.
+    // Jump, dash, climb, grapple, use and both triggers read buttons, not the
+    // stick input_scale scales, so without this a frozen player still jumped
+    // and fired. The module's own keys (`actions`) pass: a graph's "skip the
+    // cutscene" key still works. Shared, so the predicting client agrees.
+    proto::InputFrame live_input(u32 i) const noexcept {
+        proto::InputFrame f = inputs_[i];
+        if (params_[i].input_scale == fx::zero()) { f.buttons = 0; f.weapon = NO_WEAPON; }
+        return f;
+    }
 
     // A player's weapon (docs/WEAPON_PREDICTION.md): the machine's state,
     // beside the body it fires from. Reset with the slot.

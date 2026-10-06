@@ -2170,7 +2170,7 @@
         "seconds"
       ],
       "data_out": [],
-      "doc": "Take the controls: the player cannot move or attack until `end_cinematic`, and the letterbox bars come in.",
+      "doc": "Take the controls: the player cannot move, jump, dash, use or attack -- no button acts -- until `end_cinematic`, and the letterbox bars come in. The module's own keys still reach graphs, for a \"skip\" key.",
       "exec_in": [
         "in"
       ],

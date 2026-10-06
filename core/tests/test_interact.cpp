@@ -154,6 +154,56 @@ static void test_reach_finds_the_side_in_front() {
     CHECK(count_of(w, TouchKind::Use) == 0);
 }
 
+// A CINEMATIC TOOK THE CONTROLS (input_scale 0): no button acts -- not use,
+// not jump, not dash -- though the frames still say they are held. Before,
+// input_scale only scaled the stick, and a frozen player jumped and fired.
+static void test_frozen_presses_nothing() {
+    std::printf("interact: a body whose controls are taken presses nothing\n");
+    static Rooms r;
+    static World w;
+    w.reset();
+    r.attach(w);
+    const u32 a = w.spawn(fx3{F(19), F(10), F(0)});
+    face(w, a, EAST);
+    for (u32 t = 0; t < 10; ++t) w.step();                 // settle on the floor
+    w.params_mut(a).input_scale = fx::zero();
+    int uses = 0;
+    fx highest = w.agent(a).pos.z;
+    const fx x0 = w.agent(a).pos.x;
+    for (u32 t = 0; t < 30; ++t) {
+        proto::InputFrame f = frame(true, EAST);
+        f.buttons |= proto::button::JUMP | proto::button::DASH;
+        if (t % 2) f.buttons = 0;                           // pressed again and again
+        w.set_input(a, f);
+        w.step();
+        uses += count_of(w, TouchKind::Use);
+        if (w.agent(a).pos.z > highest) highest = w.agent(a).pos.z;
+    }
+    CHECK(uses == 0);
+    CHECK(highest == w.agent(a).pos.z && w.agent(a).pos.x == x0);   // never left the floor, never dashed
+    // The module's own keys pass (a "skip the cutscene" key), the buttons do not.
+    {
+        proto::InputFrame f = frame(true, EAST);
+        f.actions = 0x05;
+        w.set_input(a, f);
+        CHECK(w.live_input(a).buttons == 0 && w.live_input(a).actions == 0x05 && w.input(a).buttons != 0);
+    }
+    // CONTROL: the controls back, the same presses act.
+    w.params_mut(a).input_scale = fx::one();
+    uses = 0;
+    fx up = w.agent(a).pos.z;
+    for (u32 t = 0; t < 6; ++t) {
+        proto::InputFrame f = frame(true, EAST);
+        f.buttons |= proto::button::JUMP | proto::button::DASH;
+        if (t % 2) f.buttons = 0;
+        w.set_input(a, f);
+        w.step();
+        uses += count_of(w, TouchKind::Use);
+        if (w.agent(a).pos.z > up) up = w.agent(a).pos.z;
+    }
+    CHECK(uses >= 1 && up > w.agent(a).pos.z - F(10) && up > highest);
+}
+
 static void test_use_is_edge_triggered() {
     std::printf("interact: holding use reports once, not once per tick\n");
 
@@ -565,6 +615,7 @@ int main() {
     test_reach_crosses_into_the_next_sector();
     test_a_body_fits_only_where_it_fits();
     test_use_is_edge_triggered();
+    test_frozen_presses_nothing();
     test_crossing_a_trigger_reports_once();
     test_moving_parallel_never_crosses();
     test_kinds_do_not_collapse();

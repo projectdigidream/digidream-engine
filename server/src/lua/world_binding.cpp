@@ -434,7 +434,8 @@ int l_entity_buttons(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
     if (a < 0) { lua_pushnil(L); return 1; }
-    lua_pushnumber(L, ctx.world->input(static_cast<u32>(a)).buttons);
+    // As the rules let it act: a frozen body (a cinematic) presses nothing.
+    lua_pushnumber(L, ctx.world->live_input(static_cast<u32>(a)).buttons);
     return 1;
 }
 

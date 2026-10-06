@@ -270,7 +270,7 @@ u32 World::step_weapon(u32 i, const WeaponTable& table, u8 want, u32 tick, u64 s
     body.vel = a.vel;
     body.facing = a.facing;
     body.pitch = a.pitch;
-    const u16 b = inputs_[i].buttons;
+    const u16 b = live_input(i).buttons;
     const u8 triggers = static_cast<u8>(((b & proto::button::ATTACK_PRIMARY) ? 1 : 0) |
                                         ((b & proto::button::ATTACK_SECONDARY) ? 2 : 0));
     const u32 first = log.count();
@@ -362,7 +362,7 @@ MoveCommand to_command(const proto::InputFrame& f) noexcept {
 
 void World::step_agent(u32 i) noexcept {
     AgentState& a = agents_[i];
-    MoveCommand cmd = to_command(inputs_[i]);
+    MoveCommand cmd = to_command(live_input(i));
 
     // AIM SNAPPED TO N DIRECTIONS, before anything reads it.
     //
@@ -773,7 +773,7 @@ void World::step() noexcept {
     // The server never sets this; its Lua calls step_weapon itself.
     if (weapon_table_ != nullptr && weapon_agent_ < MAX_AGENTS &&
         agents_[weapon_agent_].active) {
-        step_weapon(weapon_agent_, *weapon_table_, inputs_[weapon_agent_].weapon, tick_,
+        step_weapon(weapon_agent_, *weapon_table_, live_input(weapon_agent_).weapon, tick_,
                     weapon_seed_, weapon_events_, weapon_stream_);
         present_weapon(weapon_agent_, *weapon_table_);
     }

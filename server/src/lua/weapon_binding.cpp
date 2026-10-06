@@ -764,7 +764,7 @@ int l_weapon_step(lua_State* L) {
     const RewindForShot rewound(context_of(L), static_cast<u32>(a));
     sim::World& world = *context_of(L).world;
     const u32 hops = world.step_weapon(static_cast<u32>(a), c->table,
-                                       world.input(static_cast<u32>(a)).weapon, tick, c->seed, log);
+                                       world.live_input(static_cast<u32>(a)).weapon, tick, c->seed, log);
     lua_pushnumber(L, hops);
     lua_createtable(L, static_cast<int>(log.count()), 0);
     for (u32 i = 0; i < log.count(); ++i) {

@@ -739,8 +739,9 @@ graph_vocab = {
                { name = "seconds", type = "number", optional = true, doc = "How long the bars take. Defaults to 0.5." } },
       exec_in = { "in" }, exec_out = { "then" },
       data_in = { "entity", "letterbox", "seconds" }, data_out = {},
-      doc = "Take the controls: the player cannot move or attack until " ..
-            "`end_cinematic`, and the letterbox bars come in." },
+      doc = "Take the controls: the player cannot move, jump, dash, use or attack -- no " ..
+            "button acts -- until `end_cinematic`, and the letterbox bars come in. The " ..
+            "module's own keys still reach graphs, for a \"skip\" key." },
     { name = "end_cinematic", category = "cinematic",
       args = { { name = "everyone", type = "bool", optional = true },
                { name = "seconds", type = "number", optional = true, doc = "How long the bars take to go. Defaults to 0.5." } },
