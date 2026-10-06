@@ -1003,6 +1003,67 @@ int main(int argc, char** argv) {
           "nodes": [ { "id": "g", "type": "get_var", "var": "luck" } ], "links": [] })"));
     }
 
+    std::printf("-- numbers from links (docs/GRAPH_NUMBERS.md) --\n");
+    {
+        // An action: the light from a variable; a required field fed by a link
+        // needs no literal. CONTROL: the literal when unlinked.
+        g_ui.sectors.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "nums", "vars": { "dim": 25, "wait": 3, "n": 0, "every_s": 0.05, "hits": 0 },
+          "nodes": [ { "id": "go", "type": "on_call", "name": "dim" },
+                     { "id": "v", "type": "get_var", "var": "dim" },
+                     { "id": "l", "type": "set_sector_light", "sector": 0 },
+                     { "id": "lit", "type": "set_sector_light", "sector": 1, "light": 200 },
+                     { "id": "lw", "type": "on_call", "name": "later" },
+                     { "id": "w", "type": "get_var", "var": "wait" },
+                     { "id": "d", "type": "delay" },
+                     { "id": "inc", "type": "add_var", "var": "n", "value": 1 },
+                     { "id": "ev", "type": "every" },
+                     { "id": "es", "type": "get_var", "var": "every_s" },
+                     { "id": "hit", "type": "add_var", "var": "hits", "value": 1 } ],
+          "links": [ ["go.then", "l.in"], ["v.value", "l.light"], ["l.then", "lit.in"],
+                     ["lw.then", "d.in"], ["w.value", "d.ticks"], ["d.then", "inc.in"],
+                     ["es.value", "ev.seconds"], ["ev.then", "hit.in"] ] })"));
+        CHECK(run("graphs.call('dim', nil, nil)", "dim"));
+        CHECK(g_ui.sectors.size() == 2 && g_ui.sectors[0].light == 25 && g_ui.sectors[1].light == 200);
+        // Flow: the delay's ticks from a variable -- 3 ticks, not the default.
+        CHECK(run("graphs.call('later', nil, nil)", "later"));
+        ticks(2);
+        const double early = [&] { run("nv = graphs.var('nums', 'n')", "n"); return num("nv"); }();
+        ticks(3);
+        run("nv = graphs.var('nums', 'n')", "n");
+        std::printf("  delay from a variable: after 2 ticks %g, after 5 %g\n", early, num("nv"));
+        CHECK(early == 0 && num("nv") == 1);
+        // A start: every 0.05 s (3 ticks), from a variable, over 30 ticks.
+        run("h0 = graphs.var('nums', 'hits')", "hits");
+        const double before = num("h0");
+        ticks(30);
+        run("h1 = graphs.var('nums', 'hits')", "hits");
+        std::printf("  every from a variable: %g fires in 30 ticks\n", num("h1") - before);
+        CHECK(num("h1") - before >= 9 && num("h1") - before <= 11);
+        // Data: random's bounds linked.
+        CHECK(load_graph(R"({ "graph": 1, "name": "rnd", "vars": { "seven": 7, "got": 0 },
+          "nodes": [ { "id": "go", "type": "on_call", "name": "roll" },
+                     { "id": "s", "type": "get_var", "var": "seven" },
+                     { "id": "r", "type": "random" },
+                     { "id": "keep", "type": "set_var", "var": "got" } ],
+          "links": [ ["go.then", "keep.in"], ["s.value", "r.lo"], ["s.value", "r.hi"], ["r.value", "keep.value"] ] })"));
+        CHECK(run("graphs.call('roll', nil, nil); rg = graphs.var('rnd', 'got')", "roll") && num("rg") == 7);
+        // CONTROL: a required number neither given nor linked is still refused.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "nolight",
+          "nodes": [ { "id": "l", "type": "set_sector_light", "sector": 0 } ], "links": [] })"));
+        // A VERB: set_hp's value from a variable satisfies "one of value, add".
+        CHECK(load_graph(R"({ "graph": 1, "name": "hpv", "vars": { "to": 33 },
+          "nodes": [ { "id": "go", "type": "on_call", "name": "hp" },
+                     { "id": "v", "type": "get_var", "var": "to" },
+                     { "id": "a", "type": "action", "a": "set_hp" } ],
+          "links": [ ["go.then", "a.in"], ["v.value", "a.value"] ] })"));
+        CHECK(run("graphs.call('hp', dnp.players()[1], nil); hpv = dnp.players()[1]:hp()", "set_hp") && num("hpv") == 33);
+        // CONTROL: with neither given nor linked, it is still refused.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "hpnone",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "hp2" }, { "id": "a", "type": "action", "a": "set_hp" } ],
+          "links": [ ["go.then", "a.in"] ] })"));
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

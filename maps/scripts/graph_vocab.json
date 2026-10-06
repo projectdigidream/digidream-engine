@@ -281,7 +281,9 @@
           "type": "int"
         }
       ],
-      "data_in": [],
+      "data_in": [
+        "ticks"
+      ],
       "data_out": [],
       "doc": "The rest of the run, later, with the same event.",
       "exec_in": [
@@ -492,7 +494,9 @@
         }
       ],
       "category": "events",
-      "data_in": [],
+      "data_in": [
+        "repeat_every"
+      ],
       "data_out": [
         "entity",
         "sector"
@@ -535,7 +539,11 @@
         }
       ],
       "category": "events",
-      "data_in": [],
+      "data_in": [
+        "x",
+        "y",
+        "radius"
+      ],
       "data_out": [
         "entity"
       ],
@@ -571,7 +579,9 @@
         }
       ],
       "category": "events",
-      "data_in": [],
+      "data_in": [
+        "seconds"
+      ],
       "data_out": [],
       "doc": "Again and again, this many seconds apart.",
       "exec_in": [],
@@ -589,7 +599,9 @@
         }
       ],
       "category": "events",
-      "data_in": [],
+      "data_in": [
+        "seconds"
+      ],
       "data_out": [],
       "doc": "Once, this many seconds after the level (or the game) starts.",
       "exec_in": [],
@@ -769,7 +781,9 @@
       ],
       "category": "maps",
       "data_in": [
-        "entity"
+        "entity",
+        "fade",
+        "seconds"
       ],
       "data_out": [],
       "doc": "Send a player to another map, arriving at a chosen spawn point.",
@@ -890,7 +904,8 @@
       "category": "entity",
       "data_in": [
         "entity",
-        "amount"
+        "amount",
+        "max"
       ],
       "data_out": [],
       "doc": "Give an entity health back.",
@@ -992,7 +1007,8 @@
       "category": "entity",
       "data_in": [
         "entity",
-        "factor"
+        "factor",
+        "seconds"
       ],
       "data_out": [],
       "doc": "Make an entity move faster or slower, for a while.",
@@ -1059,7 +1075,8 @@
       ],
       "category": "sector",
       "data_in": [
-        "sector"
+        "sector",
+        "close_after"
       ],
       "data_out": [],
       "doc": "Open a door: its ceiling rises to just under the lowest ceiling beside it, as DOOM's do.",
@@ -1254,7 +1271,8 @@
       ],
       "category": "sector",
       "data_in": [
-        "sector"
+        "sector",
+        "wait"
       ],
       "data_out": [],
       "doc": "A DOOM lift: down to the lowest floor beside it, a wait, and back up.",
@@ -1310,7 +1328,9 @@
       ],
       "category": "sector",
       "data_in": [
-        "sector"
+        "sector",
+        "dx",
+        "dy"
       ],
       "data_out": [],
       "doc": "Move a whole sector sideways: a sliding platform, a bridge.",
@@ -1359,7 +1379,8 @@
       ],
       "category": "sector",
       "data_in": [
-        "sector"
+        "sector",
+        "degrees"
       ],
       "data_out": [],
       "doc": "Turn a sector about its middle: a rotating platform.",
@@ -1492,7 +1513,9 @@
       ],
       "category": "sector",
       "data_in": [
-        "sector"
+        "sector",
+        "light",
+        "seconds"
       ],
       "data_out": [],
       "doc": "Light or darken a sector, at once or fading: the power goes out, a torch is lit.",
@@ -1549,7 +1572,8 @@
       ],
       "category": "sector",
       "data_in": [
-        "sector"
+        "sector",
+        "density"
       ],
       "data_out": [],
       "doc": "Start or stop rain, snow, dust, embers or fog in a sector (docs/SECTOR_FX.md).",
@@ -1631,7 +1655,10 @@
         }
       ],
       "category": "wall",
-      "data_in": [],
+      "data_in": [
+        "repeat",
+        "yaw"
+      ],
       "data_out": [],
       "doc": "Change this level's sky, for everyone in it and everyone who arrives.",
       "exec_in": [
@@ -1847,7 +1874,9 @@
       ],
       "category": "cinematic",
       "data_in": [
-        "entity"
+        "entity",
+        "letterbox",
+        "seconds"
       ],
       "data_out": [],
       "doc": "Take the controls: the player cannot move or attack until `end_cinematic`, and the letterbox bars come in.",
@@ -1875,7 +1904,8 @@
       ],
       "category": "cinematic",
       "data_in": [
-        "entity"
+        "entity",
+        "seconds"
       ],
       "data_out": [],
       "doc": "Give the controls back, take the bars away, the camera back to following the player, and any subtitle off.",
@@ -1952,7 +1982,8 @@
       "category": "cinematic",
       "data_in": [
         "entity",
-        "text"
+        "text",
+        "seconds"
       ],
       "data_out": [],
       "doc": "A line at the bottom of the screen. `then` at once; `done` when it goes -- so lines chain one after another. A newer line replaces it.",
@@ -2021,7 +2052,10 @@
       ],
       "category": "camera",
       "data_in": [
-        "entity"
+        "entity",
+        "distance",
+        "height",
+        "angle"
       ],
       "data_out": [],
       "doc": "The camera follows the player again, from where it is told. Off a path, back to following.",
@@ -2060,7 +2094,9 @@
       ],
       "category": "camera",
       "data_in": [
-        "entity"
+        "entity",
+        "speed",
+        "blend"
       ],
       "data_out": [],
       "doc": "Fly the camera along a path, looking where the path looks. `then` at once; `done` when it reaches the end.",
@@ -2093,7 +2129,8 @@
       ],
       "category": "camera",
       "data_in": [
-        "entity"
+        "entity",
+        "blend"
       ],
       "data_out": [],
       "doc": "The camera rides a path but keeps looking at the player: a dolly that tracks them along a corridor.",
@@ -2128,7 +2165,9 @@
       ],
       "category": "camera",
       "data_in": [
-        "entity"
+        "entity",
+        "strength",
+        "seconds"
       ],
       "data_out": [],
       "doc": "Shake the camera: an explosion, a quake.",
@@ -2425,7 +2464,10 @@
           "type": "int"
         }
       ],
-      "data_in": [],
+      "data_in": [
+        "lo",
+        "hi"
+      ],
       "data_out": [
         "value"
       ],

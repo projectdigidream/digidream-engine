@@ -239,6 +239,7 @@ end
 -- Declared here, defined below: nodes that continue a run later (a fade's
 -- `done`, a subtitle's) call it from their timers.
 local run
+local view_of, start_view   -- a node's linked numbers; see run
 
 -- ------------------------------------------------------- THE WORLD'S NODES
 --
@@ -868,6 +869,47 @@ function PURE.sector_of(g, n, ev, pull)
   return e ~= nil and index_of(e:sector()) or nil
 end
 
+-- A NODE'S NUMBERS, LINKED (docs/GRAPH_NUMBERS.md): a node whose numeric
+-- fields are data inputs with a link is handed to its function as a view in
+-- which those fields hold the linked values -- so every `n.seconds` in this
+-- file reads the link when there is one and the literal when there is not,
+-- with nothing in the nodes themselves to change.
+view_of = function(n, pull)
+  if n.linked_nums == nil then return n end
+  local v = setmetatable({}, { __index = n })
+  for _, a in ipairs(n.linked_nums) do
+    local x = pull(a)
+    if x ~= nil then v[a] = x end
+  end
+  return v
+end
+
+-- The same for a START node, checked outside any run: its linked numbers are
+-- worked out afresh, from pure nodes, each time it is asked.
+local function eval_out(g, id, out, ev, memo)
+  local key = id .. "." .. out
+  if memo[key] ~= nil then return memo[key][1] end
+  local m = g.by_id[id]
+  if m == nil or PURE[m.type] == nil then return nil end
+  local function pull(input)
+    local src = g.data_src[m.id] and g.data_src[m.id][input]
+    if src then return eval_out(g, src[1], src[2], ev, memo) end
+    return m[input]
+  end
+  local v = PURE[m.type](g, view_of(m, pull), ev, pull, out)
+  memo[key] = { v }
+  return v
+end
+start_view = function(g, n)
+  if n.linked_nums == nil then return n end
+  local memo = {}
+  return view_of(n, function(input)
+    local src = g.data_src[n.id] and g.data_src[n.id][input]
+    if src then return eval_out(g, src[1], src[2], {}, memo) end
+    return nil
+  end)
+end
+
 -- One run, from exit `pin` of node `start`.
 run = function(g, start, pin, ev)
   local memo = {}
@@ -884,7 +926,7 @@ run = function(g, start, pin, ev)
       if src then return value_of(src[1], src[2]) end
       return n[input]
     end
-    local v = PURE[n.type](g, n, ev, pull, out)
+    local v = PURE[n.type](g, view_of(n, pull), ev, pull, out)
     if not live then memo[key] = { v } end   -- boxed, so a nil or false is remembered too
     return v
   end
@@ -910,7 +952,7 @@ run = function(g, start, pin, ev)
         return n[input]
       end
       local function go(exit) stack[#stack + 1] = { n.id, exit } end
-      local exit = EXEC[n.type](g, n, ev, pull, go)
+      local exit = EXEC[n.type](g, view_of(n, pull), ev, pull, go)
       nxt = exit and g.exec_next[n.id] and g.exec_next[n.id][exit] or nil
     end
   end
@@ -939,7 +981,7 @@ end
 local function fire_start(kind, test, ev, exit)
   for _, g in ipairs(loaded) do
     for _, id in ipairs(g.by_start[kind] or {}) do
-      local n = g.by_id[id]
+      local n = start_view(g, g.by_id[id])
       if test == nil or test(n) then run(g, id, exit or "then", ev) end
     end
   end
@@ -1062,7 +1104,7 @@ local function tick_starts(now)
       if spatial then
         for _, g in ipairs(loaded) do
           for _, id in ipairs(g.by_start.when_near or {}) do
-            local n = g.by_id[id]
+            local n = start_view(g, g.by_id[id])
             if who_ok(n.who, e) then
               local p = e:pos()
               local dx, dy = unfx(p.x) - n.x, unfx(p.y) - n.y
@@ -1395,7 +1437,8 @@ function M.load(data, label)
           for _, a in ipairs(spec.args) do
             local v = n[a.name]
             if v == nil then
-              if not a.optional then bad("%s: needs '%s'", where, a.name) end
+              -- Asked again after the links: a required field fed by a link is given.
+              if not a.optional then n._missing = n._missing or {}; n._missing[#n._missing + 1] = a.name end
             elseif not check_type(a, v) then
               bad("%s: '%s' should be a %s", where, a.name, a.type)
             end
@@ -1521,6 +1564,26 @@ function M.load(data, label)
     end
   end
 
+  -- A NODE'S NUMBERS FROM LINKS (docs/GRAPH_NUMBERS.md): which numeric
+  -- fields are data inputs with a link, for view_of. And a required field
+  -- that is linked needs no literal.
+  for _, n in ipairs(order) do
+    local spec = SPEC[n.type]
+    if spec ~= nil and n.entry == nil then
+      local ins = set_of(spec.data_in)
+      for _, a in ipairs(spec.args) do
+        if (a.type == "int" or a.type == "number") and ins[a.name] and data_src[n.id] and data_src[n.id][a.name] then
+          n.linked_nums = n.linked_nums or {}
+          n.linked_nums[#n.linked_nums + 1] = a.name
+        end
+      end
+    end
+    for _, name in ipairs(n._missing or {}) do
+      if not (data_src[n.id] and data_src[n.id][name]) then bad("node '%s': needs '%s'", n.id, name) end
+    end
+    n._missing = nil
+  end
+
   -- A PANEL NODE NAMES ONE OF THIS GRAPH'S PANELS, and a widget it has.
   for _, n in ipairs(order) do
     local spec = SPEC[n.type]
@@ -1613,7 +1676,13 @@ function M.load(data, label)
         for _, e in ipairs(evs) do
           for _, p in ipairs(triggers.verbs.check(kind, entry, e or nil, ("%s node '%s'"):format(label, n.id))) do
             local missing = p:match("needs an argument '([^']+)'")
-            if not (missing and n.linked and n.linked[missing]) then problems[#problems + 1] = p end
+            -- "needs one of: value, add" is answered by a link into any of them.
+            local group = p:match("needs one of: (.+)$")
+            local linked_member = false
+            if group and n.linked then
+              for name in group:gmatch("[^, ]+") do linked_member = linked_member or n.linked[name] ~= nil end
+            end
+            if not (missing and n.linked and n.linked[missing]) and not linked_member then problems[#problems + 1] = p end
           end
         end
       end
