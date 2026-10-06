@@ -19,7 +19,7 @@ import { RenderClock } from './render/renderclock.js'
 import { GhostMissiles } from './render/ghostmissiles.js'
 import { KnockLayer, shoveOf } from './render/knock.js'
 import { NearPresent, presentWeight } from './render/nearnow.js'
-import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag, effectFrom } from './mapdata.js'
+import { readMap, fxToFloat, readPaths, refreshPathPositions, pathIndexForTag, effectFrom, SIDE_FLAG } from './mapdata.js'
 import { followMovers } from './mapmovers.js'
 import { toThreeX, toThreeY, toThreeZ } from './mapgeom.js'
 import {
@@ -1368,6 +1368,9 @@ const texturesReady = loadMapTextures()
 const RADIUS_ID = 0
 const CLIMB_ENABLED_ID = world.paramId('climb_enabled')
 const CLIMB_AUTO_ID = world.paramId('climb_auto')
+// Whether the home level has a climbable wall at all, and of which map that was.
+let climbableHere = false
+let climbableFor = null
 const HEIGHT_ID = 1
 let bodyRadius = Number(world.getParamRaw(agent, RADIUS_ID)) / 4294967296
 let bodyHeight = Number(world.getParamRaw(agent, HEIGHT_ID)) / 4294967296
@@ -3084,10 +3087,16 @@ function frame (now) {
   }
 
   // GRAB on the touch controls while this body's rules hold walls by a
-  // button (climb_enabled on, climb_auto off: docs/PLAYER.md). setShown does
-  // nothing when the answer has not changed, which is almost every frame.
+  // button (climb_enabled on, climb_auto off: docs/PLAYER.md) AND the level
+  // has a wall to hold -- a DOOM map has none, and a button that does nothing
+  // is clutter. setShown does nothing when the answer has not changed.
   if (touch) {
-    const holds = world.getParamRaw(agent, CLIMB_ENABLED_ID) !== 0n && world.getParamRaw(agent, CLIMB_AUTO_ID) === 0n
+    if (climbableFor !== mapData) {
+      climbableFor = mapData
+      climbableHere = (mapData?.sides ?? []).some((sd) => (sd.flags & SIDE_FLAG.CLIMBABLE) !== 0)
+    }
+    const holds = climbableHere && world.getParamRaw(agent, CLIMB_ENABLED_ID) !== 0n &&
+                  world.getParamRaw(agent, CLIMB_AUTO_ID) === 0n
     touch.setShown(holds ? ['grab'] : [])
   }
   const tDraw = performance.now()

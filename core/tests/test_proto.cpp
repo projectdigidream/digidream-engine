@@ -18,6 +18,12 @@
 using namespace dnp;
 using namespace dnp::proto;
 
+// EACH TEST ITS OWN FRAME. Inlined into main they all share one, and under the
+// sanitizers (scripts/check_sanitizers.sh: -O1, every local its own padded
+// slot) main grew to 12 MB of stack -- past the 8 MB a process gets -- and
+// died before its first check. Kept out of line, the deepest is one test's.
+#define TEST_FN static __attribute__((noinline))
+
 static int g_checks = 0;
 static int g_fails  = 0;
 
@@ -32,7 +38,7 @@ static int g_fails  = 0;
 
 // ------------------------------------------------------------------ primitives
 
-static void test_bytes() {
+TEST_FN void test_bytes() {
     std::printf("bytes: little-endian round trip, bounds safety\n");
     u8 buf[64];
     {
@@ -78,7 +84,7 @@ static void test_bytes() {
     }
 }
 
-static void test_varint() {
+TEST_FN void test_varint() {
     std::printf("bytes: varint round trip and hostile-input caps\n");
     const u64 values[] = {0, 1, 127, 128, 300, 16383, 16384, 0xFFFFFFFFull,
                           0xFFFFFFFFFFFFFFFFull};
@@ -105,7 +111,7 @@ static void test_varint() {
     }
 }
 
-static void test_quantisation() {
+TEST_FN void test_quantisation() {
     std::printf("bytes: fxq quantisation is symmetric and bounded\n");
     CHECK(fx_to_fxq(fx::zero()) == 0);
     CHECK(fxq_to_fx(fx_to_fxq(fx::one())) == fx::one());
@@ -149,7 +155,7 @@ static void test_quantisation() {
 
 // ---------------------------------------------------------------- input bundle
 
-static void test_view_tick() {
+TEST_FN void test_view_tick() {
     std::printf("input: the drawn tick in one byte comes back as its age\n");
     // Every age the rewind could want, at clocks either side of a wrap.
     for (u32 now : {0u, 1u, 254u, 255u, 256u, 509u, 510u, 100000u, 4294967295u}) {
@@ -164,7 +170,7 @@ static void test_view_tick() {
     CHECK(!zero);
 }
 
-static void test_input_bundle() {
+TEST_FN void test_input_bundle() {
     std::printf("input: round trip, size, reserved bits, truncation\n");
     Rng rng(77);
     for (int iter = 0; iter < 2000; ++iter) {
@@ -258,7 +264,7 @@ static EntityBlock make_entity(Rng& rng) {
     return e;
 }
 
-static void test_snapshot_roundtrip() {
+TEST_FN void test_snapshot_roundtrip() {
     std::printf("snapshot: round trip across all field combinations\n");
     Rng rng(31337);
 
@@ -408,7 +414,7 @@ static void test_snapshot_roundtrip() {
 }
 
 // SOUNDS (docs/protocol.md §5.7): after the vfx, and only when there are any.
-static void test_snapshot_sounds() {
+TEST_FN void test_snapshot_sounds() {
     std::printf("snapshot: sounds after the vfx, absent when there are none\n");
     Rng rng(4242);
     for (int iter = 0; iter < 200; ++iter) {
@@ -470,7 +476,7 @@ static void test_snapshot_sounds() {
     std::printf("  sound_hash(\"weapon.shotgun.fire\") = %08x\n", sound_hash("weapon.shotgun.fire", 19));
 }
 
-static void test_snapshot_budget() {
+TEST_FN void test_snapshot_budget() {
     std::printf("snapshot: budget is enforced structurally, rollback is clean\n");
     Rng rng(4242);
 
@@ -507,7 +513,7 @@ static void test_snapshot_budget() {
     CHECK(got.entity_count == accepted);
 }
 
-static void test_snapshot_hostile() {
+TEST_FN void test_snapshot_hostile() {
     std::printf("snapshot: truncated and hostile input is rejected\n");
 
     SnapshotHeader h;
@@ -557,7 +563,7 @@ static void test_snapshot_hostile() {
 // it is every subsequent tick computed differently. That makes "a truncated
 // message must leave the previous parameters ALONE" the property worth
 // hammering, more than the round trip.
-static void test_param_update() {
+TEST_FN void test_param_update() {
     std::printf("params: round trip, and a bad message never half-applies\n");
 
     ParamUpdate sent;
@@ -632,7 +638,7 @@ static void test_param_update() {
 // bug rather than a local one: the server would encode `jump_impulse` and the
 // client would apply it to `friction`.
 // A parameter as a module's `player` line writes it (docs/PLAYER.md).
-static void test_param_text() {
+TEST_FN void test_param_text() {
     std::printf("params: text to parameters, exactly\n");
     using namespace dnp::physics;
     ParamText t;
@@ -662,7 +668,7 @@ static void test_param_text() {
     }
 }
 
-static void test_param_table() {
+TEST_FN void test_param_table() {
     std::printf("params: every field round-trips through its wire id\n");
 
     using namespace dnp::physics;
@@ -724,7 +730,7 @@ static void test_param_table() {
                 PARAM_COUNT, sizeof(MoveParams));
 }
 
-static void test_fuzz() {
+TEST_FN void test_fuzz() {
     // Anything reachable from the network is reachable from an attacker. The
     // decoders' contract is that ANY byte string either decodes or is rejected
     // -- never reads out of bounds, never indexes past a cap, never loops
@@ -804,7 +810,7 @@ static bool same_text(const UiText& t, const char* s) {
 // a decoder gets hurt: a length field the sender controls, read into a fixed
 // buffer, on data that arrives from the network.
 
-static void test_ui_panel_round_trip() {
+TEST_FN void test_ui_panel_round_trip() {
     std::printf("ui: a panel survives the wire\n");
 
     UiPanel p;
@@ -843,7 +849,7 @@ static void test_ui_panel_round_trip() {
     CHECK(same_text(got.widgets[2].options[1], "MAP02"));
 }
 
-static void test_ui_event_round_trip() {
+TEST_FN void test_ui_event_round_trip() {
     std::printf("ui: an event survives the wire\n");
     UiEvent e{42, 9, -3};
     u8 buf[64];
@@ -855,7 +861,7 @@ static void test_ui_event_round_trip() {
     CHECK(got.ui_id == 42 && got.widget_id == 9 && got.value == -3);
 }
 
-static void test_music_cue_round_trip() {
+TEST_FN void test_music_cue_round_trip() {
     std::printf("music: a cue change survives the wire, and an unknown moment does not\n");
     MusicCue m;
     const char* name = "fight";
@@ -882,7 +888,7 @@ static void test_music_cue_round_trip() {
 // SelfBlock's animation_state is the observer's own, and the reason it needs its
 // own check is that a field an encoder silently drops round-trips perfectly on
 // the default. So this asserts the BYTES move, not just that a zero came back.
-static void test_self_block_carries_its_animation_state() {
+TEST_FN void test_self_block_carries_its_animation_state() {
     std::printf("self: the observer's own animation state reaches the wire\n");
 
     SnapshotHeader h{};
@@ -926,7 +932,7 @@ static void test_self_block_carries_its_animation_state() {
 // worth pinning are that a full record survives and that an id this build has
 // never heard of survives with it -- that second one is what lets a newer
 // server configure an older client, and it was documented but never checked.
-static void test_camera_set_round_trip() {
+TEST_FN void test_camera_set_round_trip() {
     std::printf("camera: a full record survives, and so does a field id we do not know\n");
     CameraSet c;
     c.count = static_cast<u16>(CAMERA_MAX_FIELDS);
@@ -974,7 +980,7 @@ static void test_camera_set_round_trip() {
     CHECK(!decode_camera_set(r3, got));
 }
 
-static void test_screen_set_round_trip() {
+TEST_FN void test_screen_set_round_trip() {
     std::printf("screen: the curtain and the bars survive the wire\n");
     ScreenSet sc;
     sc.count = 4;
@@ -1000,7 +1006,7 @@ static void test_screen_set_round_trip() {
 }
 
 // The sky (docs/SKY.md): a kind, six pictures at most, fields as CameraSet's.
-static void test_sky_set_round_trip() {
+TEST_FN void test_sky_set_round_trip() {
     std::printf("sky: a cube's six pictures and its fields survive the wire\n");
     SkySet s;
     s.kind = SkyKind::Cube;
@@ -1034,7 +1040,7 @@ static void test_sky_set_round_trip() {
 
 // A sector's look (SECTOR_SET): each kind of change round-trips, and what the
 // renderer could not draw honestly is refused.
-static void test_sector_set_round_trip() {
+TEST_FN void test_sector_set_round_trip() {
     std::printf("sector set: pictures, light with a fade, and effects survive the wire\n");
     u8 buf[512];
     auto trip = [&](const SectorSet& s, SectorSet& got) {
@@ -1091,7 +1097,7 @@ static void test_sector_set_round_trip() {
 
 // The decoder runs on bytes from the network, so every length in the message is
 // a number an attacker picks. Each of these is a way to be handed one.
-static void test_ui_rejects_hostile_input() {
+TEST_FN void test_ui_rejects_hostile_input() {
     std::printf("ui: hostile lengths are refused, not truncated\n");
 
     // A string longer than the cap. Refused rather than clamped: clamping keeps
@@ -1153,7 +1159,7 @@ static void test_ui_rejects_hostile_input() {
 // Every prefix of a valid panel must be refused rather than accepted as a
 // shorter one. This is the shape of a message cut short in transit, and the
 // version of it that "works" is a decoder reading past what arrived.
-static void test_ui_truncation_at_every_length() {
+TEST_FN void test_ui_truncation_at_every_length() {
     std::printf("ui: every truncation of a valid panel is refused\n");
 
     UiPanel p;
