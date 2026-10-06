@@ -10,7 +10,8 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseAnimations, animFrameAt, TextureAnimator } from '../src/render/animtex.js'
+import { parseAnimations, animFrameAt, TextureAnimator, SHEET_DEFAULT_FPS } from '../src/render/animtex.js'
+import { sheetFrame } from '../src/render/textures.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -122,6 +123,33 @@ const fakeMaterial = () => ({ uniforms: { map: { value: null } } })
   check(complete > 0, `at least one sequence is fully extracted (${complete})`)
   check(partial.length === 0,
         `every sequence whose first frame is present has all of them (${partial.length} partial)`)
+}
+
+// --- sprite sheets (qPainter's vertical and horizontal exports) ---------------
+{
+  const r = parseAnimations([
+    'sheet lavafall vertical 8 fps 10',
+    'sheet TORCH horizontal 4',
+    'sheet TORCH horizontal 6 fps 12   # a later line for the same sheet wins',
+    'sheet BAD diagonal 4', 'sheet ONE vertical 1', 'sheet JUNK vertical 4 speed 9', 'sheet vertical'
+  ].join('\n'))
+  const lava = r.sheets.get('LAVAFALL')
+  check(lava?.layout === 'vertical' && lava.frames === 8 && lava.fps === 10, 'a vertical sheet, its frames and speed')
+  const torch = r.sheets.get('TORCH')
+  check(torch?.layout === 'horizontal' && torch.frames === 6 && torch.fps === 12, 'a horizontal one; a later line for it wins')
+  check(parseAnimations('sheet X vertical 3').sheets.get('X').fps === SHEET_DEFAULT_FPS, `no fps is ${SHEET_DEFAULT_FPS}`)
+  const g = r.groups.find((x) => x.sheet === 'LAVAFALL')
+  check(g && g.frames.length === 8 && g.frames[0] === 'LAVAFALL' && g.frames[7] === 'LAVAFALL#7' && g.fps === 10,
+        `it animates as a group whose first frame is the name maps use (${g?.frames.slice(0, 3).join(' ')} ...)`)
+  check(r.groups.filter((x) => x.sheet === 'TORCH').length === 1, 'and only one group for a sheet named twice')
+  check(r.sheets.size === 2 && r.warnings.length === 4, `CONTROL: a bad layout, one frame, junk and no name are each said (${r.warnings.length})`)
+  // Where each frame is, in pixels of the sheet.
+  const v = [0, 1, 7].map((k) => sheetFrame('vertical', 8, 64, 512, k))
+  check(v[0].y === 0 && v[1].y === 64 && v[2].y === 448 && v.every((f) => f.w === 64 && f.h === 64 && f.x === 0),
+        'vertical: frames top to bottom, the sheet\'s width')
+  const h = [0, 3].map((k) => sheetFrame('horizontal', 4, 256, 32, k))
+  check(h[0].x === 0 && h[1].x === 192 && h.every((f) => f.w === 64 && f.h === 32), 'horizontal: frames left to right')
+  check(sheetFrame('vertical', 3, 64, 100, 2).h === 33, 'a size that does not divide: equal frames, the remainder unused')
 }
 
 console.log(`\nanim: ${checks} checks, ${fails} failures`)

@@ -121,11 +121,58 @@ export function configureTexture (THREE, tex) {
   return tex
 }
 
+/**
+ * Where frame `k` of a sprite sheet is, in pixels of the sheet (sheet lines in
+ * animations.txt; render/animtex.js). Frames are equal: the sheet's size
+ * divided by the count, any remainder dropped -- and said by the caller.
+ */
+export function sheetFrame (layout, frames, w, h, k) {
+  if (layout === 'horizontal') {
+    const fw = Math.floor(w / frames)
+    return { x: k * fw, y: 0, w: fw, h }
+  }
+  const fh = Math.floor(h / frames)
+  return { x: 0, y: k * fh, w, h: fh }
+}
+
+// A sheet cut into its frames, once per picture and layout: each frame its own
+// texture, so it tiles across a wall exactly as an ordinary one does.
+const SHEET_FRAMES = new Map()
+function cutSheet (THREE, tex, spec, warn) {
+  const key = `${tex.uuid}:${spec.layout}:${spec.frames}`
+  let out = SHEET_FRAMES.get(key)
+  if (out) return out
+  const img = tex.image
+  const w = img?.width ?? 0
+  const h = img?.height ?? 0
+  const along = spec.layout === 'horizontal' ? w : h
+  if (along % spec.frames !== 0) {
+    warn(`[anim] sheet ${spec.name}: ${spec.layout === 'horizontal' ? 'width' : 'height'} ${along} is not ${spec.frames} equal frames; the last ${along % spec.frames} px are not used`)
+  }
+  out = []
+  for (let k = 0; k < spec.frames; k++) {
+    const r = sheetFrame(spec.layout, spec.frames, w, h, k)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, r.w)
+    canvas.height = Math.max(1, r.h)
+    canvas.getContext('2d').drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
+    const f = configureTexture(THREE, new THREE.CanvasTexture(canvas))
+    f.name = k === 0 ? spec.name : `${spec.name}#${k}`
+    out.push(f)
+  }
+  SHEET_FRAMES.set(key, out)
+  return out
+}
+
 // Every picture this session has loaded, by URL. See fetchTexture below.
 const SHARED_TEXTURES = new Map()
 
 export async function loadRealTextures (THREE, names, materials, {
   baseUrl = '/textures', pxPerUnit = 32, extra = [],
+  // Sprite sheets (animations.txt `sheet` lines): name -> { layout, frames }.
+  // A sheet's material shows its first frame, sized as one frame; the frames
+  // come back in `frames` as NAME, NAME#1, ... for the animator.
+  sheets = null, warn = (m) => console.warn(m),
   // Called as each picture arrives, with (done, total). Optional, and a
   // counter rather than bytes: a texture is one request whose size nobody knows
   // until it lands, so counting requests is the honest measure and is the one
@@ -196,10 +243,18 @@ export async function loadRealTextures (THREE, names, materials, {
     tick()
   }))
   await Promise.all(names.map(async (name, i) => {
-    const dim = sizes[name]
+    let dim = sizes[name]
     if (!dim || !materials[i]) { tick(); return }
-    const tex = await fetchTexture(name)
+    let tex = await fetchTexture(name)
     if (!tex) { tick(); return }
+    const sheet = sheets?.get?.(name)
+    if (sheet) {
+      const cut = cutSheet(THREE, tex, sheet, warn)
+      cut.forEach((f, k) => frames.set(f.name, f))
+      tex = cut[0]
+      const r = sheetFrame(sheet.layout, sheet.frames, dim[0], dim[1], 0)
+      dim = [r.w, r.h]
+    }
     frames.set(name, tex)
     // The TEXTURE is shared; the material is not. Every view keeps its own
     // materials because they carry its own lights, and this is the one line

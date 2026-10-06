@@ -1076,7 +1076,7 @@ if (movers.length) view.setDynamicSectors(movers)
 // `let` had not been initialised and the call threw before it ever reached
 // view.loadTextures. The whole map rendered untextured, and the only sign was
 // one unhandled rejection in the console.
-let animCatalogue = { groups: [], warnings: [] }
+let animCatalogue = { groups: [], sheets: new Map(), warnings: [] }
 let animator = null
 try {
   animCatalogue = parseAnimations(await (await fetch('/animations.txt')).text())
@@ -1095,6 +1095,7 @@ async function loadMapTextures () {
   const res = await view.loadTextures({
     pxPerUnit,
     extra,
+    sheets: animCatalogue.sheets,
     onProgress: (done, total) => stage('textures', total ? done / total : 1,
                                        `textures ${done} / ${total}`)
   })
@@ -1127,7 +1128,8 @@ async function loadMapTextures () {
 function neighbourTextureOpts (scale) {
   return {
     pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (scale ?? 32),
-    extra: animCatalogue.groups.flatMap((g) => g.frames)
+    extra: animCatalogue.groups.flatMap((g) => g.frames),
+    sheets: animCatalogue.sheets
   }
 }
 
@@ -2418,7 +2420,7 @@ function applySectorSet (local, m) {
   if (!s) return
   if (m.what === 'floor' || m.what === 'ceiling') {
     const changed = view.setSectorTexture(local, m.what, m.texture.toUpperCase(),
-      { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
+      { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32), sheets: animCatalogue.sheets })
     if (changed >= 0) view.setDynamicSectors(dynamicSectors([changed]))
   } else if (m.what === 'light') {
     if (m.fadeMs > 0) {
@@ -2586,7 +2588,7 @@ function frame (now) {
       }
       const side = homeLocal(m.side)
       const sector = view.setSideTexture(side, m.field, m.name.toUpperCase(),
-        { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32) })
+        { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32), sheets: animCatalogue.sheets })
       if (sector >= 0) {
         mapData.sides[side] = view.map.sides[side]
         view.setDynamicSectors([...new Set([...movers, sector])])

@@ -18,14 +18,57 @@
 // the cost of animating a hundred surfaces is a hundred pointer stores a frame.
 //
 
-/** Read the `anim` records out of the catalogue text. */
+// SPRITE SHEETS: one picture holding every frame, stacked top to bottom
+// (`vertical`) or side by side (`horizontal`) -- what qPainter exports.
+//
+//   sheet <NAME> vertical|horizontal <frames> [fps <n>]
+//
+// NAME is the texture maps use, one PNG. The client cuts it into its frames
+// when it loads (render/textures.js sheetFrame), so each frame tiles across a
+// wall as an ordinary texture does, and animates exactly as an `anim` group:
+// the sheet becomes the group [NAME, NAME#1, ..., NAME#n-1].
+export const SHEET_MAX_FRAMES = 256
+export const SHEET_DEFAULT_FPS = 8
+
+/** Read the `anim` and `sheet` records out of the catalogue text. */
 export function parseAnimations (text) {
   const groups = []
+  const sheets = new Map()
   const warnings = []
   text.split('\n').forEach((raw, i) => {
     const line = raw.split('#')[0].trim()
     if (!line) return
     const tok = line.split(/\s+/)
+    if (tok[0] === 'sheet') {
+      const name = (tok[1] ?? '').toUpperCase()
+      const layout = tok[2]
+      const frames = Number(tok[3])
+      let fps = SHEET_DEFAULT_FPS
+      if (tok[4] !== undefined) {
+        if (tok[4] !== 'fps' || !(Number(tok[5]) > 0)) {
+          warnings.push(`line ${i + 1}: after the frame count, only 'fps <n>' (got '${tok.slice(4).join(' ')}')`)
+          return
+        }
+        fps = Number(tok[5])
+      }
+      if (!name) { warnings.push(`line ${i + 1}: a sheet needs a texture name`); return }
+      if (layout !== 'vertical' && layout !== 'horizontal') {
+        warnings.push(`line ${i + 1}: ${name}: a sheet is 'vertical' or 'horizontal', not '${layout}'`)
+        return
+      }
+      if (!Number.isInteger(frames) || frames < 2 || frames > SHEET_MAX_FRAMES) {
+        warnings.push(`line ${i + 1}: ${name}: a sheet has 2 to ${SHEET_MAX_FRAMES} frames, not '${tok[3]}'`)
+        return
+      }
+      // A later line for the same sheet wins, as a later module's file would.
+      if (sheets.has(name)) {
+        const at = groups.findIndex((g) => g.frames[0] === name)
+        if (at >= 0) groups.splice(at, 1)
+      }
+      sheets.set(name, { name, layout, frames, fps })
+      groups.push({ fps, frames: [name, ...Array.from({ length: frames - 1 }, (_, k) => `${name}#${k + 1}`)], sheet: name })
+      return
+    }
     if (tok[0] !== 'anim') return
     const fps = Number(tok[1])
     const frames = tok.slice(2).map((n) => n.toUpperCase())
@@ -39,7 +82,7 @@ export function parseAnimations (text) {
     }
     groups.push({ fps, frames })
   })
-  return { groups, warnings }
+  return { groups, sheets, warnings }
 }
 
 /**
