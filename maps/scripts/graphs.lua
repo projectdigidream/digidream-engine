@@ -788,7 +788,10 @@ end
 --
 -- The players a cutscene node acts on: every one in the level with
 -- `everyone`, else the linked entity or the event's -- if it is a player.
-local function audience(n, g, ev, pull)
+-- Said ONCE per node when it acted on nobody: "my camera does nothing" is
+-- otherwise silent, and the Play log is where a phone shows it.
+local nobody_said = {}
+local function audience_of(n, g, ev, pull)
   if n.everyone then return dnp.players() or {} end
   -- A run with NO player in it -- a timer, the level starting -- and nothing
   -- linked to `entity`: there is no "the player" to mean, so the node means
@@ -799,6 +802,21 @@ local function audience(n, g, ev, pull)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   if e ~= nil and e.kind ~= nil and e:kind() == 0 then return { e } end
   return {}
+end
+local function audience(n, g, ev, pull)
+  local list = audience_of(n, g, ev, pull)
+  if #list == 0 then
+    local key = g.name .. "/" .. n.id
+    if not nobody_said[key] then
+      nobody_said[key] = true
+      local why = (g.data_src[n.id] and g.data_src[n.id].entity) and "its linked `entity` is not a player"
+                  or (#(dnp.players() or {}) == 0 and "no player is in this level yet")
+                  or "the event's entity is not a player"
+      say("%s: node '%s' (%s) acted on no player -- %s; tick `everyone` to reach them all",
+          g.name, n.id, n.type, why)
+    end
+  end
+  return list
 end
 local function turns(deg) return (tonumber(deg) or 0) / 360 end
 
