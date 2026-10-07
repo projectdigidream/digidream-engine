@@ -87,6 +87,8 @@ public final class MainActivity extends Activity {
   private String bundledModule;
   /** Whether the build staged the studio (start.txt's `studio=1`): opens it first, serves its modules. */
   private boolean studio;
+  /** Whether that editor is the suite (start.txt's `suite=1`, docs/SUITE.md): its page, and the way back to it. */
+  private boolean suite;
   /** What the build wrote to start.txt, kept for the missing-page report. */
   private Props start;
 
@@ -188,6 +190,7 @@ public final class MainActivity extends Activity {
       start = Props.read(new File(gameDir, "start.txt"));
       bundledModule = start.need("module");
       studio = "1".equals(start.get("studio"));
+      suite = "1".equals(start.get("suite"));
       File module = new File(gameDir, "modules/" + bundledModule);
       File map = new File(module, "maps/" + start.need("map"));
       if (!map.exists()) throw new IOException("no such level: " + map);
@@ -201,7 +204,7 @@ public final class MainActivity extends Activity {
       //
       // With the studio, the studio comes first; its Play button is what
       // loads the game page (see launch()).
-      final String page = studio ? "/studio/" : "/index.html?touch=1";
+      final String page = studio ? (suite ? "/suite/" : "/studio/") : "/index.html?touch=1";
       ui.post(() -> web.loadUrl(ORIGIN + page));
     } catch (Exception e) {
       Log.e(TAG, "boot failed", e);
@@ -406,7 +409,7 @@ public final class MainActivity extends Activity {
       playLog("[shell] the game did not start: " + e.getMessage());
       throw e;
     }
-    ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1&studio=1"));
+    ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1&studio=" + (suite ? "%2Fsuite%2F" : "1")));
   }
 
   /** The game page's log for the studio, while a play-test runs. */
@@ -520,6 +523,15 @@ public final class MainActivity extends Activity {
     TYPES.put("wav", "audio/wav");
     TYPES.put("dnpm", "application/octet-stream");
     TYPES.put("txt", "text/plain");
+    // What the suite's plugin editors are made of (docs/SUITE.md).
+    TYPES.put("svg", "image/svg+xml");
+    TYPES.put("webp", "image/webp");
+    TYPES.put("woff2", "font/woff2");
+    TYPES.put("webmanifest", "application/manifest+json");
+    TYPES.put("zip", "application/zip");
+    TYPES.put("tsprite", "application/zip");
+    TYPES.put("sfxproj", "application/json");
+    TYPES.put("mstk", "application/octet-stream");
   }
 
   private WebResourceResponse serve(String url) {
@@ -597,7 +609,7 @@ public final class MainActivity extends Activity {
     StringBuilder b = new StringBuilder("<body style='background:#0b0d12;color:#cfe3ff;font:13px monospace;padding:16px'>");
     b.append("<b>Digidream has no page at</b><br>").append(esc(url)).append("<br><br>");
     b.append("start.txt: ").append(start == null ? "(not read yet)" : esc(start.toString())).append("<br><br>");
-    for (String dir : new String[] {"web", "web/studio"}) {
+    for (String dir : new String[] {"web", "web/studio", "web/suite"}) {
       String names;
       try {
         String[] l = getAssets().list(dir);

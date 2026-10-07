@@ -37,12 +37,15 @@ while [[ $# -gt 0 ]]; do
     --map) MAP="$2"; shift 2 ;;
     # The level editor in the same app (docs/STUDIO.md).
     --studio) STUDIO=1; shift ;;
+    # The suite instead (docs/SUITE.md): the studio's fork with its plugins.
+    --suite) STUDIO=1; SUITE=1; shift ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 STUDIO="${STUDIO:-0}"
+SUITE="${SUITE:-0}"
 MODULE_DIR="$REPO/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[apk] no such module: modules/$MODULE" >&2; exit 2; }
 [[ $STUDIO -eq 0 || -f "$REPO/studio/wasm/dist/mapc.mjs" ]] || {
@@ -262,6 +265,7 @@ cat > "$G/start.txt" <<EOF
 module=$MODULE
 map=$MAP
 studio=$STUDIO
+suite=$SUITE
 built=$(date '+%Y-%m-%d %H:%M')
 EOF
 
@@ -269,17 +273,25 @@ EOF
 # runtime Lua and vocabularies it bakes and validates against -- under
 # web/studio/, which is where the page fetches them from (docs/STUDIO.md).
 if [[ $STUDIO -eq 1 ]]; then
-  mkdir -p "$W/studio/wasm/dist" "$W/studio/runtime"
-  cp "$REPO/studio/index.html" "$W/studio/"
-  cp -R "$REPO/studio/src" "$W/studio/src"
-  cp -R "$REPO/studio/vendor" "$W/studio/vendor"
-  cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/studio/wasm/dist/"
+  # The suite is web/suite/ instead, with its vendored plugins beside its pages.
+  ED=studio
+  [[ $SUITE -eq 1 ]] && ED=suite
+  mkdir -p "$W/$ED/wasm/dist" "$W/$ED/runtime"
+  cp "$REPO/$ED/index.html" "$W/$ED/"
+  cp -R "$REPO/$ED/src" "$W/$ED/src"
+  cp -R "$REPO/$ED/vendor" "$W/$ED/vendor"
+  cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/$ED/wasm/dist/"
+  if [[ $SUITE -eq 1 ]]; then
+    node "$REPO/suite/tools/vendor_plugins.mjs" --check >&2 || { echo "[apk] the suite's plugins are not as vendored: node suite/tools/vendor_plugins.mjs" >&2; exit 1; }
+    cp -R "$REPO/suite/plugins" "$W/suite/plugins"
+    cp "$REPO/suite/sw.js" "$REPO/suite/VERSION" "$W/suite/"
+  fi
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
            graph_vocab.lua graphs.lua player_sounds.lua \
            trigger_vocab.json mob_vocab.json weapon_vocab.json graph_vocab.json; do
-    cp "$ROOT/maps/scripts/$f" "$W/studio/runtime/"
+    cp "$ROOT/maps/scripts/$f" "$W/$ED/runtime/"
   done
-  echo "[apk] studio   staged"
+  echo "[apk] $ED   staged"
 fi
 
 # Nothing the server will not open. A .map is the authored source and an
