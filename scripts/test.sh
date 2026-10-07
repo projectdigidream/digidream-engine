@@ -695,6 +695,22 @@ suite_studio () {
   node ../editor/test/shapes.test.js | tail -2
 }
 
+# The suite: the studio's fork with plugins (docs/SUITE.md), every node test of it.
+suite_suite () {
+  need_maps
+  stack_ready || return 0
+  need_server
+  need_wasm
+  # The fork carries the studio's tests as its own, plus the plugin system's.
+  # The page tests are opt-in (a browser), like the studio's.
+  for t in ../suite/test/*.test.js; do
+    case "$t" in *page.test.js) continue ;; esac
+    node "$t" | tail -1
+  done
+  node ../suite/tools/emit_module.mjs ../modules/starter --check | tail -1
+  node ../suite/tools/make_template.mjs --check | tail -1
+}
+
 # The desktop app: staging a module, its writable tree, its routes, its transport.
 suite_app () {
   need_maps
@@ -991,7 +1007,7 @@ suite_fps () {
 
 # --- which, and in what order ----------------------------------------------------
 
-ALL=(guards core tools lua sanitizers determinism client studio app browser stack fps)
+ALL=(guards core tools lua sanitizers determinism client studio suite app browser stack fps)
 QUICK=(guards core tools lua client)
 
 if [[ "${1:-}" == "--list" ]]; then

@@ -137,6 +137,11 @@ const MOUNTS = [
   // studio mount would otherwise claim the prefix.
   ['/studio/runtime/', join(ROOT, 'maps', 'scripts')],
   ['/studio/', join(REPO, 'studio')],
+  // The suite (docs/SUITE.md): a fork of the studio with plugins. Same runtime;
+  // the mapc wasm is the studio's build, not a second copy.
+  ['/suite/runtime/', join(ROOT, 'maps', 'scripts')],
+  ['/suite/wasm/dist/', join(REPO, 'studio', 'wasm', 'dist')],
+  ['/suite/', join(REPO, 'suite')],
   // NOTE: /maps/ is NOT a plain mount -- see findMap below.
   ['/', join(ROOT, 'client')]
 ]
