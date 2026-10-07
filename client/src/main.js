@@ -649,7 +649,11 @@ if (LIVE) {
       else if (m.type === MSG.SIDE_TEXTURE) sideTextures.push(m)
       // Sector looks share the switches' queue, and so their region bookkeeping.
       else if (m.type === MSG.SECTOR_SET) sideTextures.push(m)
-      else if (m.type === MSG.UI_SET) ui.set(m.uiId, m.widgetId, m.value)
+      else if (m.type === MSG.UI_SET) {
+        if (m.what === 'shown') ui.show(m.uiId, m.widgetId, m.value !== 0)
+        else if (m.what === 'decor') ui.showDecor(m.uiId, m.decor, m.value !== 0)
+        else ui.set(m.uiId, m.widgetId, m.value)
+      }
       // How the camera should follow (design §4.1). The server never says where
       // the camera IS -- only how it behaves -- so this is applied to the
       // client's own camera and nothing about it is predicted or replicated

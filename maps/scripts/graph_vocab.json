@@ -1830,6 +1830,72 @@
           "type": "string"
         },
         {
+          "doc": "One of that panel's widgets, by name: a button, a label, any of them.",
+          "name": "widget",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "Or one of its template's decor elements, by id (a bar, a text, a picture). Name one or the other.",
+          "name": "decor",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Show a widget or decor element of an open panel that was hidden, where it was. Nothing if the panel is not open.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "show_element"
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        },
+        {
+          "doc": "One of that panel's widgets, by name: a button, a label, any of them.",
+          "name": "widget",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "Or one of its template's decor elements, by id (a bar, a text, a picture). Name one or the other.",
+          "name": "decor",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "panel",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Hide a widget or decor element of an open panel. Hidden is not gone: a toggle or slider keeps its value, and a widget declared with `hidden = true` starts this way. Nothing if the panel is not open.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "hide_element"
+    },
+    {
+      "args": [
+        {
+          "name": "panel",
+          "type": "string"
+        },
+        {
           "doc": "One widget; any without it.",
           "name": "widget",
           "optional": true,

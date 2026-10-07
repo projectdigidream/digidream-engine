@@ -1673,6 +1673,30 @@ int l_dnp_ui_set(lua_State* L) {
     return 0;
 }
 
+// dnp.ui_show(entity, ui_id, widget, shown)
+//
+// Show or hide part of a panel that is already open: a widget by its id (a
+// number), or one of its template's decor elements by name (a string). Hidden
+// is not closed -- the panel keeps the widget's value, and showing it again
+// puts it back where it was.
+int l_dnp_ui_show(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.ui == nullptr) return 0;
+    const u32 ui_id = static_cast<u32>(luaL_checknumber(L, 2));
+    const bool shown = lua_toboolean(L, 4) != 0;
+    if (lua_type(L, 3) == LUA_TSTRING) {
+        size_t n = 0;
+        const char* name = lua_tolstring(L, 3, &n);
+        if (n == 0 || n > 32) return luaL_error(L, "dnp.ui_show: a decor element's name is 1..32 bytes");
+        ctx.ui->show_ui(ctx.level, static_cast<u32>(a), ui_id, 0, std::string(name, n), shown);
+    } else {
+        ctx.ui->show_ui(ctx.level, static_cast<u32>(a), ui_id, static_cast<u16>(luaL_checknumber(L, 3)),
+                        std::string(), shown);
+    }
+    return 0;
+}
+
 // dnp.camera(entity, { distance = 40, pitch = 0.14, lead = 3, ... })
 //
 // How the camera behaves for whoever is watching this agent. Design §4.1 puts
@@ -3280,6 +3304,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"set_side_texture", l_dnp_set_side_texture},
     {"music", l_dnp_music},
     {"ui_set", l_dnp_ui_set},
+    {"ui_show", l_dnp_ui_show},
     {"ui_close", l_dnp_ui_close},
     {"prop", l_dnp_prop},
     {"props", l_dnp_props},

@@ -50,12 +50,16 @@ writeFileSync(join(mod, 'maps', 'shop.graph.json'), JSON.stringify({
   graph: 1, name: 'shop',
   panels: { shop: { title: 'Shop', widgets: [
     { kind: 'label', id: 1, name: 'gold', label: 'Gold' },
-    { kind: 'button', id: 2, name: 'buy', label: 'Buy' }] } },
+    { kind: 'button', id: 2, name: 'buy', label: 'Buy' },
+    { kind: 'button', id: 3, name: 'sell', label: 'Sell', hidden: true }] } },
   nodes: [
     { id: 'arrive', type: 'when_player_arrives' }, { id: 'open', type: 'open_panel', panel: 'shop' },
     { id: 'used', type: 'when_panel_used', panel: 'shop', widget: 'buy' }, { id: 'bought', type: 'set_hud', name: 'bought', value: 1 },
+    { id: 'nobuy', type: 'hide_element', panel: 'shop', widget: 'buy' }, { id: 'cansell', type: 'show_element', panel: 'shop', widget: 'sell' },
+    { id: 'nosign', type: 'hide_element', panel: 'shop', decor: 'sign' },
     { id: 'shut', type: 'when_panel_closed', panel: 'shop' }, { id: 'closed', type: 'set_hud', name: 'closed', value: 1 }],
-  links: [['arrive.then', 'open.in'], ['used.then', 'bought.in'], ['shut.then', 'closed.in']]
+  links: [['arrive.then', 'open.in'], ['used.then', 'bought.in'], ['bought.then', 'nobuy.in'], ['nobuy.then', 'cansell.in'],
+          ['cansell.then', 'nosign.in'], ['shut.then', 'closed.in']]
 }))
 
 let log = ''
@@ -73,6 +77,7 @@ try {
   const control = await wt.createBidirectionalStream()
   const cw = control.writable.getWriter()
   const opens = []
+  const uiSets = []
   const hud = {}
   ;(async () => {
     const r = control.readable.getReader(); let buf = Buffer.alloc(0)
@@ -84,6 +89,7 @@ try {
           const len = buf.readUInt32LE(0); if (buf.length < 4 + len) break
           const m = decodeControlMessage(buf.subarray(0, 4 + len)); buf = buf.subarray(4 + len)
           if (m?.type === MSG.UI_OPEN) opens.push(m)
+          else if (m?.type === MSG.UI_SET) uiSets.push(m)
           else if (m?.type === MSG.HUD_SET) for (const f of m.fields) hud[f.name] = f.value
         }
       }
@@ -93,10 +99,17 @@ try {
   await waitFor(() => opens.length >= 1, 8000, 'the shop panel')
   console.log('panels: a game graph opens, answers and is told of the ×')
   const shop = opens[0]
-  check(shop.title === 'Shop' && shop.widgets.length === 2, `arriving opens the graph's panel (${shop.title}, ${shop.widgets.length} widgets)`)
+  check(shop.title === 'Shop' && shop.widgets.length === 3, `arriving opens the graph's panel (${shop.title}, ${shop.widgets.length} widgets)`)
+  await waitFor(() => uiSets.length >= 1, 3000, 'the hidden widget')
+  const said = (m) => `${m.what} ${m.what === 'decor' ? m.decor : m.widgetId}=${m.value}`
+  check(uiSets.length === 1 && said(uiSets[0]) === 'shown 3=0' && uiSets[0].uiId === shop.uiId,
+        `Sell, declared hidden, is hidden as the panel opens (${uiSets.map(said).join(', ')})`)
   await cw.write(encodeUiEvent(shop.uiId, 2, 1))
   await waitFor(() => hud.bought !== undefined, 5000, 'the press answered')
   check(hud.bought === 1, 'pressing Buy reaches when_panel_used by its name, over the wire')
+  await waitFor(() => uiSets.length >= 4, 3000, 'the shows and hides')
+  check(uiSets.slice(1).map(said).join(', ') === 'shown 2=0, shown 3=1, decor sign=0',
+        `and the graph hides Buy, shows Sell and hides the sign decor, over the wire (${uiSets.slice(1).map(said).join(', ')})`)
   await cw.write(encodeUiEvent(shop.uiId, 0, 0))
   await waitFor(() => hud.closed !== undefined, 5000, 'the × answered')
   check(hud.closed === 1, 'the × (widget 0) reaches when_panel_closed')

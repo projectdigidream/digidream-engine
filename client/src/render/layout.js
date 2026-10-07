@@ -537,6 +537,15 @@ export class HudView {
   // Every layout shows subtitles (withSubtitles), unless it places its own.
   setLayout (layout) { this.layout = withSubtitles(layout ?? DEFAULT_LAYOUT); this.#build() }
 
+  /**
+   * Elements hidden by id, whatever their `visible` rule says: a panel's decor
+   * a script hid (UiView.showDecor). A group hidden hides what is in it.
+   */
+  setHidden (ids) {
+    this.hidden = new Set(ids ?? [])
+    this.#paint()
+  }
+
   /** Partial updates merge: { hp: 80, 'hud.ammo': 12 }. */
   update (bindings) {
     let changed = false
@@ -638,7 +647,7 @@ export class HudView {
 
   #fill (n) {
     const el = n.el
-    const show = isVisible(el, this.bindings)
+    const show = isVisible(el, this.bindings) && !(this.hidden?.has(el.id))
     n.dom.style.display = show ? (el.type === 'group' && el.stack ? 'flex' : 'block') : 'none'
     if (!show) return
     const b = this.bindings

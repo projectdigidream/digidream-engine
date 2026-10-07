@@ -292,6 +292,70 @@ const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.cl
         `a panel opened later is drawn with the current values (${fillOf(rootOf(d2))?.style.width}, ${JSON.stringify(textOf(rootOf(d2)))})`)
 }
 
+// --- parts of a panel shown and hidden (UI_SET's `what`) -------------------
+{
+  // UI_SET as server/src/main.cpp writes it: u32 length (type + body), type,
+  // u32 ui, u16 widget, i32 value, then optionally u8 what [u8 n, name].
+  const uiSet = (ui, widget, value, what, name) => {
+    const extra = what === undefined ? [] : what === 2 ? [2, name.length, ...Buffer.from(name)] : [what]
+    const b = Buffer.alloc(4 + 1 + 10 + extra.length)
+    b.writeUInt32LE(1 + 10 + extra.length, 0); b.writeUInt8(MSG.UI_SET, 4)
+    b.writeUInt32LE(ui, 5); b.writeUInt16LE(widget, 9); b.writeInt32LE(value, 11)
+    Buffer.from(extra).copy(b, 15)
+    return b
+  }
+  const plain = decodeControlMessage(uiSet(7, 2, 33))
+  check(plain?.what === 'value' && plain.value === 33, `CONTROL: a UI_SET without \`what\` is a value, as before (${plain?.what})`)
+  const w = decodeControlMessage(uiSet(7, 2, 0, 1))
+  check(w?.what === 'shown' && w.widgetId === 2 && w.value === 0, `what 1: widget 2 hidden (${JSON.stringify(w)})`)
+  const d = decodeControlMessage(uiSet(7, 0, 1, 2, 'coin_bar'))
+  check(d?.what === 'decor' && d.decor === 'coin_bar' && d.value === 1, `what 2: a decor element by name (${d?.decor})`)
+  check(decodeControlMessage(uiSet(7, 2, 1, 3)) === null, 'an unknown `what` is refused')
+  const cut = uiSet(7, 0, 1, 2, 'coin_bar')
+  check(decodeControlMessage(cut.subarray(0, cut.length - 3)) === null, 'and a decor name cut short is refused')
+
+  const SHOWN = parseLayout({
+    scale: { reference: 390, min: 1, max: 1 },
+    panels: { stall: { anchor: 'c', w: 240, h: 90, slots: [{ widget: 1, x: 8, y: 8, w: 100 }],
+                       decor: [{ id: 'sign', type: 'text', text: 'OPEN', anchor: 'tl', x: 8, y: 60 }] } }
+  })
+  const visible = (root, pred) => all(root).filter(pred).filter((e) => {
+    for (let p = e; p; p = p.parent) if (p.style?.display === 'none') return false
+    return true
+  }).length
+  const buttonText = (label) => (e) => e.tag === 'button' && e.textContent === label
+  for (const [label, layout] of [['a default panel', null], ['a templated panel', SHOWN.layout]]) {
+    const doc = makeDom()
+    const view = new UiView({ onEvent: () => {}, doc, layout: layout ?? undefined, size: { width: 800, height: 600 } })
+    const m = { ...msg, uiId: 9, template: layout ? 'stall' : '', flags: 0,
+                widgets: [{ id: 1, kind: UI_KIND.BUTTON, label: 'Buy', value: 0 },
+                          { id: 2, kind: UI_KIND.BUTTON, label: 'Sell', value: 0 }] }
+    view.open(m)
+    const root = () => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.className)).at(-1)
+    check(visible(root(), buttonText('Buy')) === 1 && visible(root(), buttonText('Sell')) === 1, `${label}: CONTROL: both buttons start shown`)
+    check(view.show(9, 2, false), `${label}: hiding Sell is accepted`)
+    check(visible(root(), buttonText('Sell')) === 0 && visible(root(), buttonText('Buy')) === 1, `${label}: Sell is hidden and Buy is not`)
+    if (layout) view.setLayout(layout); else view.open(view.panels.get(9).msg)
+    check(visible(root(), buttonText('Sell')) === 0, `${label}: drawn again, Sell stays hidden`)
+    view.show(9, 2, true)
+    check(visible(root(), buttonText('Sell')) === 1, `${label}: and shown again, it is back`)
+    check(!view.show(9, 99, false) && !view.show(42, 1, false), `${label}: a widget or panel that is not there is refused`)
+  }
+  {
+    const doc = makeDom()
+    const view = new UiView({ onEvent: () => {}, doc, layout: SHOWN.layout, size: { width: 800, height: 600 } })
+    view.open({ ...msg, uiId: 3, template: 'stall', flags: 0, widgets: [{ id: 1, kind: UI_KIND.BUTTON, label: 'Buy', value: 0 }] })
+    // The decor view's own nodes: the last with this text is the drawn one (the fake DOM keeps cleared children).
+    const sign = () => all(doc.body).filter((e) => e.textContent === 'OPEN' && e.children.length === 0).at(-1)
+    check(sign() && sign().style.display !== 'none', 'CONTROL: the decor text starts shown')
+    check(view.showDecor(3, 'sign', false) && sign().style.display === 'none', 'hidden by its id')
+    view.setLayout(SHOWN.layout)
+    check(sign().style.display === 'none', 'and stays hidden when the panel is drawn again')
+    view.showDecor(3, 'sign', true)
+    check(sign().style.display !== 'none', 'shown again')
+  }
+}
+
 // --- a pinned panel has no × ------------------------------------------------
 {
   const doc = makeDom()

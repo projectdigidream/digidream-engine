@@ -2389,6 +2389,26 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         if (w.ok()) link.send_control(s.id, buf, w.size());
     }
 
+    // Part of a panel shown or hidden: UI_SET with its trailing `what` --
+    // 1 a widget, 2 a decor element by name (docs/protocol.md 11.1).
+    void send_ui_show(Session& s, u32 ui_id, u16 widget_id, const std::string& decor, bool shown) {
+        u8 buf[64];
+        ByteWriter w(buf, sizeof(buf));
+        const bool by_name = !decor.empty();
+        const u32 len = static_cast<u32>(1 + 10 + 1 + (by_name ? 1 + decor.size() : 0));
+        w.u32v(len);
+        w.u8v(proto::MSG_UI_SET);
+        w.u32v(ui_id);
+        w.u16v(by_name ? 0 : widget_id);
+        w.i32v(shown ? 1 : 0);
+        w.u8v(by_name ? 2 : 1);
+        if (by_name) {
+            w.u8v(static_cast<u8>(decor.size()));
+            for (char c : decor) w.u8v(static_cast<u8>(c));
+        }
+        if (w.ok()) link.send_control(s.id, buf, w.size());
+    }
+
     void send_ui_close(Session& s, u32 ui_id) {
         u8 buf[32];
         ByteWriter w(buf, sizeof(buf));
@@ -3086,6 +3106,25 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         s->add_ui(p, !vm_stack_.empty() && vm_stack_.back() == VM_GAME ? Session::UI_GAME : level_index);
         send_ui_open(*s, p);
         return p.ui_id;
+    }
+
+    void show_ui(u32 level_index, u32 agent, u32 ui_id, u16 widget_id, const std::string& decor,
+                 bool shown) override {
+        Session* s = session_for(level_index, agent);
+        if (s == nullptr) return;
+        proto::UiPanel* p = s->find_ui(ui_id);
+        if (p == nullptr) return;
+        if (!decor.empty()) {
+            // A decor element lives in the client's layout, so its name is
+            // checked there; here only that it fits the message.
+            if (decor.size() <= 32) send_ui_show(*s, ui_id, 0, decor, shown);
+            return;
+        }
+        for (u16 i = 0; i < p->count; ++i) {
+            if (p->widgets[i].id != widget_id) continue;
+            send_ui_show(*s, ui_id, widget_id, decor, shown);
+            return;
+        }
     }
 
     void set_ui(u32 level_index, u32 agent, u32 ui_id, u16 widget_id, i32 value) override {

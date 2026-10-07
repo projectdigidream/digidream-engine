@@ -243,11 +243,18 @@ export class UiView {
     body.className = 'dnp-ui-body'
     // Collected as the widgets are built, so UI_SET can find one by id later.
     this.pendingInputs = new Map()
-    for (const wgt of msg.widgets) body.appendChild(this.#widget(msg.uiId, wgt))
+    // And every widget's own element, so show() can hide one.
+    const rows = new Map()
+    for (const wgt of msg.widgets) {
+      const el = this.#widget(msg.uiId, wgt)
+      rows.set(wgt.id, el)
+      if (wgt.hidden) el.style.display = 'none'
+      body.appendChild(el)
+    }
 
     root.append(title, body)
     this.#layer().appendChild(root)
-    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, msg })
+    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, rows, msg })
     this.pendingInputs = new Map()
     this.onChange?.()
   }
@@ -260,6 +267,7 @@ export class UiView {
   // below the title bar.
   #openTemplated (msg, tpl) {
     const doc = this.doc
+    const rows = new Map()
     const area = this.#area()
     const s = uiScale(this.layout, area.width, area.height)
     const root = doc.createElement('div')
@@ -339,12 +347,14 @@ export class UiView {
       decor = new HudView({ host: stage, doc, size: { width: pw, height: sh }, assetUrl: this.assetUrl })
       decor.root.style.zIndex = '0'
       decor.setLayout({ ...this.layout, hud: tpl.decor })
+      decor.setHidden(msg.hiddenDecor ?? [])
       decor.update(this.values)
     }
     for (const sl of slots) {
       // A slot's style wins for its widget: over the style's button look too.
       this.slotStyle = sl.style ?? null
       const el = this.#widget(msg.uiId, byId.get(sl.widget))
+      rows.set(sl.widget, el)
       this.slotStyle = null
       el.className = `${el.className} dnp-ui-slot`
       const r = place({ anchor: 'tl', ...sl, h: sl.h ?? 32 }, this.layout, pw, sh, {}, { w: pw, h: 32 * s })
@@ -357,7 +367,11 @@ export class UiView {
     if (rest.length) {
       const body = doc.createElement('div')
       body.className = 'dnp-ui-body'
-      for (const wgt of rest) body.appendChild(this.#widget(msg.uiId, wgt))
+      for (const wgt of rest) {
+        const el = this.#widget(msg.uiId, wgt)
+        rows.set(wgt.id, el)
+        body.appendChild(el)
+      }
       root.append(body)
     }
 
@@ -380,7 +394,9 @@ export class UiView {
       decor?.refresh()
     }
     placeIt()
-    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, msg, dim, decor, place: placeIt })
+    // What the server hid (show(), showDecor()) stays hidden when drawn again.
+    for (const w of msg.widgets) if (w.hidden) { const el = rows.get(w.id); if (el) el.style.display = 'none' }
+    this.panels.set(msg.uiId, { root, inputs: this.pendingInputs, rows, msg, dim, decor, place: placeIt })
     this.pendingInputs = new Map()
     this.button = null
   }
@@ -511,6 +527,31 @@ export class UiView {
     const w = p.msg?.widgets.find((x) => x.id === widgetId)
     if (w) w.value = value
     return true
+  }
+
+  /**
+   * Show or hide one widget of an open panel (UI_SET what 1). Kept on the
+   * panel's message, so the panel drawn again (a new layout) keeps it hidden.
+   */
+  show (uiId, widgetId, shown) {
+    const p = this.panels.get(uiId)
+    const el = p?.rows?.get(widgetId)
+    if (!el) return false
+    el.style.display = shown ? '' : 'none'
+    const w = p.msg?.widgets.find((x) => x.id === widgetId)
+    if (w) w.hidden = !shown
+    return true
+  }
+
+  /** Show or hide one of a templated panel's decor elements, by its id (UI_SET what 2). */
+  showDecor (uiId, id, shown) {
+    const p = this.panels.get(uiId)
+    if (!p) return false
+    const hidden = new Set(p.msg.hiddenDecor ?? [])
+    if (shown) hidden.delete(id); else hidden.add(id)
+    p.msg.hiddenDecor = [...hidden]
+    p.decor?.setHidden(p.msg.hiddenDecor)
+    return !!p.decor
   }
 
   close (uiId) {

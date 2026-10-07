@@ -80,6 +80,9 @@ struct RecordingUi : server::lua::UiSink {
     u32  open_ui(u32, u32, const proto::UiPanel& p) override { opened.push_back(p); return ++next_ui; }
     void close_ui(u32, u32, u32 id) override { closed_ids.push_back(id); }
     void set_ui(u32, u32, u32 id, u16 w, i32 v) override { sets.push_back({id, w, v}); }
+    struct Show { u32 ui; u16 widget; std::string decor; bool shown; };
+    std::vector<Show> shows;
+    void show_ui(u32, u32, u32 id, u16 w, const std::string& d, bool shown) override { shows.push_back({id, w, d, shown}); }
     void set_camera(u32, u32, const proto::CameraSet& c) override {
         for (u16 i = 0; i < c.count; ++i) cams[c.fields[i].id] = c.fields[i].milli;
     }
@@ -1140,6 +1143,58 @@ int main(int argc, char** argv) {
           "links": [ ["c.then", "o.in"] ] })"));
         CHECK(run("graphs.call('show', dnp.players()[1], nil)", "show"));
         CHECK(g_ui.opened.size() == 1 && (g_ui.opened[0].flags & proto::UI_FLAG_PINNED) != 0);
+    }
+
+    // ================================================================
+    // SHOWING AND HIDING part of a panel: show_element / hide_element.
+    std::printf("-- panel elements shown and hidden --\n");
+    {
+        g_ui.opened.clear();
+        g_ui.shows.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "shop_panel",
+          "panels": { "stall": { "title": "Stall", "widgets": [
+              { "kind": "button", "id": 1, "name": "buy", "label": "Buy" },
+              { "kind": "button", "id": 2, "name": "sell", "label": "Sell", "hidden": true },
+              { "kind": "label", "id": 3, "name": "note", "label": "Closed" } ] } },
+          "nodes": [ { "id": "c0", "type": "on_call", "name": "hide_early" },
+                     { "id": "h0", "type": "hide_element", "panel": "stall", "widget": "buy" },
+                     { "id": "c1", "type": "on_call", "name": "open_shop" },
+                     { "id": "o",  "type": "open_panel", "panel": "stall" },
+                     { "id": "c2", "type": "on_call", "name": "rich" },
+                     { "id": "s",  "type": "show_element", "panel": "stall", "widget": "sell" },
+                     { "id": "h",  "type": "hide_element", "panel": "stall", "widget": "note" },
+                     { "id": "d",  "type": "hide_element", "panel": "stall", "decor": "coin_bar" } ],
+          "links": [ ["c0.then", "h0.in"], ["c1.then", "o.in"], ["c2.then", "s.in"], ["s.then", "h.in"], ["h.then", "d.in"] ] })"));
+        // CONTROL: a panel that is not open has nothing to hide.
+        CHECK(run("graphs.call('hide_early', dnp.players()[1], nil)", "hide before open"));
+        CHECK(g_ui.shows.empty());
+        CHECK(run("graphs.call('open_shop', dnp.players()[1], nil)", "open"));
+        const u32 ui = g_ui.next_ui;
+        // `hidden = true` starts hidden: the one widget, and only it.
+        CHECK(g_ui.shows.size() == 1 && g_ui.shows[0].ui == ui && g_ui.shows[0].widget == 2 && !g_ui.shows[0].shown);
+        CHECK(run("graphs.call('rich', dnp.players()[1], nil)", "show and hide"));
+        std::printf("  %zu show/hide sent\n", g_ui.shows.size());
+        CHECK(g_ui.shows.size() == 4);
+        if (g_ui.shows.size() == 4) {
+            CHECK(g_ui.shows[1].widget == 2 && g_ui.shows[1].shown && g_ui.shows[1].decor.empty());   // sell shown
+            CHECK(g_ui.shows[2].widget == 3 && !g_ui.shows[2].shown);                                 // note hidden
+            CHECK(g_ui.shows[3].decor == "coin_bar" && !g_ui.shows[3].shown);                         // decor, by name
+        }
+        // Refused at load: neither named, both named, a widget the panel lacks, a bad decor id.
+        const char* refused[] = {
+          R"({ "graph": 1, "name": "x1", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "b", "label": "B" } ] } },
+               "nodes": [ { "id": "h", "type": "hide_element", "panel": "p" } ], "links": [] })",
+          R"({ "graph": 1, "name": "x2", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "b", "label": "B" } ] } },
+               "nodes": [ { "id": "h", "type": "hide_element", "panel": "p", "widget": "b", "decor": "d" } ], "links": [] })",
+          R"({ "graph": 1, "name": "x3", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "b", "label": "B" } ] } },
+               "nodes": [ { "id": "h", "type": "show_element", "panel": "p", "widget": "nope" } ], "links": [] })",
+          R"({ "graph": 1, "name": "x4", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "b", "label": "B" } ] } },
+               "nodes": [ { "id": "h", "type": "show_element", "panel": "p", "decor": "../x" } ], "links": [] })",
+          R"({ "graph": 1, "name": "x5", "panels": { "p": { "widgets": [ { "kind": "button", "id": 1, "name": "b", "label": "B", "hidden": "yes" } ] } },
+               "nodes": [], "links": [] })" };
+        int n_refused = 0;
+        for (const char* j : refused) if (!load_graph(j)) ++n_refused;
+        CHECK(n_refused == 5);
     }
 
     // ================================================================

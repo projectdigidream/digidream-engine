@@ -647,6 +647,10 @@ function EXEC.open_panel(g, n, ev, pull)
   if id ~= nil and id ~= 0 then
     open_panels[key] = id
     by_ui[id] = { key = key, panel = n.panel, player = e:player() }
+    -- Widgets declared `hidden = true` start hidden (show_element shows them).
+    if dnp.ui_show ~= nil then
+      for _, w in ipairs(def.widgets) do if w.hidden then dnp.ui_show(e, id, w.id, false) end end
+    end
   end
   return "then"
 end
@@ -723,6 +727,18 @@ function EXEC.set_widget(g, n, ev, pull)
   if id ~= nil and w ~= nil and v ~= nil then dnp.ui_set(e, id, w.id, math.floor(v + 0.5)) end
   return "then"
 end
+local function show_element(g, n, ev, pull, shown)
+  local e = panel_player(n, g, ev, pull)
+  if e == nil or dnp.ui_show == nil then return "then" end
+  local id = open_panels[player_key(e) .. "/" .. n.panel]
+  if id == nil then return "then" end
+  if n.decor ~= nil then dnp.ui_show(e, id, n.decor, shown); return "then" end
+  local w = g.panels[n.panel] and g.panels[n.panel].by_name[n.widget]
+  if w ~= nil then dnp.ui_show(e, id, w.id, shown) end
+  return "then"
+end
+function EXEC.show_element(g, n, ev, pull) return show_element(g, n, ev, pull, true) end
+function EXEC.hide_element(g, n, ev, pull) return show_element(g, n, ev, pull, false) end
 function PURE.panel_is_open(g, n, ev, pull)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   return e ~= nil and open_panels[player_key(e) .. "/" .. n.panel] ~= nil
@@ -1583,6 +1599,7 @@ function M.load(data, label)
             bad("%s: `id` is a whole number from 1 (0 means the panel was closed)", ww)
           elseif def.by_id[w.id] ~= nil then bad("%s: two widgets are id %d", where, w.id) end
           if type(w.label) ~= "string" then bad("%s: needs a `label`", ww) end
+          if w.hidden ~= nil and type(w.hidden) ~= "boolean" then bad("%s: `hidden` is true or false", ww) end
           if w.kind == "slider" and (type(w.lo) ~= "number" or type(w.hi) ~= "number") then
             bad("%s: a slider needs `lo` and `hi`", ww)
           end
@@ -1802,6 +1819,11 @@ function M.load(data, label)
         bad("node '%s': this graph carries no panel '%s'", n.id, n.panel)
       elseif def ~= nil and n.widget ~= nil and def.by_name[n.widget] == nil then
         bad("node '%s': panel '%s' has no widget '%s'", n.id, n.panel, tostring(n.widget))
+      elseif def ~= nil and (n.type == "show_element" or n.type == "hide_element")
+             and (n.widget == nil) == (n.decor == nil) then
+        bad("node '%s': name a `widget` or a `decor` element -- one of them", n.id)
+      elseif n.decor ~= nil and (type(n.decor) ~= "string" or #n.decor > 32 or not n.decor:match("^[%w_%-]+$")) then
+        bad("node '%s': `decor` is an element's id, 1..32 letters, digits, _ or -", n.id)
       elseif def ~= nil and n.type == "set_widget" then
         local w = def.by_name[n.widget]
         if w ~= nil and (w.kind == "label" or w.kind == "button") then

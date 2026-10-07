@@ -495,7 +495,24 @@ export function decodeControlMessage (buf) {
     const uiId = r.u32()
     const widgetId = r.u16()
     const value = r.i32()
-    return r.ok ? { type, uiId, widgetId, value } : null
+    if (!r.ok) return null
+    // WHAT is set, appended (docs/protocol.md 11.1): absent or 0 the value, 1
+    // whether widget `widgetId` is shown (value 0 or 1), 2 whether the decor
+    // element named after it is shown.
+    const m = { type, uiId, widgetId, value, what: 'value' }
+    if (r.pos < r.buf.length) {
+      const what = r.u8()
+      if (!r.ok || what > 2) return null
+      m.what = ['value', 'shown', 'decor'][what]
+      if (what === 2) {
+        const n = r.u8()
+        if (!r.ok || n === 0 || n > 32) return null
+        const b = r.bytes(n)
+        if (b === null) return null
+        m.decor = new TextDecoder().decode(b)
+      }
+    }
+    return m
   }
 
   if (type === MSG.WELCOME) {
