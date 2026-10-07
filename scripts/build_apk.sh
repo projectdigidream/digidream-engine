@@ -285,6 +285,13 @@ if [[ $STUDIO -eq 1 ]]; then
     node "$REPO/suite/tools/vendor_plugins.mjs" --check >&2 || { echo "[apk] the suite's plugins are not as vendored: node suite/tools/vendor_plugins.mjs" >&2; exit 1; }
     cp -R "$REPO/suite/plugins" "$W/suite/plugins"
     cp "$REPO/suite/sw.js" "$REPO/suite/VERSION" "$W/suite/"
+    # The packager plugin's small kits, where its page looks (as build_app.sh):
+    # Android and the Tauri desktops, ~24 MB; the Electron ones stay out.
+    mkdir -p "$W/suite/packager-kits"
+    for k in android tauri-macos-arm64 tauri-macos-x64 tauri-linux tauri-windows; do
+      [[ -f "$REPO/packager/build/kits/$k.zip" ]] && cp "$REPO/packager/build/kits/$k.zip" "$W/suite/packager-kits/"
+    done
+    echo "[apk] suite: $(ls "$W/suite/packager-kits" | wc -l | tr -d ' ') packager kit(s) preloaded"
   fi
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
            graph_vocab.lua graphs.lua player_sounds.lua \
@@ -398,7 +405,8 @@ if [[ ! -f "$KEY" ]]; then
 fi
 
 "$BT/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
-APK="$OUT/digidream-$MODULE.apk"
+# The suite build has a name of its own, so it never replaces the plain one.
+APK="$OUT/digidream-$MODULE$([[ $SUITE -eq 1 ]] && echo -suite).apk"
 "$BT/apksigner" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android \
   --out "$APK" "$OUT/aligned.apk"
 rm -f "$OUT/unsigned.apk" "$OUT/aligned.apk" "$OUT/base.apk" "$OUT/res.zip"
