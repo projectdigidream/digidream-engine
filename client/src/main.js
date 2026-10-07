@@ -631,7 +631,7 @@ if (LIVE) {
           // A clear reaches the HUD too: the frame loop only ever passes the
           // names still set, so a value it was never told was dropped would
           // stay on screen for good.
-          if (f.kind === 2) { hudValues.delete(`hud.${f.name}`); hudView.update({ [`hud.${f.name}`]: undefined }) }
+          if (f.kind === 2) { hudValues.delete(`hud.${f.name}`); hudView.update({ [`hud.${f.name}`]: undefined }); ui?.update({ [`hud.${f.name}`]: undefined }) }
           else hudValues.set(`hud.${f.name}`, f.value)
         }
       }
@@ -3175,6 +3175,9 @@ function frame (now) {
   if (LIVE && latestHp !== undefined && latestHp !== null) {
     hudView.update({ hp: latestHp, map: homeName ?? '' })
     hudView.update(hudValues)
+    // And a panel's decor, which is HUD elements too (docs/PANEL_DECOR_VALUES.md).
+    ui?.update({ hp: latestHp, map: homeName ?? '' })
+    ui?.update(hudValues)
   }
 
   // The synth's own numbers, when it has any. A background noise and a synth

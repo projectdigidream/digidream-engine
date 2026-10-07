@@ -251,6 +251,47 @@ const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.cl
         `CONTROL: a bad name, anchor or slot is an error and the template is dropped (${bad.errors.length})`)
 }
 
+// --- a panel's decor shows the HUD's values (docs/PANEL_DECOR_VALUES.md) ---
+{
+  const DECOR = parseLayout({
+    scale: { reference: 390, min: 1, max: 1 },
+    panels: {
+      mana: {
+        anchor: 'c', w: 200, h: 60,
+        decor: [{ id: 'mb', type: 'bar', bind: 'hud.mana', max: 100, anchor: 'tl', x: 8, y: 8, w: 100, h: 8 },
+                { id: 'g', type: 'text', text: 'Gold {hud.gold}', anchor: 'tl', x: 8, y: 30 }]
+      }
+    }
+  })
+  check(DECOR.ok, `a template whose decor is a bar and a text parses (${DECOR.errors.join('; ')})`)
+  // The fill: the bar's one child, in the bar's default fill colour -- the
+  // LAST one. This fake DOM does not drop children on `textContent = ''`, so
+  // the hidden default HUD the decor view was built with is still in the tree.
+  const fillOf = (root) => all(root).filter((e) => e.style?.height === '100%' && e.style?.background === '#5fbf6a').at(-1)
+  const textOf = (root) => all(root).find((e) => /^Gold/.test(e.textContent ?? ''))?.textContent
+  const doc = makeDom()
+  const view = new UiView({ onEvent: () => {}, doc, layout: DECOR.layout, size: { width: 800, height: 600 } })
+  view.open({ ...msg, template: 'mana' })
+  const root = rootOf(doc)
+  check(fillOf(root)?.style.width === '0.0%' || fillOf(root)?.style.width === '0%',
+        `CONTROL: before any value the bar is empty (${fillOf(root)?.style.width})`)
+  view.update({ 'hud.mana': 25, 'hud.gold': 12 })
+  check(fillOf(root)?.style.width === '25.0%', `after update, a bar bound to hud.mana at 25 of 100 is a quarter full (${fillOf(root)?.style.width})`)
+  check(textOf(root) === 'Gold 12', `and {hud.gold} shows the value (${JSON.stringify(textOf(root))})`)
+  view.update(new Map([['hud.mana', 80]]))
+  check(fillOf(root)?.style.width === '80.0%', `a Map of values works too, and a later value moves it (${fillOf(root)?.style.width})`)
+  view.update({ 'hud.gold': undefined })
+  check(textOf(root) === 'Gold ', `a value the server removed is gone from the text (${JSON.stringify(textOf(root))})`)
+
+  // A panel opened AFTER the values were set shows them from its first frame.
+  const d2 = makeDom()
+  const later = new UiView({ onEvent: () => {}, doc: d2, layout: DECOR.layout, size: { width: 800, height: 600 } })
+  later.update({ 'hud.mana': 50, 'hud.gold': 7 })
+  later.open({ ...msg, template: 'mana' })
+  check(fillOf(rootOf(d2))?.style.width === '50.0%' && textOf(rootOf(d2)) === 'Gold 7',
+        `a panel opened later is drawn with the current values (${fillOf(rootOf(d2))?.style.width}, ${JSON.stringify(textOf(rootOf(d2)))})`)
+}
+
 // --- a pinned panel has no × ------------------------------------------------
 {
   const doc = makeDom()

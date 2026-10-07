@@ -139,6 +139,9 @@ export class UiView {
     this.layout = layout ?? DEFAULT_LAYOUT
     this.warned = new Set()
     this.panels = new Map()          // uiId -> { root, inputs, msg, dim, decor }
+    // The HUD's values (hp, hud.<name>), for every open panel's decor and for
+    // one opened later, so its bars and `{hud.name}` text are right at once.
+    this.values = new Map()
     this.layer = null
     // Widgets of the panel currently being built, and the control the player
     // has hold of. See set().
@@ -157,6 +160,16 @@ export class UiView {
     if (this.host) this.layer.style.position = 'absolute'
     ;(this.host ?? this.doc.body).appendChild(this.layer)
     return this.layer
+  }
+
+  /**
+   * The HUD's values for the panels' decor (docs/PANEL_DECOR_VALUES.md): the
+   * same partial bindings HudView.update takes, { hp: 80, 'hud.mana': 25 } or
+   * a Map. Kept for panels opened later; each decor repaints only on a change.
+   */
+  update (bindings) {
+    for (const [k, v] of (bindings instanceof Map ? bindings : Object.entries(bindings ?? {}))) this.values.set(k, v)
+    for (const p of this.panels.values()) p.decor?.update(bindings)
   }
 
   /** A new layout: its templates and scale. Open panels are drawn again. */
@@ -326,6 +339,7 @@ export class UiView {
       decor = new HudView({ host: stage, doc, size: { width: pw, height: sh }, assetUrl: this.assetUrl })
       decor.root.style.zIndex = '0'
       decor.setLayout({ ...this.layout, hud: tpl.decor })
+      decor.update(this.values)
     }
     for (const sl of slots) {
       // A slot's style wins for its widget: over the style's button look too.
