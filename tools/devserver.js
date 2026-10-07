@@ -47,7 +47,8 @@ const TYPES = {
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.webmanifest': 'application/manifest+json',
-  '.tsprite': 'application/zip'
+  '.tsprite': 'application/zip',
+  '.zip': 'application/zip'
 }
 
 // Prefixes served, and what they resolve to. An explicit list rather than
@@ -152,6 +153,9 @@ const MOUNTS = [
   // the mapc wasm is the studio's build, not a second copy.
   ['/suite/runtime/', join(ROOT, 'maps', 'scripts')],
   ['/suite/wasm/dist/', join(REPO, 'studio', 'wasm', 'dist')],
+  // The packager plugin's engine kits, when this checkout has built them
+  // (packager/scripts/build_kits.sh): hundreds of MB, never inside the suite.
+  ['/suite/packager-kits/', join(REPO, 'packager', 'build', 'kits')],
   ['/suite/', join(REPO, 'suite')],
   // NOTE: /maps/ is NOT a plain mount -- see findMap below.
   ['/', join(ROOT, 'client')]
