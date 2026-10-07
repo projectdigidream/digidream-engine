@@ -55,11 +55,15 @@ while [[ $# -gt 0 ]]; do
     # The level editor in the same app (docs/STUDIO.md): the studio pages, the
     # map compiler as wasm, and the runtime Lua it bakes against.
     --studio) STUDIO=1; shift ;;
+    # The suite instead (docs/SUITE.md): the studio's fork with its plugins --
+    # the sprite, texture, sound and music editors and the packager inside it.
+    --suite) STUDIO=1; SUITE=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 STUDIO="${STUDIO:-0}"
+SUITE="${SUITE:-0}"
 
 [[ ${#MODULES[@]} -gt 0 ]] || { echo "usage: $0 --module <name> [--module <name>...]" >&2; exit 2; }
 
@@ -224,21 +228,31 @@ cp client/node_modules/three/build/three.module.js "$OUT/client/vendor/three/"
 # and validates against. app/main.js opens /studio/ instead of the game when
 # game.json says so, and seeds the modules into the writable tree.
 if [[ $STUDIO -eq 1 ]]; then
+  # The suite is served from suite/ instead of studio/, with the same map
+  # compiler and runtime beside it, plus its plugins and its service worker.
+  ED=studio
+  [[ $SUITE -eq 1 ]] && ED=suite
   [[ -f ../studio/wasm/dist/mapc.mjs ]] || {
     echo "[app] no studio map compiler at ../studio/wasm/dist/mapc.mjs" >&2
     echo "      run: source ../emsdk/emsdk_env.sh && ./scripts/build_mapc_wasm.sh" >&2
     exit 1; }
-  mkdir -p "$OUT/studio/wasm/dist" "$OUT/studio/runtime"
-  cp ../studio/index.html "$OUT/studio/"
-  cp -R ../studio/src "$OUT/studio/src"
-  cp -R ../studio/vendor "$OUT/studio/vendor"
-  cp ../studio/wasm/dist/mapc.mjs ../studio/wasm/dist/mapc.wasm "$OUT/studio/wasm/dist/"
+  mkdir -p "$OUT/$ED/wasm/dist" "$OUT/$ED/runtime"
+  cp "../$ED/index.html" "$OUT/$ED/"
+  cp -R "../$ED/src" "$OUT/$ED/src"
+  cp -R "../$ED/vendor" "$OUT/$ED/vendor"
+  cp ../studio/wasm/dist/mapc.mjs ../studio/wasm/dist/mapc.wasm "$OUT/$ED/wasm/dist/"
+  if [[ $SUITE -eq 1 ]]; then
+    [[ -f ../suite/plugins/index.json ]] || { echo "[app] no suite plugins (suite/plugins/index.json)" >&2; exit 1; }
+    node ../suite/tools/vendor_plugins.mjs --check >&2 || { echo "[app] the suite's plugins are not as vendored: node suite/tools/vendor_plugins.mjs" >&2; exit 1; }
+    cp -R ../suite/plugins "$OUT/suite/plugins"
+    cp ../suite/sw.js ../suite/VERSION "$OUT/suite/"
+  fi
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
            graph_vocab.lua graphs.lua player_sounds.lua \
            trigger_vocab.json mob_vocab.json weapon_vocab.json graph_vocab.json; do
-    cp "maps/scripts/$f" "$OUT/studio/runtime/"
+    cp "maps/scripts/$f" "$OUT/$ED/runtime/"
   done
-  echo "[app] studio staged"
+  echo "[app] $ED staged"
 fi
 
 # --- what this app IS ---------------------------------------------------------
@@ -253,6 +267,7 @@ cat > "$OUT/game.json" <<EOF
   "id": "$APP_ID",
   "modules": $MODULES_JSON,
   "studio": $([[ $STUDIO -eq 1 ]] && echo true || echo false),
+  "suite": $([[ $SUITE -eq 1 ]] && echo true || echo false),
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "platform": "$(uname -s)-$(uname -m)"
 }
@@ -287,7 +302,7 @@ cat > "$OUT/package.json" <<EOF
     "appId": "dev.dnp.$APP_ID",
     "productName": $(printf '%s' "$APP_NAME" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
     "directories": { "output": "dist" },
-    "files": ["app/**", "client/**", "studio/**", "game.json"],
+    "files": ["app/**", "client/**", "studio/**", "suite/**", "game.json"],
     "extraResources": [
       { "from": "bin", "to": "bin" },
       { "from": "assets", "to": "assets" },

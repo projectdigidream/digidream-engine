@@ -32,6 +32,17 @@ import { join, normalize, extname } from 'node:path'
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  // What the suite's plugin editors are made of: a stylesheet served as bytes
+  // is refused, and the editor comes up bare.
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.webmanifest': 'application/manifest+json',
+  '.tsprite': 'application/zip',
+  '.zip': 'application/zip',
   '.mjs': 'text/javascript; charset=utf-8',
   '.wasm': 'application/wasm',
   '.json': 'application/json',
@@ -72,7 +83,11 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
     // The studio and the runtime Lua it bakes against; both staged only with
     // --studio, and a 404 otherwise.
     ['/studio/runtime/', join(root, 'studio', 'runtime')],
-    ['/studio/', join(root, 'studio')]
+    ['/studio/', join(root, 'studio')],
+    // The suite (docs/SUITE.md), staged instead with --suite: the same runtime
+    // and map compiler beside it, and its plugins inside it.
+    ['/suite/runtime/', join(root, 'suite', 'runtime')],
+    ['/suite/', join(root, 'suite')]
   ]
 
   // Every module root, the writable tree's first. Read on each request: the

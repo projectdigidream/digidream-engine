@@ -105,8 +105,13 @@
   <div id="help">WASD move   SPACE jump   SHIFT dash   G grab   E use   F attack   Q/R rotate   wheel zoom   ?proj=orthographic</div>
   <a id="studio-back" href="/studio/" hidden>◀ Studio</a>
   <script>
-    if (new URLSearchParams(location.search).get('studio')) {
-      document.getElementById('studio-back').hidden = false
+    // ?studio=1 goes back to /studio/; ?studio=/suite/ (the suite, docs/SUITE.md)
+    // goes back to the page that sent it -- a same-origin path, nothing else.
+    const from = new URLSearchParams(location.search).get('studio')
+    if (from) {
+      const back = document.getElementById('studio-back')
+      back.hidden = false
+      if (/^\/[a-z0-9_-]+\/$/i.test(from)) { back.href = from; back.textContent = from === '/suite/' ? '◀ Suite' : back.textContent }
     }
   </script>
 

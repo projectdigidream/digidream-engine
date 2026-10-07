@@ -66,6 +66,9 @@ let statics = null
 // studio all see one tree; a module the user made is never touched.
 const GAME_RW = join(app.getPath('userData'), 'game')
 const files = studioFiles(GAME_RW)
+// The editor the app opens and returns to: the studio, or the suite -- its fork
+// with plugins (docs/SUITE.md) -- when the build staged that (--suite).
+const EDITOR = manifest.suite ? '/suite/' : '/studio/'
 // Set while a play-test restarts the server, so its exit is not mistaken for
 // a crash by the handler below.
 let restarting = false
@@ -159,7 +162,7 @@ function spawnServer (linkPort, extra = {}) {
     // the studio, whose Play log shows what the server said, rather than quit.
     if (!app.isQuiting && !restarting && extra.map && manifest.studio && win && !win.isDestroyed() && statics) {
       playLog(`[shell] the server stopped during the play-test (code=${code} signal=${sig}); back to the studio`)
-      win.loadURL(`http://127.0.0.1:${statics.port}/studio/`)
+      win.loadURL(`http://127.0.0.1:${statics.port}${EDITOR}`)
       return
     }
     if (!app.isQuiting && !restarting) {
@@ -220,7 +223,7 @@ async function launch ({ module, map }) {
   } catch (e) { playLog(`[shell] the game did not start: ${e.message ?? e}`); throw e }
   // Its files first, ahead of every other module in the tree (static.js).
   statics.setFirst?.(modDir)
-  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
+  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=${manifest.suite ? encodeURIComponent(EDITOR) : 1}`)
   announceWhenUp()
   return true
 }
@@ -304,7 +307,7 @@ async function start () {
     }
   })
 
-  await win.loadURL(`http://127.0.0.1:${statics.port}${manifest.studio ? '/studio/' : '/'}`)
+  await win.loadURL(`http://127.0.0.1:${statics.port}${manifest.studio ? EDITOR : '/'}`)
   announceWhenUp()
 }
 
