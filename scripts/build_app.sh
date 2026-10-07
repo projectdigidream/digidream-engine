@@ -246,6 +246,17 @@ if [[ $STUDIO -eq 1 ]]; then
     node ../suite/tools/vendor_plugins.mjs --check >&2 || { echo "[app] the suite's plugins are not as vendored: node suite/tools/vendor_plugins.mjs" >&2; exit 1; }
     cp -R ../suite/plugins "$OUT/suite/plugins"
     cp ../suite/sw.js ../suite/VERSION "$OUT/suite/"
+    # The packager plugin's small kits, preloaded where its page looks
+    # (/suite/packager-kits/): Android and the Tauri desktops, about 24 MB.
+    # The Electron desktop kits are 135-170 MB each and stay out; the Package
+    # page can still load one by hand.
+    KITS=../packager/build/kits
+    mkdir -p "$OUT/suite/packager-kits"
+    n=0
+    for k in android tauri-macos-arm64 tauri-macos-x64 tauri-linux tauri-windows; do
+      [[ -f "$KITS/$k.zip" ]] && { cp "$KITS/$k.zip" "$OUT/suite/packager-kits/"; n=$((n + 1)); }
+    done
+    echo "[app] suite: $n packager kit(s) preloaded$([[ $n -lt 5 ]] && echo " (build the rest: packager/scripts/build_kits.sh)")"
   fi
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
            graph_vocab.lua graphs.lua player_sounds.lua \
