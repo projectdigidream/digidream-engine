@@ -39,7 +39,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:net'
-import { readFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync } from 'node:fs'
 import { readFile as readFileAsync, writeFile as writeFileAsync, readdir } from 'node:fs/promises'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -232,7 +232,13 @@ async function start () {
   const linkPort = await freePort()
   serverProc = spawnServer(linkPort)
 
-  statics = await startStatic({ root: GAME, modules: manifest.modules, rwRoot: manifest.studio ? GAME_RW : null, log })
+  // THE SAME ORIGIN EVERY LAUNCH. The page's storage (the studio's work in
+  // IndexedDB, localStorage) belongs to its origin, port included; a new port
+  // each launch was a new, empty store -- what was not yet played was gone.
+  const portFile = join(app.getPath('userData'), 'static-port')
+  const lastPort = Number((() => { try { return readFileSync(portFile, 'utf8') } catch { return '' } })()) || 0
+  statics = await startStatic({ root: GAME, modules: manifest.modules, rwRoot: manifest.studio ? GAME_RW : null, log, port: lastPort })
+  if (statics.port !== lastPort) { try { writeFileSync(portFile, String(statics.port)) } catch (e) { log(`could not keep the port: ${e.message}`) } }
 
   relay = new Relay({ port: linkPort, log })
   relay.start((msg) => { if (win && !win.isDestroyed()) win.webContents.send('dnp:down', msg) })

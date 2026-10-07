@@ -721,6 +721,8 @@ suite_app () {
   node shells/app/test/ui_route.test.js | tail -2
   # A play-test serves its own module first: another module's hud.json no longer wins it.
   node shells/app/test/play_first.test.js | tail -2
+  # The desktop app keeps its port, so the studio's storage survives a relaunch.
+  node shells/app/test/same_port.test.js | tail -2
   node shells/app/test/local_transport.test.js 2>/dev/null | tail -2
 }
 

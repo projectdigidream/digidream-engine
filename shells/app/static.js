@@ -51,7 +51,7 @@ const TYPES = {
  * @param modules  module directory names, in load order
  * @param rwRoot   the writable game tree, or null without the studio
  */
-export function startStatic ({ root, modules = [], rwRoot = null, log = () => {} }) {
+export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}, port: wanted = 0 }) {
   const MOUNTS = [
     ['/vendor/three/', join(root, 'client', 'vendor', 'three')],
     ['/src/', join(root, 'client', 'src')],
@@ -213,10 +213,17 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
   })
 
   return new Promise((resolve_, reject) => {
-    server.on('error', reject)
-    // Port 0: the OS picks a free one and tells us which. Two copies of the
-    // game can then run side by side, which a fixed port makes impossible.
-    server.listen(0, '127.0.0.1', () => {
+    // `wanted`: the port the last run used, so the page's origin -- and with
+    // it the studio's own storage (IndexedDB is kept per origin, port and
+    // all) -- is the same from one launch to the next. Taken, the OS picks a
+    // free one (0), as it always did: two copies can still run side by side.
+    let tried = false
+    server.on('error', (e) => {
+      if (!tried && wanted && e.code === 'EADDRINUSE') { tried = true; log(`static: port ${wanted} is taken; another`); server.listen(0, '127.0.0.1'); return }
+      reject(e)
+    })
+    tried = !wanted
+    server.listen(wanted || 0, '127.0.0.1', () => {
       const { port } = server.address()
       log(`static http://127.0.0.1:${port}/`)
       // setFirst(dir): the module a play-test runs, looked in first (null: none).
