@@ -855,6 +855,9 @@ suite_stack () {
      `# The module's own keys (docs/KEYS.md): told to the client, held in frames,` \
      `# answered by a graph. CONTROL: frames without the key fire nothing.` \
      && node test/keys.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# The graphs' saved variables (docs/GRAPHS.md "Saved on disk"): saved by one` \
+     `# server, loaded by the next. CONTROL: before a save, load_vars says none.` \
+     && node test/store.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \

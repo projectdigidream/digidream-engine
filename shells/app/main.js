@@ -116,6 +116,11 @@ function spawnServer (linkPort, extra = {}) {
   const maps = extra.maps ?? (extra.map ? [extra.map] : [])
   for (const m of maps) args.push('--map', m)
   if (maps.length) args.push('--spawn', 'start')
+  // Where the server writes -- save games, level state, the graphs' saved
+  // variables (docs/GRAPHS.md "Saved on disk"): the user's data directory. Its
+  // default, .dnp-state in its cwd, is inside a packaged app, which is
+  // read-only (and on macOS, sealed).
+  args.push('--state-dir', join(app.getPath('userData'), 'state'))
 
   // cwd is the GAME directory, not wherever the app was launched from. The
   // server resolves assets/props.txt and modules/ against its working

@@ -35,7 +35,7 @@ SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")
 # the other Lua tests do not: they stub `dnp` with a Lua table. That is the whole
 # point of it -- four bugs this phase came from a stub being more generous than
 # the engine, and every one of them raised the first time a real server ran.
-RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp"
+RANGE_SRCS=("${SRCS[@]}" "$ROOT/server/src/lua/world_binding.cpp" "$ROOT/server/src/platform.cpp"
             "$ROOT/server/src/lua/weapon_binding.cpp" "$ROOT/server/src/lua/json.cpp"
             "$ROOT/server/src/mobs/mob_compile.cpp"
             "$ROOT/server/src/mobs/mob_eval.cpp"
@@ -72,7 +72,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # half the conditions ask the world something, and a double would be a second
 # answer to all of it. Needs core, which the graph test does not.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
-        "$ROOT/server/src/lua/world_binding.cpp" \
+        "$ROOT/server/src/lua/world_binding.cpp" "$ROOT/server/src/platform.cpp" \
         "$ROOT/server/src/lua/weapon_binding.cpp" "$ROOT/server/src/lua/json.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
@@ -83,7 +83,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" \
 # Persistence (docs/SAVING.md): what a library saves through dnp.persist
 # and gets back, against the real bindings.
 clang++ "${FLAGS[@]}" "${SRCS[@]}" \
-        "$ROOT/server/src/lua/world_binding.cpp" \
+        "$ROOT/server/src/lua/world_binding.cpp" "$ROOT/server/src/platform.cpp" \
         "$ROOT/server/src/lua/weapon_binding.cpp" "$ROOT/server/src/lua/json.cpp" \
         "$ROOT/server/src/mobs/mob_compile.cpp" \
         "$ROOT/server/src/mobs/mob_eval.cpp" \
@@ -135,7 +135,7 @@ echo "[lua-tests] $OUT/trigger_vocab_json $OUT/triggercheck"
 if grep -q 'int dnp_server_run' "$ROOT/server/src/main.cpp"; then
   clang++ "${FLAGS[@]}" -Wno-unused-parameter "${RANGE_SRCS[@]}" \
           "$ROOT/server/src/net/link.cpp" "$ROOT/server/src/world/metamap.cpp" \
-          "$ROOT/server/src/main.cpp" "$ROOT/server/src/platform.cpp" \
+          "$ROOT/server/src/main.cpp" \
           "$ROOT/server/tests/test_server_run.cpp" "${LINK[@]}" -lpthread \
           -o "$OUT/test_server_run"
   echo "[lua-tests] $OUT/test_server_run"

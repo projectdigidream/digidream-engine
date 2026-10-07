@@ -1142,6 +1142,106 @@ int main(int argc, char** argv) {
         CHECK(g_ui.opened.size() == 1 && (g_ui.opened[0].flags & proto::UI_FLAG_PINNED) != 0);
     }
 
+    // ================================================================
+    // SAVED ON DISK: save_vars / load_vars / forget_saved (docs/GRAPHS.md).
+    std::printf("-- saved on disk --\n");
+    {
+        char dir_tpl[] = "/tmp/dnp-store-XXXXXX";
+        const char* dir = mkdtemp(dir_tpl);
+        CHECK(dir != nullptr);
+        static std::string state_dir;
+        state_dir = dir ? dir : "";
+        ctx.state_dir = &state_dir;
+        const char* keeper = R"({ "graph": 1, "name": "keeper",
+          "vars": { "best": 0, "who": "", "beat": false, "saved": 0, "loaded": 0 },
+          "nodes": [
+            { "id": "c1", "type": "on_call", "name": "win" },
+            { "id": "s1", "type": "set_var", "var": "best", "value": 42 },
+            { "id": "s2", "type": "set_var", "var": "who", "value": "ana" },
+            { "id": "s3", "type": "set_var", "var": "beat", "value": true },
+            { "id": "sv", "type": "save_vars", "store": "progress", "vars": "best, who, beat" },
+            { "id": "ok", "type": "set_var", "var": "saved", "value": 1 },
+            { "id": "no", "type": "set_var", "var": "saved", "value": -1 },
+            { "id": "c2", "type": "on_call", "name": "resume" },
+            { "id": "lv", "type": "load_vars", "store": "progress" },
+            { "id": "l1", "type": "set_var", "var": "loaded", "value": 1 },
+            { "id": "l0", "type": "set_var", "var": "loaded", "value": -1 },
+            { "id": "c3", "type": "on_call", "name": "reset_progress" },
+            { "id": "fg", "type": "forget_saved", "store": "progress" }
+          ],
+          "links": [ ["c1.then", "s1.in"], ["s1.then", "s2.in"], ["s2.then", "s3.in"], ["s3.then", "sv.in"],
+                     ["sv.then", "ok.in"], ["sv.failed", "no.in"],
+                     ["c2.then", "lv.in"], ["lv.then", "l1.in"], ["lv.none", "l0.in"],
+                     ["c3.then", "fg.in"] ] })";
+        auto var = [&](const char* g, const char* k) {
+            const std::string src = std::string("t_v = graphs.var('") + g + "', '" + k + "')";
+            run(src.c_str(), "reading");
+            lua_getglobal(L, "t_v");
+            std::string out = lua_isnil(L, -1) ? "nil" : lua_isboolean(L, -1) ? (lua_toboolean(L, -1) ? "true" : "false")
+                                                       : std::string(lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+            lua_settop(L, 0);
+            return out;
+        };
+        // Nothing saved yet: `none`.
+        CHECK(load_graph(keeper));
+        CHECK(run("graphs.call('resume', dnp.players()[1], nil)", "resume, before any save"));
+        CHECK(var("keeper", "loaded") == "-1");
+        // Saved, and the file is there.
+        CHECK(run("graphs.call('win', dnp.players()[1], nil)", "win"));
+        CHECK(var("keeper", "saved") == "1");
+        const std::string file = state_dir + "/store/progress.store";
+        std::FILE* f = std::fopen(file.c_str(), "rb");
+        CHECK(f != nullptr);
+        if (f) std::fclose(f);
+        // A NEW GAME: the graph forgotten and loaded from its file again.
+        CHECK(run("graphs.reset()", "reset"));
+        CHECK(load_graph(keeper));
+        CHECK(var("keeper", "best") == "0");          // CONTROL: a fresh load starts over
+        CHECK(run("graphs.call('resume', dnp.players()[1], nil)", "resume"));
+        std::printf("  after a new game: best %s, who %s, beat %s, loaded %s\n", var("keeper", "best").c_str(),
+                    var("keeper", "who").c_str(), var("keeper", "beat").c_str(), var("keeper", "loaded").c_str());
+        CHECK(var("keeper", "best") == "42" && var("keeper", "who") == "ana" && var("keeper", "beat") == "true");
+        CHECK(var("keeper", "loaded") == "1");
+        // ANOTHER graph naming the store shares it; one holding `best` as text is not forced.
+        CHECK(load_graph(R"({ "graph": 1, "name": "reader", "vars": { "best": 0, "who": 7 },
+          "nodes": [ { "id": "c", "type": "on_call", "name": "peek" }, { "id": "l", "type": "load_vars", "store": "progress" } ],
+          "links": [ ["c.then", "l.in"] ] })"));
+        CHECK(run("graphs.call('peek', dnp.players()[1], nil)", "peek"));
+        CHECK(var("reader", "best") == "42");
+        CHECK(var("reader", "who") == "7");            // text into a number: left alone
+        // A save of SOME variables writes beside the rest, not over them.
+        CHECK(load_graph(R"({ "graph": 1, "name": "partial", "vars": { "who": "bo" },
+          "nodes": [ { "id": "c", "type": "on_call", "name": "rename" }, { "id": "s", "type": "save_vars", "store": "progress" } ],
+          "links": [ ["c.then", "s.in"] ] })"));
+        CHECK(run("graphs.call('rename', dnp.players()[1], nil)", "rename"));
+        CHECK(run("t_s = dnp.store_load('progress'); t_best = t_s.best; t_who = t_s.who", "the file"));
+        CHECK(num("t_best") == 42);
+        CHECK(run("t_whoq = (t_who == 'bo')", "who") && truthy("t_whoq"));
+        // Forgotten: `none` again.
+        CHECK(run("graphs.call('reset_progress', dnp.players()[1], nil)", "forget"));
+        CHECK(run("graphs.call('resume', dnp.players()[1], nil)", "resume after forgetting"));
+        CHECK(var("keeper", "loaded") == "-1");
+        // Nowhere to write: `failed`, and said.
+        ctx.state_dir = nullptr;
+        CHECK(run("graphs.call('win', dnp.players()[1], nil)", "win with no state dir"));
+        CHECK(var("keeper", "saved") == "-1");
+        ctx.state_dir = &state_dir;
+        // A store name is a file name: no path gets through, at load or at run time.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "sneak", "vars": { "a": 1 },
+          "nodes": [ { "id": "s", "type": "save_vars", "store": "../../etc" } ], "links": [] })"));
+        CHECK(run("t_bad, t_why = dnp.store_save('../x', { a = 1 })", "a bad name") && !truthy("t_bad"));
+        // And a variable it does not have is refused at load.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "typo", "vars": { "best": 1 },
+          "nodes": [ { "id": "s", "type": "save_vars", "vars": "bset" } ], "links": [] })"));
+        // Only plain values: a table cannot be saved through the binding.
+        CHECK(run("t_t = dnp.store_save('x', { a = function() end })", "a function") && !truthy("t_t"));
+        std::remove(file.c_str());
+        std::remove((state_dir + "/store/x.store").c_str());
+        rmdir((state_dir + "/store").c_str());
+        rmdir(state_dir.c_str());
+        ctx.state_dir = nullptr;
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

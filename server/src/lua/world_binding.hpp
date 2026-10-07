@@ -329,6 +329,10 @@ struct WorldContext {
     // fps. What dnp.controls() answers, so a weapon aims by the view in an FPS
     // and by auto-aim in a platformer.
     u8                controls = 0;
+    // The server's state directory (--state-dir): the graphs' saved variables
+    // live in its `store/` (dnp.store_save, docs/GRAPHS.md "Saved on disk").
+    // Null: there is nowhere to write, and the store says so.
+    const std::string* state_dir = nullptr;
     // The module's own keys (module.txt `key` lines, docs/KEYS.md), in bit
     // order: what dnp.actions() names and e:actions()'s bits mean.
     const std::vector<std::string>* actions = nullptr;

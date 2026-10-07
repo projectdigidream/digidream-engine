@@ -650,6 +650,63 @@ function EXEC.open_panel(g, n, ev, pull)
   end
   return "then"
 end
+-- SAVED ON DISK. A store is one table, { [variable] = value }, under a name;
+-- graphs naming the same store share it, so a save writes beside what is
+-- there rather than over it. Plain values only: a number, text, true/false.
+local function store_names(g, n)
+  if type(n.vars) == "string" then
+    local out = {}
+    for name in n.vars:gmatch("[^,%s]+") do out[#out + 1] = name end
+    return out
+  end
+  local out = {}
+  for k in pairs(g.vars) do out[#out + 1] = k end
+  table.sort(out)
+  return out
+end
+local store_said = {}
+local function store_say(key, fmt, ...)
+  if store_said[key] then return end
+  store_said[key] = true
+  say(fmt, ...)
+end
+function EXEC.save_vars(g, n)
+  local store = n.store or "game"
+  if dnp.store_save == nil then return "failed" end
+  local have = dnp.store_load(store)
+  if type(have) ~= "table" then have = {} end
+  for _, k in ipairs(store_names(g, n)) do
+    local v = g.vars[k]
+    local t = type(v)
+    if t == "number" or t == "string" or t == "boolean" then have[k] = v
+    elseif v ~= nil then store_say(g.name .. "/" .. k, "%s: '%s' holds a %s, which cannot be kept on disk", g.name, k, t) end
+  end
+  local ok, why = dnp.store_save(store, have)
+  if not ok then
+    store_say(g.name .. "/" .. store, "%s: could not save store '%s': %s", g.name, store, tostring(why))
+    return "failed"
+  end
+  return "then"
+end
+function EXEC.load_vars(g, n)
+  local store = n.store or "game"
+  if dnp.store_load == nil then return "none" end
+  local have, why = dnp.store_load(store)
+  if type(have) ~= "table" then
+    if why ~= nil then store_say(g.name .. "/" .. store, "%s: store '%s': %s", g.name, store, tostring(why)) end
+    return "none"
+  end
+  for _, k in ipairs(store_names(g, n)) do
+    local v = have[k]
+    if v ~= nil and g.vars[k] ~= nil and type(v) == type(g.vars[k]) then g.vars[k] = v end
+  end
+  return "then"
+end
+function EXEC.forget_saved(g, n)
+  if dnp.store_delete ~= nil then dnp.store_delete(n.store or "game") end
+  return "then"
+end
+
 function EXEC.close_panel(g, n, ev, pull)
   local e = panel_player(n, g, ev, pull)
   if e == nil then return "then" end
@@ -1631,6 +1688,16 @@ function M.load(data, label)
         end
         if n.type == "delay" and type(n.ticks) == "number" and n.ticks < 1 then
           bad("%s: `ticks` is at least 1", where)
+        end
+        if n.type == "save_vars" or n.type == "load_vars" or n.type == "forget_saved" then
+          if n.store ~= nil and (type(n.store) ~= "string" or not n.store:match("^[%w_%-]+$") or #n.store > 48) then
+            bad("%s: `store` '%s' is not a store name: 1-48 letters, digits, _ or -", where, tostring(n.store))
+          end
+          if type(n.vars) == "string" then
+            for name in n.vars:gmatch("[^,%s]+") do
+              if vars[name] == nil then bad("%s: no variable '%s' in `vars` to keep", where, name) end
+            end
+          end
         end
         if (n.type == "get_var" or n.type == "set_var" or n.type == "add_var") and type(n.var) == "string" then
           local prop = vars[n.var] == nil and PROPERTY[n.var] or nil

@@ -1673,6 +1673,83 @@
     {
       "args": [
         {
+          "doc": "Which saved set: letters, digits, _ or -. Default `game`. Graphs that name the same store share it.",
+          "name": "store",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "Which of this graph's variables, by name, comma-separated. Default all of them.",
+          "name": "vars",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "storage",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Write variables to the disk, beside what the store already holds. Numbers, text and true/false only. `failed` when there is nowhere to write or a value cannot be kept.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then",
+        "failed"
+      ],
+      "name": "save_vars"
+    },
+    {
+      "args": [
+        {
+          "doc": "Which saved set. Default `game`.",
+          "name": "store",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "doc": "Which variables, comma-separated. Default every one of this graph's that the store has.",
+          "name": "vars",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "storage",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Read variables back from the disk into this graph's own. A saved value goes only into a variable of the same kind (a number into a number). `none` when nothing was ever saved there.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then",
+        "none"
+      ],
+      "name": "load_vars"
+    },
+    {
+      "args": [
+        {
+          "doc": "Which saved set. Default `game`.",
+          "name": "store",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "storage",
+      "data_in": [],
+      "data_out": [],
+      "doc": "Delete a saved set from the disk: a reset of progress.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "forget_saved"
+    },
+    {
+      "args": [
+        {
           "doc": "One of this graph's panels.",
           "name": "panel",
           "type": "string"

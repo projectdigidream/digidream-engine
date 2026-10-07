@@ -15,6 +15,7 @@
 #include "dnp/physics/params_table.hpp"
 #include "lua/fx_binding.hpp"
 #include "sky.hpp"
+#include "platform.hpp"
 
 extern "C" {
 #include "lauxlib.h"
@@ -2932,6 +2933,118 @@ bool restore_parts(lua_State* L, const char* key, int nargs, const std::string& 
 }  // namespace
 
 int l_dnp_persist(lua_State* L) { return register_part(L, PERSIST_KEY); }
+
+// --- the store: values a game keeps on disk (docs/GRAPHS.md "Saved on disk") --
+//
+// Not a save game. A save is the world at a moment and a new game forgets it;
+// the store is what outlives both -- a high score, what is unlocked, a setting.
+// One file per NAME under <state-dir>/store, in the persist encoding (plain
+// data only, keys sorted), written whole and swapped in, so a crash mid-write
+// leaves the old file rather than half a new one.
+namespace {
+constexpr size_t STORE_MAX_BYTES = 64 * 1024;
+
+// A name is a file name, so it is held to letters, digits, '_' and '-': no
+// path can be smuggled through it, and it means the same file on every system.
+bool store_name_ok(const char* s, size_t n) {
+    if (n == 0 || n > 48) return false;
+    for (size_t i = 0; i < n; ++i) {
+        const char c = s[i];
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+// The file for a name, or empty (with a reason pushed as `false, why`).
+std::string store_path(lua_State* L, int& pushed) {
+    size_t n = 0;
+    const char* name = luaL_checklstring(L, 1, &n);
+    const WorldContext& ctx = ctx_of(L);
+    pushed = 0;
+    if (!store_name_ok(name, n)) {
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "'%s' is not a store name: 1-48 letters, digits, _ or -", name);
+        pushed = 2;
+        return {};
+    }
+    if (ctx.state_dir == nullptr || ctx.state_dir->empty()) {
+        lua_pushboolean(L, 0);
+        lua_pushstring(L, "this server has nowhere to write (no state directory)");
+        pushed = 2;
+        return {};
+    }
+    return *ctx.state_dir + "/store/" + std::string(name, n) + ".store";
+}
+}  // namespace
+
+// dnp.store_save(name, value) -> true | false, why
+int l_dnp_store_save(lua_State* L) {
+    int pushed = 0;
+    const std::string path = store_path(L, pushed);
+    if (pushed) return pushed;
+    luaL_checkany(L, 2);
+    std::string out, err;
+    if (!encode_value(L, 2, out, err)) {
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "cannot be saved: %s", err.c_str());
+        return 2;
+    }
+    if (out.size() > STORE_MAX_BYTES) {
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "too big to keep (%d bytes; the most is %d)", (int)out.size(), (int)STORE_MAX_BYTES);
+        return 2;
+    }
+    const std::string dir = *ctx_of(L).state_dir + "/store";
+    std::string at;
+    for (size_t i = 0; i <= dir.size(); ++i) {
+        if (i == dir.size() || dir[i] == '/' || dir[i] == '\\') { if (!at.empty()) make_dir(at.c_str()); }
+        if (i < dir.size()) at += dir[i];
+    }
+    const std::string tmp = path + ".tmp";
+    std::FILE* f = std::fopen(tmp.c_str(), "wb");
+    bool ok = f != nullptr;
+    if (f) { ok = std::fwrite(out.data(), 1, out.size(), f) == out.size(); std::fclose(f); }
+    if (ok) ok = replace_file(tmp.c_str(), path.c_str());
+    if (!ok) {
+        lua_pushboolean(L, 0);
+        lua_pushfstring(L, "could not write %s", path.c_str());
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// dnp.store_load(name) -> value | nil[, why]. Nil with no reason: never saved.
+int l_dnp_store_load(lua_State* L) {
+    int pushed = 0;
+    const std::string path = store_path(L, pushed);
+    if (pushed) { lua_pushnil(L); lua_replace(L, -3); return 2; }
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) { lua_pushnil(L); return 1; }
+    std::string in;
+    char buf[4096];
+    size_t got = 0;
+    while ((got = std::fread(buf, 1, sizeof buf, f)) > 0 && in.size() <= STORE_MAX_BYTES) in.append(buf, got);
+    std::fclose(f);
+    std::string err;
+    if (in.size() > STORE_MAX_BYTES || !decode_value(L, in, err)) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "%s is damaged: %s", path.c_str(), err.empty() ? "too big" : err.c_str());
+        return 2;
+    }
+    return 1;
+}
+
+// dnp.store_delete(name) -> true if there was one
+int l_dnp_store_delete(lua_State* L) {
+    int pushed = 0;
+    const std::string path = store_path(L, pushed);
+    if (pushed) return pushed;
+    lua_pushboolean(L, std::remove(path.c_str()) == 0 ? 1 : 0);
+    return 1;
+}
 int l_dnp_persist_player(lua_State* L) { return register_part(L, PERSIST_PLAYER_KEY); }
 int l_dnp_restoring(lua_State* L) {
     lua_pushboolean(L, ctx_of(L).restoring ? 1 : 0);
@@ -3114,6 +3227,9 @@ int l_dnp_is_game(lua_State* L) {
 
 const luaL_Reg DNP_FUNCS[] = {
     {"persist", l_dnp_persist},
+    {"store_save", l_dnp_store_save},
+    {"store_load", l_dnp_store_load},
+    {"store_delete", l_dnp_store_delete},
     {"persist_player", l_dnp_persist_player},
     {"restoring", l_dnp_restoring},
     {"export", l_dnp_export},

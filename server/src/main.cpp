@@ -1066,6 +1066,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.props       = &props;
         game_ctx.cross       = this;
         game_ctx.controls    = controls;
+        game_ctx.state_dir   = &state_dir;
         game_ctx.actions     = &key_names;
         game_ctx.rng         = Rng(0x47414D45ull, 13);
         game_bound_stack_.clear();
@@ -2247,6 +2248,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.cross  = this;
         L.ctx.sounds = &L.host->sounds;
         L.ctx.controls = controls;
+        L.ctx.state_dir = &state_dir;
         L.ctx.actions = &key_names;
         L.ctx.props       = &props;
         // Seeded from the map, so a scripted-discrete schedule is unpredictable

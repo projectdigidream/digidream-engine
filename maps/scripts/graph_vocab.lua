@@ -599,6 +599,30 @@ graph_vocab = {
     -- the runtime keeps which player has which open, so nothing here needs a
     -- panel's number. Not level_only: the game's graph opens the game's
     -- panels, which survive a level change (docs/PANELS.md).
+    -- SAVED ON DISK (docs/GRAPHS.md "Saved on disk"): variables that outlive a
+    -- new game and a loaded save -- a high score, what is unlocked, a setting.
+    { name = "save_vars", category = "storage",
+      args = { { name = "store", type = "string", optional = true,
+                 doc = "Which saved set: letters, digits, _ or -. Default `game`. Graphs that name the same store share it." },
+               { name = "vars", type = "string", optional = true,
+                 doc = "Which of this graph's variables, by name, comma-separated. Default all of them." } },
+      exec_in = { "in" }, exec_out = { "then", "failed" },
+      data_in = {}, data_out = {},
+      doc = "Write variables to the disk, beside what the store already holds. Numbers, text and true/false only. " ..
+            "`failed` when there is nowhere to write or a value cannot be kept." },
+    { name = "load_vars", category = "storage",
+      args = { { name = "store", type = "string", optional = true, doc = "Which saved set. Default `game`." },
+               { name = "vars", type = "string", optional = true,
+                 doc = "Which variables, comma-separated. Default every one of this graph's that the store has." } },
+      exec_in = { "in" }, exec_out = { "then", "none" },
+      data_in = {}, data_out = {},
+      doc = "Read variables back from the disk into this graph's own. A saved value goes only into a variable of " ..
+            "the same kind (a number into a number). `none` when nothing was ever saved there." },
+    { name = "forget_saved", category = "storage",
+      args = { { name = "store", type = "string", optional = true, doc = "Which saved set. Default `game`." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = {}, data_out = {},
+      doc = "Delete a saved set from the disk: a reset of progress." },
     { name = "open_panel", category = "panel",
       args = { { name = "panel", type = "string", doc = "One of this graph's panels." } },
       exec_in = { "in" }, exec_out = { "then" },
