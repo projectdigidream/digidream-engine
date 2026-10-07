@@ -36,7 +36,18 @@ const TYPES = {
   '.dnpm': 'application/octet-stream',
   '.map': 'application/json',
   '.png': 'image/png',
-  '.txt': 'text/plain; charset=utf-8'
+  '.txt': 'text/plain; charset=utf-8',
+  // What the suite's plugin editors are built of (docs/SUITE.md): a stylesheet
+  // served as bytes is refused by the browser, and the editor comes up bare.
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.webmanifest': 'application/manifest+json',
+  '.tsprite': 'application/zip'
 }
 
 // Prefixes served, and what they resolve to. An explicit list rather than
