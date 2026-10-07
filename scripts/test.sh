@@ -682,6 +682,9 @@ suite_studio () {
   # modules/starter is generated from its documents; a checked-in copy that
   # the emitter would write differently is a stale one.
   node ../studio/tools/emit_module.mjs ../modules/starter --check | tail -1
+  # The starter template the studio ships (new modules are copies of it) is
+  # modules/starter's sources; a stale one makes modules from an old starter.
+  node ../studio/tools/make_template.mjs --check | tail -1
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
