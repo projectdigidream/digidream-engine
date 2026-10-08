@@ -36,16 +36,20 @@ while [[ $# -gt 0 ]]; do
     --module) MODULE="$2"; shift 2 ;;
     --map) MAP="$2"; shift 2 ;;
     # The level editor in the same app (docs/STUDIO.md).
+    # Its plugins come with it (docs/PLUGINS.md).
     --studio) STUDIO=1; shift ;;
-    # The suite instead (docs/SUITE.md): the studio's fork with its plugins.
-    --suite) STUDIO=1; SUITE=1; shift ;;
+    # The suite, the studio's fork with the plugins, became the studio (0.2.0).
+    --suite) STUDIO=1; shift ;;
+    # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
+    # kits must not carry kits).
+    --no-kits) NO_KITS=1; shift ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 STUDIO="${STUDIO:-0}"
-SUITE="${SUITE:-0}"
+NO_KITS="${NO_KITS:-0}"
 MODULE_DIR="$REPO/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[apk] no such module: modules/$MODULE" >&2; exit 2; }
 [[ $STUDIO -eq 0 || -f "$REPO/studio/wasm/dist/mapc.mjs" ]] || {
@@ -265,7 +269,6 @@ cat > "$G/start.txt" <<EOF
 module=$MODULE
 map=$MAP
 studio=$STUDIO
-suite=$SUITE
 built=$(date '+%Y-%m-%d %H:%M')
 EOF
 
@@ -273,25 +276,24 @@ EOF
 # runtime Lua and vocabularies it bakes and validates against -- under
 # web/studio/, which is where the page fetches them from (docs/STUDIO.md).
 if [[ $STUDIO -eq 1 ]]; then
-  # The suite is web/suite/ instead, with its vendored plugins beside its pages.
+  # With its vendored plugins beside its pages (docs/PLUGINS.md).
   ED=studio
-  [[ $SUITE -eq 1 ]] && ED=suite
   mkdir -p "$W/$ED/wasm/dist" "$W/$ED/runtime"
   cp "$REPO/$ED/index.html" "$W/$ED/"
   cp -R "$REPO/$ED/src" "$W/$ED/src"
   cp -R "$REPO/$ED/vendor" "$W/$ED/vendor"
   cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/$ED/wasm/dist/"
-  if [[ $SUITE -eq 1 ]]; then
-    node "$REPO/suite/tools/vendor_plugins.mjs" --check >&2 || { echo "[apk] the suite's plugins are not as vendored: node suite/tools/vendor_plugins.mjs" >&2; exit 1; }
-    cp -R "$REPO/suite/plugins" "$W/suite/plugins"
-    cp "$REPO/suite/sw.js" "$REPO/suite/VERSION" "$W/suite/"
+  node "$REPO/studio/tools/vendor_plugins.mjs" --check >&2 || { echo "[apk] the studio's plugins are not as vendored: node studio/tools/vendor_plugins.mjs" >&2; exit 1; }
+  cp -R "$REPO/studio/plugins" "$W/studio/plugins"
+  cp "$REPO/studio/sw.js" "$REPO/studio/VERSION" "$W/studio/"
+  if [[ $NO_KITS -eq 0 ]]; then
     # The packager plugin's small kits, where its page looks (as build_app.sh):
     # Android and the Tauri desktops, ~24 MB; the Electron ones stay out.
-    mkdir -p "$W/suite/packager-kits"
+    mkdir -p "$W/studio/packager-kits"
     for k in android tauri-macos-arm64 tauri-macos-x64 tauri-linux tauri-windows; do
-      [[ -f "$REPO/packager/build/kits/$k.zip" ]] && cp "$REPO/packager/build/kits/$k.zip" "$W/suite/packager-kits/"
+      [[ -f "$REPO/packager/build/kits/$k.zip" ]] && cp "$REPO/packager/build/kits/$k.zip" "$W/studio/packager-kits/"
     done
-    echo "[apk] suite: $(ls "$W/suite/packager-kits" | wc -l | tr -d ' ') packager kit(s) preloaded"
+    echo "[apk] studio: $(ls "$W/studio/packager-kits" | wc -l | tr -d ' ') packager kit(s) preloaded"
   fi
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
            graph_vocab.lua graphs.lua player_sounds.lua \
@@ -405,8 +407,7 @@ if [[ ! -f "$KEY" ]]; then
 fi
 
 "$BT/zipalign" -f -p 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
-# The suite build has a name of its own, so it never replaces the plain one.
-APK="$OUT/digidream-$MODULE$([[ $SUITE -eq 1 ]] && echo -suite).apk"
+APK="$OUT/digidream-$MODULE.apk"
 "$BT/apksigner" sign --ks "$KEY" --ks-pass pass:android --key-pass pass:android \
   --out "$APK" "$OUT/aligned.apk"
 rm -f "$OUT/unsigned.apk" "$OUT/aligned.apk" "$OUT/base.apk" "$OUT/res.zip"

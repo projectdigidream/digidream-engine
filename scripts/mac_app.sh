@@ -2,9 +2,9 @@
 #
 # A macOS .app from an app staged by build_app.sh, without electron-builder.
 #
-#   scripts/build_app.sh --module starter --suite --out build/app-suite
-#   (cd build/app-suite/starter && npm install)        # once: fetches Electron
-#   scripts/mac_app.sh build/app-suite/starter "Digidream Suite"
+#   scripts/build_app.sh --module starter --studio --out build/app-studio
+#   (cd build/app-studio/starter && npm install)        # once: fetches Electron
+#   scripts/mac_app.sh build/app-studio/starter "Digidream Studio"
 #
 # The staged folder goes into a copy of its own Electron.app as
 # Contents/Resources/app -- the layout it already runs from with `npm start`

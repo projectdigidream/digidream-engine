@@ -685,6 +685,14 @@ suite_studio () {
   # The starter template the studio ships (new modules are copies of it) is
   # modules/starter's sources; a stale one makes modules from an old starter.
   node ../studio/tools/make_template.mjs --check | tail -1
+  # THE PLUGINS (docs/PLUGINS.md): manifests, the registry, the editor protocol
+  # over a real channel, every plugin's copy of the SDK; bakers in node, the
+  # same bytes a page's Worker makes; and no '/studio/' literal in src/.
+  node ../studio/test/plugins.test.js | tail -1
+  node ../studio/test/bake.sources.test.js | tail -1
+  node ../studio/test/paths_abs.test.js | tail -1
+  # The bundled editors are what plugins.lock.json pins, untouched by hand.
+  node ../studio/tools/vendor_plugins.mjs --check | tail -5
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
@@ -693,22 +701,6 @@ suite_studio () {
   # format means by that word. A platform whose edges came out `wall` looks
   # completely correct and plays as a room with a thick floor.
   node ../editor/test/shapes.test.js | tail -2
-}
-
-# The suite: the studio's fork with plugins (docs/SUITE.md), every node test of it.
-suite_suite () {
-  need_maps
-  stack_ready || return 0
-  need_server
-  need_wasm
-  # The fork carries the studio's tests as its own, plus the plugin system's.
-  # The page tests are opt-in (a browser), like the studio's.
-  for t in ../suite/test/*.test.js; do
-    case "$t" in *page.test.js) continue ;; esac
-    node "$t" | tail -1
-  done
-  node ../suite/tools/emit_module.mjs ../modules/starter --check | tail -1
-  node ../suite/tools/make_template.mjs --check | tail -1
 }
 
 # The desktop app: staging a module, its writable tree, its routes, its transport.
@@ -1007,7 +999,7 @@ suite_fps () {
 
 # --- which, and in what order ----------------------------------------------------
 
-ALL=(guards core tools lua sanitizers determinism client studio suite app browser stack fps)
+ALL=(guards core tools lua sanitizers determinism client studio app browser stack fps)
 QUICK=(guards core tools lua client)
 
 if [[ "${1:-}" == "--list" ]]; then

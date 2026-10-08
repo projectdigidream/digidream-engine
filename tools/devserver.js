@@ -37,7 +37,7 @@ const TYPES = {
   '.map': 'application/json',
   '.png': 'image/png',
   '.txt': 'text/plain; charset=utf-8',
-  // What the suite's plugin editors are built of (docs/SUITE.md): a stylesheet
+  // What the studio's plugin editors are built of (docs/PLUGINS.md): a stylesheet
   // served as bytes is refused by the browser, and the editor comes up bare.
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
@@ -148,15 +148,10 @@ const MOUNTS = [
   // bakes and validates against. The runtime mount comes first because the
   // studio mount would otherwise claim the prefix.
   ['/studio/runtime/', join(ROOT, 'maps', 'scripts')],
-  ['/studio/', join(REPO, 'studio')],
-  // The suite (docs/SUITE.md): a fork of the studio with plugins. Same runtime;
-  // the mapc wasm is the studio's build, not a second copy.
-  ['/suite/runtime/', join(ROOT, 'maps', 'scripts')],
-  ['/suite/wasm/dist/', join(REPO, 'studio', 'wasm', 'dist')],
   // The packager plugin's engine kits, when this checkout has built them
-  // (packager/scripts/build_kits.sh): hundreds of MB, never inside the suite.
-  ['/suite/packager-kits/', join(REPO, 'packager', 'build', 'kits')],
-  ['/suite/', join(REPO, 'suite')],
+  // (packager/scripts/build_kits.sh): hundreds of MB, never inside the studio.
+  ['/studio/packager-kits/', join(REPO, 'packager', 'build', 'kits')],
+  ['/studio/', join(REPO, 'studio')],
   // NOTE: /maps/ is NOT a plain mount -- see findMap below.
   ['/', join(ROOT, 'client')]
 ]

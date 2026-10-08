@@ -66,9 +66,9 @@ let statics = null
 // studio all see one tree; a module the user made is never touched.
 const GAME_RW = join(app.getPath('userData'), 'game')
 const files = studioFiles(GAME_RW)
-// The editor the app opens and returns to: the studio, or the suite -- its fork
-// with plugins (docs/SUITE.md) -- when the build staged that (--suite).
-const EDITOR = manifest.suite ? '/suite/' : '/studio/'
+// The editor the app opens and returns to: the studio, plugins and all
+// (docs/PLUGINS.md). The suite, its fork with the plugins, became it at 0.2.0.
+const EDITOR = '/studio/'
 // Set while a play-test restarts the server, so its exit is not mistaken for
 // a crash by the handler below.
 let restarting = false
@@ -223,7 +223,7 @@ async function launch ({ module, map }) {
   } catch (e) { playLog(`[shell] the game did not start: ${e.message ?? e}`); throw e }
   // Its files first, ahead of every other module in the tree (static.js).
   statics.setFirst?.(modDir)
-  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=${manifest.suite ? encodeURIComponent(EDITOR) : 1}`)
+  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
   announceWhenUp()
   return true
 }

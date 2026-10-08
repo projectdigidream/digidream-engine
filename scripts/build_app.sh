@@ -54,16 +54,20 @@ while [[ $# -gt 0 ]]; do
     --id)     APP_ID="$2"; shift 2 ;;
     # The level editor in the same app (docs/STUDIO.md): the studio pages, the
     # map compiler as wasm, and the runtime Lua it bakes against.
+    # Its plugins come with it (docs/PLUGINS.md): the sprite, texture, sound and
+    # music editors, Code, and the packager with its small kits.
     --studio) STUDIO=1; shift ;;
-    # The suite instead (docs/SUITE.md): the studio's fork with its plugins --
-    # the sprite, texture, sound and music editors and the packager inside it.
-    --suite) STUDIO=1; SUITE=1; shift ;;
+    # The suite, the studio's fork with the plugins, became the studio (0.2.0).
+    --suite) STUDIO=1; shift ;;
+    # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
+    # kits must not carry kits).
+    --no-kits) NO_KITS=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 STUDIO="${STUDIO:-0}"
-SUITE="${SUITE:-0}"
+NO_KITS="${NO_KITS:-0}"
 
 [[ ${#MODULES[@]} -gt 0 ]] || { echo "usage: $0 --module <name> [--module <name>...]" >&2; exit 2; }
 
@@ -228,10 +232,8 @@ cp client/node_modules/three/build/three.module.js "$OUT/client/vendor/three/"
 # and validates against. app/main.js opens /studio/ instead of the game when
 # game.json says so, and seeds the modules into the writable tree.
 if [[ $STUDIO -eq 1 ]]; then
-  # The suite is served from suite/ instead of studio/, with the same map
-  # compiler and runtime beside it, plus its plugins and its service worker.
+  # With its plugins and its service worker (docs/PLUGINS.md).
   ED=studio
-  [[ $SUITE -eq 1 ]] && ED=suite
   [[ -f ../studio/wasm/dist/mapc.mjs ]] || {
     echo "[app] no studio map compiler at ../studio/wasm/dist/mapc.mjs" >&2
     echo "      run: source ../emsdk/emsdk_env.sh && ./scripts/build_mapc_wasm.sh" >&2
@@ -241,22 +243,22 @@ if [[ $STUDIO -eq 1 ]]; then
   cp -R "../$ED/src" "$OUT/$ED/src"
   cp -R "../$ED/vendor" "$OUT/$ED/vendor"
   cp ../studio/wasm/dist/mapc.mjs ../studio/wasm/dist/mapc.wasm "$OUT/$ED/wasm/dist/"
-  if [[ $SUITE -eq 1 ]]; then
-    [[ -f ../suite/plugins/index.json ]] || { echo "[app] no suite plugins (suite/plugins/index.json)" >&2; exit 1; }
-    node ../suite/tools/vendor_plugins.mjs --check >&2 || { echo "[app] the suite's plugins are not as vendored: node suite/tools/vendor_plugins.mjs" >&2; exit 1; }
-    cp -R ../suite/plugins "$OUT/suite/plugins"
-    cp ../suite/sw.js ../suite/VERSION "$OUT/suite/"
+  [[ -f ../studio/plugins/index.json ]] || { echo "[app] no studio plugins (studio/plugins/index.json)" >&2; exit 1; }
+  node ../studio/tools/vendor_plugins.mjs --check >&2 || { echo "[app] the studio's plugins are not as vendored: node studio/tools/vendor_plugins.mjs" >&2; exit 1; }
+  cp -R ../studio/plugins "$OUT/studio/plugins"
+  cp ../studio/sw.js ../studio/VERSION "$OUT/studio/"
+  if [[ ${NO_KITS:-0} -eq 0 ]]; then
     # The packager plugin's small kits, preloaded where its page looks
-    # (/suite/packager-kits/): Android and the Tauri desktops, about 24 MB.
+    # (/studio/packager-kits/): Android and the Tauri desktops, about 24 MB.
     # The Electron desktop kits are 135-170 MB each and stay out; the Package
     # page can still load one by hand.
     KITS=../packager/build/kits
-    mkdir -p "$OUT/suite/packager-kits"
+    mkdir -p "$OUT/studio/packager-kits"
     n=0
     for k in android tauri-macos-arm64 tauri-macos-x64 tauri-linux tauri-windows; do
-      [[ -f "$KITS/$k.zip" ]] && { cp "$KITS/$k.zip" "$OUT/suite/packager-kits/"; n=$((n + 1)); }
+      [[ -f "$KITS/$k.zip" ]] && { cp "$KITS/$k.zip" "$OUT/studio/packager-kits/"; n=$((n + 1)); }
     done
-    echo "[app] suite: $n packager kit(s) preloaded$([[ $n -lt 5 ]] && echo " (build the rest: packager/scripts/build_kits.sh)")"
+    echo "[app] studio: $n packager kit(s) preloaded$([[ $n -lt 5 ]] && echo " (build the rest: packager/scripts/build_kits.sh)")"
   fi
   for f in mob_vocab.lua mobs.lua trigger_vocab.lua triggers.lua weapon_vocab.lua weapons.lua \
            graph_vocab.lua graphs.lua player_sounds.lua \
@@ -278,7 +280,6 @@ cat > "$OUT/game.json" <<EOF
   "id": "$APP_ID",
   "modules": $MODULES_JSON,
   "studio": $([[ $STUDIO -eq 1 ]] && echo true || echo false),
-  "suite": $([[ $SUITE -eq 1 ]] && echo true || echo false),
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "platform": "$(uname -s)-$(uname -m)"
 }
@@ -313,7 +314,7 @@ cat > "$OUT/package.json" <<EOF
     "appId": "dev.dnp.$APP_ID",
     "productName": $(printf '%s' "$APP_NAME" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
     "directories": { "output": "dist" },
-    "files": ["app/**", "client/**", "studio/**", "suite/**", "game.json"],
+    "files": ["app/**", "client/**", "studio/**", "game.json"],
     "extraResources": [
       { "from": "bin", "to": "bin" },
       { "from": "assets", "to": "assets" },
