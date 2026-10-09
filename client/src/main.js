@@ -312,7 +312,39 @@ async function playMapMusic (hash, name, fadeMs = 0) {
 
 say('loading simulation core...')
 stage('core', 0, 'simulation core')
-const core = await Core.load()
+// THE SYNTH BEFORE THE LEVEL. Nothing of the level is fetched, and nobody joins
+// a server, until the music engine is up and proven working (Music.whenUp: the
+// worklet ready, the bank and the kit loaded, the audio thread rendering) -- so
+// the first level's track starts with the level, never after it. The core
+// loads meanwhile; it is not the level.
+//
+// Where the page may not make sound until the player acts (a browser; the
+// shells allow it), it asks for a key or a tap first -- and the player is not
+// yet in any world while it asks. A synth that fails is said on screen, and the
+// game goes on without music rather than not at all.
+const corePromise = Core.load()
+{
+  const root = document.documentElement
+  const prompt = () => {
+    root.dataset.music = 'blocked'
+    say(touch ? 'Tap to start' : 'Press a key or click to start')
+  }
+  music.onBlocked = prompt
+  if (music.blocked) prompt()
+  else say('starting the music...')
+  try {
+    await music.whenUp()
+    root.dataset.music = 'up'
+    say('')
+  } catch (e) {
+    root.dataset.music = 'failed'
+    console.warn(`[music] ${e.message}`)
+    say(`music did not start: ${e.message} -- playing without it`)
+    await new Promise((r) => setTimeout(r, 3000))
+  }
+  music.onBlocked = null
+}
+const core = await corePromise
 stage('core', 1)
 
 // --- getting a map ---------------------------------------------------------
@@ -590,6 +622,8 @@ let weaponSlotWanted = 0
 // sounds, its tracers and effects, and whether the gun kicked.
 const ownWeapon = []
 
+// What the music was when the level began to load (the page test reads it).
+document.documentElement.dataset.levelStart = document.documentElement.dataset.music ?? 'none'
 if (LIVE) {
   say(DESKTOP ? 'starting...' : `connecting to ${SERVER_URL}...`)
   // A development edge presents a self-signed certificate. Its hash is public

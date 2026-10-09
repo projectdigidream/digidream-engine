@@ -31,6 +31,16 @@ const READY_TIMEOUT_MS = 10000
 // What midisynth renders at, and cannot be told otherwise: SAMPLE_RATE in
 // midisynth/src/synth/config.h is a compile-time constant.
 const SYNTH_SAMPLE_RATE = 48000
+// How long a context gets to start without a gesture before it is called
+// blocked. resume() on a context the page may not start yet does not fail --
+// it stays pending until a gesture -- so it is raced, not awaited.
+const RESUME_GRACE_MS = 400
+// After the instruments are sent: their verdicts, and the first status the
+// audio thread posts once it is rendering -- the proof samples are being made.
+const UP_TIMEOUT_MS = 5000
+
+/** Thrown by start() when the page may not make sound until the player acts. */
+class Blocked extends Error {}
 
 export class Music {
   /**
@@ -63,7 +73,19 @@ export class Music {
     this.sameContent = false
     // Called with the AudioContext once it is running: see start().
     this.onContext = null
+    // UP: the context runs, the worklet said ready, the bank and the kit
+    // loaded, and the audio thread has rendered -- functional, not just built.
+    // whenUp() resolves then, or rejects with why it never will. `blocked` is
+    // true while it waits for the player's first key or tap; onBlocked is told.
+    this.up = false
+    this.blocked = false
+    this.onBlocked = null
+    this.upPromise = new Promise((resolve, reject) => { this.resolveUp = resolve; this.rejectUp = reject })
+    this.upPromise.catch(() => {})
   }
+
+  /** Resolves when the synth is up (see `up`); rejects if it failed. */
+  whenUp () { return this.upPromise }
 
   /**
    * Begin on the first user gesture, and never before.
@@ -75,10 +97,19 @@ export class Music {
   arm () {
     if (this.started || this.failed) return
 
+    const fail = (e) => {
+      this.failed = String(e?.message ?? e)
+      this.blocked = false
+      this.#teardown()
+      this.rejectUp(e instanceof Error ? e : new Error(this.failed))
+    }
     const listen = () => {
+      this.blocked = true
+      this.onBlocked?.()
       const go = () => {
         for (const ev of ['pointerdown', 'keydown', 'touchstart']) removeEventListener(ev, go)
-        this.start().catch((e) => { this.failed = String(e?.message ?? e) })
+        this.blocked = false
+        this.start().catch(fail)
       }
       for (const ev of ['pointerdown', 'keydown', 'touchstart']) addEventListener(ev, go)
     }
@@ -91,13 +122,12 @@ export class Music {
     // If it comes up suspended it is torn down again rather than left half
     // built: a context that exists and is not running holds an output device
     // open for nothing, and start() must be able to run cleanly later.
-    this.start().then(() => {
-      if (this.ctx && this.ctx.state !== 'running') {
-        this.log('[music] audio is blocked until the first key or click')
-        this.#teardown()
-        listen()
-      }
-    }).catch(() => { this.#teardown(); listen() })
+    this.start().catch((e) => {
+      if (!(e instanceof Blocked)) { fail(e); return }
+      this.log('[music] audio is blocked until the first key or click')
+      this.#teardown()
+      listen()
+    })
   }
 
   #teardown () {
@@ -141,7 +171,14 @@ export class Music {
     }
     // Even after a gesture a context can come up suspended; resuming is
     // idempotent and costs nothing when it is already running.
-    if (this.ctx.state === 'suspended') await this.ctx.resume()
+    if (this.ctx.state === 'suspended') {
+      await Promise.race([this.ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, RESUME_GRACE_MS))])
+    }
+    if (this.ctx.state !== 'running') {
+      // Undone, so a later start() -- after a gesture -- begins cleanly.
+      this.#teardown()
+      throw new Blocked('the page may not make sound yet')
+    }
 
     await this.ctx.audioWorklet.addModule(`${this.baseUrl}/synth-worklet.js`)
     this.node = new AudioWorkletNode(this.ctx, 'midisynth', {
@@ -179,8 +216,34 @@ export class Music {
       fetch(`${this.contentUrl}/patches/gm_bank.json`).then((r) => r.text()),
       fetch(`${this.contentUrl}/drums/gm_kit.json`).then((r) => r.text())
     ])
+    // FUNCTIONAL, NOT JUST BUILT: both verdicts, and a status from the audio
+    // thread after them -- it posts one about ten times a second while it
+    // renders, so the first proves samples are being made.
+    const verdicts = new Map()
+    let rendered = false
+    const proven = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(
+        `the synth did not come up (bank ${verdicts.get('bank') ?? 'no answer'}, kit ${verdicts.get('drums') ?? 'no answer'}, ` +
+        `${rendered ? 'rendering' : 'not rendering'})`)), UP_TIMEOUT_MS)
+      const check = () => {
+        if (verdicts.get('bank') === 'ok' && verdicts.get('drums') === 'ok' && rendered) { clearTimeout(timer); resolve() }
+      }
+      const prev = this.node.port.onmessage
+      this.node.port.onmessage = (e) => {
+        prev(e)
+        const m = e.data
+        if (m.type === 'report' && (m.what === 'bank' || m.what === 'drums')) {
+          verdicts.set(m.what, m.report?.ok === false ? 'failed' : 'ok')
+          if (m.report?.ok === false) { clearTimeout(timer); reject(new Error(`the ${m.what === 'bank' ? 'instrument bank' : 'drum kit'} did not load`)) }
+        } else if (m.type === 'status' && verdicts.size === 2) rendered = true
+        check()
+      }
+    })
     this.node.port.postMessage({ type: 'loadBank', json: bank })
     this.node.port.postMessage({ type: 'loadDrums', json: kit })
+    await proven
+    this.up = true
+    this.resolveUp()
 
     this.log('[music] synth ready')
     if (this.pending) {

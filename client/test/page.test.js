@@ -74,25 +74,89 @@ let serverErr = ''
 server.stderr.on('data', (d) => { serverErr += d.toString() })
 process.on('exit', () => { try { server.kill('SIGKILL') } catch {} })
 
-/** Load a URL and give back the DOM the page ended up with. */
-function dump (url) {
+/**
+ * Load a URL and give back the DOM the page ended up with.
+ *
+ * IN REAL TIME, over the DevTools protocol -- not --dump-dom's virtual time. The
+ * page brings the music synth up before the level (main.js), and "up" means the
+ * audio thread has rendered; virtual time does not advance the audio thread, so
+ * under it the page waits for the synth forever. Done when the start-up has
+ * finished (the status line cleared after the level began), or after `settle`
+ * ms at most; then a moment more, as the virtual budget used to give.
+ */
+async function dump (url, { gesture = true, settle = 30000, press = false, fail = null, watch = null } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'dnp-client-'))
+  const port = 9800 + Math.floor(Math.random() * 150)
+  const browser = spawn(chrome, [
+    '--headless=new', '--mute-audio', '--no-sandbox', '--disable-dev-shm-usage',
+    // Sound allowed from the start, as the shells allow it. Without it the
+    // page asks for a key before anything of the level loads.
+    ...(gesture ? ['--autoplay-policy=no-user-gesture-required'] : []),
+    `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`,
+    // SwiftShader, because there is no GPU here and the client makes a WebGL
+    // context before it does anything else. Without this the page throws at
+    // the renderer and every check below fails for the wrong reason.
+    '--enable-unsafe-swiftshader',
+    'about:blank'
+  ], { stdio: 'ignore' })
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  let ws = null
   try {
-    const r = spawnSync(chrome, [
-      '--headless=new', '--mute-audio', '--no-sandbox', '--disable-dev-shm-usage',
-      `--user-data-dir=${profile}`,
-      // SwiftShader, because there is no GPU here and the client makes a WebGL
-      // context before it does anything else. Without this the page throws at
-      // the renderer and every check below fails for the wrong reason.
-      '--enable-unsafe-swiftshader',
-      // Enough virtual time for the wasm core, the map and the textures. The
-      // page is deterministic under virtual time, so this is a budget and not
-      // a race.
-      '--virtual-time-budget=10000',
-      '--dump-dom', url
-    ], { encoding: 'utf8', timeout: 120_000, maxBuffer: 32 << 20 })
-    return r.stdout ?? ''
+    let targets = null
+    for (let i = 0; i < 100 && !targets; i++) {
+      targets = await fetch(`http://127.0.0.1:${port}/json`).then((r) => r.json()).catch(() => null)
+      if (!targets) await sleep(100)
+    }
+    const page = targets?.find((t) => t.type === 'page')
+    if (!page) return ''
+    ws = new WebSocket(page.webSocketDebuggerUrl)
+    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject })
+    let next = 0
+    const waiting = new Map()
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data)
+      if (m.id && waiting.has(m.id)) { waiting.get(m.id)(m.result); waiting.delete(m.id) }
+      // A request the test makes fail (`fail`): refused as the network would.
+      else if (m.method === 'Fetch.requestPaused') {
+        ws.send(JSON.stringify({ id: ++next, method: 'Fetch.failRequest', params: { requestId: m.params.requestId, errorReason: 'Failed' } }))
+      }
+    }
+    const send = (method, params = {}) => new Promise((resolve) => {
+      const id = ++next
+      waiting.set(id, resolve)
+      ws.send(JSON.stringify({ id, method, params }))
+    })
+    const value = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true }))?.result?.value
+    if (fail) await send('Fetch.enable', { patterns: [{ urlPattern: fail }] })
+    // What the status line said along the way, sampled (`watch`).
+    const seen = []
+    await send('Page.navigate', { url })
+    const settled = async (ms) => {
+      const end = Date.now() + ms
+      while (Date.now() < end) {
+        await sleep(250)
+        const done = await value(`!!document.documentElement.dataset.levelStart &&
+          (document.getElementById('status')?.textContent ?? '') === ''`)
+        if (watch) seen.push(await value(`document.getElementById('status')?.textContent ?? ''`))
+        if (done) return
+      }
+    }
+    await settled(settle)
+    // A real key, as the player's: input through the protocol is a user
+    // gesture to the page, which a script's synthetic event is not.
+    if (press) {
+      for (const type of ['keyDown', 'keyUp']) {
+        await send('Input.dispatchKeyEvent', { type, key: 'x', code: 'KeyX', windowsVirtualKeyCode: 88 })
+      }
+      await settled(30000)
+    }
+    await sleep(1500)
+    if (watch) watch.push(...seen)
+    return (await value('document.documentElement.outerHTML')) ?? ''
   } finally {
+    try { ws?.close() } catch {}
+    browser.kill('SIGKILL')
+    await sleep(200)
     rmSync(profile, { recursive: true, force: true })
   }
 }
@@ -105,7 +169,7 @@ await new Promise((r) => setTimeout(r, 1500))
 
 try {
   console.log('--- the client loads, with the touch controls asked for ---')
-  const dom = dump(url('touch=1'))
+  const dom = await dump(url('touch=1'))
   check(dom.length > 0, 'chrome returned a DOM')
 
   // WHERE A THROWN ERROR LANDS. index.html installs an `error` and an
@@ -118,6 +182,41 @@ try {
   // The module got all the way past its awaits: the core loaded, the map was
   // fetched and parsed, and the status line was cleared.
   check(status === '', 'and the module reached the end of its start-up')
+
+  console.log('\n--- the music synth is up before the level ---')
+  {
+    const attrs = /<html([^>]*)>/.exec(dom)?.[1] ?? ''
+    check(/data-music="up"/.test(attrs), `the synth came up: worklet, bank, kit, rendering (${/data-music="([^"]*)"/.exec(attrs)?.[1]})`)
+    check(/data-level-start="up"/.test(attrs), `and was up when the level began to load (${/data-level-start="([^"]*)"/.exec(attrs)?.[1]})`)
+  }
+
+  console.log('\n--- CONTROL: a page that may not make sound asks first, and waits ---')
+  {
+    // No autoplay: the browser holds the context until a gesture, which a
+    // headless dump never makes. The level must not start behind the prompt.
+    const held = await dump(url('touch=0'), { gesture: false, settle: 5000 })
+    const attrs = /<html([^>]*)>/.exec(held)?.[1] ?? ''
+    check(/data-music="blocked"/.test(attrs) && /Press a key or click to start/.test(statusOf(held)),
+          `it asks for a key or a click (${JSON.stringify(statusOf(held).trim())})`)
+    check(!/data-level-start=/.test(attrs), 'and the level has not begun to load')
+    // And a key is all it takes: the synth comes up, then the level.
+    const pressed = await dump(url('touch=0'), { gesture: false, settle: 5000, press: true })
+    const after = /<html([^>]*)>/.exec(pressed)?.[1] ?? ''
+    check(/data-music="up"/.test(after) && /data-level-start="up"/.test(after) && statusOf(pressed).trim() === '',
+          `a key press brings the synth up, and then the level (${/data-music="([^"]*)"/.exec(after)?.[1]}, ` +
+          `${/data-level-start="([^"]*)"/.exec(after)?.[1]}, ${JSON.stringify(statusOf(pressed).trim())})`)
+  }
+
+  console.log('\n--- a synth that fails is said, and the game goes on ---')
+  {
+    const said = []
+    const broken = await dump(url('touch=0'), { fail: '*gm_bank.json*', watch: said })
+    const attrs = /<html([^>]*)>/.exec(broken)?.[1] ?? ''
+    check(/data-music="failed"/.test(attrs), `the synth is reported failed (${/data-music="([^"]*)"/.exec(attrs)?.[1]})`)
+    check(said.some((t) => /music did not start/.test(t)), `on screen (${JSON.stringify(said.find((t) => /music did not start/.test(t)) ?? '')})`)
+    check(/data-level-start="failed"/.test(attrs) && statusOf(broken).trim() === '',
+          'and the level still loads, without music')
+  }
 
   console.log('\n--- the controls are there ---')
   {
@@ -141,7 +240,7 @@ try {
     // Without this, every check above passes for a client that mounts a
     // thumbstick over a desktop game that has a keyboard. `?touch=0` is the
     // same override a touchscreen laptop would use.
-    off = dump(url('touch=0'))
+    off = await dump(url('touch=0'))
     check(!/^error:/.test(statusOf(off).trim()),
           `it still loads (${JSON.stringify(statusOf(off).trim().slice(0, 120))})`)
     check(!/class="dnp-touch-btn/.test(off), 'no buttons')
@@ -162,7 +261,7 @@ try {
     check(shown && /tick \d+/.test(shown[2]) && !/display: none/.test(shown[1]),
           'CONTROL: by default the debug block is drawn and written')
     check(/display: block/.test(helpOf(off)), 'CONTROL: and so is the legend')
-    const clean = dump(url('touch=0&debug=0'))
+    const clean = await dump(url('touch=0&debug=0'))
     check(!/^error:/.test(statusOf(clean).trim()) && statusOf(clean).trim() === '',
           `it loads to the end (${JSON.stringify(statusOf(clean).trim().slice(0, 120))})`)
     const h = hudOf(clean)
@@ -177,7 +276,7 @@ try {
     // on a desktop reports a fine pointer, so the controls must NOT appear --
     // which is what says wantsTouch is reading the browser rather than
     // defaulting to yes.
-    const auto = dump(url('zoom=44'))
+    const auto = await dump(url('zoom=44'))
     check(!/class="dnp-touch-btn/.test(auto),
           'with no ?touch, a fine-pointer browser gets no thumbstick')
   }
