@@ -329,8 +329,11 @@ public final class MainActivity extends Activity {
           pendingShareBytes = Base64.decode(a.getString("data"), Base64.NO_WRAP);
           Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
           i.addCategory(Intent.CATEGORY_OPENABLE);
-          i.setType("application/zip");
-          i.putExtra(Intent.EXTRA_TITLE, a.getString("name"));
+          // An APK (the packager's, from the studio) as one, so the picker
+          // keeps its .apk rather than calling it a zip.
+          String shareName = a.getString("name");
+          i.setType(shareName.endsWith(".apk") ? "application/vnd.android.package-archive" : "application/zip");
+          i.putExtra(Intent.EXTRA_TITLE, shareName);
           ui.post(() -> startActivityForResult(i, REQ_SHARE));
           return;
         }
