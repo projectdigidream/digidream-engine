@@ -84,7 +84,7 @@ process.on('exit', () => { try { server.kill('SIGKILL') } catch {} })
  * finished (the status line cleared after the level began), or after `settle`
  * ms at most; then a moment more, as the virtual budget used to give.
  */
-async function dump (url, { gesture = true, settle = 30000, press = false, fail = null, watch = null } = {}) {
+async function dump (url, { gesture = true, settle = 30000, press = false, fail = null, watch = null, probes = null } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'dnp-client-'))
   const port = 9800 + Math.floor(Math.random() * 150)
   const browser = spawn(chrome, [
@@ -152,6 +152,15 @@ async function dump (url, { gesture = true, settle = 30000, press = false, fail 
     }
     await sleep(1500)
     if (watch) watch.push(...seen)
+    // Expressions run in the page once it has started, in order (`probes`):
+    // each a string, or a number of ms to wait before the next.
+    if (probes) {
+      probes.results = []
+      for (const p of probes) {
+        if (typeof p === 'number') await sleep(p)
+        else probes.results.push(await value(p))
+      }
+    }
     return (await value('document.documentElement.outerHTML')) ?? ''
   } finally {
     try { ws?.close() } catch {}
@@ -188,6 +197,32 @@ try {
     const attrs = /<html([^>]*)>/.exec(dom)?.[1] ?? ''
     check(/data-music="up"/.test(attrs), `the synth came up: worklet, bank, kit, rendering (${/data-music="([^"]*)"/.exec(attrs)?.[1]})`)
     check(/data-level-start="up"/.test(attrs), `and was up when the level began to load (${/data-level-start="([^"]*)"/.exec(attrs)?.[1]})`)
+  }
+
+  console.log('\n--- the level\'s music: loaded while the level loads, started with it ---')
+  {
+    const probes = [
+      `JSON.stringify({ loadedAt: window.__music.loadedAt, startedAt: window.__music.startedAt,
+        held: window.__music.held, sfx: window.__sfx.loaded, state: window.__music.ctx?.state })`,
+      1500,
+      `JSON.stringify({ playing: window.__music.lastStatus?.playing, t: window.__music.lastStatus?.timeMs })`,
+      'window.__dnpAppHidden(true)', 600,
+      `JSON.stringify({ state: window.__music.ctx?.state, t: window.__music.lastStatus?.timeMs, audio: document.documentElement.dataset.audio })`,
+      1000,
+      `JSON.stringify({ t: window.__music.lastStatus?.timeMs })`,
+      'window.__dnpAppHidden(false)', 1000,
+      `JSON.stringify({ state: window.__music.ctx?.state, t: window.__music.lastStatus?.timeMs })`
+    ]
+    await dump(url('touch=0'), { probes })
+    const [at, play, , hid, still, , back] = probes.results.map((r) => (r ? JSON.parse(r) : null))
+    check(at && at.loadedAt > 0 && at.startedAt >= at.loadedAt && at.held === false,
+          `the track was loaded before it was started, and started on the first frame (loaded ${at?.loadedAt | 0} ms, started ${at?.startedAt | 0} ms)`)
+    check(at?.sfx === true, 'the sound effects were loaded before the level started too')
+    check(play?.playing === true && play.t > 0, `and it plays (${play?.t} ms in)`)
+    check(at?.state === 'running', `CONTROL: the audio runs while the app is in sight (${at?.state})`)
+    check(hid?.state === 'suspended' && hid.audio === 'suspended', `sent to the background, the audio stops (${hid?.state})`)
+    check(still && hid && still.t === hid.t, `and the song does not move on while hidden (${hid?.t} -> ${still?.t} ms)`)
+    check(back?.state === 'running' && back.t > (still?.t ?? 0), `back in sight, it plays on from where it was (${back?.t} ms)`)
   }
 
   console.log('\n--- CONTROL: a page that may not make sound asks first, and waits ---')

@@ -88,6 +88,46 @@ export class Music {
   whenUp () { return this.upPromise }
 
   /**
+   * HOLD: a track asked for now is loaded but not started, until release().
+   *
+   * Loading a track builds its instruments ON THE AUDIO THREAD (the worklet's
+   * message handler), and nothing renders while it does -- 0.44 s on a desktop
+   * for a DOOM track, seconds on a phone. Done during the loading screen, that
+   * costs nothing anybody hears; done as the level starts, it is the level's
+   * first seconds of silence and then a stutter. So the client holds the music
+   * while the level loads and starts it on the level's first frame.
+   */
+  hold () { this.held = true }
+
+  /** Resolves when the track asked for while held has loaded (or at once). */
+  whenLoaded () { return this.loading ?? Promise.resolve() }
+
+  /** Start what was loaded while held. */
+  release () {
+    this.held = false
+    if (this.heldPlay && this.node) {
+      this.node.port.postMessage({ type: 'play' })
+      this.startedAt = performance.now()
+    }
+    this.heldPlay = false
+  }
+
+  /**
+   * The app or tab went out of sight: the context stops, and with it every
+   * sound in it (the effects share it). Back in sight, it runs again from
+   * where it was. Not stop(): the song keeps its place.
+   */
+  suspend () {
+    this.hidden = true
+    if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {})
+  }
+
+  resume () {
+    this.hidden = false
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {})
+  }
+
+  /**
    * Begin on the first user gesture, and never before.
    *
    * One-shot on several event kinds because "interaction" is whatever the
@@ -202,6 +242,12 @@ export class Music {
         else if (m.type === 'report' && m.report && m.report.ok === false) {
           this.log(`[music] ${m.what} failed: ${JSON.stringify(m.report)}`)
         }
+        if (m.type === 'report' && m.what === 'track') this.loadedAt = performance.now()
+        if (m.type === 'report' && m.what === 'track' && this.trackLoaded) {
+          const done = this.trackLoaded
+          this.trackLoaded = null
+          done(m.report)
+        }
       }
     })
 
@@ -244,6 +290,9 @@ export class Music {
     await proven
     this.up = true
     this.resolveUp()
+    // Hidden while it came up (the app sent away during the loading screen):
+    // it waits, silent, for the app to come back.
+    if (this.hidden) this.ctx.suspend().catch(() => {})
 
     this.log('[music] synth ready')
     if (this.pending) {
@@ -308,9 +357,13 @@ export class Music {
       await new Promise((r) => setTimeout(r, half))
     }
 
+    // Its verdict, which arrives when the audio thread has finished building
+    // it -- what a held start waits for.
+    this.loading = new Promise((resolve) => { this.trackLoaded = resolve })
     this.node.port.postMessage({ type: 'loadTrack', bytes }, [bytes])
     this.node.port.postMessage({ type: 'setLoop', on: loop })
-    this.node.port.postMessage({ type: 'play' })
+    if (this.held) this.heldPlay = true
+    else this.node.port.postMessage({ type: 'play' })
 
     if (dipping) this.node.port.postMessage({ type: 'duck', milli: 1000, rampMs: half })
 

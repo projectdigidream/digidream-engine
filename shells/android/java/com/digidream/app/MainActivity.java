@@ -865,6 +865,28 @@ public final class MainActivity extends Activity {
     if (has) immersive();
   }
 
+  // OUT OF SIGHT, OUT OF EARSHOT. Nothing paused the page when the app went to
+  // the background, so its music played on behind the home screen. The page
+  // is told (window.__dnpAppHidden: its audio context suspends, and resumes
+  // where it was), and the WebView pauses what it can.
+  @Override
+  protected void onPause() {
+    super.onPause();
+    if (web != null) {
+      web.evaluateJavascript("window.__dnpAppHidden && window.__dnpAppHidden(true)", null);
+      web.onPause();
+    }
+  }
+
+  @Override
+  protected void onResume() {
+    super.onResume();
+    if (web != null) {
+      web.onResume();
+      web.evaluateJavascript("window.__dnpAppHidden && window.__dnpAppHidden(false)", null);
+    }
+  }
+
   @Override
   protected void onDestroy() {
     server.stop();

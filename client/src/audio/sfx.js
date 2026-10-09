@@ -26,6 +26,11 @@ export class Sfx {
    */
   constructor ({ worklet = '/src/audio/sfx-worklet.js', onDuck = null, log = () => {} } = {}) {
     this.workletUrl = worklet
+    // Settled when a bank has been loaded and its cache built -- or found
+    // missing. Both are ON THE AUDIO THREAD the music shares (buildCache
+    // pre-renders megabytes of sound), so the client waits for this before the
+    // level starts rather than letting it stall the level's first seconds.
+    this.bankPromise = new Promise((resolve) => { this.bankSettled = resolve })
     this.onDuck = onDuck
     this.log = log
     this.ctx = null
@@ -92,13 +97,17 @@ export class Sfx {
 
   async #load (url) {
     const res = await fetch(url).catch(() => null)
-    if (!res || !res.ok) { this.log(`[sfx] no sound bank at ${url}`); return }
+    if (!res || !res.ok) { this.log(`[sfx] no sound bank at ${url}`); this.bankSettled(); return }
     const json = await res.text()
     this.loaded = false
     this.node.port.postMessage({ type: 'loadBank', json, budgetKb: 16384 })
   }
 
+  /** Resolves when the bank is loaded and cached, or known to be missing. */
+  whenBank () { return this.bankPromise }
+
   #banked (m) {
+    this.bankSettled()
     this.ids.clear()
     this.missing.clear()
     if (!m.report?.ok) {

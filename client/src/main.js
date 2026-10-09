@@ -334,6 +334,13 @@ const corePromise = Core.load()
   else say('starting the music...')
   try {
     await music.whenUp()
+    // And the sound effects, which load into the same audio thread: their
+    // bank and its pre-rendered cache, done now rather than over the level's
+    // first seconds. Bounded -- an effects engine that never answers is said
+    // and left, not waited on for ever.
+    const banked = await Promise.race([sfx.whenBank().then(() => true),
+                                       new Promise((r) => setTimeout(() => r(false), 15000))])
+    if (!banked) console.warn('[sfx] the sound bank did not load in 15 s; going on')
     root.dataset.music = 'up'
     say('')
   } catch (e) {
@@ -345,6 +352,19 @@ const corePromise = Core.load()
   music.onBlocked = null
 }
 const core = await corePromise
+// Held from here to the level's first frame: the level's track is loaded while
+// the level loads, and starts with it (Music.hold).
+music.hold()
+// OUT OF SIGHT, OUT OF EARSHOT: an app sent to the background or a tab hidden
+// stops its sound, and gets it back where it was. The page's own visibility,
+// and the Android shell's lifecycle (window.__dnpAppHidden), which says so
+// whether or not the WebView reports it.
+const appHidden = (hidden) => {
+  if (hidden) music.suspend(); else music.resume()
+  document.documentElement.dataset.audio = hidden ? 'suspended' : 'running'
+}
+document.addEventListener('visibilitychange', () => appHidden(document.hidden))
+window.__dnpAppHidden = appHidden
 stage('core', 1)
 
 // --- getting a map ---------------------------------------------------------
@@ -923,7 +943,7 @@ homeLevel = welcome?.homeLevel ?? 0
 // Solo has no WELCOME: the name is the map file's own.
 homeName = welcome?.levelName ?? (LIVE ? null : MAP_URL.split('/').pop().replace(/\.dnpm$/, ''))
 // The level is known: its music starts now, while the rest of it loads.
-playMapMusic(map.hash, homeName)
+const firstMusic = playMapMusic(map.hash, homeName)
 if (region) {
   homeOriginRaw = { x: welcome.origin.x, y: welcome.origin.y }
   homeOrigin = { x: fxToFloat(homeOriginRaw.x), y: fxToFloat(homeOriginRaw.y) }
@@ -3463,4 +3483,10 @@ stageDone()
 say('')
 helpShown = true
 showDebug(debugShown)
+// THE LEVEL'S MUSIC STARTS WITH THE LEVEL: its track was loaded while the
+// level loaded (held), so the audio thread is free and it starts clean. Waited
+// for if it is still loading, but not for ever.
+await Promise.race([firstMusic.then(() => music.whenLoaded()), new Promise((r) => setTimeout(r, 10000))])
+music.release()
+document.documentElement.dataset.musicStarted = String(performance.now() | 0)
 requestAnimationFrame(frame)
