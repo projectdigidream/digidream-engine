@@ -311,6 +311,11 @@ async function start () {
   announceWhenUp()
 }
 
+// The game's music starts as the level loads (client/src/main.js), before the
+// player has touched anything: a game app is not a web page whose sound must
+// wait for a gesture. (Android's WebView is told the same in MainActivity.)
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 app.whenReady().then(start).catch((e) => {
   dialog.showErrorBox('Could not start', String(e.message ?? e))
   app.quit()
