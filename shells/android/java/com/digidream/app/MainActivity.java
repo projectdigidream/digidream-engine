@@ -193,7 +193,19 @@ public final class MainActivity extends Activity {
       if (!map.exists()) throw new IOException("no such level: " + map);
       List<File> modules = new ArrayList<>();
       modules.add(module);
-      startServer(modules, map);
+      // THE WHOLE MODULE: the entry map first (where players start), then
+      // every other map it has, as a studio play-test passes them (launch()).
+      // Given only the entry map, the server hosts only that one, and a graph
+      // going to another map (change_map) is refused at load -- the game died
+      // starting while the same module played in the studio.
+      List<File> maps = new ArrayList<>();
+      maps.add(map);
+      File[] others = new File(module, "maps").listFiles((d, n) -> n.endsWith(".dnpm"));
+      if (others != null) {
+        java.util.Arrays.sort(others);
+        for (File f : others) if (!f.equals(map) && maps.size() < 64) maps.add(f);
+      }
+      startServer(modules, maps, null);
 
       // ONLY NOW is the page loaded. The client decides its transport at
       // module scope and sends its hello immediately, so a page that started
