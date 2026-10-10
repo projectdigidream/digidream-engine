@@ -2424,10 +2424,38 @@
           "type": "string"
         },
         {
-          "doc": "How long it stays. Defaults to long enough to read it.",
+          "doc": "How long it stays. Defaults to long enough to read it (and, typed, to type it first).",
           "name": "seconds",
           "optional": true,
           "type": "number"
+        },
+        {
+          "doc": "`line` shows it all at once (the default); `typed` types it out, a few letters at a time.",
+          "name": "mode",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "line",
+            "typed"
+          ]
+        },
+        {
+          "doc": "Typed: letters a second. Defaults to 30.",
+          "name": "speed",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Typed: how many letters appear together, each step. Defaults to 2.",
+          "name": "pack",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "doc": "Typed: a sound's name, played with every step that shows a letter (a space or a step of spaces is silent). None: typed in silence.",
+          "name": "sound",
+          "optional": true,
+          "type": "string"
         },
         {
           "name": "everyone",
@@ -2439,7 +2467,9 @@
       "data_in": [
         "entity",
         "text",
-        "seconds"
+        "seconds",
+        "speed",
+        "pack"
       ],
       "data_out": [],
       "doc": "A line at the bottom of the screen. `then` at once; `done` when it goes -- so lines chain one after another. A newer line replaces it.",

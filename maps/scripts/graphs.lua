@@ -927,7 +927,8 @@ function EXEC.end_cinematic(g, n, ev, pull)
     dnp.screen(p, { letterbox = 0, letterbox_ms = ms })
     dnp.camera(p, { cam_mode = 0, cam_path = -1 })
     spoken[i] = (spoken[i] or 0) + 1
-    dnp.hud(p, { subtitle = false, subtitle_speaker = false })
+    dnp.hud(p, { subtitle = false, subtitle_speaker = false,
+                 subtitle_typing = false, subtitle_pack = false, subtitle_sound = false })
   end
   return "then"
 end
@@ -939,22 +940,34 @@ function EXEC.fade(g, n, ev, pull, go)
   later(ticks_of(secs), function() run(g, n.id, "done", ev) end)
   return "then"
 end
+-- Every subtitle field, cleared: the line, its speaker and how it is typed.
+local NO_SUBTITLE = { subtitle = false, subtitle_speaker = false,
+                      subtitle_typing = false, subtitle_pack = false, subtitle_sound = false }
+
 function EXEC.subtitle(g, n, ev, pull)
   local text = tostring(pull("text") or "")
-  local secs = n.seconds or math.min(8, 1.5 + #text * 0.05)
+  -- TYPED: the client shows it `pack` letters at a time, `speed` letters a
+  -- second, playing `sound` with each step that shows a letter. It stays long
+  -- enough to be typed AND read.
+  local typed = n.mode == "typed"
+  local speed = typed and math.max(1, n.speed or 30) or nil
+  local pack = typed and math.max(1, math.floor(n.pack or 2)) or nil
+  local secs = n.seconds or ((typed and #text / speed or 0) + math.min(8, 1.5 + #text * 0.05))
   local mine = {}
   for _, p in ipairs(audience(n, g, ev, pull)) do
     local i = p:index()
     spoken[i] = (spoken[i] or 0) + 1
     mine[i] = spoken[i]
-    dnp.hud(p, { subtitle = text, subtitle_speaker = n.speaker or false })
+    dnp.hud(p, { subtitle = text, subtitle_speaker = n.speaker or false,
+                 subtitle_typing = speed or false, subtitle_pack = pack or false,
+                 subtitle_sound = (typed and n.sound) or false })
   end
   later(ticks_of(secs), function()
     -- Taken off only if it is still THIS line: a newer one replaced it.
     for i, line in pairs(mine) do
       if spoken[i] == line then
         local p = dnp.entity(i)
-        if p ~= nil and p:valid() then dnp.hud(p, { subtitle = false, subtitle_speaker = false }) end
+        if p ~= nil and p:valid() then dnp.hud(p, NO_SUBTITLE) end
       end
     end
     run(g, n.id, "done", ev)
@@ -964,7 +977,7 @@ end
 function EXEC.clear_subtitle(g, n, ev, pull)
   for _, p in ipairs(audience(n, g, ev, pull)) do
     spoken[p:index()] = (spoken[p:index()] or 0) + 1
-    dnp.hud(p, { subtitle = false, subtitle_speaker = false })
+    dnp.hud(p, NO_SUBTITLE)
   end
   return "then"
 end

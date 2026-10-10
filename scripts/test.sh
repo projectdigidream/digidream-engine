@@ -563,6 +563,7 @@ suite_client () {
   node client/test/sky.test.js | grep -E 'FAIL|failures'
   node client/test/slash.test.js | grep -E 'FAIL|failures'
   node client/test/remoteparams.test.js | grep -E 'FAIL|failures'
+  node client/test/typewriter.test.js | grep -E 'FAIL|failures'
   # The input bundle the client writes: 15 bytes a frame with the module's keys,
   # at the full sixteen frames (it once overran past six).
   node client/test/proto_input.test.js | grep -E 'FAIL|failures'

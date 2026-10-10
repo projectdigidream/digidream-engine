@@ -61,6 +61,7 @@ import { report, CrossingProbe, BodyWatch } from './seam/diag.js'
 import { Music } from './audio/music.js'
 import { RemoteParams, isOwnParams } from './remoteparams.js'
 import { SlashView, parseSwingStyles, styleFor } from './render/slash.js'
+import { Typewriter } from './render/typewriter.js'
 import { musicKeyFor } from './audio/musickey.js'
 import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, encodeGameNew, CAMERA_FIELD } from './proto.js'
 import { SOUND_FOLLOW, SOUND_PREDICTED } from './proto.js'
@@ -419,6 +420,23 @@ const dnpStats = { welcomes: 0, snapshots: 0, gpu: () => null }
 // its ammunition. What the view model draws from now and the HUD layout will
 // (docs/UI_LAYOUT.md). Kept across level changes -- the server re-sends it.
 const hudValues = new Map()
+// A TYPED SUBTITLE (render/typewriter.js; the graphs' subtitle node, mode
+// `typed`): while one is coming out, `hud.subtitle` holds what is shown so far
+// and the whole line is the typewriter's. Started when the line or how it is
+// typed arrives; the frame loop types it.
+let typer = null
+let typerSound = null
+let typerSounds = 0
+function subtitleArrived () {
+  const full = hudValues.get('hud.subtitle')
+  const speed = Number(hudValues.get('hud.subtitle_typing'))
+  if (typeof full !== 'string' || !(speed > 0)) { typer = null; return }
+  const now = performance.now() / 1000
+  typer = new Typewriter({ text: full, speed, pack: hudValues.get('hud.subtitle_pack'), startedAt: now })
+  typerSound = hudValues.get('hud.subtitle_sound') || null
+  hudValues.set('hud.subtitle', typer.shownAt(now))
+}
+dnpStats.subtitle = () => ({ shown: hudValues.get('hud.subtitle') ?? null, typing: !!typer, sounds: typerSounds })
 // THE CONTROL SCHEME, the module's (WELCOME.controls): a platformer's screen-
 // relative push and turning body, or a first-person view that IS the aim
 // (client/src/controls.js). Up here because the input and camera code below
@@ -791,6 +809,7 @@ if (LIVE) {
           if (f.kind === 2) { hudValues.delete(`hud.${f.name}`); hudView.update({ [`hud.${f.name}`]: undefined }); ui?.update({ [`hud.${f.name}`]: undefined }) }
           else hudValues.set(`hud.${f.name}`, f.value)
         }
+        if (m.fields.some((f) => f.name === 'subtitle' || f.name === 'subtitle_typing')) subtitleArrived()
       }
       // QUEUED, like every other message that needs the renderer.
       //
@@ -3308,7 +3327,15 @@ function frame (now) {
     const fx3 = eye.lookAt.x - eye.x
     const fz3 = eye.lookAt.z - eye.z
     const yawTurns = (Math.atan2(-fz3, fx3) / (2 * Math.PI) + 1) % 1
-    lastEar = { x: px, y: py, z: pz }
+    // AT THE CAMERA while a camera path has it (a flythrough, a cutscene): the
+    // camera is somewhere else then, and the scene is heard from where it is
+    // seen. Blended with the path's own crossfade, so the ear travels with the
+    // view rather than jumping.
+    const m = camera.pathMix ?? 0
+    const ex = eye.x, ey = -eye.z, ez = eye.y      // three-space back to simulation
+    lastEar = m > 0
+      ? { x: px + (ex - px) * m, y: py + (ey - py) * m, z: pz + (ez - pz) * m }
+      : { x: px, y: py, z: pz }
     sfx.listener(lastEar, Math.floor(yawTurns * 4294967296) >>> 0)
     // And whatever a sound is following, where it is drawn now.
     const keys = sfx.followed()
@@ -3414,6 +3441,20 @@ function frame (now) {
   // THE HUD, from the module's layout (render/layout.js): the client's own
   // values and the server's (HUD_SET), every frame -- HudView only touches
   // what changed.
+  // The typed subtitle, so far -- and its sound, once a frame however many
+  // steps the frame covered (a burst of clicks after a hitch is noise). Played
+  // AT THE EAR: centred and at full volume, which is at the camera whenever a
+  // camera path has taken it somewhere else (the listener, above).
+  if (typer) {
+    const now = performance.now() / 1000
+    hudValues.set('hud.subtitle', typer.shownAt(now))
+    const steps = typer.takeSounds(now)
+    if (steps.length && typerSound) {
+      sfx.play(typerSound, lastEar, { seed: steps.at(-1) })
+      typerSounds++
+    }
+    if (typer.doneAt(now)) typer = null
+  }
   if (LIVE && latestHp !== undefined && latestHp !== null) {
     hudView.update({ hp: latestHp, map: homeName ?? '' })
     hudView.update(hudValues)

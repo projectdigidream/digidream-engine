@@ -103,7 +103,10 @@ struct RecordingUi : server::lua::UiSink {
     }
     void predict_sounds(u32, u32, u32, const proto::PredictSound*, u32) override {}
     bool hud(u32, i32, const std::vector<server::lua::HudSet>& set) override {
-        for (const auto& h : set) huds[h.name] = h.kind == proto::HUD_CLEAR ? std::string("<cleared>") : h.s;
+        for (const auto& h : set) {
+            huds[h.name] = h.kind == proto::HUD_CLEAR ? std::string("<cleared>")
+                         : h.kind == proto::HUD_INT  ? std::to_string(h.i) : h.s;
+        }
         return true;
     }
 };
@@ -1207,6 +1210,32 @@ int main(int argc, char** argv) {
           "links": [ ["c.then", "o.in"] ] })"));
         CHECK(run("graphs.call('show', dnp.players()[1], nil)", "show"));
         CHECK(g_ui.opened.size() == 1 && (g_ui.opened[0].flags & proto::UI_FLAG_PINNED) != 0);
+    }
+
+    // ================================================================
+    // A TYPED SUBTITLE: the line, and how the client is to type it out.
+    std::printf("-- subtitle, typed --\n");
+    {
+        g_ui.huds.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "typed",
+          "nodes": [ { "id": "c", "type": "on_call", "name": "say_typed" },
+                     { "id": "s", "type": "subtitle", "everyone": true, "text": "Gems ahead.", "mode": "typed",
+                       "speed": 20, "pack": 3, "sound": "ui.type" },
+                     { "id": "c2", "type": "on_call", "name": "say_line" },
+                     { "id": "l", "type": "subtitle", "everyone": true, "text": "Plain." } ],
+          "links": [ ["c.then", "s.in"], ["c2.then", "l.in"] ] })"));
+        CHECK(run("graphs.call('say_typed', dnp.players()[1], nil)", "typed"));
+        std::printf("  subtitle '%s', typing %s, pack %s, sound %s\n", g_ui.huds["subtitle"].c_str(),
+                    g_ui.huds["subtitle_typing"].c_str(), g_ui.huds["subtitle_pack"].c_str(), g_ui.huds["subtitle_sound"].c_str());
+        CHECK(g_ui.huds["subtitle"] == "Gems ahead.");
+        CHECK(g_ui.huds["subtitle_typing"] == "20" && g_ui.huds["subtitle_pack"] == "3" && g_ui.huds["subtitle_sound"] == "ui.type");
+        // CONTROL: a plain line clears how the last one was typed, or it would be typed too.
+        CHECK(run("graphs.call('say_line', dnp.players()[1], nil)", "line"));
+        CHECK(g_ui.huds["subtitle"] == "Plain." && g_ui.huds["subtitle_typing"] == "<cleared>" &&
+              g_ui.huds["subtitle_sound"] == "<cleared>");
+        // A typed mode with an unknown name is refused at load.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "badmode",
+          "nodes": [ { "id": "s", "type": "subtitle", "text": "x", "mode": "scrolling" } ], "links": [] })"));
     }
 
     // ================================================================
