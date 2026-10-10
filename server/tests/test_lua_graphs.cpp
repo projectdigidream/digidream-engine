@@ -882,6 +882,18 @@ int main(int argc, char** argv) {
         CHECK(run("bt_ceil = dnp.sector(2):ceil().raw / 4294967296", "the ceiling after"));
         std::printf("  sector_move by tag 3: sector 2's ceiling now %.3f\n", num("bt_ceil"));
         CHECK(num("bt_ceil") == 12);
+        // A push STRAIGHT UP (a spring): the strength goes into the vertical.
+        // It went nowhere -- `up` was a direction with no case, so only the
+        // separate `up` lift moved anything.
+        CHECK(load_graph(R"({ "graph": 1, "name": "spring",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "boing" },
+                     { "id": "p", "type": "push", "direction": "up", "strength": 12 } ],
+          "links": [ ["go.then", "p.in"] ] })"));
+        CHECK(run("graphs.call('boing', dnp.players()[1], nil)", "a spring"));
+        ticks(1);
+        CHECK(run("sp_vz = dnp.players()[1]:vel().z.raw / 4294967296", "the push up"));
+        std::printf("  push up 12: vertical speed %.2f\n", num("sp_vz"));
+        CHECK(num("sp_vz") > 5);
     }
 
     std::printf("-- arrivals, after the level stood empty --\n");

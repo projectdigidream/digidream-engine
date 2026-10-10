@@ -439,7 +439,10 @@ function EXEC.push(g, n, ev, pull)
   elseif how == "angle" then
     d = dnp.dir(math.floor((tonumber(pull("angle")) or 0) / 360 * 4294967296) % 4294967296)
   end
-  e:add_impulse(vec3.new(d.x * strength, d.y * strength, fxn(pull("up") or 0)))
+  local lift = fxn(pull("up") or 0)
+  -- STRAIGHT UP: the strength is the vertical (a spring), with any `up` on top.
+  if how == "up" then lift = lift + strength end
+  e:add_impulse(vec3.new(d.x * strength, d.y * strength, lift))
   return "then"
 end
 function EXEC.stop(g, n, ev, pull)
