@@ -302,6 +302,13 @@ inline constexpr u32 SOLID           = 1u << 8;
 // class swap, a costume. Zero is the default avatar, which is what a server that
 // never speaks gets.
 inline constexpr u32 AVATAR          = 1u << 9;
+// HOW FAR INTO ITS SWING another body is: its attack countdown (u8, ticks left;
+// 0 not swinging). Sent while it changes, so a swing costs a byte a snapshot
+// for as long as it lasts and nothing otherwise. What lets a client draw
+// somebody ELSE's swing -- a monster's claw, another player's blade -- with the
+// shape it already has from that body's parameters (design 4.1; the client's
+// own swing is predicted and needs none of this).
+inline constexpr u32 ATTACK          = 1u << 10;
 }  // namespace ent_field
 
 namespace state_flag {
@@ -664,6 +671,7 @@ struct EntityBlock {
     u32    display_id      = 0;   // dropped items only; never an item_hash (R7)
     u16    avatar          = 0;   // which avatar draws a player; 0 is the default
     u8     solid           = 1;
+    u8     attack_left     = 0;   // ent_field::ATTACK
 };
 
 // A scripted-discrete sector's current offset. Parametric movers are absent by

@@ -125,6 +125,10 @@ struct UiSink {
     // name. A no-op for a panel that is not open, or a widget it lacks.
     virtual void show_ui(u32 /*level*/, u32 /*agent*/, u32 /*ui_id*/, u16 /*widget_id*/,
                          const std::string& /*decor*/, bool /*shown*/) {}
+    // A scripted body's parameter changed (entity:set_body_param): its
+    // observers are told, so they can draw what it does -- a monster's swing
+    // has the shape its parameters give it (docs/protocol.md 10.1).
+    virtual void body_param_changed(u32 /*level*/, u32 /*agent*/, u16 /*field_id*/) {}
     // Camera settings for whoever is watching this agent (design §4.1: the
     // camera is the client's, and Lua configures and triggers it).
     virtual void set_camera(u32 level, u32 agent, const proto::CameraSet& c) = 0;

@@ -59,6 +59,8 @@ import { Neighbourhood } from './seam/neighbourhood.js'
 import { buildCell } from './seam/buildcell.js'
 import { report, CrossingProbe, BodyWatch } from './seam/diag.js'
 import { Music } from './audio/music.js'
+import { RemoteParams, isOwnParams } from './remoteparams.js'
+import { SlashView, parseSwingStyles, styleFor } from './render/slash.js'
 import { musicKeyFor } from './audio/musickey.js'
 import { MSG, encodeUiEvent, encodeGameSave, encodeGameLoad, encodeGameNew, CAMERA_FIELD } from './proto.js'
 import { SOUND_FOLLOW, SOUND_PREDICTED } from './proto.js'
@@ -1134,6 +1136,9 @@ let agent = world.spawn(spawn)
 // referred to had run. The fix is the ordinary one -- declare a binding where
 // it is first needed.
 let myAgentIndex = (LIVE && welcome) ? (welcome.selfHandle & 0x00ffffff) - 1 : null
+// Everybody else's parameters (remoteparams.js): what their swings are drawn
+// with. A PARAM_UPDATE about another body goes here, never into our own.
+const remoteParams = new RemoteParams({ defaultRaw: (id) => core.paramDefaultRaw(id), paramId: (n) => world.paramId(n) })
 // This client's own handle, as the wire writes it: what a PREDICTED sound's
 // `source` is compared with (docs/protocol.md §5.7).
 let mySelfHandle = (LIVE && welcome) ? welcome.selfHandle >>> 0 : 0
@@ -1169,6 +1174,7 @@ if (LIVE) {
   // first tick: a client predicting with the wrong movement rules mispredicts
   // every tick and never recovers (docs/protocol.md §8.4).
   for (const m of paramUpdates) {
+    if (!isOwnParams(m, myAgentIndex)) { remoteParams.take(m); continue }
     world.applyParamUpdate(agent, m)
     predictor.paramEpoch = m.epoch
   }
@@ -1669,6 +1675,21 @@ rebuildSwing(readSwingShape(world, agent))
 // collider alone crosses and is gone inside a sixth of a second, so where it
 // has BEEN is the part you can actually look at.
 const swingTrail = SHOW_SWING ? new SwingTrail({ THREE, scene }) : null
+
+// THE SWING AS THE GAME SHOWS IT, debug or not: a slash streak along each
+// body's real sweep, in the module's look (render/slash.js, docs/SWINGS.md;
+// assets/sprites/swings.json). The drawings above are the collider, for
+// somebody tuning a weapon; this is the effect.
+const slash = new SlashView({ THREE, scene })
+let swingStyles = parseSwingStyles({}).styles
+fetch('/sprites/swings.json').then((r) => (r.ok ? r.text() : null)).then((text) => {
+  if (text === null) return
+  const parsed = parseSwingStyles(text)
+  // Said, not fatal: what is wrong is left out and the rest is used.
+  for (const e of parsed.errors) console.warn(`[swings] ${e}`)
+  swingStyles = parsed.styles
+}).catch(() => {})
+dnpStats.slash = () => ({ live: slash.count, swingers: [...slash.swingers.keys()] })
 
 // Camera paths, drawn. OPT-IN, unlike the swing view beside it: a map may hold
 // sixteen paths and each is a spline sampled every frame it moves. That is
@@ -2484,11 +2505,14 @@ function drainSnapshots () {
     others.ingest(s, { fxToFloat, toThree: (x, y, z) => ({ x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) }) })
     predictor.reconcile(s)
   }
+  let ownParams = false
   for (const m of paramUpdates) {
+    if (!isOwnParams(m, myAgentIndex)) { remoteParams.take(m); continue }
     world.applyParamUpdate(agent, m)
     predictor.paramEpoch = m.epoch
+    ownParams = true
   }
-  if (paramUpdates.length) refreshBody()
+  if (ownParams) refreshBody()
   paramUpdates.length = 0
   applyWeaponDefs()
 }
@@ -2938,6 +2962,42 @@ function frame (now) {
     })
     swingTrail.update(performance.now() / 1000)
   }
+  // THE SLASHES: this body's, from its predicted swing (not in first person,
+  // where the weapon on screen is the swing), and every other body's, from its
+  // swing countdown (ATTACK) and the parameters the server sent for it.
+  {
+    const now = performance.now() / 1000
+    if (!isFps()) {
+      const shape = readSwingShape(world, agent)
+      slash.offer('self', {
+        shape, left: a.attackLeft,
+        offsetTurns: sweepOffset({ ...shape, left: a.attackLeft }),
+        pitchTurns: pitchOffset({ ...shape, left: a.attackLeft }) ?? 0,
+        facingTurns: (a.facing >>> 0) / 4294967296,
+        x: subject.x, y: subject.y + bodyHeight / 2, z: subject.z,
+        style: styleFor(swingStyles, { weapon: hudValues.get('hud.weapon') || null }),
+        now
+      })
+    }
+    for (const [index, ent] of others.entities) {
+      if (!ent.attackLeft && !slash.swingers.has(index)) continue
+      const shape = readSwingShape(remoteParams.view(index), index)
+      const rec = ent.kind ? props?.kinds.get(ent.kind) : null
+      const h = rec?.height ?? bodyHeight
+      const p = ent.mesh.position
+      slash.offer(index, {
+        shape, left: ent.attackLeft ?? 0,
+        offsetTurns: sweepOffset({ ...shape, left: ent.attackLeft ?? 0 }),
+        pitchTurns: pitchOffset({ ...shape, left: ent.attackLeft ?? 0 }) ?? 0,
+        facingTurns: ((ent.facing ?? 0) >>> 0) / 4294967296,
+        x: p.x, y: p.y - (ent.mesh.userData.yOffset ?? 0) + h / 2, z: p.z,
+        style: styleFor(swingStyles, { monster: rec?.name ?? null }),
+        now
+      })
+    }
+    slash.update(now)
+  }
+
   // The body's MIDDLE, from the body's declared height rather than from the
   // mesh's yOffset.
   //

@@ -2205,6 +2205,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // first snapshot so it is never predicting with rules it has not been
         // told.
         send_param_update(L, id, agent, true);
+        send_others_params(L, id, agent);
         resend_hud(s);
         // And the game's scripts, which follow the player: a body in a new
         // world has none of the parameters they had set on the last one.
@@ -3106,6 +3107,35 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         s->add_ui(p, !vm_stack_.empty() && vm_stack_.back() == VM_GAME ? Session::UI_GAME : level_index);
         send_ui_open(*s, p);
         return p.ui_id;
+    }
+
+    // A monster's body parameter, set by its script: every observer in its
+    // world is told, as a player's changes always were -- the client draws a
+    // monster's swing from these (ent_field::ATTACK says when).
+    void body_param_changed(u32 level_index, u32 agent, u16 field_id) override {
+        Level& L = level(level_index);
+        if (agent >= sim::MAX_AGENTS) return;
+        L.param_epoch[agent] = static_cast<u8>(L.param_epoch[agent] + 1);
+        for (auto& [id, s] : sessions) {
+            if (s.hello_done && same_world(s, level_index)) send_param_update(L, id, agent, false, &field_id, 1);
+        }
+    }
+
+    // What every OTHER body here has that is not the engine's default, for a
+    // client arriving: the monsters set theirs before it came, and a change is
+    // only ever sent to whoever is already watching.
+    void send_others_params(Level& L, u32 id, u32 self) {
+        static const physics::MoveParams defaults{};
+        u16 diff[physics::PARAM_COUNT];
+        for (u32 a = 0; a < sim::MAX_AGENTS; ++a) {
+            if (a == self || !L.world.agent(a).active) continue;
+            const physics::MoveParams& mp = L.world.params(a);
+            u16 n = 0;
+            for (u16 f = 0; f < physics::PARAM_COUNT; ++f) {
+                if (physics::param_get_raw(mp, f) != physics::param_get_raw(defaults, f)) diff[n++] = f;
+            }
+            if (n) send_param_update(L, id, a, false, diff, n);
+        }
     }
 
     void show_ui(u32 level_index, u32 agent, u32 ui_id, u16 widget_id, const std::string& decor,
@@ -4280,6 +4310,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     // suggest a monster could wear one.
                     now.avatar          = a.kind == 0 ? L.avatar[i] : 0;
                     now.solid           = a.solid;
+                    now.attack_left     = a.mv.attack_left;
                 }
 
                 if (!now.present) {
@@ -4317,6 +4348,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 e.display_id       = now.display_id;
                 e.avatar           = now.avatar;
                 e.solid            = now.solid ? 1 : 0;
+                e.attack_left      = now.attack_left;
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;

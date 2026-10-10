@@ -63,6 +63,12 @@ export class Core {
    */
   get paramCount () { return this.M._dnp_param_count() }
 
+  /** The engine's default for one parameter, as the raw i64 (BigInt). */
+  paramDefaultRaw (fieldId) {
+    this.M._dnp_param_default_raw(fieldId, this.buf64)
+    return this.views.i64[this.buf64 / 8]
+  }
+
   get interactReach () {
     this.M._dnp_interact_reach(this.buf64)
     return Number(this.views.i64[this.buf64 / 8]) / 4294967296

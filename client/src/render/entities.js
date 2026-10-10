@@ -104,6 +104,17 @@ export class EntityView {
       // a remove-and-respawn the caller can do rather than a surprise this loop
       // performs mid-interpolation.
       if (e.mask & ENT_FIELD.AVATAR) ent.avatar = e.avatar ?? 0
+      // How far into its swing (ticks left; 0 none), delta-encoded like the
+      // rest, so the last value stands until it changes -- and BEFORE the
+      // position early-return, because a monster swinging on the spot sends
+      // ATTACK with no POS. With `attackAt`, the client time it was told, so a
+      // renderer can tell a fresh swing from one it already drew.
+      if (e.mask & ENT_FIELD.ATTACK) {
+        const left = e.attackLeft ?? 0
+        if (left > (ent.attackLeft ?? 0)) ent.swingStartedAt = performance.now()
+        ent.attackLeft = left
+        ent.attackAt = performance.now()
+      }
 
       // SOLIDITY, BEFORE THE POSITION EARLY-RETURN.
       //

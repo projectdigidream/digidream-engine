@@ -560,6 +560,7 @@ int l_entity_set_body_param(lua_State* L) {
                            static_cast<u16>(id), integral ? v.trunc_int() : v.raw);
     ctx.effects->set_base(static_cast<u32>(a),
                           ctx.world->params(static_cast<u32>(a)));
+    if (ctx.ui) ctx.ui->body_param_changed(ctx.level, static_cast<u32>(a), static_cast<u16>(id));
     return 0;
 }
 

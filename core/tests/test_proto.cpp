@@ -338,6 +338,11 @@ TEST_FN void test_snapshot_roundtrip() {
                 sent[i].mask |= ent_field::AVATAR;
                 sent[i].avatar = static_cast<u16>(rng.next_u32());
             }
+            // How far into its swing: a byte, while it changes.
+            if (i % 4 == 1) {
+                sent[i].mask |= ent_field::ATTACK;
+                sent[i].attack_left = static_cast<u8>(1 + rng.next_below(255));
+            }
             if (sw.try_entity(sent[i])) ++written;
         }
 
@@ -409,6 +414,8 @@ TEST_FN void test_snapshot_roundtrip() {
                 CHECK(got.entities[i].display_id == sent[i].display_id);
                 CHECK(got.entities[i].avatar == sent[i].avatar);
             }
+            if (sent[i].mask & ent_field::ATTACK) CHECK(got.entities[i].attack_left == sent[i].attack_left);
+            else CHECK(got.entities[i].attack_left == 0);   // CONTROL: absent means nothing was read
         }
         CHECK(got.vfx_count == vwritten);
     }

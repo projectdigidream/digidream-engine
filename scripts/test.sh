@@ -561,6 +561,8 @@ suite_client () {
   # The sky (docs/SKY.md): SKY_SET as the server writes it, where a direction
   # lands on DOOM's sky, DOOM's sky hack, and pictures loaded once.
   node client/test/sky.test.js | grep -E 'FAIL|failures'
+  node client/test/slash.test.js | grep -E 'FAIL|failures'
+  node client/test/remoteparams.test.js | grep -E 'FAIL|failures'
   # The input bundle the client writes: 15 bytes a frame with the module's keys,
   # at the full sixteen frames (it once overran past six).
   node client/test/proto_input.test.js | grep -E 'FAIL|failures'
@@ -883,6 +885,9 @@ suite_stack () {
      `# The graphs' saved variables (docs/GRAPHS.md "Saved on disk"): saved by one` \
      `# server, loaded by the next. CONTROL: before a save, load_vars says none.` \
      && node test/store.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Another body's swing (docs/SWINGS.md): a monster's parameters on joining and` \
+     `# its swing countdown in the snapshots. CONTROL: it counts down.` \
+     && node test/slashes.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Game scripts: one panel and one count that follow the player into the` \
      `# next level, a level's own panel closed when it is left, and the game's` \
      `# state in a save and across a restart. CONTROL: the same script per level.` \

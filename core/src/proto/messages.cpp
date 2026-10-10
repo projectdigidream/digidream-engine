@@ -90,6 +90,7 @@ void encode_entity(ByteWriter& w, const EntityBlock& e) noexcept {
     if (e.mask & ent_field::DISPLAY_ID) w.u32v(e.display_id);
     if (e.mask & ent_field::AVATAR) w.u16v(e.avatar);
     if (e.mask & ent_field::SOLID) w.u8v(e.solid);
+    if (e.mask & ent_field::ATTACK) w.u8v(e.attack_left);
     // DESTROYED carries no payload.
 }
 
@@ -116,6 +117,7 @@ bool decode_entity(ByteReader& r, EntityBlock& e) noexcept {
     if (e.mask & ent_field::DISPLAY_ID) e.display_id = r.u32v();
     if (e.mask & ent_field::AVATAR) e.avatar = r.u16v();
     if (e.mask & ent_field::SOLID) e.solid = r.u8v();
+    if (e.mask & ent_field::ATTACK) e.attack_left = r.u8v();
     return r.ok();
 }
 

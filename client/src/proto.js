@@ -121,7 +121,9 @@ export const ENT_FIELD = {
   SOLID: 1 << 8,
   // Which avatar draws this player. Its own field, not display_id's: that one
   // carries the KIND, and kind zero has to keep meaning "a player".
-  AVATAR: 1 << 9
+  AVATAR: 1 << 9,
+  // Ticks left in another body's swing (u8; 0 not swinging).
+  ATTACK: 1 << 10
 }
 
 // Snapshot header flags (docs/protocol.md §5).
@@ -856,6 +858,7 @@ export function decodeSnapshot (buf) {
     if (e.mask & ENT_FIELD.DISPLAY_ID) e.displayId = r.u32()
     if (e.mask & ENT_FIELD.AVATAR) e.avatar = r.u16()
     if (e.mask & ENT_FIELD.SOLID) e.solid = r.u8()
+    if (e.mask & ENT_FIELD.ATTACK) e.attackLeft = r.u8()
     if (!r.ok) return null
     snap.entities.push(e)
   }

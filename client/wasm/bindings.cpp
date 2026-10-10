@@ -895,6 +895,16 @@ int dnp_param_id_by_name(const char* name) { return physics::param_id_by_name(na
 EMSCRIPTEN_KEEPALIVE
 int dnp_param_count() { return physics::PARAM_COUNT; }
 
+// The engine's default for one parameter: what a body has that nothing
+// changed. The client keeps OTHER bodies' parameters as the fields the server
+// sent (a monster's swing, another player's weapon), and every field it was not
+// sent is this.
+EMSCRIPTEN_KEEPALIVE
+void dnp_param_default_raw(unsigned field_id, long long* out) {
+    static const physics::MoveParams defaults{};
+    out[0] = physics::param_get_raw(defaults, static_cast<u16>(field_id));
+}
+
 // Mirror a replicated prop into the client's own simulation.
 //
 // A solid prop is PHYSICS: the mover pushes bodies out of it, so a client

@@ -158,7 +158,12 @@ async function dump (url, { gesture = true, settle = 30000, press = false, fail 
       probes.results = []
       for (const p of probes) {
         if (typeof p === 'number') await sleep(p)
-        else probes.results.push(await value(p))
+        // { down | up: 'KeyF' }: a real key, as the player's.
+        else if (typeof p === 'object') {
+          const code = p.down ?? p.up
+          await send('Input.dispatchKeyEvent', { type: p.down ? 'keyDown' : 'keyUp', code, key: code.replace(/^Key/, '').toLowerCase(),
+            windowsVirtualKeyCode: code.charCodeAt(code.length - 1) })
+        } else probes.results.push(await value(p))
       }
     }
     return (await value('document.documentElement.outerHTML')) ?? ''
@@ -223,6 +228,23 @@ try {
     check(hid?.state === 'suspended' && hid.audio === 'suspended', `sent to the background, the audio stops (${hid?.state})`)
     check(still && hid && still.t === hid.t, `and the song does not move on while hidden (${hid?.t} -> ${still?.t} ms)`)
     check(back?.state === 'running' && back.t > (still?.t ?? 0), `back in sight, it plays on from where it was (${back?.t} ms)`)
+  }
+
+  console.log('\n--- the swing, shown with the debug overlay off ---')
+  {
+    // F swings. The streak is the game's (render/slash.js), so it must be there
+    // with debug off -- and gone again once it has faded.
+    const live = 'window.__dnpStats.slash().live'
+    const probes = [live, { down: 'KeyF' }]
+    for (let i = 0; i < 10; i++) probes.push(30, live)
+    probes.push({ up: 'KeyF' }, 900, live)
+    await dump(url('touch=0&debug=0'), { probes })
+    const [before, ...rest] = probes.results
+    const after = rest.pop()
+    const peak = Math.max(...rest)
+    check(before === 0, `CONTROL: no streak before the swing (${before})`)
+    check(peak > 0, `swinging, with the debug overlay off, draws the streak (${peak} piece(s) at most)`)
+    check(after === 0, `and it fades and is freed (${after})`)
   }
 
   console.log('\n--- CONTROL: a page that may not make sound asks first, and waits ---')

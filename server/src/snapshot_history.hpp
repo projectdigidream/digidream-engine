@@ -40,6 +40,8 @@ struct EntitySample {
     // Whether other bodies collide with this one. Replicated because the client
     // predicts against it -- see proto::ent_field::SOLID.
     bool solid           = true;
+    // Ticks left in its swing (proto::ent_field::ATTACK); 0 when not swinging.
+    u8   attack_left     = 0;
 };
 
 struct SnapshotRecord {
@@ -129,6 +131,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
         // Same reasoning: solid is the default, so it is only worth a byte when
         // it is not. A body that spawns already dead does not exist.
         if (!now.solid) full |= proto::ent_field::SOLID;
+        if (now.attack_left != 0) full |= proto::ent_field::ATTACK;
         return full;
     }
     u32 mask = 0;
@@ -141,6 +144,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     // else looking at the old one forever.
     if (now.avatar != was.avatar) mask |= proto::ent_field::AVATAR;
     if (now.solid != was.solid) mask |= proto::ent_field::SOLID;
+    if (now.attack_left != was.attack_left) mask |= proto::ent_field::ATTACK;
     return mask;
 }
 
