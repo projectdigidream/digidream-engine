@@ -40,7 +40,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { serverSaid } from './said.js'
 import { createServer } from 'node:net'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync, readdirSync } from 'node:fs'
 import { readFile as readFileAsync, writeFile as writeFileAsync, readdir } from 'node:fs/promises'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -239,12 +239,33 @@ async function launch ({ module, map }) {
   return true
 }
 
+/**
+ * A module's maps for the server: `entry` first (where players start), then
+ * every other .dnpm it has, in name order -- the whole module, so a graph may
+ * send players to any of them (change_map), with the start the game chose.
+ */
+function moduleMaps (modDir, entry) {
+  const first = join(modDir, 'maps', entry)
+  let others = []
+  try { others = readdirSync(join(modDir, 'maps')).filter((n) => n.endsWith('.dnpm') && n !== entry).sort() } catch {}
+  return [first, ...others.map((n) => join(modDir, 'maps', n))].slice(0, 64)
+}
+
 async function start () {
   if (manifest.studio) {
     if (await files.seed(join(GAME, 'modules'), manifest.builtAt ?? 'unknown')) log(`seeded ${GAME_RW}`)
   }
   const linkPort = await freePort()
-  serverProc = spawnServer(linkPort)
+  // THE MAP THE GAME STARTS ON, when game.json names one (the packager writes
+  // the one chosen there). Without it the server hosts every map of the module
+  // and starts on the first by name -- a module whose menu is called `menu`
+  // started in `first`.
+  const entry = typeof manifest.map === 'string' && manifest.map ? manifest.map : null
+  const startDir = entry ? join(manifest.studio ? GAME_RW : GAME, 'modules', manifest.modules[0]) : null
+  if (entry && !existsSync(join(startDir, 'maps', entry))) log(`game.json names map ${entry}, which the module does not have; starting on the first by name`)
+  serverProc = entry && existsSync(join(startDir, 'maps', entry))
+    ? spawnServer(linkPort, { maps: moduleMaps(startDir, entry) })
+    : spawnServer(linkPort)
 
   // THE SAME ORIGIN EVERY LAUNCH. The page's storage (the studio's work in
   // IndexedDB, localStorage) belongs to its origin, port included; a new port
