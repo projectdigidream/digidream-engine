@@ -345,6 +345,14 @@ public final class MainActivity extends Activity {
           reply(id, true, String.valueOf(rwFile(a.getString("path")).delete()));
           return;
         }
+        // The module the studio has open: the one whose files the page is
+        // served (serveFromTree), beside the engine's. Modules do not share.
+        case "useModule": {
+          String m = a.optString("module", "");
+          playModule = m.isEmpty() ? null : rwFile(m);
+          reply(id, true, "true");
+          return;
+        }
         case "launch": {
           launch(a.getString("module"), a.getString("map"));
           reply(id, true, "true");
@@ -406,10 +414,11 @@ public final class MainActivity extends Activity {
     File mapFile = new File(modDir, "maps/" + map);
     if (!mapFile.isFile()) throw new IOException("no such level: " + module + "/maps/" + map);
     server.stop();
+    // ONLY THE MODULE BEING PLAYED, as a game packaged from it runs. Modules
+    // do not share: the APK's bundled module (starter) used to run beside it,
+    // and a game built from the same module then behaved differently.
     List<File> modules = new ArrayList<>();
-    File bundled = new File(gameDir, "modules/" + bundledModule);
-    modules.add(bundled);
-    if (!modDir.getCanonicalPath().equals(bundled.getCanonicalPath())) modules.add(modDir);
+    modules.add(modDir);
     // The Play log, started afresh: the server's output (play-server.log) and
     // the game page's console (play-game.log), for the studio to read back.
     File logs = rwFile("logs");
@@ -587,6 +596,9 @@ public final class MainActivity extends Activity {
     // have it: /studio/ is the studio's page. Without this the WebView asked
     // the APK for a directory, got a 404, and showed it as a page error.
     if (path.isEmpty() || path.endsWith("/")) path += "index.html";
+    // The studio's page, loaded again (the way back from Play, a reload): no
+    // module is open until it says which (useModule).
+    if (path.equals("studio/index.html")) playModule = null;
 
     // NO `..`, EVER. This serves out of the APK rather than out of a world of
     // files, so there is not much to reach -- but a path check that only holds
@@ -667,6 +679,42 @@ public final class MainActivity extends Activity {
   }
 
   /**
+   * The engine's files and one module's (null: the engine's alone), as a game
+   * packaged from that module serves them. The two catalogues are the
+   * engine's copy (unpacked beside the modules: the APK's has the bundled
+   * module's appended) and then the module's; the music index is the
+   * module's own. Any other file the module has is its own; null falls
+   * through to the APK, the engine's client and assets.
+   */
+  private WebResourceResponse serveOnly(File module, String path) throws IOException {
+    boolean has = module != null && module.isDirectory();
+    if (path.equals("props.txt") || path.equals("animations.txt")) {
+      ByteArrayOutputStream bo = new ByteArrayOutputStream();
+      File engineFile = new File(gameDir, "assets/" + path);
+      if (engineFile.isFile()) try (InputStream in = new FileInputStream(engineFile)) { bo.write(readAllBytes(in)); }
+      File f = has ? new File(module, "assets/" + path) : null;
+      if (f != null && f.isFile()) {
+        bo.write(("\n# --- " + module.getName() + " ---\n").getBytes("utf-8"));
+        try (InputStream in = new FileInputStream(f)) { bo.write(readAllBytes(in)); }
+      }
+      return bytes("text/plain", bo.toByteArray());
+    }
+    if (path.equals("music/index.json")) {
+      File f = has ? new File(module, "assets/music/index.json") : null;
+      if (f != null && f.isFile()) try (InputStream in = new FileInputStream(f)) { return bytes("application/json", readAllBytes(in)); }
+      return bytes("application/json", "{}".getBytes("utf-8"));
+    }
+    if (!has) return null;
+    File f = new File(module, "assets/" + path);
+    if (f.isFile()) {
+      String ext = path.substring(path.lastIndexOf('.') + 1).toLowerCase();
+      String type = TYPES.get(ext);
+      try (InputStream in = new FileInputStream(f)) { return bytes(type != null ? type : "application/octet-stream", readAllBytes(in)); }
+    }
+    return null;
+  }
+
+  /**
    * What the studio's modules add to what the APK has, or null to fall
    * through to the APK.
    */
@@ -676,6 +724,14 @@ public final class MainActivity extends Activity {
     // that module's files only out of the APK meant every picture, font, sprite
     // and prop the studio gave it never reached the game. Other modules first,
     // then the bundled module's tree copy, then the APK (below).
+    // MODULES DO NOT SHARE. With the studio, the page is served the engine's
+    // files and ONE module's: the one played, or the one the studio has open
+    // (useModule). Every module on the phone used to be served at once --
+    // their props and animations concatenated into the catalogues, their music
+    // and layout indexes merged, their files standing in for ones this module
+    // lacks -- so the studio offered, and Play used, what a game built from
+    // the module would not have.
+    if (studio) return serveOnly(playModule, path);
     List<File> mods = new ArrayList<>(userModules());
     File bundledTree = gameDir == null || bundledModule == null ? null : new File(gameDir, "modules/" + bundledModule);
     boolean haveBundled = bundledTree != null && bundledTree.isDirectory();

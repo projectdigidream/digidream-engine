@@ -94,7 +94,14 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
   // modules come in name order -- so another module's hud.json used to win a
   // play-test of this one. Set by the studio's Play (main.js launch).
   let first = null
+  // MODULES DO NOT SHARE. With the studio (rwRoot), the page is served the
+  // engine's files and ONE module's -- the one played, or the one the studio
+  // has open (setFirst) -- as a game packaged from it serves them. Every
+  // module used to be served at once: catalogues concatenated, indexes
+  // merged, their files standing in for ones this module lacks, so the studio
+  // offered, and Play used, what a game built from the module would not have.
   const moduleRoots = async () => {
+    if (rwRoot) return first ? [first] : []
     const roots = []
     if (first) roots.push(first)
     if (rwRoot) {
@@ -132,6 +139,8 @@ export function startStatic ({ root, modules = [], rwRoot = null, log = () => {}
   const server = createServer(async (req, res) => {
     try {
       const path = req.url.split('?')[0]
+      // The studio's page, loaded again: no module is open until it says.
+      if (rwRoot && (path === '/studio/' || path === '/studio/index.html')) first = null
 
       // The two catalogues are CONCATENATED across modules, never chosen
       // between -- several modules load at once and each contributes entries.

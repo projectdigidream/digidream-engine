@@ -176,6 +176,8 @@
       listFiles: (prefix) => call('listFiles', { prefix: prefix ?? '' }),
       deleteFile: (path) => call('deleteFile', { path }),
       launch: (opts) => call('launch', opts),
+      // The module the studio has open: the only one whose files it is served.
+      useModule: (module) => call('useModule', { module: module ?? '' }),
       share: (name, bytes) => call('share', { name, data: b64encode(new Uint8Array(bytes)) }),
       importFile: (accept) => call('importFile', { accept: accept ?? '' })
         .then((r) => (r ? { name: r.name, bytes: b64decode(r.data) } : null))

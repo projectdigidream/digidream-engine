@@ -123,8 +123,9 @@ function spawnServer (linkPort, extra = {}) {
   // a module the studio rewrote is the one the server loads, and no catalogue
   // is loaded twice (an id collision refuses to start).
   const bundledRoot = manifest.studio ? join(GAME_RW, 'modules') : join(GAME, 'modules')
-  const roots = new Set(manifest.modules.map((m) => join(bundledRoot, m)))
-  for (const m of extra.modules ?? []) roots.add(m)
+  // A play-test runs ONLY the module played, as a game packaged from it does:
+  // modules do not share (the bundled ones beside it changed the game).
+  const roots = new Set(extra.modules?.length ? extra.modules : manifest.modules.map((m) => join(bundledRoot, m)))
   for (const m of roots) args.push('--module', m)
   // The first map is where players start; the rest are what a script may send
   // them to (change_map). A play-test passes the map being tested, then every
@@ -343,6 +344,8 @@ async function start () {
       case 'listFiles': return files.listFiles(a ?? '')
       case 'deleteFile': return files.deleteFile(a)
       case 'launch': return launch(a ?? {})
+      // The module the studio has open: the only one whose files it is served.
+      case 'useModule': { statics.setFirst?.(a ? join(GAME_RW, 'modules', String(a).replace(/[\\/]/g, '')) : null); return true }
       case 'share': {
         const r = await dialog.showSaveDialog(win, { defaultPath: a })
         if (r.canceled || !r.filePath) return false
