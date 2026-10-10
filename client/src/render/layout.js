@@ -667,7 +667,14 @@ export class HudView {
       n.fill.style.background = fill
     } else if (el.type === 'image') {
       const frame = el.bind ? b.get(el.bind) : el.frame
-      if (frame && n.img) n.img.src = `/sprites/${frame}.png`
+      // A sprite picture of that name, else a texture of it (§3.3: "a sprite
+      // frame key ... or a texture name") -- a texture painted in qPainter is
+      // baked to /textures/, never to /sprites/.
+      if (frame && n.img && n.img.dataset.frame !== frame) {
+        n.img.dataset.frame = frame
+        n.img.onerror = () => { if (n.img.dataset.frame === frame && !n.img.src.includes('/textures/')) n.img.src = `/textures/${frame}.png` }
+        n.img.src = `/sprites/${frame}.png`
+      }
     }
     for (const k of n.kids) this.#fill(k)
   }

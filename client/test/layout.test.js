@@ -123,7 +123,7 @@ const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps
 function fakeDoc () {
   const make = (tag) => {
     const n = {
-      tag, style: {}, children: [], className: '', textContent: '', offsetWidth: 0, offsetHeight: 0,
+      tag, style: {}, dataset: {}, children: [], className: '', textContent: '', offsetWidth: 0, offsetHeight: 0,
       appendChild (c) { this.children.push(c); c.parent = this; return c },
       remove () { if (this.parent) this.parent.children = this.parent.children.filter((x) => x !== this) }
     }
@@ -171,6 +171,15 @@ function fakeDoc () {
   const shown = hud.nodes[0].dom.style.display
   hud.update({ 'hud.key': undefined })
   check(shown === 'block' && hud.nodes[0].dom.style.display === 'none', 'a value the server clears is gone from the HUD (HUD_SET kind 2)')
+  // An image's frame is a sprite picture, else a texture of that name (§3.3).
+  hud.setLayout(parseLayout({ hud: [{ id: 'coin', type: 'image', frame: 'HUDCOIN', w: 32, h: 32 }] }).layout)
+  hud.update({})
+  const img = hud.nodes[0].img
+  check(img.src === '/sprites/HUDCOIN.png', `an image asks for the sprite picture first (${img.src})`)
+  img.onerror?.()
+  check(img.src === '/textures/HUDCOIN.png', `and a texture of the name when there is none (${img.src})`)
+  img.onerror?.()
+  check(img.src === '/textures/HUDCOIN.png', 'and stays there when that is missing too')
   // SUBTITLES: shown while there is a line, with its speaker above it; gone
   // when cleared; and a layout that places its own is not given a second.
   hud.setLayout(parseLayout({ hud: [] }).layout)
