@@ -1475,6 +1475,9 @@ function W.pickup(entity, prop)
   -- spawned as, and a level of monsters walking over the medikits would clear a
   -- Doom map of pickups in seconds -- which is exactly what happened to the
   -- keys before doom.lua grew the same guard.
+  -- A prop something else took first -- a graph's `remove` on the same
+  -- touch, earlier in the tick -- arrives as nothing.
+  if entity == nil or prop == nil then return end
   if entity:kind() ~= 0 then return end
   local idx = key_of(entity)
   if idx == nil then return end

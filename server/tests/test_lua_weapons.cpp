@@ -719,6 +719,10 @@ int main(int argc, char** argv) {
     CHECK(num("hp_full") == 100);
     CHECK(num("kit_taken") == 1);
     CHECK(num("hp_healed") == 75);
+    // A touch whose prop something else removed first (a graph's `remove`, the
+    // same tick) arrives as nil: nothing to pick up, and no error.
+    CHECK(run("gone_ok = pcall(weapons.pickup, dnp.players()[1], nil)", "a touch of nothing"));
+    CHECK(truthy("gone_ok"));
 
     // ------------------------------------------------------- the bfg says so
     //
