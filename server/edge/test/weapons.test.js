@@ -58,6 +58,7 @@ import {
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
 import { fpsFrame, mirrorEntities } from './helpers.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -153,7 +154,7 @@ async function session ({ echo, giveAll = false, fps = false }) {
             // Applied AND its epoch adopted, as main.js does: the weapons change
             // the swing's parameters, and a predictor left on epoch 0 files every
             // mismatch after that as "rules in flight" instead of comparing it.
-            if (c.world) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
+            if (c.world && isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
             else c.params.push(m)
           } else if (m?.type === MSG.WEAPON_DEFS) {
             c.defs = m.bytes
@@ -184,7 +185,7 @@ async function session ({ echo, giveAll = false, fps = false }) {
   c.agent = c.world.spawn(map.spawnForTag('start') ?? { x: 0n, y: 0n, z: 0n })
   c.serverAgent = (c.welcome.selfHandle & 0x00ffffff) - 1
   c.predictor = new Predictor(c.world, c.agent)
-  for (const m of c.params.splice(0)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
+  for (const m of c.params.splice(0)) { if (!isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) continue; c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
   c.applyDefs = () => { c.defsOk = c.world.setWeapons(c.defs, c.agent, c.serverAgent) }
   if (c.defs) c.applyDefs()
   // Our rockets, flown as main.js flies them; what they drew, with when.
@@ -285,12 +286,16 @@ async function session ({ echo, giveAll = false, fps = false }) {
   }
   // Every tick's predicted weapon, to show a run did something.
   c.seen = { phases: new Set(), currents: new Set(), ammoLow: Infinity, ammoStart: null }
+  // Every tick's PREDICTED animation state (what the first-person view model
+  // plays, docs/VIEWMODEL_PHASES.md), by the tick it was predicted for.
+  c.anims = new Map()
   c.play = async (ticks, script) => {
     for (let i = 0; i < ticks; i++) {
       const input = script(i)
       await c.frame(input)
       c.drain()
       const k = c.world.readWeapon(c.agent)
+      c.anims.set(c.world.tick, c.world.animationState(c.agent))
       c.seen.phases.add(`${k.armed}/${k.phase}`)
       c.seen.currents.add(k.current)
       if (c.seen.ammoStart === null) c.seen.ammoStart = k.ammo.reduce((a, b) => a + b, 0)
@@ -357,6 +362,22 @@ const firing = (slots) => (i) => {
   // hashes above say it did.
   const serverCurrents = new Set(c.snapshots.map((x) => x.self.weapon?.current).filter((x) => x !== undefined))
   check(serverCurrents.size >= 2, `the server switched as well (${[...serverCurrents].join(', ')})`)
+
+  // THE ANIMATION STATE, PREDICTED: what the view model plays is what the
+  // server's body is in, on the same tick -- a phase's `anim`, the moment the
+  // phase starts. CONTROL: six ticks out of step, they disagree somewhere.
+  {
+    const pairs = c.snapshots.slice(firstSnapshot)
+      .filter((x) => c.anims.has(x.serverTick) && x.self?.animationState !== undefined)
+      .map((x) => [c.anims.get(x.serverTick), x.self.animationState, c.anims.get(x.serverTick - 6)])
+    const same = pairs.filter(([p, s]) => p === s).length
+    const states = new Set(pairs.map(([p]) => p))
+    const shifted = pairs.filter(([, s, q]) => q !== undefined && q !== s).length
+    console.log(`  animation: ${same} of ${pairs.length} ticks agree; states seen ${[...states].join(', ')}`)
+    check(pairs.length > 30 && same === pairs.length, `the predicted animation state is the server's, tick for tick (${same} of ${pairs.length})`)
+    check(states.size >= 2, `and it changed with the phases (${[...states].join(', ')})`)
+    check(shifted > 0, `CONTROL: six ticks out of step, it disagrees (${shifted} tick(s))`)
+  }
 
   // DRAWN AT ONCE, AND THE SAME: every tracer and flash this client drew from
   // its prediction is one the server sent for that shot, field for field.

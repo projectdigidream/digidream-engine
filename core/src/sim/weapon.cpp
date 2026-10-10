@@ -246,6 +246,16 @@ u32 step_weapon(const WeaponTable& t, WeaponState& s, WeaponBody& body,
         c.elapsed = tick - s.entered;
         c.jump = NO_PHASE;
 
+        // ITS ANIMATION, on the tick it is entered and before its steps (so a
+        // `set_anim` at 0 overrides it). The vocabulary always promised a
+        // phase's `anim`; nothing applied it, so the body -- and the
+        // first-person view model, which plays by this number
+        // (docs/VIEWMODEL_PHASES.md) -- never moved with the phases.
+        if (s.entered == tick && s.done == 0 && ph.anim != NO_ANIM) {
+            body.anim_set = true;
+            body.anim = ph.anim;
+        }
+
         // The sequence: each due step once, `goto` abandoning the rest.
         for (u8 i = 0; i < ph.step_count; ++i) {
             if ((s.done >> i) & 1u) continue;

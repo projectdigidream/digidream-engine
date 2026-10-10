@@ -459,7 +459,10 @@ const ownSounds = new OwnSounds()
 // Its frames are the module's (sprites/weapons.json) and its pictures are
 // placed by the sprite index's offsets; both fetched once, and a module without
 // them simply has no gun on screen.
-const viewModel = new ViewModel({ host: document.body })
+const viewModel = new ViewModel({ host: document.body, log: (m) => console.warn(m) })
+// Our body's animation state as the server last said (the self block), for a
+// weapon this client does not predict.
+let lastSelfAnim = null
 
 // THE LAYOUT (docs/UI_LAYOUT.md): the module's HUD and touch controls as data,
 // or the built-in default, which is what index.html and touchui.js drew before.
@@ -2524,6 +2527,7 @@ function drainSnapshots () {
     }
     for (const so of s.sectorOffsets ?? []) world.setDiscreteOffset(so.sector, so.offset)
     others.ingest(s, { fxToFloat, toThree: (x, y, z) => ({ x: toThreeX(x), y: toThreeY(z), z: toThreeZ(y) }) })
+    if (s.self) lastSelfAnim = s.self.animationState ?? 0
     predictor.reconcile(s)
   }
   let ownParams = false
@@ -3287,6 +3291,17 @@ function frame (now) {
   {
     const held = hudValues.get('hud.weapon')
     if (held) viewModel.setWeapon(held)
+    // WHICH ANIMATION the weapon is in (docs/VIEWMODEL_PHASES.md): the state its
+    // phase set, PREDICTED -- the tick it happens -- with the phase's entry
+    // tick, so a second swing of the same phase restarts it. A weapon the
+    // client does not predict (one on the server's Lua path) goes by the
+    // snapshot's, a round trip late; with neither, ready and fire as before.
+    if (LIVE && world.hasWeapons) {
+      const st = world.animationState(agent)
+      viewModel.setAnim(st, `${st}:${world.readWeapon(agent).entered}`)
+    } else if (LIVE && lastSelfAnim !== null) {
+      viewModel.setAnim(lastSelfAnim, lastSelfAnim)
+    } else viewModel.setAnim(null)
     const sp = Math.hypot(fxToFloat(a.vel.x), fxToFloat(a.vel.y)) / 8
     viewModel.update(dt, a.grounded ? sp : 0, isFps() && !camPathSpline,
                      { width: innerWidth, height: innerHeight })

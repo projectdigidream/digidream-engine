@@ -488,8 +488,10 @@ bool compile_weapon(Reader& r, int d, const std::string& name, const std::vector
         const int p = lua_gettop(L);
         bool has = false;
         v = 0;
-        ok = r.int_at(p, "anim", pwhere, 0, 65535, v);
-        ph.anim = static_cast<u16>(v);
+        // Absent is NO_ANIM -- the body keeps the state it has -- so 65535 is
+        // not a state a phase may name.
+        ok = r.int_at(p, "anim", pwhere, 0, 65534, v, &has);
+        ph.anim = has ? static_cast<u16>(v) : sim::NO_ANIM;
         if (ok) { v = 0; ok = r.int_at(p, "ticks", pwhere, 0, 65534, v, &has); ph.ticks = has ? static_cast<u16>(v) : sim::PHASE_WAITS; }
         if (ok) {
             const std::string next = r.str_at(p, "next");

@@ -612,6 +612,14 @@ void dnp_world_predict_weapon_agent(sim::World* w, unsigned agent, unsigned stre
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_has_weapons(const sim::World* w) { return weapon_tables().count(w) ? 1 : 0; }
 
+// A body's animation state: for this client's own, what its PREDICTED weapon
+// set (a phase's `anim`, `set_anim`) -- what the first-person view model plays
+// (docs/VIEWMODEL_PHASES.md), the tick it happens rather than a round trip late.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_animation_state(const sim::World* w, unsigned idx) {
+    return idx < w->capacity() ? w->agent(idx).animation_state : 0;
+}
+
 // The weapon state as 32-bit words, in this order; the length is asked for,
 // not assumed, as the agent buffers' are.
 constexpr unsigned WEAPON_BUF32_LEN = 6 + 4 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS;

@@ -155,7 +155,9 @@ inline constexpr u16 REACH = 1u << 0, HALF_ARC = 1u << 1, SWEEP_FROM = 1u << 2,
 
 struct WPhase {
     char name[WEAPON_NAME_LEN + 1]{};
-    u16  anim = 0;
+    // The animation state the body takes on ENTERING this phase (its `anim`),
+    // or NO_ANIM. Applied before the phase's steps, so a `set_anim` at 0 wins.
+    u16  anim = NO_ANIM;
     u16  ticks = PHASE_WAITS;
     u8   next = NO_PHASE;            // NO_PHASE: the weapon's initial
     WSwing swing{};

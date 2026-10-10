@@ -588,6 +588,9 @@ export class WasmWorld {
 
   get hasWeapons () { return this.core.M._dnp_world_has_weapons(this.ptr) !== 0 }
 
+  /** A body's animation state (its weapon's phase `anim` / `set_anim`, predicted for our own). */
+  animationState (idx) { return this.core.M._dnp_world_animation_state(this.ptr, idx) >>> 0 }
+
   readWeapon (idx) {
     const M = this.core.M
     M._dnp_world_read_weapon(this.ptr, idx, this.core.weaponbuf)

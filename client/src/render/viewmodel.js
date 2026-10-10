@@ -53,6 +53,33 @@ export function place ({ width, height }, size, offset, sx, sy, screen = [320, 2
   }
 }
 
+/**
+ * A weapon's `anims` (docs/VIEWMODEL_PHASES.md): animation state number ->
+ * { frames, loop }. A value is a frame list, or { frames, loop }; `loop`
+ * defaults to true for state 0 and false otherwise. A bad key or a frame list
+ * of the wrong shape is reported in `errors` and left out; the rest is used.
+ */
+export function parseAnims (anims, where, errors) {
+  const out = new Map()
+  if (anims === undefined) return out
+  if (!anims || typeof anims !== 'object' || Array.isArray(anims)) { errors.push(`${where}: anims is not an object`); return out }
+  const frameOk = (f) => Array.isArray(f) && typeof f[0] === 'string' && f[0] !== '' &&
+    (f[1] === undefined || (typeof f[1] === 'number' && f[1] >= 0)) && (f[2] === undefined || typeof f[2] === 'string')
+  for (const [key, v] of Object.entries(anims)) {
+    if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) > 65535) { errors.push(`${where}.anims: '${key}' is not an animation state (0..65535)`); continue }
+    const state = Number(key)
+    const frames = Array.isArray(v) ? v : v?.frames
+    const loop = Array.isArray(v) || v?.loop === undefined ? state === 0 : v.loop
+    if (!Array.isArray(frames) || frames.length === 0 || !frames.every(frameOk)) {
+      errors.push(`${where}.anims["${key}"]: a list of [picture, tics(, flash)] frames, or { frames, loop }`)
+      continue
+    }
+    if (typeof loop !== 'boolean') { errors.push(`${where}.anims["${key}"]: loop is true or false`); continue }
+    out.set(state, { frames, loop })
+  }
+  return out
+}
+
 // Doom's numbers: the weapon at rest sits at sy 32 (WEAPONTOP); lowered, at 128.
 const TOP = 32
 const BOTTOM = 128
@@ -64,7 +91,12 @@ export class ViewModel {
    * @param doc    for a test or the studio: a document to make elements in
    * @param sprites  URL of the sprite directory
    */
-  constructor ({ host, doc = globalThis.document, sprites = '/sprites/' } = {}) {
+  constructor ({ host, doc = globalThis.document, sprites = '/sprites/', log = () => {} } = {}) {
+    this.log = log
+    // The animation the player's weapon is in (setAnim), and how far into it.
+    this.animState = null
+    this.animKey = null
+    this.animT = 0
     this.doc = doc
     this.sprites = sprites
     this.defs = null
@@ -98,6 +130,23 @@ export class ViewModel {
   setDefs (defs, index) {
     this.defs = defs
     this.index = { sizes: index?.sizes ?? {}, offsets: index?.offsets ?? {} }
+    // Each weapon's per-state animations, read once. What is wrong is said.
+    this.anims = new Map()
+    this.errors = []
+    for (const [name, def] of Object.entries(defs?.weapons ?? {})) {
+      this.anims.set(name, parseAnims(def?.anims, `weapons.${name}`, this.errors))
+    }
+    for (const e of this.errors) this.log(`[viewmodel] ${e}`)
+  }
+
+  /**
+   * The player's weapon is in animation `state` (its phase's `anim` or a
+   * `set_anim`, predicted). `key` changes when that state is ENTERED -- a new
+   * swing of the same phase as much as a different one -- and restarts it.
+   */
+  setAnim (state, key = state) {
+    if (key !== this.animKey) { this.animKey = key; this.animT = 0 }
+    this.animState = state
   }
 
   /** The weapon in hand changed: lower the old one, raise this. */
@@ -107,6 +156,7 @@ export class ViewModel {
     if (this.weapon === null) { this.weapon = name; return }
     this.switchT = SWITCH_SECONDS
     this.fireT = -1
+    this.animKey = null
   }
 
   /** A shot, the moment it is predicted. */
@@ -144,7 +194,16 @@ export class ViewModel {
     const live = this.defs?.weapons?.[this.weapon]
     if (!live) return
     let frame = null
-    if (this.fireT >= 0) {
+    // THE WEAPON'S OWN ANIMATION for the state it is in, when it has one: from
+    // its start, looping or holding its last frame. Otherwise ready and fire,
+    // exactly as before.
+    const anim = this.animState === null ? null : this.anims?.get(this.weapon)?.get(this.animState)
+    if (anim) {
+      this.animT += dt
+      frame = frameAt(anim.frames, this.animT, anim.loop) ?? anim.frames[anim.frames.length - 1]
+      this.fireT = -1
+    }
+    if (frame === null && this.fireT >= 0) {
       this.fireT += dt
       frame = frameAt(live.fire, this.fireT)
       if (frame === null) this.fireT = -1
