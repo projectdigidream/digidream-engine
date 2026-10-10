@@ -691,7 +691,7 @@ suite_studio () {
   node ../studio/tools/emit_module.mjs ../modules/starter --check | tail -1
   # The starter template the studio ships (new modules are copies of it) is
   # modules/starter's sources; a stale one makes modules from an old starter.
-  node ../studio/tools/make_template.mjs --check | tail -1
+  node ../studio/tools/make_template.mjs --check | tail -2
   # THE PLUGINS (docs/PLUGINS.md): manifests, the registry, the editor protocol
   # over a real channel, every plugin's copy of the SDK; bakers in node, the
   # same bytes a page's Worker makes; and no '/studio/' literal in src/.
