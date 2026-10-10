@@ -529,6 +529,18 @@ public final class MainActivity extends Activity {
       server.stop();
     }
 
+    /**
+     * The game asked to quit (a main menu's "Quit": SCREEN_SET's `quit`,
+     * docs/protocol.md). A studio play-test never gets here -- the client
+     * goes back to the studio's page instead -- so this is the game app
+     * closing: the task too, so it does not linger in the recents list.
+     */
+    @JavascriptInterface
+    public void quit() {
+      playLog("[shell] the game asked to quit");
+      runOnUiThread(MainActivity.this::finishAndRemoveTask);
+    }
+
     /** So the shell's JS can log where a person will see it. */
     @JavascriptInterface
     public void log(String line) {

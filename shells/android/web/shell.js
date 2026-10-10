@@ -145,7 +145,12 @@
       closed = true
       open = false
       try { native.close() } catch (e) {}
-    }
+    },
+
+    // A main menu's "Quit" (SCREEN_SET `quit`): the activity finishes. Only
+    // offered when the native side has it -- an APK from before it has no
+    // quit, and the client then shows its "you can close this" curtain.
+    ...(typeof native.quit === 'function' ? { quit () { try { native.quit() } catch (e) { log(`quit: ${e}`) } } } : {})
   }
 
   // THE STUDIO'S SEVEN CALLS (docs/STUDIO.md), the same names app/preload.cjs

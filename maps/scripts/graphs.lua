@@ -979,6 +979,13 @@ local function level_index(want)
 end
 M.level_index = level_index
 
+-- A request, not a setting: the client asks its shell to close the app
+-- (docs/protocol.md SCREEN_SET field 4). The server does nothing else -- the
+-- player's leaving is the connection closing, as any leaving is.
+function EXEC.quit_game(g, n, ev, pull)
+  for _, p in ipairs(audience(n, g, ev, pull)) do dnp.screen(p, { quit = 1 }) end
+  return "then"
+end
 function EXEC.change_map(g, n, ev, pull)
   local to = level_index(n.level)
   local players = audience(n, g, ev, pull)

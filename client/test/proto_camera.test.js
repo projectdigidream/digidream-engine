@@ -20,7 +20,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CAMERA_FIELD, CAMERA_MAX_FIELDS } from '../src/proto.js'
+import { CAMERA_FIELD, CAMERA_MAX_FIELDS, SCREEN_FIELD, SCREEN_MAX_FIELDS, MSG, encodeControlMessage, decodeControlMessage } from '../src/proto.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -95,6 +95,41 @@ console.log('\n--- the cap is the same number on both sides ---')
   // silent -- this is the check that says so a release early.
   check(CAMERA_FIELD.length < CAMERA_MAX_FIELDS,
     `${CAMERA_FIELD.length} fields against a cap of ${CAMERA_MAX_FIELDS}`)
+}
+
+// SCREEN_SET: the same discipline for its own, shorter list, and the record
+// as the server's encode_screen_set writes it (u16 count, count x {u8, i32}).
+console.log('\n--- the screen fields are one list too ---')
+{
+  const cpp = readFileSync(join(ROOT, 'server', 'src', 'lua', 'world_binding.cpp'), 'utf8')
+  const block = /SCREEN_FIELD_NAMES\[\]\s*=\s*\{([\s\S]*?)\};/.exec(cpp)
+  check(block !== null, 'found SCREEN_FIELD_NAMES in the C++ source')
+  const names = [...block[1].replace(/\/\/[^\n]*/g, '').matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1])
+  check(names.length === 5 && SCREEN_FIELD.length === 5, `5 screen fields on both sides (C++ ${names.length}, client ${SCREEN_FIELD.length})`)
+  check(names.map(jsName).every((n, i) => n === SCREEN_FIELD[i]), 'every screen id means the same field on both sides')
+  check(names[4] === 'quit' && SCREEN_FIELD[4] === 'quit', 'id 4 is quit on both sides')
+  const hpp = readFileSync(join(ROOT, 'core', 'include', 'dnp', 'proto', 'messages.hpp'), 'utf8')
+  check(Number(/SCREEN_MAX_FIELDS\s*=\s*(\d+)/.exec(hpp)?.[1]) === SCREEN_MAX_FIELDS, 'the screen cap agrees')
+
+  const record = (fields) => {
+    const out = new Uint8Array(2 + fields.length * 5)
+    const v = new DataView(out.buffer)
+    v.setUint16(0, fields.length, true)
+    fields.forEach(([id, milli], i) => { v.setUint8(2 + i * 5, id); v.setInt32(3 + i * 5, milli, true) })
+    return out
+  }
+  const m = decodeControlMessage(encodeControlMessage(MSG.SCREEN_SET, record([[0, 1000], [4, 1000]])))
+  check(m?.type === MSG.SCREEN_SET && m.fields.length === 2, 'a fade and a quit decode')
+  const q = m?.fields.find((f) => SCREEN_FIELD[f.id] === 'quit')
+  check(q?.value === 1, 'the quit field reads as 1')
+  const unknown = decodeControlMessage(encodeControlMessage(MSG.SCREEN_SET, record([[99, 5], [4, 1000]])))
+  check(unknown?.fields.length === 2 && SCREEN_FIELD[99] === undefined, 'an unknown id is carried, not refused (the handler skips it)')
+  check(decodeControlMessage(encodeControlMessage(MSG.SCREEN_SET, record(Array(17).fill([0, 0])))) === null,
+    'CONTROL: over the cap is refused')
+  // The handler: main.js reads `quit` and calls quitGame, which tries the shell's quit.
+  const main = readFileSync(join(ROOT, 'client', 'src', 'main.js'), 'utf8')
+  check(/name === 'quit'/.test(main) && /if \(quit\) quitGame\(\)/.test(main) && /window\.dnp\?\.quit/.test(main),
+    'the SCREEN_SET handler acts on quit through the shell')
 }
 
 console.log(`\nproto_camera: ${checks} checks, ${fails} failures`)

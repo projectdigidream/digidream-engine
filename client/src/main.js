@@ -564,6 +564,31 @@ const remoteCondition = (ent) => {
   return deriveRemote(a, b, ticks * DT, {})
 }
 
+// THE GAME ASKED TO QUIT (SCREEN_SET `quit`, a main menu's "Quit"). A studio
+// play-test goes back to the studio, as its ◀ Studio link does; a shell with a
+// quit closes the app (desktop, Android, the packager's runner); a plain tab
+// cannot close itself -- nor may an iOS app -- so the screen goes black and
+// says so. Once: a second request while leaving changes nothing.
+let quitting = false
+function quitGame () {
+  if (quitting) return
+  quitting = true
+  dnpStats.quit = (dnpStats.quit ?? 0) + 1
+  const back = document.getElementById('studio-back')
+  if (back && !back.hidden) { location.href = back.href; return }
+  if (typeof window.dnp?.quit === 'function') {
+    try { window.dnp.quit(); return } catch (e) { say(`quit: ${e?.message ?? e}`) }
+  }
+  curtainEl.style.transitionDuration = '600ms'
+  curtainEl.style.opacity = '1'
+  const note = document.createElement('div')
+  note.id = 'quit-note'
+  note.textContent = 'Thanks for playing \u2014 you can close this tab.'
+  note.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:100;' +
+    'color:#cfe3ff;font:600 18px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-align:center;padding:16px;pointer-events:none'
+  document.body.appendChild(note)
+}
+
 // The cutscene overlay's three elements. Looked up once: SCREEN_SET can arrive
 // on join, and querying the DOM per message would be the same hazard the
 // camera's own settings are staged for.
@@ -831,12 +856,14 @@ if (LIVE) {
         let lbMs = null
         let fade = null
         let lb = null
+        let quit = false
         for (const f of m.fields) {
           const name = SCREEN_FIELD[f.id]
           if (name === 'fade') fade = f.value
           else if (name === 'fadeMs') fadeMs = f.value
           else if (name === 'letterbox') lb = f.value
           else if (name === 'letterboxMs') lbMs = f.value
+          else if (name === 'quit' && f.value) quit = true
         }
         // Duration first, then the value, or the browser animates from the old
         // duration -- the one case where the order of two fields in one record
@@ -852,6 +879,7 @@ if (LIVE) {
             el.style.height = pct
           }
         }
+        if (quit) quitGame()
       }
       else if (m.type === MSG.REJECT) say(`server rejected the connection (reason ${m.reason})`)
     },

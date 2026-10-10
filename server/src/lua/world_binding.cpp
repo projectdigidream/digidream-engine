@@ -2070,8 +2070,10 @@ int l_dnp_music(lua_State* L) {
 // Named fields and only the ones given, exactly as dnp.camera works: a script
 // that wants to raise the bars should not have to restate the fade. `entity`
 // nil means everyone in the level, as dnp.music does.
+// `quit` (4) is a request, not a setting: the client closes the app (its
+// shell's dnp.quit) or, in a plain browser tab, says it may be closed.
 static const char* const SCREEN_FIELD_NAMES[] = {
-    "fade", "fade_ms", "letterbox", "letterbox_ms"
+    "fade", "fade_ms", "letterbox", "letterbox_ms", "quit"
 };
 
 int l_dnp_screen(lua_State* L) {

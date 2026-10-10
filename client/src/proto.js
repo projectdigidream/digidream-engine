@@ -95,7 +95,8 @@ export const CAMERA_MAX_FIELDS = 32
 
 // docs/protocol.md §11.1's screen field table: the curtain and the letterbox
 // bars. Same record shape as CAMERA_SET and applied the same way, by NAME.
-export const SCREEN_FIELD = ['fade', 'fadeMs', 'letterbox', 'letterboxMs']
+// `quit` is a request, not a setting: close the app (main.js quitGame).
+export const SCREEN_FIELD = ['fade', 'fadeMs', 'letterbox', 'letterboxMs', 'quit']
 export const SCREEN_MAX_FIELDS = 16
 
 export const UI_KIND = {

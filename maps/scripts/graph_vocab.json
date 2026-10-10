@@ -798,6 +798,28 @@
     {
       "args": [
         {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "maps",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Close the game for a player: a main menu's \"Quit\". The desktop app exits, the Android app closes, a studio play-test goes back to the studio; in a browser tab (or on iOS, which has no quit) the screen fades to black and says the game may be closed.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "quit_game"
+    },
+    {
+      "args": [
+        {
           "doc": "Which way: the way the entity faces, the other way, away from or toward the entity linked to `from`, straight up, or at `angle` degrees (0 is east, 90 north).",
           "name": "direction",
           "type": "enum",

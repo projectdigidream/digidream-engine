@@ -706,6 +706,24 @@ int main(int argc, char** argv) {
       "links": [ ["go.then", "f.in"] ] })"));
 
     // ================================================================
+    // QUIT: a main menu's "Quit" asks the player's client to close the app
+    // (SCREEN_SET field 4). CONTROL: nothing asked it before the node ran.
+    std::printf("-- quit the game --\n");
+    g_ui.scr.erase(4);
+    CHECK(load_graph(R"({ "graph": 1, "name": "menu_quit",
+      "nodes": [ { "id": "go", "type": "on_call", "name": "quit" }, { "id": "q", "type": "quit_game" } ],
+      "links": [ ["go.then", "q.in"] ] })"));
+    ticks(2);
+    CHECK(g_ui.scr.count(4) == 0);
+    CHECK(run("graphs.call('quit', dnp.players()[1], nil)", "the call"));
+    ticks(2);
+    std::printf("  quit field: %d\n", g_ui.scr.count(4) ? g_ui.scr[4] : -1);
+    CHECK(g_ui.scr.count(4) == 1 && g_ui.scr[4] == 1000);
+    CHECK(!load_graph(R"({ "graph": 1, "name": "menu_quit2",
+      "nodes": [ { "id": "go", "type": "on_call", "name": "q2" }, { "id": "q", "type": "quit_game", "now": true } ],
+      "links": [ ["go.then", "q.in"] ] })"));     // an unknown field: refused, as any is
+
+    // ================================================================
     // A SPAWN POINT BY ITS TAG: teleport there; a tag the map lacks is refused.
     std::printf("-- spawn points --\n");
     CHECK(load_graph(R"({ "graph": 1, "name": "to_pad",

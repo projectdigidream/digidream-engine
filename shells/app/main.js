@@ -333,6 +333,20 @@ async function start () {
 
   ipcMain.on('dnp:up', (_e, kind, bytes) => relay?.send(kind, bytes))
   ipcMain.on('dnp:close', () => relay?.stop())
+  // The game's "Quit" (SCREEN_SET `quit`). A studio play-test goes back to the
+  // studio instead -- the client already does that itself (its ◀ Studio
+  // link), so this is the belt to that: quitting the play-test must not
+  // close the studio and whatever it has not saved.
+  ipcMain.on('dnp:quit', () => {
+    const playTest = manifest.studio && win && !win.isDestroyed() && /[?&]studio=/.test(win.webContents.getURL())
+    if (playTest && statics) {
+      playLog('[shell] the game quit; back to the studio')
+      win.loadURL(`http://127.0.0.1:${statics.port}${EDITOR}`)
+      return
+    }
+    log('the game asked to quit')
+    app.quit()
+  })
 
   // The studio's seven calls (app/preload.cjs). Files stay under GAME_RW --
   // studio_files.js refuses anything else -- and the two dialogs are the

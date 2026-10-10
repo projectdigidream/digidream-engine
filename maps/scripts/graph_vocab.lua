@@ -409,6 +409,14 @@ graph_vocab = {
       exec_in = { "in" }, exec_out = { "then" },
       data_in = { "entity", "fade", "seconds" }, data_out = {},
       doc = "Send a player to another map, arriving at a chosen spawn point." },
+    { name = "quit_game", category = "maps",
+      args = { { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Close the game for a player: a main menu's \"Quit\". The desktop app " ..
+            "exits, the Android app closes, a studio play-test goes back to the " ..
+            "studio; in a browser tab (or on iOS, which has no quit) the screen " ..
+            "fades to black and says the game may be closed." },
     { name = "push", category = "entity",
       args = { { name = "direction", type = "enum", values = { "forward", "backward", "away", "toward", "up", "angle" },
                  doc = "Which way: the way the entity faces, the other way, away " ..

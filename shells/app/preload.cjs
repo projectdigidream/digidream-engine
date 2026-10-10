@@ -7,7 +7,7 @@
 // be a difference between the two builds, and the whole point of the desktop
 // shell is that there is only one client.
 //
-// So this exposes exactly four things, and every one of them is a message pipe.
+// So this exposes a handful of things, and every one of them is a message pipe.
 // No filesystem, no process control, no paths. `window.dnp` existing is also
 // how client/src/main.js knows it is in the shell at all (net_local.js).
 //
@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('dnp', {
   onMessage: (cb) => ipcRenderer.on('dnp:down', (_e, msg) => cb(msg)),
 
   close: () => ipcRenderer.send('dnp:close'),
+
+  /** A main menu's "Quit" (SCREEN_SET `quit`, docs/protocol.md): the app exits. */
+  quit: () => ipcRenderer.send('dnp:quit'),
 
   // THE STUDIO'S SEVEN CALLS (docs/STUDIO.md), the same names every shell
   // publishes. Still message pipes: no path is resolved and no file is
