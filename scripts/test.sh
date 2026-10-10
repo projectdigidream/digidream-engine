@@ -705,6 +705,8 @@ suite_studio () {
   node ../studio/test/skin_literals.test.js | tail -1
   # Icons by catalog id: every id exists, and no icon is left written as a glyph.
   node ../studio/test/icons.test.js | tail -1
+  # Styles from outside: a baked skin is taken, its unbaked source refused.
+  node ../studio/test/skin_import.test.js | tail -1
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
