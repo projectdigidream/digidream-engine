@@ -44,6 +44,10 @@ while [[ $# -gt 0 ]]; do
     # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
     # kits must not carry kits).
     --no-kits) NO_KITS=1; shift ;;
+    # The Digidream logo as the launcher icon (branding/icons.mjs), for the
+    # studio's own APK. Without it, the engine's plain diamond -- what kits and
+    # games keep unless the packager is given an icon.
+    --icon) ICON=1; shift ;;
     # A log file the player can open without adb: the server's output and the
     # game page's console, in Download/Digidream/<module>-log.txt (GameLog.java).
     --log) LOG=1; shift ;;
@@ -54,6 +58,7 @@ done
 
 STUDIO="${STUDIO:-0}"
 NO_KITS="${NO_KITS:-0}"
+ICON="${ICON:-0}"
 MODULE_DIR="$REPO/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[apk] no such module: modules/$MODULE" >&2; exit 2; }
 [[ $STUDIO -eq 0 || -f "$REPO/studio/wasm/dist/mapc.mjs" ]] || {
@@ -344,6 +349,12 @@ XML
 # needs to resolve @mipmap/ic_launcher on every density it compiles for.
 mkdir -p "$RES/mipmap"
 cp "$RES/drawable/ic_fg.xml" "$RES/mipmap/ic_launcher.xml"
+# THE LOGO instead (--icon): the same resource names, now bitmaps -- the
+# packager swaps a game's icon by those names, so an APK built either way
+# takes one.
+if [[ $ICON -eq 1 ]]; then
+  node "$REPO/branding/icons.mjs" android "$RES" | sed 's/^/[apk] /'
+fi
 
 echo "[apk] res      compiling"
 "$BT/aapt2" compile --dir "$RES" -o "$OUT/res.zip" >/dev/null
