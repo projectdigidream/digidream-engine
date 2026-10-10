@@ -1024,6 +1024,20 @@ else
   done
 fi
 
+# WHAT EARLIER RUNS LEFT BEHIND. The node tests make throwaway folders in the
+# system temp (mkdtemp: dnp-studio-*, dnp-cut-*, dnp-bake-* ...) and most never
+# remove them; headless Chrome leaves its profiles there too. A few hundred KB
+# each, thousands of runs: over a gigabyte. Anything older than a day goes
+# before a run -- never a folder a run in progress could still be using.
+TMP_ROOT="$(node -e "console.log(require('os').tmpdir())" 2>/dev/null || echo "${TMPDIR:-/tmp}")"
+if [[ -d "$TMP_ROOT" ]]; then
+  swept=$(find "$TMP_ROOT" -maxdepth 1 \( -name 'dnp-*' -o -name 'compose*' -o -name 'shot*' -o -name 'puppeteer_dev_chrome_profile-*' \) -mtime +0 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$swept" -gt 0 ]]; then
+    find "$TMP_ROOT" -maxdepth 1 \( -name 'dnp-*' -o -name 'compose*' -o -name 'shot*' -o -name 'puppeteer_dev_chrome_profile-*' \) -mtime +0 -exec rm -rf {} + 2>/dev/null || true
+    echo "[test] swept $swept leftover temp folder(s) older than a day from $TMP_ROOT"
+  fi
+fi
+
 TIMES=()
 n=0
 for s in "${WANT[@]}"; do
