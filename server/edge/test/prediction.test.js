@@ -27,6 +27,7 @@ import {
   fxToNumber, numberToFx, MSG, BUTTON
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -171,7 +172,7 @@ class PredictingClient {
     // client used to ignore them, which passed only because a platformer's
     // rules ARE the defaults -- an fps server's are not, and every tick was a
     // misprediction of the test's making.
-    for (const m of this.paramUpdates.splice(0)) this.world.applyParamUpdate(this.agent, m)
+    for (const m of this.paramUpdates.splice(0)) if (isOwnParams(m, (this.welcome.selfHandle & 0x00ffffff) - 1)) this.world.applyParamUpdate(this.agent, m)
   }
 
   async _pumpControl () {
@@ -190,7 +191,7 @@ class PredictingClient {
           if (msg?.type === MSG.WELCOME) this.welcome = msg
           else if (msg?.type === MSG.MAP_DATA) this.mapAcc.push(msg)
           else if (msg?.type === MSG.PARAM_UPDATE) {
-            if (this.world) this.world.applyParamUpdate(this.agent, msg)
+            if (this.world && isOwnParams(msg, (this.welcome.selfHandle & 0x00ffffff) - 1)) this.world.applyParamUpdate(this.agent, msg)
             else this.paramUpdates.push(msg)
           }
         }

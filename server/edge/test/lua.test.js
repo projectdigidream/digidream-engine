@@ -38,6 +38,7 @@ import {
   axisFromNumber, fxToNumber, MSG, SNAP_FLAG
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -174,7 +175,7 @@ let lastZ = null
 const drainParams = () => {
   while (paramUpdates.length) {
     const m = paramUpdates.shift()
-    world.applyParamUpdate(agent, m)
+    if (isOwnParams(m, (welcome.selfHandle & 0x00ffffff) - 1)) world.applyParamUpdate(agent, m)
     predictor.paramEpoch = m.epoch
     paramsSeen++
   }

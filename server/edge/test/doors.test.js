@@ -53,6 +53,7 @@ import {
   axisFromNumber, fxToNumber, MSG, BUTTON, ENT_FIELD, handleIndex
 } from '../../../client/src/proto.js'
 import { serverBin, doomProps } from './serverbin.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -192,9 +193,9 @@ check(ok && map.hash === welcome.mapHash, 'map loaded')
 
 const world = core.createWorld({ map })
 const agent = world.spawn(map.spawnForTag('start'))
-for (const m of paramUpdates.splice(0)) world.applyParamUpdate(agent, m)
+for (const m of paramUpdates.splice(0)) if (isOwnParams(m, (welcome.selfHandle & 0x00ffffff) - 1)) world.applyParamUpdate(agent, m)
 // Later ones as they come: pumped from the same place the snapshots are read.
-const applyParams = () => { for (const m of paramUpdates.splice(0)) world.applyParamUpdate(agent, m) }
+const applyParams = () => { for (const m of paramUpdates.splice(0)) if (isOwnParams(m, (welcome.selfHandle & 0x00ffffff) - 1)) world.applyParamUpdate(agent, m) }
 const predictor = new Predictor(world, agent)
 
 // The door as the client sees it, right now. Read through the same wasm module

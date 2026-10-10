@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
 import { serverBin, doomProps } from './serverbin.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 // net.js reaches for the global, exactly as a browser provides it. Installed
 // here rather than parameterised: a constructor argument would be a seam that
@@ -113,7 +114,7 @@ async function connectClient (name) {
   c.agent = c.world.spawn(map.spawnForTag('start'))
   c.predictor = new Predictor(c.world, c.agent)
   for (const m of c.paramUpdates) {
-    c.world.applyParamUpdate(c.agent, m)
+    if (isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) c.world.applyParamUpdate(c.agent, m)
     c.predictor.paramEpoch = m.epoch
   }
   c.paramUpdates.length = 0

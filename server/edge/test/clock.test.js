@@ -72,6 +72,7 @@ import {
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
 import { fpsFrame, mirrorEntities } from './helpers.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -169,7 +170,7 @@ async function session ({ echo, giveAll = false, fps = false, netsim = null }) {
             // Applied AND its epoch adopted, as main.js does: the weapons change
             // the swing's parameters, and a predictor left on epoch 0 files every
             // mismatch after that as "rules in flight" instead of comparing it.
-            if (c.world) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
+            if (c.world && isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
             else c.params.push(m)
           } else if (m?.type === MSG.WEAPON_DEFS) {
             c.defs = m.bytes
@@ -200,7 +201,7 @@ async function session ({ echo, giveAll = false, fps = false, netsim = null }) {
   c.agent = c.world.spawn(map.spawnForTag('start') ?? { x: 0n, y: 0n, z: 0n })
   c.serverAgent = (c.welcome.selfHandle & 0x00ffffff) - 1
   c.predictor = new Predictor(c.world, c.agent)
-  for (const m of c.params.splice(0)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
+  for (const m of c.params.splice(0)) { if (!isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) continue; c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
   c.applyDefs = () => { c.defsOk = c.world.setWeapons(c.defs, c.agent, c.serverAgent) }
   if (c.defs) c.applyDefs()
   // Our rockets, flown as main.js flies them; what they drew, with when.

@@ -39,6 +39,7 @@ import {
 } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
 import { bakedMapPath } from './helpers.js'
+import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
@@ -116,7 +117,7 @@ async function run (lagComp, latencyMs = LATENCY_MS, sayView = true) {
           if (m?.type === MSG.WELCOME) c.welcome = m
           else if (m?.type === MSG.MAP_DATA) c.mapAcc.push(m)
           else if (m?.type === MSG.PARAM_UPDATE) {
-            if (c.world) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
+            if (c.world && isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
             else c.params.push(m)
           } else if (m?.type === MSG.WEAPON_DEFS) {
             c.defs = m.bytes
@@ -146,7 +147,7 @@ async function run (lagComp, latencyMs = LATENCY_MS, sayView = true) {
   c.agent = c.world.spawn(map.spawnForTag('start'))
   c.serverAgent = (c.welcome.selfHandle & 0x00ffffff) - 1
   c.predictor = new Predictor(c.world, c.agent)
-  for (const m of c.params.splice(0)) { c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
+  for (const m of c.params.splice(0)) { if (!isOwnParams(m, (c.welcome.selfHandle & 0x00ffffff) - 1)) continue; c.world.applyParamUpdate(c.agent, m); c.predictor.paramEpoch = m.epoch }
   if (c.defs) c.world.setWeapons(c.defs, c.agent, c.serverAgent)
 
   // The walker's positions by snapshot tick: the one other body.
