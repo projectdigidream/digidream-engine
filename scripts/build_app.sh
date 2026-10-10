@@ -57,6 +57,9 @@ while [[ $# -gt 0 ]]; do
     # Its plugins come with it (docs/PLUGINS.md): the sprite, texture, sound and
     # music editors, Code, and the packager with its small kits.
     --studio) STUDIO=1; shift ;;
+    # A log file: the server's output and the game page's console, in the
+    # user's data folder (logs/<id>-log.txt), named in any error dialog.
+    --log) LOG=1; shift ;;
     # The suite, the studio's fork with the plugins, became the studio (0.2.0).
     --suite) STUDIO=1; shift ;;
     # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
@@ -137,7 +140,7 @@ if [[ -n "$STASH" ]]; then
 fi
 
 # The shell.
-cp shells/app/main.js shells/app/preload.cjs shells/app/static.js shells/app/relay.js shells/app/studio_files.js shells/app/said.js \
+cp shells/app/main.js shells/app/preload.cjs shells/app/static.js shells/app/relay.js shells/app/studio_files.js shells/app/said.js shells/app/filelog.js \
    shells/app/ensure-electron.cjs "$OUT/app/"
 
 # THE LINK FRAMING, COPIED rather than reimplemented or imported across a
@@ -280,6 +283,7 @@ cat > "$OUT/game.json" <<EOF
   "id": "$APP_ID",
   "modules": $MODULES_JSON,
   "studio": $([[ $STUDIO -eq 1 ]] && echo true || echo false),
+  "log": $([[ ${LOG:-0} -eq 1 ]] && echo true || echo false),
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "platform": "$(uname -s)-$(uname -m)"
 }

@@ -80,6 +80,8 @@ public final class MainActivity extends Activity {
 
   private final Handler ui = new Handler(Looper.getMainLooper());
   private final GameServer server = new GameServer();
+  // The log file, when the build asked for one (start.txt `log=1`; GameLog).
+  private final GameLog fileLog = new GameLog();
   private WebView web;
   private File gameDir;
   private File exe;
@@ -147,8 +149,10 @@ public final class MainActivity extends Activity {
     web.setWebChromeClient(new android.webkit.WebChromeClient() {
       @Override
       public boolean onConsoleMessage(android.webkit.ConsoleMessage m) {
-        playLog("[" + m.messageLevel().name().toLowerCase(java.util.Locale.ROOT) + "] " + m.message()
-            + (m.sourceId() == null || m.sourceId().isEmpty() ? "" : " (" + m.sourceId().replace(ORIGIN, "") + ":" + m.lineNumber() + ")"));
+        String said = "[" + m.messageLevel().name().toLowerCase(java.util.Locale.ROOT) + "] " + m.message()
+            + (m.sourceId() == null || m.sourceId().isEmpty() ? "" : " (" + m.sourceId().replace(ORIGIN, "") + ":" + m.lineNumber() + ")");
+        playLog(said);
+        fileLog.line("[page] " + said);
         return false;
       }
     });
@@ -188,6 +192,12 @@ public final class MainActivity extends Activity {
       start = Props.read(new File(gameDir, "start.txt"));
       bundledModule = start.need("module");
       studio = "1".equals(start.get("studio"));
+      if ("1".equals(start.get("log"))) {
+        fileLog.open(this, bundledModule, "Digidream " + bundledModule + ", built " + start.get("built")
+            + "; " + Build.MANUFACTURER + " " + Build.MODEL + ", Android " + Build.VERSION.RELEASE
+            + " (API " + Build.VERSION.SDK_INT + ")");
+        if (fileLog.on()) server.lineSink = fileLog::line;
+      }
       File module = new File(gameDir, "modules/" + bundledModule);
       File map = new File(module, "maps/" + start.need("map"));
       if (!map.exists()) throw new IOException("no such level: " + map);
@@ -217,7 +227,9 @@ public final class MainActivity extends Activity {
       ui.post(() -> web.loadUrl(ORIGIN + page));
     } catch (Exception e) {
       Log.e(TAG, "boot failed", e);
-      final String msg = String.valueOf(e.getMessage());
+      fileLog.line("[shell] could not start the game server: " + e.getMessage());
+      final String msg = String.valueOf(e.getMessage())
+          + (fileLog.where() == null ? "" : "\n\nThe whole log is in " + fileLog.where());
       ui.post(() -> {
         // pre-wrap: the server's own lines, as it wrote them, and wrapped to
         // the phone's width rather than scrolled off it.
@@ -886,6 +898,7 @@ public final class MainActivity extends Activity {
   @Override
   protected void onPause() {
     super.onPause();
+    fileLog.line("[shell] the app went to the background");
     if (web != null) {
       web.evaluateJavascript("window.__dnpAppHidden && window.__dnpAppHidden(true)", null);
       web.onPause();
@@ -895,6 +908,7 @@ public final class MainActivity extends Activity {
   @Override
   protected void onResume() {
     super.onResume();
+    fileLog.line("[shell] the app came back");
     if (web != null) {
       web.onResume();
       web.evaluateJavascript("window.__dnpAppHidden && window.__dnpAppHidden(false)", null);

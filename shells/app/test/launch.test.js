@@ -52,7 +52,8 @@ console.log('launch: the packaged app, under a real Electron')
 
 rmSync(join(ROOT, OUT_REL), { recursive: true, force: true })
 execFileSync(join(ROOT, 'scripts', 'build_app.sh'),
-             ['--module', 'doom2', '--out', OUT_REL],
+             // With its log file on: what it writes is checked below.
+             ['--module', 'doom2', '--out', OUT_REL, '--log'],
              { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
 
 // The staged app declares electron as a devDependency; installing it here would
@@ -110,6 +111,17 @@ check(out.includes('[app] upstream connected') && out.includes('edge connected')
 // the local transport, said HELLO, and the server put it in a level.
 check(/session 1 -> level \d+ agent \d+/.test(out),
       'and a window joins a level with an agent')
+
+// THE LOG FILE (--log): the app's lines, the server's and the page's, in one
+// file the app named as it started.
+{
+  const where = /\[app\] log file: (.+)/.exec(out)?.[1]?.trim()
+  const text = where && existsSync(where) ? (await import('node:fs')).readFileSync(where, 'utf8') : ''
+  check(!!text, `a --log build writes its log file (${where})`)
+  check(/\[shell\] .*built/.test(text) && /\[app\] server:/.test(text), 'with its header and the app\'s own lines')
+  check(/session 1 -> level/.test(text), 'the server\'s output')
+  check(/\[page\] /.test(text), 'and the game page\'s console')
+}
 
 if (fails) {
   console.log('\n--- what the app printed ---')

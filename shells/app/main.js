@@ -39,6 +39,8 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { serverSaid } from './said.js'
+import { openGameLog } from './filelog.js'
+import { release } from 'node:os'
 import { createServer } from 'node:net'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync, readdirSync } from 'node:fs'
 import { readFile as readFileAsync, writeFile as writeFileAsync, readdir } from 'node:fs/promises'
@@ -53,7 +55,18 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const GAME = join(HERE, '..')
 
 const manifest = JSON.parse(readFileSync(join(GAME, 'game.json'), 'utf8'))
-const log = (...a) => console.log('[app]', ...a)
+// The game's log file, when the build asked for one (filelog.js): the shell's
+// own lines, the server's output and the game page's console.
+const fileLog = manifest.log
+  ? openGameLog(join(app.getPath('userData'), 'logs'), manifest.id ?? 'game',
+    `${manifest.name ?? 'Digidream'} (${(manifest.modules ?? []).join(', ')}), built ${manifest.builtAt ?? '?'}; ` +
+    `${process.platform} ${release()} ${process.arch}, Electron ${process.versions.electron ?? '?'}`)
+  : null
+if (manifest.log && !fileLog) console.error('[app] the log file could not be opened')
+const log = (...a) => { console.log('[app]', ...a); fileLog?.line(`[app] ${a.join(' ')}`) }
+// Said at the end of an error dialog, so a player knows what to send.
+const logHint = () => (fileLog ? `\n\nThe whole log is in ${fileLog.where}` : '')
+if (fileLog) log(`log file: ${fileLog.where}`)
 
 let serverProc = null
 let relay = null
@@ -150,7 +163,11 @@ function spawnServer (linkPort, extra = {}) {
   // server dies the dialog says what it said (see serverSaid).
   const tail = []
   const keep = (b) => {
-    for (const line of b.toString().split('\n')) if (line !== '') tail.push(line)
+    for (const line of b.toString().split('\n')) {
+      if (line === '') continue
+      tail.push(line)
+      fileLog?.line(line.startsWith('[') ? line : `[srv] ${line}`)
+    }
     if (tail.length > 40) tail.splice(0, tail.length - 40)
   }
   const both = (stream) => { const out = relay_out(stream); return (b) => { out(b); keep(b); file?.write(b) } }
@@ -178,7 +195,7 @@ function spawnServer (linkPort, extra = {}) {
     if (!app.isQuiting && !restarting) {
       const said = serverSaid(tail)
       dialog.showErrorBox('The game server stopped',
-        `It exited with ${code ?? sig}.` + (said ? ` It said:\n\n${said}` : ' It said nothing.'))
+        `It exited with ${code ?? sig}.` + (said ? ` It said:\n\n${said}` : ' It said nothing.') + logHint())
       app.quit()
     }
   })
@@ -304,12 +321,14 @@ async function start () {
   // server -- otherwise leaves no trace anywhere.
   win.webContents.on('console-message', (e, level, message, line, sourceId) => {
     // The game page's console, into the Play log while a play-test runs.
-    playLog(`[${['verbose', 'info', 'warning', 'error'][level] ?? e?.level ?? level}] ${message ?? e?.message}${sourceId ? ` (${String(sourceId).replace(/^https?:\/\/[^/]+/, '')}:${line})` : ''}`)
+    const said = `[${['verbose', 'info', 'warning', 'error'][level] ?? e?.level ?? level}] ${message ?? e?.message}${sourceId ? ` (${String(sourceId).replace(/^https?:\/\/[^/]+/, '')}:${line})` : ''}`
+    playLog(said)
+    fileLog?.line(`[page] ${said}`)
     if (level < 2) return          // 0/1 are log and info; keep warnings and errors
     const where = sourceId ? `${sourceId.split('/').pop()}:${line}` : '?'
     console.error(`[page] ${message}  (${where})`)
   })
-  win.webContents.on('unresponsive', () => console.error('[app] the window stopped responding'))
+  win.webContents.on('unresponsive', () => { console.error('[app] the window stopped responding'); fileLog?.line('[app] the window stopped responding') })
 
   ipcMain.on('dnp:up', (_e, kind, bytes) => relay?.send(kind, bytes))
   ipcMain.on('dnp:close', () => relay?.stop())
@@ -349,7 +368,8 @@ async function start () {
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 app.whenReady().then(start).catch((e) => {
-  dialog.showErrorBox('Could not start', String(e.message ?? e))
+  fileLog?.line(`[app] could not start: ${e.message ?? e}`)
+  dialog.showErrorBox('Could not start', String(e.message ?? e) + logHint())
   app.quit()
 })
 

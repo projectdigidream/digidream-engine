@@ -4,6 +4,7 @@
 #
 #   ./scripts/build_apk.sh                 # doom2, its first map, debug-signed
 #   ./scripts/build_apk.sh --module doom2 --map map05.dnpm
+#   ./scripts/build_apk.sh --module doom2 --log   # writes Download/Digidream/doom2-log.txt
 #
 # WHAT IS IN IT. The same client the browser loads, the same authoritative
 # server the desktop runs -- cross-compiled for arm64 -- and one module's maps
@@ -43,6 +44,9 @@ while [[ $# -gt 0 ]]; do
     # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
     # kits must not carry kits).
     --no-kits) NO_KITS=1; shift ;;
+    # A log file the player can open without adb: the server's output and the
+    # game page's console, in Download/Digidream/<module>-log.txt (GameLog.java).
+    --log) LOG=1; shift ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -269,6 +273,7 @@ cat > "$G/start.txt" <<EOF
 module=$MODULE
 map=$MAP
 studio=$STUDIO
+log=${LOG:-0}
 built=$(date '+%Y-%m-%d %H:%M')
 EOF
 

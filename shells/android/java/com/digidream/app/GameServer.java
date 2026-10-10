@@ -134,6 +134,8 @@ final class GameServer {
             if (c == '\n') {
               Log.i(TAG, line.toString());
               remember(line.toString());
+              LineSink ls = lineSink;
+              if (ls != null) ls.line(line.toString());
               if (sink != null) {
                 try { sink.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)); sink.flush(); } catch (IOException ignored) { }
               }
@@ -155,6 +157,10 @@ final class GameServer {
     log.start();
     logThread = log;
   }
+
+  /** Every line the server writes, as it writes it (the game's log file). */
+  interface LineSink { void line(String s); }
+  volatile LineSink lineSink = null;
 
   // THE SERVER'S LAST WORDS, kept in memory: a phone has no console and a game
   // outside the studio has no Play log, so when the server dies starting, what
