@@ -67,6 +67,13 @@ export const DEFAULTS = {
   // the instant somebody turns makes the whole view lurch on every keypress.
   leadSmoothing: 4,
 
+  // How much FURTHER ahead it aims the faster the subject runs: the forward
+  // speed (velocity along the facing, units a second; never backwards) times
+  // this, added to `lead`. Roughly "this many seconds of running ahead", so a
+  // sprint shows more of where it is going and standing still shows `lead`.
+  // Zero is the fixed lead above and nothing more.
+  leadVelocity: 0,
+
   // Maximum change in the camera's velocity, in units per second squared.
   //
   // Zero means unlimited, which is the exponential approach on its own. A
@@ -150,6 +157,17 @@ export class Camera {
     // current lead offset, which eases toward where the subject faces.
     this.velocity = { x: 0, y: 0, z: 0 }
     this.lead = { x: 0, z: 0 }
+    // THE POINT THE CAMERA LOOKS AT, smoothed exactly as the eye is.
+    //
+    // It used to look at `target` -- the deadzoned subject, unsmoothed -- while
+    // the eye eased after it. Moving fast, the target moves every tick and the
+    // eye glides, so the view's ANGLE carried every step of the motion: the
+    // camera jiggled. Integrated with the same rule and the same numbers as the
+    // eye, the two move together and the picture translates instead of
+    // swinging; turning or zooming still eases, because only the eye has an
+    // offset to chase.
+    this.focus = { x: 0, y: 0, z: 0 }
+    this.focusVelocity = { x: 0, y: 0, z: 0 }
     this._started = false
 
     // --- path state ---
@@ -171,6 +189,8 @@ export class Camera {
   /** Jump straight to the subject, with no smoothing. Used on spawn. */
   snapTo (p) {
     this.target = { ...p }
+    this.focus = { ...p }
+    this.focusVelocity = { x: 0, y: 0, z: 0 }
     this.velocity = { x: 0, y: 0, z: 0 }
     this.lead = { x: 0, z: 0 }
     this.position = {
@@ -216,6 +236,7 @@ export class Camera {
   rebase (delta) {
     this.position.x += delta.x; this.position.y += delta.y; this.position.z += delta.z
     this.target.x += delta.x; this.target.y += delta.y; this.target.z += delta.z
+    this.focus.x += delta.x; this.focus.y += delta.y; this.focus.z += delta.z
     if (this._pathEye) {
       this._pathEye.x += delta.x; this._pathEye.y += delta.y; this._pathEye.z += delta.z
     }
@@ -233,7 +254,7 @@ export class Camera {
    * exactly why the smoothing is written to be frame-rate INdependent, so the
    * one thing a player would notice is not.
    */
-  update (subject, dt, facing = null, path = null) {
+  update (subject, dt, facing = null, path = null, velocity = null) {
     if (!this._started) { this.snapTo(subject); return this.eye() }
 
     // THE POINT THE CAMERA AIMS AT is ahead of the subject, not on it.
@@ -242,11 +263,19 @@ export class Camera {
     // The offset eases toward its target rather than snapping, because the
     // subject's facing changes the instant a key is pressed and a view that
     // followed it exactly would lurch on every turn.
-    if (facing && this.cfg.lead > 0) {
+    // How far ahead: the fixed `lead`, plus the forward speed times
+    // `leadVelocity` (velocity along the facing; running backwards adds
+    // nothing). `velocity` is three-space units a second, or null.
+    let ahead = this.cfg.lead > 0 ? this.cfg.lead : 0
+    if (facing && velocity && this.cfg.leadVelocity > 0) {
+      const forward = velocity.x * facing.x + velocity.z * facing.z
+      if (forward > 0) ahead += forward * this.cfg.leadVelocity
+    }
+    if (facing && ahead > 0) {
       const k = 1 - Math.exp(-this.cfg.leadSmoothing * dt)
-      this.lead.x += (facing.x * this.cfg.lead - this.lead.x) * k
-      this.lead.z += (facing.z * this.cfg.lead - this.lead.z) * k
-    } else if (this.cfg.lead <= 0) {
+      this.lead.x += (facing.x * ahead - this.lead.x) * k
+      this.lead.z += (facing.z * ahead - this.lead.z) * k
+    } else if (ahead <= 0) {
       const k = 1 - Math.exp(-this.cfg.leadSmoothing * dt)
       this.lead.x += (0 - this.lead.x) * k
       this.lead.z += (0 - this.lead.z) * k
@@ -320,48 +349,13 @@ export class Camera {
       const steps = Math.max(1, Math.ceil(dt / maxStep))
       const h = dt / steps
       for (let step = 0; step < steps; step++) {
-      let ax = (want.x - this.position.x) * w * w - this.velocity.x * damp
-      let ay = (want.y - this.position.y) * w * w - this.velocity.y * damp
-      let az = (want.z - this.position.z) * w * w - this.velocity.z * damp
-      const mag = Math.hypot(ax, ay, az)
-      if (mag > this.cfg.maxAccel && mag > 0) {
-        const s = this.cfg.maxAccel / mag
-        ax *= s; ay *= s; az *= s
-      }
-      this.velocity.x += ax * h
-      this.velocity.y += ay * h
-      this.velocity.z += az * h
-
-      // NEVER GOING FASTER THAN IT CAN STOP FROM.
-      //
-      // A clamped acceleration limits slowing down exactly as much as speeding
-      // up, so a long move builds a speed it then needs the same distance again
-      // to shed -- 209 units out on a 100-unit move, and back, and out again. A
-      // spring does not save it, because the restoring force it would need is
-      // the thing being clamped.
-      //
-      // v = sqrt(2 * a * d) is the speed from which `a` still stops you in `d`,
-      // which is the whole content of the problem. Applied as a ceiling on the
-      // speed rather than as a separate braking mode, so there is one rule
-      // rather than two and no moment where they disagree.
-      const rx = want.x - this.position.x
-      const ry = want.y - this.position.y
-      const rz = want.z - this.position.z
-      const dist = Math.hypot(rx, ry, rz)
-      const speed = Math.hypot(this.velocity.x, this.velocity.y, this.velocity.z)
-      const ceiling = Math.sqrt(2 * this.cfg.maxAccel * dist)
-      if (speed > ceiling && speed > 0) {
-        const s = ceiling / speed
-        this.velocity.x *= s
-        this.velocity.y *= s
-        this.velocity.z *= s
-      }
-
-      this.position.x += this.velocity.x * h
-      this.position.y += this.velocity.y * h
-      this.position.z += this.velocity.z * h
+        this._springStep(this.position, this.velocity, want, w, damp, h)
+        this._springStep(this.focus, this.focusVelocity, this.target, w, damp, h)
       }
     } else {
+      this.focus.x += (this.target.x - this.focus.x) * k
+      this.focus.y += (this.target.y - this.focus.y) * k
+      this.focus.z += (this.target.z - this.focus.z) * k
       this.position.x += (want.x - this.position.x) * k
       this.position.y += (want.y - this.position.y) * k
       this.position.z += (want.z - this.position.z) * k
@@ -381,6 +375,53 @@ export class Camera {
     }
 
     return this.eye()
+  }
+
+  /**
+   * One sub-step of the camera's spring, for any point and its velocity: the
+   * eye toward where it should stand, and the focus toward what it looks at.
+   */
+  _springStep (pos, vel, want, w, damp, h) {
+    let ax = (want.x - pos.x) * w * w - vel.x * damp
+    let ay = (want.y - pos.y) * w * w - vel.y * damp
+    let az = (want.z - pos.z) * w * w - vel.z * damp
+    const mag = Math.hypot(ax, ay, az)
+    if (mag > this.cfg.maxAccel && mag > 0) {
+      const s = this.cfg.maxAccel / mag
+      ax *= s; ay *= s; az *= s
+    }
+    vel.x += ax * h
+    vel.y += ay * h
+    vel.z += az * h
+
+    // NEVER GOING FASTER THAN IT CAN STOP FROM.
+    //
+    // A clamped acceleration limits slowing down exactly as much as speeding
+    // up, so a long move builds a speed it then needs the same distance again
+    // to shed -- 209 units out on a 100-unit move, and back, and out again. A
+    // spring does not save it, because the restoring force it would need is
+    // the thing being clamped.
+    //
+    // v = sqrt(2 * a * d) is the speed from which `a` still stops you in `d`,
+    // which is the whole content of the problem. Applied as a ceiling on the
+    // speed rather than as a separate braking mode, so there is one rule
+    // rather than two and no moment where they disagree.
+    const rx = want.x - pos.x
+    const ry = want.y - pos.y
+    const rz = want.z - pos.z
+    const dist = Math.hypot(rx, ry, rz)
+    const speed = Math.hypot(vel.x, vel.y, vel.z)
+    const ceiling = Math.sqrt(2 * this.cfg.maxAccel * dist)
+    if (speed > ceiling && speed > 0) {
+      const s = ceiling / speed
+      vel.x *= s
+      vel.y *= s
+      vel.z *= s
+    }
+
+    pos.x += vel.x * h
+    pos.y += vel.y * h
+    pos.z += vel.z * h
   }
 
   /**
@@ -543,7 +584,8 @@ export class Camera {
   eye () {
     const s = this.shakeOffset()
     let ex = this.position.x, ey = this.position.y, ez = this.position.z
-    let lx = this.target.x, ly = this.target.y, lz = this.target.z
+    // The FOCUS, not the raw target: see the constructor.
+    let lx = this.focus.x, ly = this.focus.y, lz = this.focus.z
 
     // THE ONLY PLACE THE PATH AND THE FREE CAMERA MEET.
     //
@@ -733,6 +775,21 @@ export function viewYaw (eye, yaw, mix = 0) {
  * opposite way from the camera. A reflection looks entirely plausible until
  * something turns.
  */
+/**
+ * Where to DRAW a body between two simulation ticks: `t` (0..1) of the way
+ * from where the last tick started to where it ended. Further apart than
+ * `snap` units is a teleport, a respawn or a new frame of reference, and is
+ * drawn where it ended -- smearing a teleport across a tick shows the body
+ * flying through walls for a frame.
+ */
+export function between (from, to, t, snap = 4) {
+  if (!from) return { ...to }
+  const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z
+  if (Math.hypot(dx, dy, dz) >= snap) return { ...to }
+  const k = Math.max(0, Math.min(1, t))
+  return { x: from.x + dx * k, y: from.y + dy * k, z: from.z + dz * k }
+}
+
 export function facingDirection (raw) {
   const theta = (Number(raw >>> 0) / 4294967296) * Math.PI * 2
   return { x: Math.cos(theta), z: -Math.sin(theta) }

@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -917,6 +917,70 @@ console.log('\n--- the yaw the camera is actually looking along ---')
   back.update(far, 0.25)
   check(Math.abs(back.position.x - settled) < 0.01,
         `and comes to rest (moved ${Math.abs(back.position.x - settled).toFixed(4)} in two more frames)`)
+}
+
+// --- moving fast: the view must not jiggle ----------------------------------
+console.log('camera: moving fast, the view translates rather than swings')
+{
+  // A subject running at 12 units a second in 60 Hz TICKS, drawn at 120 Hz: it
+  // moves on every other frame, as the raw simulation position does. The view's
+  // DIRECTION (eye towards what it looks at) is what reads as a jiggle.
+  const run = (pick) => {
+    const cam = new Camera({ deadzoneX: 0, deadzoneY: 0, smoothing: 8 })
+    cam.snapTo({ x: 0, y: 0, z: 0 })
+    const dirs = []
+    for (let f = 0; f < 480; f++) {
+      const tick = Math.floor(f / 2)
+      const e = cam.update({ x: tick * 12 / 60, y: 0, z: 0 }, 1 / 120, null)
+      const look = pick(cam, e)
+      if (f > 360) dirs.push(Math.atan2(e.x - look.x, e.y - look.y))
+    }
+    // How much the angle moves frame to frame, at a steady run.
+    let worst = 0
+    for (let i = 1; i < dirs.length; i++) worst = Math.max(worst, Math.abs(dirs[i] - dirs[i - 1]))
+    return worst
+  }
+  const now = run((cam, e) => e.lookAt)
+  const old = run((cam) => cam.target)      // what it used to look at
+  check(now < 1e-4, `looking at its smoothed focus, the view angle holds still at a steady run (${now.toExponential(2)} rad/frame)`)
+  check(old > 20 * now && old > 1e-3, `CONTROL: looking at the raw target, it wobbles every tick (${old.toExponential(2)} rad/frame)`)
+}
+{
+  // Drawn BETWEEN ticks the subject moves the same amount every frame.
+  const pts = []
+  for (let f = 0; f < 8; f++) {
+    const tick = Math.floor(f / 2)
+    const from = { x: (tick - 1) * 0.2, y: 0, z: 0 }
+    const to = { x: tick * 0.2, y: 0, z: 0 }
+    pts.push(between(from, to, (f % 2) / 2).x)
+  }
+  const steps = pts.slice(1).map((x, i) => +(x - pts[i]).toFixed(9))
+  check(steps.every((d) => Math.abs(d - 0.1) < 1e-9), `between ticks, an even step every frame (${steps.join(' ')})`)
+  check(between({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 }, 0.5).x === 10, 'a teleport (over the snap distance) is drawn where it ended')
+  check(between(null, { x: 3, y: 1, z: 2 }, 0.5).x === 3, 'and with no tick before it, the body is where it is')
+  check(between({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, 7).x === 1, 'a fraction past 1 does not overshoot')
+}
+
+// --- leadVelocity: aiming further ahead the faster it runs --------------------
+console.log('camera: a lead that grows with forward speed')
+{
+  const settle = (cfg, velocity) => {
+    const cam = new Camera({ deadzoneX: 0, deadzoneY: 0, smoothing: 8, leadSmoothing: 8, ...cfg })
+    cam.snapTo({ x: 0, y: 0, z: 0 })
+    let e
+    for (let f = 0; f < 600; f++) e = cam.update({ x: 0, y: 0, z: 0 }, 1 / 60, { x: 1, z: 0 }, null, velocity)
+    return e.lookAt.x
+  }
+  const fast = settle({ lead: 1, leadVelocity: 0.5 }, { x: 10, z: 0 })
+  check(Math.abs(fast - 6) < 0.05, `lead 1 + 0.5 x forward speed 10: it aims 6 ahead (${fast.toFixed(3)})`)
+  const fixed = settle({ lead: 1, leadVelocity: 0 }, { x: 10, z: 0 })
+  check(Math.abs(fixed - 1) < 0.05, `CONTROL: leadVelocity 0, the fixed lead only (${fixed.toFixed(3)})`)
+  const back = settle({ lead: 1, leadVelocity: 0.5 }, { x: -10, z: 0 })
+  check(Math.abs(back - 1) < 0.05, `running backwards adds nothing (${back.toFixed(3)})`)
+  const side = settle({ lead: 0, leadVelocity: 0.5 }, { x: 0, z: 10 })
+  check(Math.abs(side) < 0.05, `and moving sideways adds nothing: it is FORWARD speed (${side.toFixed(3)})`)
+  const still = settle({ lead: 0, leadVelocity: 0.5 }, null)
+  check(Math.abs(still) < 1e-6, `no velocity given, no lead (${still})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

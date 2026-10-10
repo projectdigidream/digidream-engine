@@ -1210,6 +1210,30 @@ int main(int argc, char** argv) {
     }
 
     // ================================================================
+    // THE CAMERA'S LEAD, from camera_follow: `lead` (field 4) and the lead
+    // that grows with forward speed, `lead_velocity` (field 18).
+    std::printf("-- camera_follow: a lead, and one that grows with speed --\n");
+    {
+        g_ui.cams.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "leadcam",
+          "nodes": [ { "id": "c", "type": "on_call", "name": "lead_on" },
+                     { "id": "f", "type": "camera_follow", "everyone": true, "lead": 2, "lead_velocity": 0.25 } ],
+          "links": [ ["c.then", "f.in"] ] })"));
+        CHECK(run("graphs.call('lead_on', dnp.players()[1], nil)", "lead on"));
+        std::printf("  lead %d, lead_velocity %d (thousandths)\n",
+                    g_ui.cams.count(4) ? g_ui.cams[4] : -1, g_ui.cams.count(18) ? g_ui.cams[18] : -1);
+        CHECK(g_ui.cams.count(4) && g_ui.cams[4] == 2000);
+        CHECK(g_ui.cams.count(18) && g_ui.cams[18] == 250);
+        // CONTROL: a camera_follow that says neither leaves both alone.
+        g_ui.cams.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "plaincam",
+          "nodes": [ { "id": "c", "type": "on_call", "name": "plain_on" }, { "id": "f", "type": "camera_follow", "everyone": true } ],
+          "links": [ ["c.then", "f.in"] ] })"));
+        CHECK(run("graphs.call('plain_on', dnp.players()[1], nil)", "plain"));
+        CHECK(!g_ui.cams.count(4) && !g_ui.cams.count(18));
+    }
+
+    // ================================================================
     // SHOWING AND HIDING part of a panel: show_element / hide_element.
     std::printf("-- panel elements shown and hidden --\n");
     {

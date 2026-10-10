@@ -833,9 +833,14 @@ graph_vocab = {
                { name = "angle", type = "number", optional = true, doc = "Degrees around the player." },
                { name = "lock", type = "bool", optional = true,
                  doc = "Hold that angle and distance: the player cannot turn or zoom it." },
+               { name = "lead", type = "number", optional = true,
+                 doc = "Units ahead of the player, along where they face, that the camera aims at. 0 aims at the player." },
+               { name = "lead_velocity", type = "number", optional = true,
+                 doc = "And further ahead the faster they run forward: their forward speed times this " ..
+                       "(about \"this many seconds of running ahead\"). 0 is a fixed lead." },
                { name = "everyone", type = "bool", optional = true } },
       exec_in = { "in" }, exec_out = { "then" },
-      data_in = { "entity", "distance", "height", "angle" }, data_out = {},
+      data_in = { "entity", "distance", "height", "angle", "lead", "lead_velocity" }, data_out = {},
       doc = "The camera follows the player again, from where it is told. " ..
             "Off a path, back to following." },
     { name = "camera_flythrough", category = "camera", level_only = true,

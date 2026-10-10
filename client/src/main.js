@@ -29,7 +29,7 @@ import {
 import { Sky, skyFromMessage } from './render/sky.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  viewYaw,
+  viewYaw, between,
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
@@ -2402,6 +2402,8 @@ function currentInput () {
 // the display's rate and reads whatever the last tick produced.
 
 let acc = 0
+// WHERE THE LAST TICK STARTED, for drawing between ticks (see `subject`).
+let stepFrom = null
 let last = performance.now()
 let ticks = 0
 let frames = 0
@@ -2739,6 +2741,7 @@ function frame (now) {
       // ONLY AT A CELL BOUNDARY. A pit inside the level is a fall and must
       // stay one; this is about leaving the map the simulation is holding.
       const before = world.readAgent(agent)
+      stepFrom = before.pos
       // Our missiles fly BEFORE the step, where the server's on_tick flies its
       // own, and one that bursts at our feet shoves us in this very step.
       // This tick's launches are added after it -- the server's order again:
@@ -2766,6 +2769,7 @@ function frame (now) {
       inputHistory = [f, ...inputHistory].slice(0, 8)   // redundancy, protocol §4.1
       conn.send(predictor.tick, predictor.lastSnapshot?.serverTick ?? 0, inputHistory)
     } else {
+      stepFrom = world.readAgent(agent).pos
       world.setInput(agent, f)
       world.step()
     }
@@ -2873,7 +2877,18 @@ function frame (now) {
   const px = fxToFloat(a.pos.x)
   const py = fxToFloat(a.pos.y)
   const pz = fxToFloat(a.pos.z)
-  const subject = { x: toThreeX(px), y: toThreeY(pz), z: toThreeZ(py) }
+  // DRAWN BETWEEN TICKS. The simulation moves in whole 60 Hz ticks and the
+  // display runs at its own rate, so a frame drawn at the last tick's position
+  // shows the body standing still for a frame and then jumping -- at 120 Hz
+  // every other frame, at 60 Hz whenever a frame gets two ticks or none. Fast,
+  // that is the body and the camera jiggling. So the body is drawn where it was
+  // `acc` of the way from the tick before to the latest one (a tick behind,
+  // the price of every interpolated renderer). A jump of more than a few units
+  // is a teleport, a respawn or a new frame of reference, and is drawn as one.
+  // The simulation, the sounds and the HUD read `a`; only what is DRAWN follows.
+  const drawn = between(stepFrom && { x: fxToFloat(stepFrom.x), y: fxToFloat(stepFrom.y), z: fxToFloat(stepFrom.z) },
+                        { x: px, y: py, z: pz }, acc / DT)
+  const subject = { x: toThreeX(drawn.x), y: toThreeY(drawn.z), z: toThreeZ(drawn.y) }
 
   // THIS CLIENT'S OWN SOUNDS, the moment it predicts the action: its jump, its
   // landing, its swing, its shot (audio/ownsounds.js). The server's copies are
@@ -3238,7 +3253,10 @@ function frame (now) {
   // The agent's facing, so the camera can aim AHEAD of it rather than at it.
   // facingDirection already returns three-space -- it is the same vector the
   // debug arrow is drawn along -- so converting again would negate z twice.
-  const eye = camera.update(subject, dt, facingDirection(a.facing), camPathSpline)
+  // Its velocity too, in three-space, for a lead that grows with speed
+  // (Camera leadVelocity). Units a second, like the engine's.
+  const eye = camera.update(subject, dt, facingDirection(a.facing), camPathSpline,
+                            { x: fxToFloat(a.vel.x), z: -fxToFloat(a.vel.y) })
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
   // FIRST PERSON: the camera is the player's eyes, looking where the view does,

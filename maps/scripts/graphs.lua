@@ -1013,6 +1013,8 @@ function EXEC.camera_follow(g, n, ev, pull)
   if n.height ~= nil then f.pitch = turns(n.height) end
   if n.angle ~= nil then f.yaw = turns(n.angle) end
   if n.lock ~= nil then f.lock_yaw = n.lock and 1 or 0; f.lock_zoom = n.lock and 1 or 0 end
+  if n.lead ~= nil then f.lead = n.lead end
+  if n.lead_velocity ~= nil then f.lead_velocity = n.lead_velocity end
   for _, p in ipairs(audience(n, g, ev, pull)) do dnp.camera(p, f) end
   return "then"
 end

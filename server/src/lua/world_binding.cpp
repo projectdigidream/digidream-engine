@@ -1724,7 +1724,10 @@ static const char* const CAMERA_FIELD_NAMES[] = {
     // Edge-triggered, unlike everything above it: a shake is an event, not a
     // setting, and the client fires one when the field ARRIVES rather than
     // holding it. See docs/protocol.md §11.1.
-    "cam_shake", "cam_shake_time"
+    "cam_shake", "cam_shake_time",
+    // How much further ahead the camera aims the faster its subject runs
+    // forward: forward speed times this, added to `lead` (field 18).
+    "lead_velocity"
 };
 
 // The fields a Lua table names, in thousandths. Shared by dnp.camera and

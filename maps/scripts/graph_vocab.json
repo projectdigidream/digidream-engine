@@ -2501,6 +2501,18 @@
           "type": "bool"
         },
         {
+          "doc": "Units ahead of the player, along where they face, that the camera aims at. 0 aims at the player.",
+          "name": "lead",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "And further ahead the faster they run forward: their forward speed times this (about \"this many seconds of running ahead\"). 0 is a fixed lead.",
+          "name": "lead_velocity",
+          "optional": true,
+          "type": "number"
+        },
+        {
           "name": "everyone",
           "optional": true,
           "type": "bool"
@@ -2511,7 +2523,9 @@
         "entity",
         "distance",
         "height",
-        "angle"
+        "angle",
+        "lead",
+        "lead_velocity"
       ],
       "data_out": [],
       "doc": "The camera follows the player again, from where it is told. Off a path, back to following.",

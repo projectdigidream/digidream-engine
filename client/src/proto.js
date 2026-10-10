@@ -83,7 +83,9 @@ export const CAMERA_FIELD = [
   // CAMERA_FIELD_NAMES in server/src/lua/world_binding.cpp with no shared
   // header between them. client/test/proto_camera.test.js compares the two.
   'mode', 'path', 'pathSpeed', 'pathAttach', 'pathBlend',
-  'shake', 'shakeTime'
+  'shake', 'shakeTime',
+  // 18: the aim point's lead grows with forward speed (camera.js leadVelocity).
+  'leadVelocity'
 ]
 
 // The cap on fields in ONE CameraSet, mirroring proto/messages.hpp. Not the
