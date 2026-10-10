@@ -699,6 +699,8 @@ suite_studio () {
   # bakes today, and every shipped skin compiles clean.
   node ../uikit/vendor.js ../studio/vendor/uikit --check | tail -5
   node ../uikit/test/skin.test.js | tail -1
+  # And the studio asks the skin for its colours: no literal left in a migrated file.
+  node ../studio/test/skin_literals.test.js | tail -1
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
