@@ -207,8 +207,10 @@ public final class MainActivity extends Activity {
       Log.e(TAG, "boot failed", e);
       final String msg = String.valueOf(e.getMessage());
       ui.post(() -> {
+        // pre-wrap: the server's own lines, as it wrote them, and wrapped to
+        // the phone's width rather than scrolled off it.
         web.loadDataWithBaseURL(ORIGIN + "/", "<body style='background:#0b0d12;color:#cfe3ff;"
-            + "font:13px monospace;padding:16px'>could not start the game server<br><br>"
+            + "font:13px monospace;padding:16px;white-space:pre-wrap;word-break:break-word'>could not start the game server\n\n"
             + esc(msg) + "</body>", "text/html", "utf-8", null);
       });
     }

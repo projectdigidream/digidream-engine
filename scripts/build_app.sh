@@ -137,7 +137,7 @@ if [[ -n "$STASH" ]]; then
 fi
 
 # The shell.
-cp shells/app/main.js shells/app/preload.cjs shells/app/static.js shells/app/relay.js shells/app/studio_files.js \
+cp shells/app/main.js shells/app/preload.cjs shells/app/static.js shells/app/relay.js shells/app/studio_files.js shells/app/said.js \
    shells/app/ensure-electron.cjs "$OUT/app/"
 
 # THE LINK FRAMING, COPIED rather than reimplemented or imported across a

@@ -38,6 +38,7 @@
 // file loads at all.
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { spawn } from 'node:child_process'
+import { serverSaid } from './said.js'
 import { createServer } from 'node:net'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, createWriteStream, appendFileSync } from 'node:fs'
 import { readFile as readFileAsync, writeFile as writeFileAsync, readdir } from 'node:fs/promises'
@@ -145,11 +146,20 @@ function spawnServer (linkPort, extra = {}) {
   // (logs/play-server.log), started afresh, for the studio to read back.
   const file = extra.logFile ? (mkdirSync(dirname(extra.logFile), { recursive: true }), createWriteStream(extra.logFile, { flags: 'w' })) : null
   file?.write(`$ ${bin} ${args.join(' ')}\n`)
-  const both = (stream) => { const out = relay_out(stream); return (b) => { out(b); file?.write(b) } }
+  // THE SERVER'S LAST WORDS, kept: a packaged app has no console, so when the
+  // server dies the dialog says what it said (see serverSaid).
+  const tail = []
+  const keep = (b) => {
+    for (const line of b.toString().split('\n')) if (line !== '') tail.push(line)
+    if (tail.length > 40) tail.splice(0, tail.length - 40)
+  }
+  const both = (stream) => { const out = relay_out(stream); return (b) => { out(b); keep(b); file?.write(b) } }
   p.stdout.on('data', both(process.stdout))
   p.stderr.on('data', both(process.stderr))
   p.on('exit', (code, sig) => { file?.end(`[shell] the server exited (code=${code} signal=${sig})\n`) })
-  p.on('exit', (code, sig) => {
+  // 'close', not 'exit': its output has all arrived by then, so the dialog
+  // below can quote the end of it.
+  p.on('close', (code, sig) => {
     // SIGTERM here is almost always US: before-quit kills it. Anything else is
     // the server actually failing, and the two deserve different words.
     log(sig === 'SIGTERM' && app.isQuiting
@@ -166,8 +176,9 @@ function spawnServer (linkPort, extra = {}) {
       return
     }
     if (!app.isQuiting && !restarting) {
+      const said = serverSaid(tail)
       dialog.showErrorBox('The game server stopped',
-        `It exited with ${code ?? sig}. Check the console for what it said.`)
+        `It exited with ${code ?? sig}.` + (said ? ` It said:\n\n${said}` : ' It said nothing.'))
       app.quit()
     }
   })

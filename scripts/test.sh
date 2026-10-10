@@ -730,6 +730,7 @@ suite_app () {
   # /ui/index.json merged across modules by the asset rule (first wins), in the
   # app and the devserver, and each file served from the module that named it.
   node shells/app/test/ui_route.test.js | tail -2
+  node shells/app/test/said.test.js | tail -1
   # A play-test serves its own module first: another module's hud.json no longer wins it.
   node shells/app/test/play_first.test.js | tail -2
   # The desktop app keeps its port, so the studio's storage survives a relaunch.

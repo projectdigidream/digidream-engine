@@ -119,6 +119,7 @@ final class GameServer {
       file.write(("$ " + String.join(" ", cmd) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
       file.flush();
     }
+    synchronized (tail) { tail.clear(); }
     process = pb.start();
 
     final java.io.OutputStream sink = file;
@@ -132,6 +133,7 @@ final class GameServer {
             char c = (char) (buf[i] & 0xff);
             if (c == '\n') {
               Log.i(TAG, line.toString());
+              remember(line.toString());
               if (sink != null) {
                 try { sink.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)); sink.flush(); } catch (IOException ignored) { }
               }
@@ -151,6 +153,43 @@ final class GameServer {
     }, "dnp-server-log");
     log.setDaemon(true);
     log.start();
+    logThread = log;
+  }
+
+  // THE SERVER'S LAST WORDS, kept in memory: a phone has no console and a game
+  // outside the studio has no Play log, so when the server dies starting, what
+  // it said is put on the screen (see connect).
+  private static final int TAIL_LINES = 40;
+  private final java.util.ArrayDeque<String> tail = new java.util.ArrayDeque<>();
+  private Thread logThread = null;
+
+  private void remember(String line) {
+    synchronized (tail) {
+      tail.addLast(line);
+      while (tail.size() > TAIL_LINES) tail.removeFirst();
+    }
+  }
+
+  /**
+   * What the server said before it died: the lines that say why first (a
+   * refusal, a failure, an error), then the end of its output for context.
+   */
+  String lastWords() {
+    // Its output may still be in the pipe when the exit is noticed.
+    if (logThread != null) { try { logThread.join(1000); } catch (InterruptedException ignored) { } }
+    java.util.List<String> lines;
+    synchronized (tail) { lines = new java.util.ArrayList<>(tail); }
+    StringBuilder why = new StringBuilder();
+    for (String l : lines) {
+      String low = l.toLowerCase(java.util.Locale.ROOT);
+      if (low.contains("refus") || low.contains("fail") || low.contains("error") || low.contains("cannot")
+          || low.contains("could not") || low.contains("problem")) why.append(l).append('\n');
+    }
+    StringBuilder out = new StringBuilder();
+    if (why.length() > 0) out.append(why).append('\n');
+    int from = Math.max(0, lines.size() - 15);
+    for (int i = from; i < lines.size(); i++) out.append(lines.get(i)).append('\n');
+    return out.toString().trim();
   }
 
   /**
@@ -167,8 +206,9 @@ final class GameServer {
     IOException last = null;
     while (System.currentTimeMillis() < deadline) {
       if (process != null && !process.isAlive()) {
-        throw new IOException("the game server exited while starting (exit " + process.exitValue()
-            + "); the studio's Play log shows what it said");
+        String said = lastWords();
+        throw new IOException("the game server exited while starting (exit " + process.exitValue() + ")"
+            + (said.isEmpty() ? " and said nothing" : ". It said:\n\n" + said));
       }
       try {
         socket = new Socket(InetAddress.getByName("127.0.0.1"), port);
