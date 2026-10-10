@@ -1556,7 +1556,7 @@ local function index_sectors_once()
     if tag ~= nil then
       sectors_by_tag[tag] = sectors_by_tag[tag] or {}
       local q = sectors_by_tag[tag]
-      q[#q + 1] = s:index()
+      q[#q + 1] = s          -- the handle, as the loader keeps it: targets_of hands these to move_one
     end
   end
 end

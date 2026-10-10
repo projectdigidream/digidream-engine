@@ -1278,10 +1278,23 @@ local function tick_starts(now)
       local sec = index_of(e:sector())
       local floor = (e.grounded ~= nil and e:grounded()) and sec or nil
       local t = track[i]
+      -- WHO, and WHEN LAST. A level with nobody in it does not tick, so a
+      -- player who left was never seen leaving; the one who arrives next --
+      -- or the same one, back -- would find the slot taken and never be
+      -- seen arriving (a title screen's panel, once, then never). A gap in
+      -- this level's clock, or another player in the slot, is a departure
+      -- and a new arrival.
+      local who = (e.player ~= nil and is_player(e)) and e:player() or nil
+      if t ~= nil and (t.seen < now - 1 or t.who ~= who) then
+        track[i] = nil
+        if roster and t.player then fire_start("when_player_leaves", nil, {}) end
+        t = nil
+      end
       if t == nil then
-        track[i] = { sector = sec, floor = floor, since = now, player = is_player(e) }
+        track[i] = { sector = sec, floor = floor, since = now, player = is_player(e), who = who, seen = now }
         if roster and is_player(e) then fire_start("when_player_arrives", nil, { entity = e }) end
       else
+        t.seen = now
         if sec ~= t.sector then
           local was = t.sector
           t.sector = sec

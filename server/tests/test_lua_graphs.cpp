@@ -866,6 +866,40 @@ int main(int argc, char** argv) {
                      { "id": "l", "type": "set_sector_light", "tag": 77, "light": 0 } ],
           "links": [ ["go.then", "l.in"] ] })"));
         CHECK(run("graphs.call('nowhere', nil, nil)", "nowhere") && g_ui.sectors.empty());
+        // A trigger verb addressed BY TAG from a graph, in a level with no
+        // trigger table: the tag index is built on first use and must hold
+        // sectors, as the loader's does -- it held their numbers, and the move
+        // died indexing one ("attempt to index local 's'").
+        CHECK(load_graph(R"({ "graph": 1, "name": "bytag",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "raise" },
+                     { "id": "m", "type": "action", "a": "sector_move", "tag": 3, "surface": "ceiling",
+                       "to": "absolute", "height": "12", "speed": 1, "loop": "once" } ],
+          "links": [ ["go.then", "m.in"] ] })"));
+        CHECK(run("bt_ok, bt_err = pcall(graphs.call, 'raise', nil, nil); bt_err = tostring(bt_err)", "a move by tag"));
+        if (!truthy("bt_ok")) { lua_getglobal(L, "bt_err"); std::printf("  %s\n", lua_tostring(L, -1)); lua_pop(L, 1); }
+        CHECK(truthy("bt_ok"));
+        ticks(60);
+        CHECK(run("bt_ceil = dnp.sector(2):ceil().raw / 4294967296", "the ceiling after"));
+        std::printf("  sector_move by tag 3: sector 2's ceiling now %.3f\n", num("bt_ceil"));
+        CHECK(num("bt_ceil") == 12);
+    }
+
+    std::printf("-- arrivals, after the level stood empty --\n");
+    {
+        CHECK(load_graph(R"({ "graph": 1, "name": "roster", "vars": { "came": 0, "went": 0 },
+          "nodes": [ { "id": "a", "type": "when_player_arrives" }, { "id": "c", "type": "add_var", "var": "came", "value": 1 },
+                     { "id": "l", "type": "when_player_leaves" },  { "id": "w", "type": "add_var", "var": "went", "value": 1 } ],
+          "links": [ ["a.then", "c.in"], ["l.then", "w.in"] ] })"));
+        ticks(5);
+        CHECK(run("r_came = graphs.var('roster', 'came'); r_went = graphs.var('roster', 'went')", "first arrival"));
+        CHECK(num("r_came") == 1 && num("r_went") == 0);      // once, and not again while it stays
+        // The level empties and stops ticking (its clock keeps count); the
+        // player is back later in the same slot. That is a new arrival.
+        for (int i = 0; i < 120; ++i) g_world->step();
+        ticks(3);
+        CHECK(run("r_came = graphs.var('roster', 'came'); r_went = graphs.var('roster', 'went')", "back again"));
+        std::printf("  arrivals %g, departures %g\n", num("r_came"), num("r_went"));
+        CHECK(num("r_came") == 2 && num("r_went") == 1);
     }
 
     std::printf("-- panels by name (docs/PANELS.md) --\n");
