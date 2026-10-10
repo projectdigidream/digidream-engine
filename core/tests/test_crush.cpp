@@ -15,6 +15,7 @@
 #include <cstdio>
 
 #include "dnp/sim/world.hpp"
+#include "dnp/physics/collide.hpp"
 
 using namespace dnp;
 using namespace dnp::geom;
@@ -393,12 +394,41 @@ static void test_events_reach_the_state_hash() {
     CHECK(a.hash() != b.hash());
 }
 
+// A raft: a floating platform with OPEN sides (no neighbour, LEDGE), in a pool.
+// Its moving footprint must shove what is below its floor -- a swimmer meets
+// the hull -- and let pass what it could stand on: a body landing from above.
+// The open sides were walls to every body at every height, so nobody could
+// land on a sliding raft.
+static void test_a_raft_lets_a_lander_aboard() {
+    std::printf("sweep: a raft's open side shoves a swimmer and lets a lander aboard\n");
+    static MapStorage store;
+    const fx2 pool[] = {{F(0), F(0)}, {F(24), F(0)}, {F(24), F(20)}, {F(0), F(20)}};
+    const fx2 raft[] = {{F(10), F(8)}, {F(14), F(8)}, {F(14), F(12)}, {F(10), F(12)}};
+    store.add_sector(pool, 4, F(-3), F(40), 1);
+    store.add_sector(raft, 4, F(1), F(40), 2);
+    for (u32 k = 0; k < 4; ++k) store.add_side(0, k, (k + 1) % 4, NO_SECTOR, 0);
+    for (u32 k = 0; k < 4; ++k) store.add_side(1, k, (k + 1) % 4, NO_SECTOR, side_flag::LEDGE);
+    const MapData map = store.view();
+    const fx r = fx::from_frac(1, 2);
+    // Overlapping the raft's west side by a quarter, centre outside it.
+    fx2 lander{fx::from_frac(39, 4), F(10)};
+    const physics::SweepContact a = physics::sweep_out_of_sector(map, 1, lander, r, fx::from_frac(3, 2), F(2));
+    CHECK(!a.contacted);
+    CHECK(lander.x == fx::from_frac(39, 4));
+    fx2 swimmer{fx::from_frac(39, 4), F(10)};
+    const physics::SweepContact b = physics::sweep_out_of_sector(map, 1, swimmer, r, F(-3), F(2));
+    CHECK(b.contacted);                                 // CONTROL: the hull still shoves
+    CHECK(swimmer.x < fx::from_frac(39, 4));
+    std::printf("  lander %s, swimmer pushed to x=%.3f\n", a.contacted ? "PUSHED" : "passes", D(swimmer.x));
+}
+
 int main() {
     test_ceiling_crushes_when_the_gap_closes();
     test_a_whole_sector_moving_never_crushes();
     test_a_sweeping_footprint_pushes_and_then_pins();
     test_a_sweeping_footprint_a_body_fits_in_touches_nothing();
     test_a_rider_is_carried_not_swept();
+    test_a_raft_lets_a_lander_aboard();
     test_the_log_is_bounded_and_says_so();
     test_the_log_holds_one_tick_only();
     test_events_reach_the_state_hash();

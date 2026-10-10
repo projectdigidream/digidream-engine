@@ -189,7 +189,13 @@ SweepContact push_out_volume(const MapData& map, u32 s, fx2& p, fx radius,
 
     const auto side_is_solid = [&](u32 si) {
         const Side& sd = map.side(si);
-        return volume_solid || (sd.flags & side_flag::BLOCKING) != 0 || sd.neighbor == NO_SECTOR;
+        // A platform's OPEN side is where its floor simply ends, not a wall:
+        // a body it admits (one landing on it from above) passes, as it
+        // would through the side of one standing still. Only a sealed side
+        // with nothing beyond it is a wall. Treated as a wall, a sliding
+        // raft shoved away everyone trying to land on it, at any height.
+        const bool open_edge = sd.neighbor == NO_SECTOR && (sd.flags & side_flag::LEDGE) != 0;
+        return volume_solid || (sd.flags & side_flag::BLOCKING) != 0 || (sd.neighbor == NO_SECTOR && !open_edge);
     };
 
     // Phase 1: the footprint has swept OVER the agent, which is the case a
