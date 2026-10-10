@@ -664,6 +664,9 @@ suite_studio () {
   # How swings look in the game: swings.json as the client's own parser reads it,
   # each weapon's and monster's look the one the studio's form shows.
   node ../studio/test/swings.test.js | tail -2
+  # The weapon in first person: weapons.json and the sprite index placed by the
+  # client's own view-model code where the studio's form says.
+  node ../studio/test/viewmodel.test.js | tail -2
   # The sky: the server reads every sky line the studio writes (a broken one
   # it reports), and the client reads the preview message as written.
   node ../studio/test/sky.test.js | tail -2
