@@ -695,6 +695,10 @@ suite_studio () {
   node ../studio/test/paths_abs.test.js | tail -1
   # The bundled editors are what plugins.lock.json pins, untouched by hand.
   node ../studio/tools/vendor_plugins.mjs --check | tail -5
+  # THE SKINS (docs/STUDIO_SKINS.md): what the studio carries is what uikit
+  # bakes today, and every shipped skin compiles clean.
+  node ../uikit/vendor.js ../studio/vendor/uikit --check | tail -5
+  node ../uikit/test/skin.test.js | tail -1
   # And the editor's in-memory map against the one mapc bakes: same content
   # hash, same per-sector triangle counts. Here rather than above because it is
   # the one editor test that loads the wasm core.
