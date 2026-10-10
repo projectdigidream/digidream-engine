@@ -1632,10 +1632,24 @@ function acts.swing(m, a)
   pressing[m.idx] = { e = m.e, tick = dnp.tick() }
 end
 
+-- HEIGHT TOO, not only across the floor. A claw measured in plan alone
+-- reached a player on a ledge two storeys up, or a cacodemon over a pit bit
+-- whoever walked under it. The rule is the engine's own swing's
+-- (core/src/sim/world.cpp, the attack sweep): the two bodies' height spans,
+-- each stretched by the reach, must meet -- so a hit lands whenever the gap
+-- between them, above or below, is within `range`. A body with no height (a
+-- prop, or a test's bare entity) is a point at its feet.
+local function height_of(e)
+  local h = e.param and e:param("height") or nil
+  return h or ZERO
+end
+
 function acts.melee(m, a)
   if m.target == nil or not m.target:valid() then return end
   local p, t = m.e:pos(), m.target:pos()
   local dx, dy = t.x - p.x, t.y - p.y
+  if p.z + height_of(m.e) + a.range < t.z then return end         -- it is above the reach
+  if p.z > t.z + height_of(m.target) + a.range then return end    -- or below it
   if dx * dx + dy * dy <= a.range * a.range then
     hurt(m.target, a.damage, m)
     -- The same hit effects every other damage path gets. Without this the

@@ -621,7 +621,10 @@ mob_vocab = {
                  doc = "A particle kind to burst where this lands. A mob's own " ..
                        "`blood` overrides it." },
                { name = "hit_vfx_radius", type = "fx", optional = true } },
-      doc = "Damage if the target is inside `range` right now. Separate from " ..
+      doc = "Damage if the target is inside `range` right now -- across the " ..
+            "floor and in height: the gap between the two bodies, above or " ..
+            "below, must be within `range` too, as the engine's own swing " ..
+            "measures it, so a claw does not reach a ledge overhead. Separate from " ..
             "`hitscan` because a monster with only a ranged attack is " ..
             "harmless the moment you stand inside it -- a missile spawned " ..
             "inside somebody bursts on its owner or sails past." },

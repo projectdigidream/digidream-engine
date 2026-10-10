@@ -591,5 +591,37 @@ do
   CHECK(imp < own and own < caco, ("imp %d < zombieman %d < cacodemon %d ticks"):format(imp, own, caco))
 end
 
+-- ---------------------------------------------------------------------------
+print("mobs: a claw reaches across the floor AND up or down, not through a ceiling")
+do
+  W.reset(); mobs.reset()
+  local d = mobs.spawn("demon", { x = W.mkfx(0), y = W.mkfx(0), z = W.mkfx(0) })
+  local p = W.add("player", 1, 0, 0)
+  d.params = { height = W.mkfx(2) }
+  p.params = { height = W.mkfx(2) }
+  local m = rec(d)
+  m.target = p
+  local range = 5 / 3                          -- the demon's du(80)
+  local blow = { damage = 10, range = W.mkfx(range) }
+  -- The player one unit away across the floor, at the height `z`: hit or not?
+  local function hit_at(z)
+    p.p.z = W.mkfx(z)
+    p.health = 100
+    mobs.acts.melee(m, blow)
+    return p.health < 100
+  end
+  CHECK(hit_at(0), "CONTROL: on the same floor, a unit away, it hits")
+  CHECK(not hit_at(10), "a player ten units up is out of its reach")
+  CHECK(not hit_at(-10), "and so is one ten units down")
+  -- The edge: the gap between the bodies (head to feet) against the reach.
+  CHECK(hit_at(2 + range - 0.1), "just within the reach above its head, it still hits")
+  CHECK(not hit_at(2 + range + 0.1), "just beyond it, it does not")
+  CHECK(hit_at(-(2 + range - 0.1)), "and the same below its feet")
+  CHECK(not hit_at(-(2 + range + 0.1)), "and beyond, below, it does not")
+  -- A body with no height is a point at its feet.
+  p.params = nil
+  CHECK(hit_at(2 + range - 0.1) and not hit_at(2 + range + 0.1), "a body with no height: the same rule, from its feet")
+end
+
 print(("== %d checks, %d failures =="):format(checks, fails))
 os.exit(fails == 0 and 0 or 1)
