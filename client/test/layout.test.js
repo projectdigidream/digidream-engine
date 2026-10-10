@@ -176,6 +176,7 @@ function fakeDoc () {
   hud.update({})
   const img = hud.nodes[0].img
   check(img.src === '/sprites/HUDCOIN.png', `an image asks for the sprite picture first (${img.src})`)
+  check(img.style.width === '100%' && img.style.height === '100%' && img.style.objectFit === 'contain', 'and the picture fills its w x h, not its natural size')
   img.onerror?.()
   check(img.src === '/textures/HUDCOIN.png', `and a texture of the name when there is none (${img.src})`)
   img.onerror?.()

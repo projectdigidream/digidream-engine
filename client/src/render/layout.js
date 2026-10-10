@@ -628,7 +628,9 @@ export class HudView {
       d.style.minWidth = '3ch'
     } else if (el.type === 'image') {
       const img = this.doc.createElement('img')
-      img.style.imageRendering = 'pixelated'
+      // The picture fills the element's box (its w x h), keeping its shape; at
+      // its natural size it spilled over whatever stood beside it.
+      Object.assign(img.style, { imageRendering: 'pixelated', width: '100%', height: '100%', objectFit: 'contain', display: 'block' })
       d.appendChild(img)
       node.img = img
     }
