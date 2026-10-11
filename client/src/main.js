@@ -2322,11 +2322,19 @@ let pointerRefusal = null
 let cutsceneHeld = false
 const showPointerHint = (why = null) => {
   pointerHint = true
+  // Refused: get focus back natively now, so the next click finds it there.
+  if (why) nativeFocus()
   if (why) pointerRefusal = why
   dnpStats.pointerRefusal = pointerRefusal
   say(pointerRefusal ? `Click to look around  (${pointerRefusal})` : 'Click to look around')
 }
+// The shell's own focus, where it has one (the Tauri runner: the window and its
+// web view, natively). Asynchronous, so it helps the NEXT request rather than
+// this one -- which is why it is also asked for when a cutscene ends and when
+// a request is refused.
+const nativeFocus = () => { try { if (typeof window.dnpNative?.focus === 'function') window.dnpNative.focus() } catch {} }
 function takePointer () {
+  nativeFocus()
   // FOCUS FIRST, ON THE PAGE ITSELF. window.focus() does nothing inside a
   // macOS webview (WKWebView, the Tauri app), and WebKit refuses the lock to a
   // page without focus -- so the canvas, made focusable, is focused, which
@@ -2346,6 +2354,7 @@ function takePointer () {
 // take it again without a click; where one refuses, the hint says to click.
 function retakePointer () {
   if (!isFps() || document.pointerLockElement === renderer.domElement || uiModal) return
+  nativeFocus()
   takePointer()
 }
 document.addEventListener('pointerlockerror', () => showPointerHint(pointerRefusal ?? 'the browser refused the pointer'))
