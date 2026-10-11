@@ -2316,18 +2316,30 @@ addEventListener('mousedown', (e) => {
 // focus, ask for it and wait for the next click; and a refusal is a hint on
 // screen, not an error.
 let pointerHint = false
+// Why the last request was refused, as the browser put it (shown in the hint).
+let pointerRefusal = null
 // Whether the controls were taken (a cutscene) on the last frame.
 let cutsceneHeld = false
-const showPointerHint = () => { pointerHint = true; say('Click to look around') }
+const showPointerHint = (why = null) => {
+  pointerHint = true
+  if (why) pointerRefusal = why
+  dnpStats.pointerRefusal = pointerRefusal
+  say(pointerRefusal ? `Click to look around  (${pointerRefusal})` : 'Click to look around')
+}
 function takePointer () {
-  // Focus first, then ask anyway: a webview that goes on reporting no focus
-  // must not turn every click into the hint and nothing else. A refusal is
-  // caught below and is the hint.
+  // FOCUS FIRST, ON THE PAGE ITSELF. window.focus() does nothing inside a
+  // macOS webview (WKWebView, the Tauri app), and WebKit refuses the lock to a
+  // page without focus -- so the canvas, made focusable, is focused, which
+  // gives the page focus within this same click. Then ask anyway: a refusal is
+  // caught below and is the hint, with the browser's own reason.
+  const el = renderer.domElement
+  if (el.tabIndex < 0 || el.getAttribute('tabindex') === null) { el.setAttribute('tabindex', '-1'); el.style.outline = 'none' }
+  try { el.focus({ preventScroll: true }) } catch {}
   if (!document.hasFocus()) window.focus()
   try {
-    const p = renderer.domElement.requestPointerLock?.()
-    p?.catch?.(() => showPointerHint())
-  } catch { showPointerHint() }
+    const p = el.requestPointerLock?.()
+    p?.catch?.((e) => showPointerHint(e?.message || String(e)))
+  } catch (e) { showPointerHint(e?.message || String(e)) }
 }
 // TAKEN BACK when what had it is over: a cutscene (the controls return) or a
 // modal panel closing. Browsers let a page that released the pointer itself
@@ -2336,7 +2348,7 @@ function retakePointer () {
   if (!isFps() || document.pointerLockElement === renderer.domElement || uiModal) return
   takePointer()
 }
-document.addEventListener('pointerlockerror', () => showPointerHint())
+document.addEventListener('pointerlockerror', () => showPointerHint(pointerRefusal ?? 'the browser refused the pointer'))
 addEventListener('mouseup', (e) => mouseHeld.delete(e.button))
 // The right button is the second trigger, not the browser's menu.
 addEventListener('contextmenu', (e) => { if (isFps()) e.preventDefault() })
@@ -2349,7 +2361,7 @@ document.addEventListener('pointerlockchange', () => {
     // Lost in first-person play (Escape, a switch of window): say how to get
     // it back -- unless a panel or a cutscene has the screen, which is why.
     if (isFps() && !uiModal && !controlsTaken()) showPointerHint()
-  } else if (pointerHint) { pointerHint = false; say('') }
+  } else if (pointerHint) { pointerHint = false; pointerRefusal = null; say('') }
 })
 
 // The last direction the agent was actually pointed. Brad 0 is due east, not
