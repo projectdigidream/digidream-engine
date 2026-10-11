@@ -333,8 +333,21 @@ void main () {
   }
   float a = min(cap, 1.0 - exp(-tau));
   if (a < 0.002) discard;
-  gl_FragColor = vec4(color, a);
+  // PREMULTIPLIED: the prisms add up in the fog target, which is then laid over
+  // the picture once (renderFog).
+  gl_FragColor = vec4(color * a, a);
 }
+`
+
+// The fog target, laid over the picture: premultiplied, stretched to the screen.
+const COMPOSITE_VS = /* glsl */`
+varying vec2 vUv;
+void main () { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`
+const COMPOSITE_FS = /* glsl */`
+uniform sampler2D fog;
+varying vec2 vUv;
+void main () { gl_FragColor = texture2D(fog, vUv); }
 `
 
 /**
@@ -345,8 +358,12 @@ void main () {
  * the smaller particle budget.
  */
 export class SectorFx {
-  constructor ({ THREE, map, touch = false, budget = null, rng = mulberry(0x5eed) }) {
+  constructor ({ THREE, map, touch = false, budget = null, rng = mulberry(0x5eed), fogScale = 0.5 }) {
     this.THREE = THREE
+    // The fog's resolution against the screen's: its depth pass and its prisms
+    // are drawn into targets this fraction of the size, then laid over the
+    // picture. Fog is soft; at half it costs a quarter of the pixels.
+    this.fogScale = Math.max(0.25, Math.min(1, fogScale))
     this.root = new THREE.Group()
     this.root.name = 'sectorfx'
     this.fogScene = new THREE.Scene()
@@ -489,6 +506,13 @@ export class SectorFx {
       transparent: true,
       depthWrite: false,
       depthTest: false,
+      // Premultiplied over: what the shader writes is colour times alpha.
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendSrcAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
       // Both sides, so the exit face is drawn however it is wound; the shader
       // discards the entry face, so no prism counts twice.
       side: THREE.DoubleSide
@@ -497,6 +521,8 @@ export class SectorFx {
     const mesh = new THREE.Mesh(geo, mat)
     mesh.frustumCulled = false
     mesh.name = `fog:${e.sector}`
+    // Its extent, map-local, for "is any fog in view at all" (renderFog).
+    geo.computeBoundingBox()
     return mesh
   }
 
@@ -525,20 +551,36 @@ export class SectorFx {
   renderFog (renderer, scene, camera) {
     if (!this.hasFog) return
     const THREE = this.THREE
-    const size = renderer.getDrawingBufferSize(new THREE.Vector2())
-    if (!this.depthTarget || this.depthTarget.width !== size.x || this.depthTarget.height !== size.y) {
+    // NONE IN VIEW, NO PASS: a level whose fog is behind the camera or across
+    // the map pays nothing for it.
+    if (!this.fogInView(camera)) { this.lastPass = 'skipped'; return }
+    this.lastPass = 'drawn'
+    const full = renderer.getDrawingBufferSize(this._size ??= new THREE.Vector2())
+    const w = Math.max(1, Math.ceil(full.x * this.fogScale))
+    const h = Math.max(1, Math.ceil(full.y * this.fogScale))
+    if (!this.depthTarget || this.depthTarget.width !== w || this.depthTarget.height !== h) {
       this.depthTarget?.dispose()
-      const dt = new THREE.DepthTexture(size.x, size.y)
+      this.fogTarget?.dispose()
+      const dt = new THREE.DepthTexture(w, h)
       dt.type = THREE.UnsignedIntType
-      this.depthTarget = new THREE.WebGLRenderTarget(size.x, size.y, { depthTexture: dt, depthBuffer: true })
+      this.depthTarget = new THREE.WebGLRenderTarget(w, h, { depthTexture: dt, depthBuffer: true })
+      this.fogTarget = new THREE.WebGLRenderTarget(w, h, { depthBuffer: false })
     }
     const prevTarget = renderer.getRenderTarget()
     const prevAuto = renderer.autoClear
+    const prevClear = renderer.getClearColor(this._clear ??= new THREE.Color())
+    const prevAlpha = renderer.getClearAlpha()
     // The frame's draw counts go on counting through these passes rather than
     // being reset by them, so the HUD reports the whole frame's cost.
     const prevInfo = renderer.info.autoReset
     renderer.info.autoReset = false
+
+    // 1. WHERE THE SCENE STOPS, as cheaply as depth can be had: colour writes
+    // masked; opaque surfaces with one trivial material instead of their own
+    // lighting; cut-out sprites with theirs, so fog shows through their holes;
+    // and whatever writes no depth (particles, overlays, lines) not drawn.
     const color = renderer.state.buffers.color
+    const restore = this.leanDepthScene(scene)
     renderer.setRenderTarget(this.depthTarget)
     renderer.clear(true, true, false)
     color.setMask(false)
@@ -546,21 +588,112 @@ export class SectorFx {
     renderer.render(scene, camera)
     color.setLocked(false)
     color.setMask(true)
-    renderer.setRenderTarget(prevTarget)
+    restore()
+
+    // 2. THE FOG, into its own target: cleared to nothing, prisms added on.
     for (const m of this.fogMaterials) {
       m.uniforms.sceneDepth.value = this.depthTarget.depthTexture
-      m.uniforms.resolution.value.set(size.x, size.y)
+      m.uniforms.resolution.value.set(w, h)
       m.uniforms.projInv.value.copy(camera.projectionMatrixInverse)
     }
+    renderer.setRenderTarget(this.fogTarget)
+    renderer.setClearColor(0x000000, 0)
+    renderer.clear(true, false, false)
     renderer.autoClear = false
     renderer.render(this.fogScene, camera)
+
+    // 3. LAID OVER THE PICTURE, once.
+    renderer.setRenderTarget(prevTarget)
+    const comp = this.#composite()
+    comp.material.uniforms.fog.value = this.fogTarget.texture
+    renderer.render(comp, camera)
+
+    renderer.setClearColor(prevClear, prevAlpha)
     renderer.autoClear = prevAuto
     renderer.info.autoReset = prevInfo
+  }
+
+  /** Whether any fog prism is in `camera`'s view (map-local boxes, placed). */
+  fogInView (camera) {
+    const THREE = this.THREE
+    camera.updateMatrixWorld()
+    this._frustum ??= new THREE.Frustum()
+    this._m4 ??= new THREE.Matrix4()
+    this._box ??= new THREE.Box3()
+    this._frustum.setFromProjectionMatrix(this._m4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse))
+    for (const m of this.fogScene.children) {
+      const b = m.geometry.boundingBox
+      if (!b) return true
+      this._box.copy(b).translate(m.position)
+      if (this._frustum.intersectsBox(this._box) || this._box.containsPoint(camera.position)) return true
+    }
+    return false
+  }
+
+  // The scene made cheap for its depth pass; returns the undo.
+  leanDepthScene (scene) {
+    const THREE = this.THREE
+    this._depthMats ??= new Map()
+    const lean = (side) => {
+      let m = this._depthMats.get(side)
+      if (!m) { m = new THREE.MeshBasicMaterial({ colorWrite: false, side }); this._depthMats.set(side, m) }
+      return m
+    }
+    const swapped = []
+    const hidden = []
+    scene.traverseVisible((o) => {
+      if (o === scene) return
+      const mat = o.material
+      if (!o.isMesh || Array.isArray(mat) || !mat) {
+        if (o.isLine || o.isPoints || o.isSprite) { hidden.push(o) }
+        return
+      }
+      if (mat.depthWrite === false) { hidden.push(o); return }
+      // A cut-out (a sprite's transparent pixels) keeps its own material, or
+      // the fog would stop at the edge of the quad rather than of the picture.
+      if (mat.alphaTest > 0 || mat.alphaToCoverage) return
+      if (o.isSkinnedMesh || o.isInstancedMesh) return
+      swapped.push([o, mat])
+      o.material = lean(mat.side)
+    })
+    for (const o of hidden) o.visible = false
+    return () => {
+      for (const [o, mat] of swapped) o.material = mat
+      for (const o of hidden) o.visible = true
+    }
+  }
+
+  #composite () {
+    if (this._comp) return this._comp
+    const THREE = this.THREE
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { fog: { value: null } },
+      vertexShader: COMPOSITE_VS,
+      fragmentShader: COMPOSITE_FS,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneMinusSrcAlphaFactor,
+      blendSrcAlpha: THREE.OneFactor,
+      blendDstAlpha: THREE.OneMinusSrcAlphaFactor
+    })
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat)
+    quad.frustumCulled = false
+    this._comp = new THREE.Scene()
+    this._comp.add(quad)
+    this._comp.material = mat
+    return this._comp
   }
 
   dispose () {
     for (const m of this.meshes) { m.geometry.dispose(); m.material.dispose() }
     this.depthTarget?.dispose()
+    this.fogTarget?.dispose()
+    for (const m of this._depthMats?.values() ?? []) m.dispose()
+    if (this._comp) { this._comp.children[0].geometry.dispose(); this._comp.material.dispose() }
     this.root.removeFromParent()
     this.meshes = []
   }

@@ -146,5 +146,40 @@ const MAP = {
   fx.dispose()
 }
 
+// --- the fog pass, made cheaper ------------------------------------------------
+{
+  const map = { ...MAP, fx: [{ sector: 0, kind: KIND.FOG, params: { density: 0.2, color: 0x708090, alpha: 1, top: 1.5 } }] }
+  const fx = new SectorFx({ THREE, map })
+  const box = fx.fogScene.children[0].geometry.boundingBox
+  const mid = box.getCenter(new THREE.Vector3())
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 500)
+  cam.position.set(mid.x + 20, mid.y + 20, mid.z + 20)
+  cam.lookAt(mid)
+  check(fx.fogInView(cam), 'NONE IN VIEW, NO PASS: a camera looking at the fog sees it')
+  cam.lookAt(mid.x + 60, mid.y + 60, mid.z + 60)
+  check(!fx.fogInView(cam), 'and one looking away does not -- the whole pass is skipped')
+  cam.position.copy(mid)
+  cam.lookAt(mid.x + 50, mid.y, mid.z)
+  check(fx.fogInView(cam), 'standing in it, it is in view whichever way you look')
+
+  // The depth pass's scene: opaque surfaces on one cheap material, cut-outs on
+  // their own, and what writes no depth left out -- then all put back.
+  const scene = new THREE.Scene()
+  const opaque = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshLambertMaterial({ side: THREE.DoubleSide }))
+  const cutout = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({ alphaTest: 0.5, transparent: true }))
+  const particles = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({ depthWrite: false }))
+  const line = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial())
+  scene.add(opaque, cutout, particles, line)
+  const was = [opaque.material, cutout.material]
+  const undo = fx.leanDepthScene(scene)
+  check(opaque.material !== was[0] && opaque.material.colorWrite === false && opaque.material.side === THREE.DoubleSide,
+        'an opaque surface draws its depth with a cheap material, on the same side(s)')
+  check(cutout.material === was[1], "a cut-out keeps its own, so the fog shows through a sprite's holes")
+  check(!particles.visible && !line.visible, 'what writes no depth (particles) and lines are not drawn')
+  undo()
+  check(opaque.material === was[0] && particles.visible && line.visible, 'and everything is put back')
+  fx.dispose()
+}
+
 console.log(`\nsectorfx: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)
