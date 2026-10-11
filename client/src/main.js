@@ -2301,11 +2301,28 @@ addEventListener('mousedown', (e) => {
   if (document.pointerLockElement !== renderer.domElement &&
       (uiModal || e.target?.closest?.('.dnp-ui'))) return
   if (document.pointerLockElement !== renderer.domElement) {
-    renderer.domElement.requestPointerLock?.()
+    takePointer()
     return
   }
   mouseHeld.add(e.button)
 })
+// TAKING THE POINTER, which a browser may refuse: WebKit (Safari, the macOS
+// Tauri app) will not lock it for a page without focus -- the click that
+// activates a window is exactly that -- and says so by REJECTING the promise
+// requestPointerLock returns. Uncaught, the rejection reached index.html's
+// error line as "Pointer lock requires window to have focus". So: without
+// focus, ask for it and wait for the next click; and a refusal is a hint on
+// screen, not an error.
+let pointerHint = false
+const showPointerHint = () => { pointerHint = true; say('Click to look around') }
+function takePointer () {
+  if (!document.hasFocus()) { window.focus(); showPointerHint(); return }
+  try {
+    const p = renderer.domElement.requestPointerLock?.()
+    p?.catch?.(() => showPointerHint())
+  } catch { showPointerHint() }
+}
+document.addEventListener('pointerlockerror', () => showPointerHint())
 addEventListener('mouseup', (e) => mouseHeld.delete(e.button))
 // The right button is the second trigger, not the browser's menu.
 addEventListener('contextmenu', (e) => { if (isFps()) e.preventDefault() })
@@ -2314,6 +2331,7 @@ addEventListener('mousemove', (e) => {
 })
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== renderer.domElement) mouseHeld.clear()
+  else if (pointerHint) { pointerHint = false; say('') }
 })
 
 // The last direction the agent was actually pointed. Brad 0 is due east, not
