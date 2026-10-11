@@ -563,6 +563,8 @@ function panelsChanged () {
   uiModal = now
   touch?.setBlocked(now)
   if (now && document.pointerLockElement) document.exitPointerLock?.()
+  // The panel that had the mouse is gone: the view takes it back.
+  if (!now) retakePointer()
 }
 // Why the transport closed, if it has. Read by the handshake loop, which must
 // stop waiting for a reply that a closed connection can never deliver.
@@ -2314,13 +2316,25 @@ addEventListener('mousedown', (e) => {
 // focus, ask for it and wait for the next click; and a refusal is a hint on
 // screen, not an error.
 let pointerHint = false
+// Whether the controls were taken (a cutscene) on the last frame.
+let cutsceneHeld = false
 const showPointerHint = () => { pointerHint = true; say('Click to look around') }
 function takePointer () {
-  if (!document.hasFocus()) { window.focus(); showPointerHint(); return }
+  // Focus first, then ask anyway: a webview that goes on reporting no focus
+  // must not turn every click into the hint and nothing else. A refusal is
+  // caught below and is the hint.
+  if (!document.hasFocus()) window.focus()
   try {
     const p = renderer.domElement.requestPointerLock?.()
     p?.catch?.(() => showPointerHint())
   } catch { showPointerHint() }
+}
+// TAKEN BACK when what had it is over: a cutscene (the controls return) or a
+// modal panel closing. Browsers let a page that released the pointer itself
+// take it again without a click; where one refuses, the hint says to click.
+function retakePointer () {
+  if (!isFps() || document.pointerLockElement === renderer.domElement || uiModal) return
+  takePointer()
 }
 document.addEventListener('pointerlockerror', () => showPointerHint())
 addEventListener('mouseup', (e) => mouseHeld.delete(e.button))
@@ -2330,8 +2344,12 @@ addEventListener('mousemove', (e) => {
   if (isFps() && document.pointerLockElement === renderer.domElement && !controlsTaken()) fpsLook.move(e.movementX, e.movementY)
 })
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== renderer.domElement) mouseHeld.clear()
-  else if (pointerHint) { pointerHint = false; say('') }
+  if (document.pointerLockElement !== renderer.domElement) {
+    mouseHeld.clear()
+    // Lost in first-person play (Escape, a switch of window): say how to get
+    // it back -- unless a panel or a cutscene has the screen, which is why.
+    if (isFps() && !uiModal && !controlsTaken()) showPointerHint()
+  } else if (pointerHint) { pointerHint = false; say('') }
 })
 
 // The last direction the agent was actually pointed. Brad 0 is due east, not
@@ -2718,6 +2736,13 @@ function frame (now) {
   if (LIVE) drainSeam()
 
   // Turning the view is the player's -- unless a cinematic took the controls.
+  // A CUTSCENE OVER: the controls are back, and in first person so is the view
+  // -- the pointer is taken back rather than waiting to be clicked for.
+  {
+    const taken = controlsTaken()
+    if (cutsceneHeld && !taken) retakePointer()
+    cutsceneHeld = taken
+  }
   const turnable = !camLockYaw && !controlsTaken()
   if (turnable && held.has('KeyQ')) yaw -= 1.5 * dt
   if (turnable && held.has('KeyR')) yaw += 1.5 * dt
