@@ -22,6 +22,7 @@ Run them with `engine/scripts/check_mobs.sh`, which is wired into `engine/script
 | `inexact_number.lua` | a non-integral Lua number where fx is wanted |
 | `ticks_no_next.lua` | a state that runs out with nowhere to go |
 | `seq_after_end.lua` | a sequence entry past the end of its state |
+| `missile_damage.lua` | a `damage` field on a missile (damage is an `on_hit` action); written by hand, not generated |
 
 Generated from the good table by `engine/tools/mobcheck/make_controls.py`, so they
 stay one edit apart from it: a control that has drifted into being broken for a

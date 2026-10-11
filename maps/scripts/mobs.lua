@@ -450,6 +450,35 @@ end
 --- The missile definitions by name, for weapons.lua's compiler in this VM.
 function M.missile_defs() return missiles end
 
+-- ONE MISSILE'S FIELDS, against the vocabulary: names and values. Shared by
+-- mobs.load and mobs.add_missiles, which used to accept anything at all.
+local function check_missile_fields(name, m)
+  local where = ("missile '%s'"):format(name)
+  -- Its body, defaulted to its name. Same rule as a mob's, below.
+  m.prop = m.prop or name
+  for k in pairs(m) do
+    if MISSILE_FIELD[k] == nil then
+      -- The one a missile is most often given by mistake: its damage is what
+      -- it DOES on arrival, so it is an action -- and a field that was
+      -- accepted and never read let a rocket do none.
+      if k == "damage" then
+        complain("%s: has no field named `damage` -- what it does on arrival goes in " ..
+                 "`on_hit`, e.g. on_hit = { { action = \"damage\", amount = %s } }",
+                 where, tostring(m.damage))
+      else
+        complain("%s: has no field named `%s`", where, k)
+      end
+    end
+  end
+  for _, f in ipairs(vocab.missile_fields) do
+    if m[f.name] == nil then
+      if not f.optional then complain("%s: needs `%s`", where, f.name) end
+    else
+      m[f.name] = check_value(f, m[f.name], where)
+    end
+  end
+end
+
 function M.load(data)
   if type(data) ~= "table" then
     error("mobs.load: expected a table of { missiles = ..., mobs = ... }")
@@ -467,21 +496,7 @@ function M.load(data)
   -- Missiles first: mobs reference them, and a reference to something not yet
   -- read would be reported as missing when it is only late.
   for name, m in pairs(data.missiles or {}) do
-    local where = ("missile '%s'"):format(name)
-    -- Its body, defaulted to its name. Same rule as a mob's, below.
-    m.prop = m.prop or name
-    for k in pairs(m) do
-      if MISSILE_FIELD[k] == nil then
-        complain("%s: has no field named `%s`", where, k)
-      end
-    end
-    for _, f in ipairs(vocab.missile_fields) do
-      if m[f.name] == nil then
-        if not f.optional then complain("%s: needs `%s`", where, f.name) end
-      else
-        m[f.name] = check_value(f, m[f.name], where)
-      end
-    end
+    check_missile_fields(name, m)
     missiles[name] = m
   end
 
@@ -2786,6 +2801,10 @@ end
 -- it survives to production.
 function M.add_missiles(t)
   local added, clashed = 0, 0
+  -- CHECKED AS mobs.load CHECKS ITS OWN: fields, values, and the actions they
+  -- run. All of this batch go in first, so one may name another; one with a
+  -- problem is then taken out again and said, rather than flying wrong.
+  local fresh = {}
   for name, def in pairs(t or {}) do
     if missiles[name] ~= nil then
       clashed = clashed + 1
@@ -2793,6 +2812,26 @@ function M.add_missiles(t)
             :format(name))
     else
       missiles[name] = def
+      fresh[#fresh + 1] = name
+    end
+  end
+  table.sort(fresh)
+  for _, name in ipairs(fresh) do
+    local def = missiles[name]
+    local before = #problems
+    if type(def) ~= "table" then
+      complain("missile '%s': is not a table", name)
+    else
+      check_missile_fields(name, def)
+      check_action_list(def.on_hit, ("missile '%s' on_hit"):format(name), nil)
+      check_action_list(def.on_expire, ("missile '%s' on_expire"):format(name), nil)
+    end
+    if #problems > before then
+      for i = before + 1, #problems do print("mobs: " .. problems[i]) end
+      for i = #problems, before + 1, -1 do problems[i] = nil end
+      missiles[name] = nil
+      clashed = clashed + 1
+    else
       added = added + 1
     end
   end

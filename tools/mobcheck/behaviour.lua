@@ -623,5 +623,29 @@ do
   CHECK(hit_at(2 + range - 0.1) and not hit_at(2 + range + 0.1), "a body with no height: the same rule, from its feet")
 end
 
+-- ---------------------------------------------------------------------------
+print("mobs: a missile added later is checked as the loader checks its own")
+do
+  local said = {}
+  local real = print
+  _G.print = function(m) said[#said + 1] = tostring(m) end
+  local added, refused = mobs.add_missiles{
+    good_dart = { prop = "fireball", speed = "10", life = 60,
+                  on_hit = { { action = "damage", amount = 7 } } },
+    dart_with_damage = { prop = "fireball", speed = "10", life = 60, damage = 7 },
+    dart_with_typo = { prop = "fireball", speed = "10", life = 60,
+                       on_hit = { { action = "damgae", amount = 7 } } },
+  }
+  _G.print = real
+  CHECK(added == 1 and refused == 2, ("one added, two refused (%s, %s)"):format(tostring(added), tostring(refused)))
+  CHECK(mobs.has_missile("good_dart"), "CONTROL: the good one flies")
+  CHECK(not mobs.has_missile("dart_with_damage") and not mobs.has_missile("dart_with_typo"),
+        "the bad ones are not registered")
+  local all = table.concat(said, "\n")
+  CHECK(all:find("`damage`", 1, true) and all:find("on_hit", 1, true),
+        "a `damage` field is refused with where it goes")
+  CHECK(all:find("damgae", 1, true) ~= nil, "and a typo'd action in on_hit is said")
+end
+
 print(("== %d checks, %d failures =="):format(checks, fails))
 os.exit(fails == 0 and 0 or 1)

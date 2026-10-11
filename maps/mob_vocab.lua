@@ -894,7 +894,6 @@ mob_vocab = {
             "radius it hits with. Defaults to the missile's own name, as a " ..
             "mob's does." },
     { name = "speed", type = "fx", doc = "World units per second." },
-    { name = "damage", type = "int", optional = true },
     { name = "radius", type = "fx", optional = true,
       doc = "What it collides with, as a radius. Absent means the `prop`'s " ..
             "own radius from assets/props.txt, which is usually right -- a " ..
@@ -922,7 +921,9 @@ mob_vocab = {
     { name = "burst_ticks", type = "int", optional = true },
     { name = "on_hit", type = "actions", optional = true,
       doc = "Runs when it reaches something, with the thing it reached as the " ..
-            "target. This is where the damage and the splash go -- so a " ..
+            "target. This is where the damage and the splash go -- there is " ..
+            "no `damage` field on a missile, and one is refused with this " ..
+            "hint -- so a " ..
             "rocket is a missile whose on_hit is a damage_area, and nothing " ..
             "in the runtime knows what a rocket is." },
     { name = "on_expire", type = "actions", optional = true },

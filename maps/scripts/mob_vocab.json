@@ -1009,11 +1009,6 @@
       "type": "fx"
     },
     {
-      "name": "damage",
-      "optional": true,
-      "type": "int"
-    },
-    {
       "doc": "What it collides with, as a radius. Absent means the `prop`'s own radius from assets/props.txt, which is usually right -- a missile that hits with a different size than it is drawn is a missile players learn to distrust.",
       "name": "radius",
       "optional": true,
@@ -1059,7 +1054,7 @@
       "type": "int"
     },
     {
-      "doc": "Runs when it reaches something, with the thing it reached as the target. This is where the damage and the splash go -- so a rocket is a missile whose on_hit is a damage_area, and nothing in the runtime knows what a rocket is.",
+      "doc": "Runs when it reaches something, with the thing it reached as the target. This is where the damage and the splash go -- there is no `damage` field on a missile, and one is refused with this hint -- so a rocket is a missile whose on_hit is a damage_area, and nothing in the runtime knows what a rocket is.",
       "name": "on_hit",
       "optional": true,
       "type": "actions"
