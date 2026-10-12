@@ -91,13 +91,38 @@ local nodes = {
   { id = "say", type = "action", a = "log", text = "arrived in " .. L },
   { id = "l", type = "when_player_leaves" },
   { id = "bye", type = "action", a = "log", text = "left " .. L },
+  { id = "d", type = "when_dies", what = "players" },
+  { id = "rip", type = "action", a = "log", text = "died in " .. L },
 }
-local links = { { "a.then", "say.in" }, { "l.then", "bye.in" } }
+local links = { { "a.then", "say.in" }, { "l.then", "bye.in" }, { "d.then", "rip.in" } }
 if L == 1 then
   nodes[#nodes + 1] = { id = "go", type = "teleport", spawn = "start" }
   links[#links + 1] = { "say.then", "go.in" }
 end
 graphs.load({ graph = 1, name = "gaps" .. L, nodes = nodes, links = links }, "gaps" .. L)
+-- seam_b reaches across the seam twice, once the player in seam_a is close
+-- (in seam_b's terms, x > -10 and a sector it cannot name). First (§6) it kills
+-- them, as a monster of its own would. Then, when they come back, (§7) it
+-- takes them across into itself and fades their screen in the same tick.
+if L == 1 then
+  local stage = 0
+  function on_tick()
+    for _, p in ipairs(dnp.players() or {}) do
+      if p:sector() == -1 and p:pos().x > fx.int(-10) then
+        if stage == 0 then
+          stage = 1
+          print("[gaps] seam_b kills the player in seam_a")
+          mobs.hurt(p, 1000, nil)
+        elseif stage == 1 then
+          stage = 2
+          p:teleport(vec3.new(fx.int(4), fx.int(20), p:pos().z))
+          dnp.screen(p, { fade = 0, fade_ms = 250 })
+          print("[gaps] seam_b takes the player across and fades")
+        end
+      end
+    end
+  end
+end
 `
 writeFileSync(GAPS, gaps(true))
 
@@ -107,6 +132,7 @@ const args = ['--port', String(LINK_PORT), '--map', A, '--map', B, '--map', C,
               '--props', join(REPO, 'modules', 'doom2', 'assets', 'props.txt'),
               '--script', join(S, 'trigger_vocab.lua'), '--script', join(S, 'triggers.lua'),
               '--script', join(S, 'graph_vocab.lua'), '--script', join(S, 'graphs.lua'),
+              '--script', join(S, 'mob_vocab.lua'), '--script', join(S, 'mobs.lua'),
               '--script', GAPS]
 const server = spawn(serverBin, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
 let log = ''
@@ -133,6 +159,7 @@ try {
   const cw = control.writable.getWriter()
   const dw = wt.datagrams.createWritable().getWriter()
   const welcomes = []
+  const screens = []
   const snapshots = []
   ;(async () => {
     const r = control.readable.getReader()
@@ -148,6 +175,7 @@ try {
           const m = decodeControlMessage(buf.subarray(0, 4 + len))
           buf = buf.subarray(4 + len)
           if (m?.type === MSG.WELCOME) welcomes.push(m)
+          else if (m?.type === MSG.SCREEN_SET) screens.push({ m, at: log.length })
         }
       }
     } catch {}
@@ -185,7 +213,7 @@ try {
       clientTick: tick, ackSnapshotTick: snapshots.at(-1)?.serverTick ?? 0, frames: history
     }))
   }
-  for (let i = 0; i < 700 && !/arrived in 1/.test(log); i++) { await walkEast(); await sleep(6) }
+  for (let i = 0; i < 2500 && !/arrived in 1/.test(log); i++) { await walkEast(); await sleep(6) }
   for (let i = 0; i < 60; i++) { await walkEast(); await sleep(6) }
   await sleep(300)
 
@@ -207,9 +235,22 @@ try {
   check(!/no spawn point tagged/.test(log), 'and the graph teleporting to it is not refused')
   const xs = snapshots.filter((s) => s?.self).map((s) => fxToNumber(s.self.pos.x))
   let jump = null
-  for (let i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] > 10) { jump = [xs[i - 1], xs[i]]; break }
+  for (let i = 1; i < xs.length; i++) {
+    if (xs[i] - xs[i - 1] > 10 && Math.abs(xs[i] - (PITCH + 34)) < 0.5) { jump = [xs[i - 1], xs[i]]; break }
+  }
   check(jump !== null && Math.abs(jump[1] - (PITCH + 34)) < 0.5,
         `the arrival's teleport lands on the spawn, one pitch east (${jump ? jump.map((x) => x.toFixed(2)).join(' -> ') : 'no jump'})`)
+
+  console.log('§6 a death across the seam')
+  check(/seam_b kills the player in seam_a/.test(log), 'CONTROL: seam_b hits the player standing in seam_a')
+  check(/died in 0/.test(log), "seam_a, the player's level, hears of the death")
+  check(!/died in 1/.test(log), "and seam_b, the killer's, does not")
+
+  console.log('§7 a fade across the seam')
+  const across = at(/seam_b takes the player across and fades/)
+  check(across >= 0, 'CONTROL: seam_b takes the player across and fades in the same tick')
+  check(screens.some((s) => s.m.fields.some((f) => f.id === 0 && f.value === 0)),
+        `the fade reaches the player (${screens.length} screen message(s))`)
 
   console.log('§4 a failed level, fixed')
   check(failedFirst, 'CONTROL: seam_c failed to load at the join, with its own error')

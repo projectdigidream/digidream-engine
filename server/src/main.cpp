@@ -3327,8 +3327,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // cue like everyone did (docs/protocol.md §11.1).
         for (auto& kv : sessions) {
             Session& s = kv.second;
-            if (!s.has_agent || s.level != level_index) continue;
+            // TO A PLAYER: wherever in this world they are counted. A level
+            // that moves its player across a seam and speaks to them in the
+            // same tick is speaking before the walk is noticed (the session's
+            // level follows a tick later), so filtering by level dropped it --
+            // a fade to clear lost, a black screen for good
+            // (docs/REGION_GAPS.md §7). The level only says who "everyone" is.
+            if (!same_world(s, level_index)) continue;
             if (agent >= 0 && s.agent != static_cast<u32>(agent)) continue;
+            if (agent < 0 && s.level != level_index) continue;
             send_music(s, m);
         }
     }
@@ -3358,8 +3365,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // rectangle nothing will ever lift.
         for (auto& kv : sessions) {
             Session& s = kv.second;
-            if (!s.has_agent || s.level != level_index) continue;
+            // TO A PLAYER: wherever in this world they are counted. A level
+            // that moves its player across a seam and speaks to them in the
+            // same tick is speaking before the walk is noticed (the session's
+            // level follows a tick later), so filtering by level dropped it --
+            // a fade to clear lost, a black screen for good
+            // (docs/REGION_GAPS.md §7). The level only says who "everyone" is.
+            if (!same_world(s, level_index)) continue;
             if (agent >= 0 && s.agent != static_cast<u32>(agent)) continue;
+            if (agent < 0 && s.level != level_index) continue;
             send_screen(s, sc);
         }
     }

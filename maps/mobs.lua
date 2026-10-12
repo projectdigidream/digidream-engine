@@ -2438,6 +2438,10 @@ local function pain_ticks_for(m, rolled, amount)
   return math.max(1, ticks)
 end
 
+-- True while a hit handed over from another level is being taken here (see
+-- `hurt_player`), so it is never handed on again.
+local handed_over = false
+
 function hurt(target, amount, by)
   if target == nil or not target:valid() then return end
   local m = live[target:index()]
@@ -2467,6 +2471,17 @@ function hurt(target, amount, by)
     -- down with it. Checked rather than assumed: the two handle kinds are
     -- different userdata types and only one of them answers this.
     if target.hp == nil then return end
+
+    -- ANOTHER LEVEL'S PLAYER. In a region a monster of ours can hit a player
+    -- standing next door (a sector this level cannot name: -1). What a hit,
+    -- a death and a respawn mean is the level the player is IN -- its hooks,
+    -- its graphs' when_hurt / when_dies, its home -- so the hit is handed over;
+    -- kept here, a player killed across a seam came back at this level's start
+    -- (docs/REGION_GAPS.md §6). Taken here when that level keeps no mobs.lua.
+    if not handed_over and target.sector ~= nil and target:sector() == -1 and dnp.call_level ~= nil and
+       dnp.call_level(target, "hurt_player", amount, by and by.e or nil) then
+      return
+    end
 
     if M.on_player_hurt then
       M.on_player_hurt(target, amount, by)
@@ -2739,6 +2754,18 @@ if dnp ~= nil and dnp.export ~= nil then
   dnp.export("weapon_runtime", function(...) return M.weapon_runtime(...) end)
   -- A hit from a neighbouring level, on one of ours (see hurt). Who dealt it
   -- comes as an entity; it is somebody else's, so it is nobody's record here.
+  -- A hit on one of OUR players, from a neighbouring level's monster (see
+  -- hurt). Taken as if dealt here.
+  dnp.export("hurt_player", function(target, amount, attacker)
+    if target == nil or not target:valid() or target.hp == nil then return false end
+    local by = nil
+    if attacker ~= nil and attacker:valid() then by = synthetic_owner(attacker, attacker:facing()) end
+    handed_over = true
+    local ok, err = pcall(hurt, target, amount, by)
+    handed_over = false
+    if not ok then error(err, 0) end
+    return true
+  end)
   dnp.export("hurt_mob", function(target, amount, attacker)
     if live[target:index()] == nil then return false end
     local by = nil
