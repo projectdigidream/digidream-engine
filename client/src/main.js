@@ -2326,15 +2326,36 @@ const showPointerHint = (why = null) => {
   if (why) nativeFocus()
   if (why) pointerRefusal = why
   dnpStats.pointerRefusal = pointerRefusal
-  say(pointerRefusal ? `Click to look around  (${pointerRefusal})` : 'Click to look around')
+  // The refusal, and where focus was: the page's own view of it and, in the
+  // Tauri app, the window's as the runner saw it.
+  const where = pointerRefusal
+    ? `; page ${document.hasFocus() ? 'focused' : 'not focused'}${nativeSaw ? `; ${nativeSaw}` : ''}`
+    : ''
+  say(pointerRefusal ? `Click to look around  (${pointerRefusal}${where})` : 'Click to look around')
 }
 // The shell's own focus, where it has one (the Tauri runner: the window and its
 // web view, natively). Asynchronous, so it helps the NEXT request rather than
 // this one -- which is why it is also asked for when a cutscene ends and when
 // a request is refused.
-const nativeFocus = () => { try { if (typeof window.dnpNative?.focus === 'function') window.dnpNative.focus() } catch {} }
+// Resolves with what the shell saw (shown when a lock is still refused), or null.
+let nativeSaw = null
+const nativeFocus = () => {
+  try {
+    if (typeof window.dnpNative?.focus !== 'function') return Promise.resolve(null)
+    return Promise.resolve(window.dnpNative.focus()).then((saw) => { nativeSaw = saw ?? null; return saw })
+  } catch { return Promise.resolve(null) }
+}
 function takePointer () {
-  nativeFocus()
+  // Focused natively first; and once that has happened, asked AGAIN -- WebKit
+  // may still count it as part of this click. Only if the first ask failed.
+  let first = 'pending'
+  nativeFocus().then(() => {
+    if (first !== 'refused' || document.pointerLockElement === renderer.domElement) return
+    try {
+      const p = renderer.domElement.requestPointerLock?.()
+      p?.catch?.((e) => showPointerHint(e?.message || String(e)))
+    } catch (e) { showPointerHint(e?.message || String(e)) }
+  })
   // FOCUS FIRST, ON THE PAGE ITSELF. window.focus() does nothing inside a
   // macOS webview (WKWebView, the Tauri app), and WebKit refuses the lock to a
   // page without focus -- so the canvas, made focusable, is focused, which
@@ -2346,8 +2367,8 @@ function takePointer () {
   if (!document.hasFocus()) window.focus()
   try {
     const p = el.requestPointerLock?.()
-    p?.catch?.((e) => showPointerHint(e?.message || String(e)))
-  } catch (e) { showPointerHint(e?.message || String(e)) }
+    p?.then?.(() => { first = 'granted' }, (e) => { first = 'refused'; showPointerHint(e?.message || String(e)) })
+  } catch (e) { first = 'refused'; showPointerHint(e?.message || String(e)) }
 }
 // TAKEN BACK when what had it is over: a cutscene (the controls return) or a
 // modal panel closing. Browsers let a page that released the pointer itself
