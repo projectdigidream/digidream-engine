@@ -2321,6 +2321,7 @@ let pointerRefusal = null
 // Whether the controls were taken (a cutscene) on the last frame.
 let cutsceneHeld = false
 const showPointerHint = (why = null) => {
+  if (why) plog(`refused: ${why}`)
   pointerHint = true
   // Refused: get focus back natively now, so the next click finds it there.
   if (why) nativeFocus()
@@ -2337,6 +2338,20 @@ const showPointerHint = (why = null) => {
 // web view, natively). Asynchronous, so it helps the NEXT request rather than
 // this one -- which is why it is also asked for when a cutscene ends and when
 // a request is refused.
+// THE POINTER'S TRAIL, to the shell's own log where it has one (the Tauri
+// runner prints it): locks, unlocks, refusals, cutscenes, focus. A webview
+// has no console anybody can read, and pointer lock is decided by state no
+// test browser reproduces.
+const plog = (m) => {
+  try {
+    if (typeof window.dnpNative?.log === 'function') {
+      window.dnpNative.log(`[pointer] ${(performance.now() / 1000).toFixed(2)} ${m} (page ${document.hasFocus() ? 'focused' : 'not focused'}, ${document.visibilityState})`)
+    }
+  } catch {}
+}
+addEventListener('focus', () => plog('window focus'))
+addEventListener('blur', () => plog('window blur'))
+document.addEventListener('visibilitychange', () => plog(`visibility ${document.visibilityState}`))
 // Resolves with what the shell saw (shown when a lock is still refused), or null.
 let nativeSaw = null
 const nativeFocus = () => {
@@ -2346,6 +2361,7 @@ const nativeFocus = () => {
   } catch { return Promise.resolve(null) }
 }
 function takePointer () {
+  plog('asking for the pointer')
   // Focused natively first; and once that has happened, asked AGAIN -- WebKit
   // may still count it as part of this click. Only if the first ask failed.
   let first = 'pending'
@@ -2386,6 +2402,7 @@ addEventListener('mousemove', (e) => {
   if (isFps() && document.pointerLockElement === renderer.domElement && !controlsTaken()) fpsLook.move(e.movementX, e.movementY)
 })
 document.addEventListener('pointerlockchange', () => {
+  plog(document.pointerLockElement === renderer.domElement ? 'locked' : 'unlocked')
   if (document.pointerLockElement !== renderer.domElement) {
     mouseHeld.clear()
     // Lost in first-person play (Escape, a switch of window): say how to get
@@ -2782,6 +2799,7 @@ function frame (now) {
   // -- the pointer is taken back rather than waiting to be clicked for.
   {
     const taken = controlsTaken()
+    if (taken !== cutsceneHeld) plog(taken ? 'cutscene: controls taken' : 'cutscene: controls back')
     if (cutsceneHeld && !taken) retakePointer()
     cutsceneHeld = taken
   }
