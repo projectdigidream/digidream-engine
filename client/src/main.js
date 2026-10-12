@@ -2360,18 +2360,18 @@ const nativeFocus = () => {
     return Promise.resolve(window.dnpNative.focus()).then((saw) => { nativeSaw = saw ?? null; return saw })
   } catch { return Promise.resolve(null) }
 }
-function takePointer () {
-  plog('asking for the pointer')
-  // Focused natively first; and once that has happened, asked AGAIN -- WebKit
-  // may still count it as part of this click. Only if the first ask failed.
-  let first = 'pending'
-  nativeFocus().then(() => {
-    if (first !== 'refused' || document.pointerLockElement === renderer.domElement) return
-    try {
-      const p = renderer.domElement.requestPointerLock?.()
-      p?.catch?.((e) => showPointerHint(e?.message || String(e)))
-    } catch (e) { showPointerHint(e?.message || String(e)) }
-  })
+// `auto`: asked without a click (a cutscene ended, a panel closed). WebKit
+// refuses those ("requires a user gesture"), which is expected and not news:
+// the hint then just says to click, and keeps any earlier, real reason out of
+// the way of the next click's own. No second ask after the native focus: it
+// would be outside the click too, and refused for that.
+function takePointer (auto = false) {
+  plog(auto ? 'asking for the pointer (no click)' : 'asking for the pointer')
+  const refused = (e) => {
+    const why = e?.message || String(e)
+    if (auto) { plog(`refused: ${why}`); pointerRefusal = null; nativeFocus(); showPointerHint(); return }
+    showPointerHint(why)
+  }
   // FOCUS FIRST, ON THE PAGE ITSELF. window.focus() does nothing inside a
   // macOS webview (WKWebView, the Tauri app), and WebKit refuses the lock to a
   // page without focus -- so the canvas, made focusable, is focused, which
@@ -2383,8 +2383,8 @@ function takePointer () {
   if (!document.hasFocus()) window.focus()
   try {
     const p = el.requestPointerLock?.()
-    p?.then?.(() => { first = 'granted' }, (e) => { first = 'refused'; showPointerHint(e?.message || String(e)) })
-  } catch (e) { first = 'refused'; showPointerHint(e?.message || String(e)) }
+    p?.catch?.(refused)
+  } catch (e) { refused(e) }
 }
 // TAKEN BACK when what had it is over: a cutscene (the controls return) or a
 // modal panel closing. Browsers let a page that released the pointer itself
@@ -2392,9 +2392,11 @@ function takePointer () {
 function retakePointer () {
   if (!isFps() || document.pointerLockElement === renderer.domElement || uiModal) return
   nativeFocus()
-  takePointer()
+  takePointer(true)
 }
-document.addEventListener('pointerlockerror', () => showPointerHint(pointerRefusal ?? 'the browser refused the pointer'))
+// The older form of a refusal (no promise). An automatic ask's is the same
+// non-news as above.
+document.addEventListener('pointerlockerror', () => showPointerHint(pointerRefusal))
 addEventListener('mouseup', (e) => mouseHeld.delete(e.button))
 // The right button is the second trigger, not the browser's menu.
 addEventListener('contextmenu', (e) => { if (isFps()) e.preventDefault() })
