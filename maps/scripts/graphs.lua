@@ -1221,7 +1221,8 @@ local function who_ok(who, e)
   return e ~= nil and not is_player(e)
 end
 local function sector_ok(n, idx)
-  if idx == nil then return false end
+  -- -1: a sector of another level of the region, which this one cannot name.
+  if idx == nil or idx < 0 then return false end
   if n.sector ~= nil then return idx == n.sector end
   if n.tag ~= nil then
     local sec = dnp.sector(idx)
@@ -1303,16 +1304,29 @@ local function tick_starts(now)
       -- this level's clock, or another player in the slot, is a departure
       -- and a new arrival.
       local who = (e.player ~= nil and is_player(e)) and e:player() or nil
+      -- IN THIS LEVEL, not merely in its world: in a region every resident
+      -- level sees every player, and one standing in another level's geometry
+      -- has a sector this level cannot name (-1). Arriving is coming into this
+      -- level's own sectors, and leaving is going out of them -- which is the
+      -- server's own test for a player's home (docs/REGION_GAPS.md §2).
+      local here = sec ~= nil and sec >= 0
       if t ~= nil and (t.seen < now - 1 or t.who ~= who) then
         track[i] = nil
-        if roster and t.player then fire_start("when_player_leaves", nil, {}) end
+        if roster and t.player and t.here then fire_start("when_player_leaves", nil, {}) end
         t = nil
       end
       if t == nil then
-        track[i] = { sector = sec, floor = floor, since = now, player = is_player(e), who = who, seen = now }
-        if roster and is_player(e) then fire_start("when_player_arrives", nil, { entity = e }) end
+        track[i] = { sector = sec, floor = floor, since = now, player = is_player(e), who = who, seen = now, here = here }
+        if roster and here and is_player(e) then fire_start("when_player_arrives", nil, { entity = e }) end
       else
         t.seen = now
+        if here ~= t.here then
+          t.here = here
+          if roster and t.player then
+            if here then fire_start("when_player_arrives", nil, { entity = e })
+            else fire_start("when_player_leaves", nil, {}) end
+          end
+        end
         if sec ~= t.sector then
           local was = t.sector
           t.sector = sec
@@ -1368,7 +1382,7 @@ local function tick_starts(now)
   for i, t in pairs(track) do
     if not seen[i] then
       track[i] = nil
-      if roster and t.player then fire_start("when_player_leaves", nil, {}) end
+      if roster and t.player and t.here then fire_start("when_player_leaves", nil, {}) end
     end
   end
   -- Touches not renewed are over; forget them now and then.

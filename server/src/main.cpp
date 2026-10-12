@@ -1199,6 +1199,23 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                           static_cast<int>(t.name.len), t.name.text);
             out += line;
         }
+        // The props its scripts placed at load: what was asked for, and whether
+        // it is still there, where, and facing which way.
+        // `placed <there> <asked x y z> <x y z> <facing> <name>`, raw, local.
+        for (const lua::WorldContext::Placement& p : L.ctx.placements) {
+            const bool there = sim::World::is_prop(p.entity) && H.world.prop(p.entity).active &&
+                               H.world.generation(p.entity) == p.generation &&
+                               (L.ctx.owner == nullptr || L.ctx.owner[p.entity] == li);
+            const sim::PropState* ps = there ? &H.world.prop(p.entity) : nullptr;
+            const fx3 at = ps ? fx3{ps->pos.x - o.x, ps->pos.y - o.y, ps->pos.z} : fx3{};
+            std::snprintf(line, sizeof(line), "placed %d %lld %lld %lld %lld %lld %lld %u ",
+                          there ? 1 : 0,
+                          static_cast<long long>(p.asked.x.raw), static_cast<long long>(p.asked.y.raw),
+                          static_cast<long long>(p.asked.z.raw),
+                          static_cast<long long>(at.x.raw), static_cast<long long>(at.y.raw),
+                          static_cast<long long>(at.z.raw), ps ? ps->facing.raw : 0u);
+            out += line + p.name + "\n";
+        }
         // The sky a script gave the level (docs/SKY.md), as its words.
         if (L.has_sky) out += "sky " + sky_text(L.sky) + "\n";
         // Sector looks, as words: `look <sector> floor|ceiling NAME`,
@@ -1333,6 +1350,36 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                      "%u switch picture(s); %u spawn(s) its scripts tried at load held back\n",
                      li, motions, sides, L.ctx.held_back_spawns);
         L.ctx.held_back_spawns = 0;
+    }
+
+    // The `placed` lines of a saved state, for the scripts' load to match
+    // against (lua::WorldContext::KeptPlacement). Before the scripts run, which
+    // is before restore_level reads the rest.
+    void read_placements(u32 li, const std::string& text) {
+        Level& L = level(li);
+        L.ctx.kept_placements.clear();
+        size_t at = 0;
+        while (at < text.size()) {
+            const size_t nl = text.find('\n', at);
+            const std::string ln = text.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+            at = nl == std::string::npos ? text.size() : nl + 1;
+            // The scripts' own parts come last and are not lines of this kind.
+            if (ln.compare(0, 8, "scripts ") == 0) break;
+            if (ln.compare(0, 7, "placed ") != 0) continue;
+            int there = 0, used = 0;
+            long long ax = 0, ay = 0, az = 0, x = 0, y = 0, z = 0;
+            unsigned facing = 0;
+            if (std::sscanf(ln.c_str(), "placed %d %lld %lld %lld %lld %lld %lld %u %n",
+                            &there, &ax, &ay, &az, &x, &y, &z, &facing, &used) < 8 || used <= 0) continue;
+            lua::WorldContext::KeptPlacement k;
+            k.name = ln.substr(static_cast<size_t>(used));
+            if (k.name.empty()) continue;
+            k.asked = fx3{fx::from_raw(ax), fx::from_raw(ay), fx::from_raw(az)};
+            k.there = there != 0;
+            k.at = fx3{fx::from_raw(x), fx::from_raw(y), fx::from_raw(z)};
+            k.facing = brad(facing);
+            L.ctx.kept_placements.push_back(std::move(k));
+        }
     }
 
     std::string level_file(const std::string& name) const {
@@ -1676,6 +1723,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // otherwise only discovered by watching an enemy fail to path.
         if (!L.nav_graph.build(*L.host->view)) {
             std::fprintf(stderr, "[srv] map has more sectors than the nav graph holds\n");
+            if (!L.own) leave_region(li, L);
             return false;
         }
         L.nav_heights = 0;
@@ -1707,9 +1755,20 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         const auto saved = level_saves_.find(level_name(li));
         const bool restoring = saved != level_saves_.end();
         slot.live->ctx.restoring = restoring;
-        if (wants_scripts &&
-            !start_scripts(li, shared_scripts.data(),
-                           static_cast<u32>(shared_scripts.size()))) {
+        // The props it had placed, and which of them are still there: what
+        // lets its scripts' own placement back through (WorldContext::Placement).
+        if (restoring) read_placements(li, saved->second);
+        slot.live->ctx.loading = true;
+        const bool scripts_ok = !wants_scripts ||
+            start_scripts(li, shared_scripts.data(), static_cast<u32>(shared_scripts.size()));
+        slot.live->ctx.loading = false;
+        slot.live->ctx.kept_placements.clear();
+        if (!scripts_ok) {
+            // A FAILED LOAD LEAVES THE REGION AS IT FOUND IT: its chunk out
+            // again, with whatever the scripts spawned before they failed. Kept
+            // in, the next attempt found the chunk's key taken and said "does
+            // not fit" forever instead of the script's real error.
+            if (!slot.live->own) leave_region(li, *slot.live);
             slot.live.reset();
             return false;
         }
@@ -1722,6 +1781,35 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             if (!restores_levels()) level_saves_.erase(saved);
         }
         return true;
+    }
+
+    // A region level's chunk out of the region's world, with everything the
+    // level spawned in it. Unloading does this, and so does a load that fails
+    // after the chunk went in.
+    void leave_region(u32 li, Level& L) {
+        // OUT OF THE REGION, taking with it everything its script spawned:
+        // a level that comes back runs its script again and places them
+        // afresh, which is what Doom does with a level you left.
+        Host& H = *L.host;
+        for (u32 e = 0; e < sim::MAX_ENTITIES; ++e) {
+            if (H.owner[e] != li) continue;
+            H.owner[e] = NO_OWNER;
+            if (sim::World::is_prop(e)) {
+                if (H.world.prop(e).active) H.world.despawn_prop(e);
+            } else if (H.world.agent(e).active) {
+                H.effects.clear_agent(e);
+                H.world.despawn(e);
+            }
+        }
+        if (const geom::Chunk* c = H.store->find_chunk(li)) {
+            H.world.motions().forget_sectors(c->sectors.first, c->sectors.count);
+        }
+        H.store->remove_chunk(li);
+        H.region_view = H.store->view();
+        // Motion indices shifted with the removal: tell everybody again.
+        H.sent_motion_count = 0;
+        H.nav_graph.build(H.region_view);
+        H.nav_heights = 0;
     }
 
     // Drop a level's payload, keeping everything a declaration is.
@@ -1744,31 +1832,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                      li, slot.path.c_str(), slot.live->world.tick());
         keep_level(li);
         Level& L = *slot.live;
-        if (!L.own) {
-            // OUT OF THE REGION, taking with it everything its script spawned:
-            // a level that comes back runs its script again and places them
-            // afresh, which is what Doom does with a level you left.
-            Host& H = *L.host;
-            for (u32 e = 0; e < sim::MAX_ENTITIES; ++e) {
-                if (H.owner[e] != li) continue;
-                H.owner[e] = NO_OWNER;
-                if (sim::World::is_prop(e)) {
-                    if (H.world.prop(e).active) H.world.despawn_prop(e);
-                } else if (H.world.agent(e).active) {
-                    H.effects.clear_agent(e);
-                    H.world.despawn(e);
-                }
-            }
-            if (const geom::Chunk* c = H.store->find_chunk(li)) {
-                H.world.motions().forget_sectors(c->sectors.first, c->sectors.count);
-            }
-            H.store->remove_chunk(li);
-            H.region_view = H.store->view();
-            // Motion indices shifted with the removal: tell everybody again.
-            H.sent_motion_count = 0;
-            H.nav_graph.build(H.region_view);
-            H.nav_heights = 0;
-        }
+        if (!L.own) leave_region(li, L);
         slot.live.reset();
     }
 
@@ -2233,6 +2297,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // The WORLD'S store: live heights, motions, joins. A region level's
         // script addresses its own part of it through the frame below.
         L.ctx.map_store   = L.host->store;
+        L.ctx.level_map   = &L.map_store;
         L.ctx.chunk       = L.own ? nullptr : L.host->store->find_chunk(li);
         L.ctx.origin      = L.own ? fx2{} : origin_of(li);
         L.ctx.owner       = L.own ? nullptr : L.host->owner;

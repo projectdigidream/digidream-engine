@@ -2405,6 +2405,15 @@ addEventListener('mousemove', (e) => {
 })
 document.addEventListener('pointerlockchange', () => {
   plog(document.pointerLockElement === renderer.domElement ? 'locked' : 'unlocked')
+  // Granted LATE, over a modal panel: a request is asynchronous, so a click
+  // (or a retake) just before a panel opened can land after it -- and a locked
+  // pointer cannot click the panel's buttons. While a modal panel is up the
+  // pointer is free, whenever the lock arrives (docs/REGION_GAPS.md §5).
+  if (document.pointerLockElement === renderer.domElement && uiModal) {
+    plog('locked over a modal panel: released')
+    document.exitPointerLock?.()
+    return
+  }
   if (document.pointerLockElement !== renderer.domElement) {
     mouseHeld.clear()
     // Lost in first-person play (Escape, a switch of window): say how to get

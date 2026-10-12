@@ -18,6 +18,12 @@
 //           state directory: the level comes back as it was left, and the
 //           script did not put down a fresh four. CONTROL: the first start did.
 //
+// And PLACED PROPS (maps/scripts/placed_test.lua): three put down the way the
+// studio's placement does it, knowing nothing of saving. A restored level has
+// the ones still there, where they were left, and not the one taken -- the
+// engine's doing (docs/SAVING.md, "Placed props"). CONTROL: the fresh placement
+// had all three where they were authored.
+//
 // And a NEW GAME in two of them: the world from scratch, and nothing kept --
 // not in memory, and not on disk.
 //
@@ -71,6 +77,7 @@ const certHash = Buffer.from(
 async function start (persist, stateDir) {
   const args = ['--port', String(LINK_PORT), '--map', MAP,
                 '--script', join(ROOT, 'maps', 'scripts', 'persist_test.lua'),
+                '--script', join(ROOT, 'maps', 'scripts', 'placed_test.lua'),
                 '--props', join(REPO, 'modules', 'doom2', 'assets', 'props.txt'),
                 '--persist', persist, '--state-dir', stateDir]
   const server = spawn(serverBin, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -146,6 +153,8 @@ try {
   {
     const run = await start('saves', state)
     check(run.log.includes('[persist_test] placed 4 keys'), 'a fresh level puts down its four keys')
+    check(run.log.includes('[placed_test] placed 3 at 14,18,22'), 'CONTROL: and its placed props, all three where authored')
+    await waitFor(() => run.log.includes('[placed_test] changed: 2 left at -,30,22'), 6000, 'a placed prop taken, one moved')
     await waitFor(() => leftNow(run) === 3, 6000, 'one key taken')
     await run.cw.write(encodeGameSave(0))
     await waitFor(() => run.results.length >= 1, 4000, 'save result')
@@ -166,6 +175,9 @@ try {
     const restored = [...run.log.matchAll(/restored (\d) keys/g)].map((m) => Number(m[1]))
     check(restored.at(-1) === 3, `the level is back as it was saved: three keys (${restored.at(-1)})`)
     check(run.log.includes('level 0 restored'), 'and the server says it restored it')
+    const placedLines = [...run.log.matchAll(/\[placed_test\] placed (.*)/g)].map((m) => m[1])
+    check(placedLines.at(-1) === '2 at -,30,22',
+          `the placed props are back where they were left, the taken one not (${placedLines.at(-1)})`)
 
     // A NEW GAME: the world from scratch. The level is placed afresh -- four
     // keys again -- and nothing kept comes back.
@@ -178,6 +190,8 @@ try {
     check(run.welcomes === w0 + 1, 'and the player is put in it')
     check((run.log.match(/placed 4 keys/g) ?? []).length === placedBefore + 1,
           'the level is placed afresh: four keys')
+    check([...run.log.matchAll(/\[placed_test\] placed (.*)/g)].at(-1)?.[1] === '3 at 14,18,22',
+          'and all three placed props, where authored')
     await stop(run)
   }
 
@@ -210,6 +224,8 @@ try {
     check(!second.log.includes('placed 4 keys'), 'the restart does not put down a fresh four')
     const restored = Number(second.log.match(/restored (\d) keys/)?.[1])
     check(restored === 2, `it comes back as it was left: two keys (${restored})`)
+    const placedBack = second.log.match(/\[placed_test\] placed (.*)/)?.[1]
+    check(placedBack === '2 at -,30,22', `and its placed props as they were left (${placedBack})`)
     check(skyOf(second) === '1:SKY2:2000', `and with the sky its script gave it, which nothing set again (${skyOf(second)})`)
     const looks = (run) => run.sectors.map((m) => m.what === 'light' ? `light ${m.light}` : `${m.what} ${m.texture ?? ''}`).sort().join(', ')
     check(looks(first) === 'ceiling F_SKY1, light 77', `CONTROL: the fresh start's script changed a sector (${looks(first)})`)

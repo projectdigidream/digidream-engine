@@ -1297,18 +1297,32 @@ int l_dnp_prop_kind(lua_State* L) {
 
 int l_dnp_spawn_prop(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
+    size_t len = 0;
+    const char* name = luaL_checklstring(L, 1, &len);
+    const fx3 asked = check_vec3(L, 2);
+    fx3 pos = ctx.to_world(asked);
     // HELD BACK while a level is restored: whatever its scripts place as they
     // load, the saved state puts back instead (docs/SAVING.md). Caught
     // here rather than trusted to every script, because any script can place
     // things -- including ones nobody thought to teach about restoring.
+    // EXCEPT a placement the save says is still there (see Placement): that one
+    // comes back, where it was left.
+    WorldContext::KeptPlacement* kept = nullptr;
     if (ctx.restoring) {
-        ++ctx.held_back_spawns;
-        lua_pushnil(L);
-        return 1;
+        for (WorldContext::KeptPlacement& k : ctx.kept_placements) {
+            if (k.used || k.asked != asked || k.name.size() != len ||
+                std::memcmp(k.name.data(), name, len) != 0) continue;
+            k.used = true;
+            if (k.there) kept = &k;
+            break;
+        }
+        if (kept == nullptr) {
+            ++ctx.held_back_spawns;
+            lua_pushnil(L);
+            return 1;
+        }
+        pos = ctx.to_world(kept->at);
     }
-    size_t len = 0;
-    const char* name = luaL_checklstring(L, 1, &len);
-    const fx3 pos = ctx.to_world(check_vec3(L, 2));
 
     if (ctx.props == nullptr || ctx.props->empty()) {
         // Named in terms of the FILE, because that is what is wrong. A map
@@ -1351,7 +1365,11 @@ int l_dnp_spawn_prop(lua_State* L) {
     ctx.world->prop_mut(e).radius = ctx.prop_radius(kind);
     ctx.world->prop_mut(e).height = ctx.prop_height(kind);
     ctx.world->prop_mut(e).flags  = ctx.prop_flags(kind);
+    if (kept != nullptr) ctx.world->prop_mut(e).facing = kept->facing;
     ctx.own(e);
+    if (ctx.loading) {
+        ctx.placements.push_back({std::string(name, len), asked, e, ctx.world->generation(e)});
+    }
     push_prop(L, ctx, e);
     return 1;
 }
@@ -1538,11 +1556,14 @@ int l_dnp_spawn_point(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     size_t n = 0;
     const char* tag = luaL_checklstring(L, 1, &n);
-    if (ctx.map_store == nullptr || !ctx.map_store->has_spawn_tag(tag, static_cast<u32>(n))) {
+    // The level's own spawns, in its own coordinates -- which is what a script
+    // passes back (e:teleport translates to the world).
+    const geom::MapStorage* m = ctx.own_map();
+    if (m == nullptr || !m->has_spawn_tag(tag, static_cast<u32>(n))) {
         lua_pushnil(L);
         return 1;
     }
-    push_vec3(L, ctx.map_store->spawn_for_tag(tag, static_cast<u32>(n)));
+    push_vec3(L, m->spawn_for_tag(tag, static_cast<u32>(n)));
     return 1;
 }
 
@@ -1856,8 +1877,9 @@ int l_dnp_sky(lua_State* L) {
 int l_dnp_path_length(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const u32 tag = static_cast<u32>(luaL_checkinteger(L, 1));
-    if (ctx.map_store == nullptr) { lua_pushnil(L); return 1; }
-    const geom::MapData m = ctx.map_store->view();
+    // The level's own paths: the camera follows its home level's by tag.
+    if (ctx.own_map() == nullptr) { lua_pushnil(L); return 1; }
+    const geom::MapData m = ctx.own_map()->view();
     for (u32 i = 0; i < m.path_count; ++i) {
         // FIRST match. Tags are not unique and mapc does not enforce it, so the
         // rule is the same one every other tag lookup here uses.

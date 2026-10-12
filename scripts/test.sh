@@ -875,6 +875,10 @@ suite_stack () {
      `# Walking across a seam: two maps composed in world space by a metamap's` \
      `# pitch, and a crossing that is a change of frame rather than a teleport.` \
      && node test/seam.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Region levels' scripts: arrivals only into the level walked into, a` \
+     `# level's own spawn points, a failed level that can be entered again` \
+     `# (docs/REGION_GAPS.md).` \
+     && node test/region_gaps.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Persistence: save and load a game, refused without the module's say-so,` \
      `# and a level that survives a server restart (docs/SAVING.md).` \
      && node test/persist.test.js 2>/dev/null | grep -E 'FAIL|failures' \

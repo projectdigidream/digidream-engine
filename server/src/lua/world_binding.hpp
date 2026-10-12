@@ -220,6 +220,12 @@ struct WorldContext {
     const PoseHistory* poses = nullptr;
     const u32*         rewind_tick = nullptr;
     geom::MapStorage* map_store = nullptr;
+    // THE LEVEL'S OWN MAP, in its own coordinates: where its spawn points and
+    // camera paths are. In a region `map_store` is the region's store of
+    // chunks, which carries neither (add_chunk copies geometry only); for a
+    // level alone the two are the same parse. Null: use map_store.
+    const geom::MapStorage* level_map = nullptr;
+    const geom::MapStorage* own_map() const noexcept { return level_map ? level_map : map_store; }
 
     // The level's sector graph, for dnp.find_path. Borrowed, not owned: the
     // server builds one per level at load and rebuilds it when a shape commits,
@@ -361,6 +367,37 @@ struct WorldContext {
     bool              restoring = false;
     // Spawns refused because the level was being restored (see restoring).
     u32               held_back_spawns = 0;
+
+    // PLACED PROPS, kept across a reload (docs/SAVING.md, "Placed props").
+    //
+    // Every prop a level's scripts spawn while they LOAD is its placement --
+    // the studio's, a hand-written map script's -- known by what was asked for:
+    // the catalogue name and the position in the level's own terms, which a
+    // script asks for the same way every time it runs. The level's save says,
+    // for each, whether it is still there and where. Restoring, the same ask
+    // is let through to where the prop was left, or held back if it was taken;
+    // anything else asked at load is held back as before. So a script that
+    // places things keeps them without knowing it is being restored.
+    //
+    // A library that places AND keeps its own (mobs.lua, doom.lua) asks for
+    // nothing while restoring, so nothing here doubles what it puts back.
+    struct Placement {
+        std::string name;
+        fx3         asked{};   // level coordinates, raw as the script gave them
+        u32         entity = 0;
+        u8          generation = 0;
+    };
+    struct KeptPlacement {
+        std::string name;
+        fx3         asked{};
+        bool        there = false;
+        fx3         at{};      // level coordinates
+        brad        facing{};
+        bool        used = false;
+    };
+    bool                       loading = false;     // the scripts are loading
+    std::vector<Placement>     placements;          // this load's, while loading
+    std::vector<KeptPlacement> kept_placements;     // the save's, while restoring
 
     i32*              hp = nullptr;
     // Which avatar draws each player (design 4.1). Borrowed like hp, and server
