@@ -21,7 +21,7 @@
 #
 # THE CHAIN, in order, with what satisfies each link:
 #
-#   emsdk                 scripts/setup_emsdk.sh, then emsdk/emsdk_env.sh
+#   emsdk                 scripts/setup_emsdk.sh, then ../emsdk/emsdk_env.sh
 #   client wasm core      scripts/build_wasm.sh   -> client/wasm/dist/dnp_core.mjs
 #   three.js              (cd client && npm install)
 #   synth wasm            midisynth/scripts/build_wasm.sh (optional: no synth,

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Installs a PINNED Emscripten SDK into ./emsdk (gitignored).
+# Installs a PINNED Emscripten SDK into ../emsdk, BESIDE the engine: every
+# script that wants em++ (and the sound and synth repositories next to it)
+# looks there.
 #
 # The version is pinned deliberately. The wasm build is one half of the
 # determinism comparison, so an unpinned toolchain would mean CI could start
@@ -16,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The repository. The engine is $ROOT; modules, the studio, the synth and
 # the rest are beside it, here.
 REPO="$(cd "$ROOT/.." && pwd)"
-cd "$ROOT"
+cd "$REPO"
 
 if [[ ! -d emsdk ]]; then
   git clone https://github.com/emscripten-core/emsdk.git emsdk

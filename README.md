@@ -20,22 +20,38 @@ named on the command line (`--module starter`). The engine itself carries no gam
 
 ## Get started with the starter module
 
-Prerequisites: a C++17 compiler (clang), Node 22, and -- for the browser client --
-Emscripten. The two pinned dependencies are fetched by scripts:
+Prerequisites: a C++17 compiler (clang), Node 22, OpenSSL, git and bash. The two
+pinned dependencies, Emscripten (for the browser builds) and LuaJIT (for the
+server's scripting), are fetched by scripts.
+
+Clone into a folder of its own, because Emscripten and the other Digidream
+repositories go BESIDE the engine, not inside it:
 
 ```sh
-./scripts/setup_emsdk.sh          # Emscripten, pinned (the wasm builds)
-./scripts/setup_luajit.sh         # LuaJIT, pinned (the server's scripting)
-source ../emsdk/emsdk_env.sh      # or wherever setup_emsdk.sh put it
+mkdir digidream && cd digidream
+git clone https://github.com/projectdigidream/digidream-engine.git engine
+cd engine
+./scripts/setup_emsdk.sh          # Emscripten, pinned, into ../emsdk
+./scripts/setup_luajit.sh         # LuaJIT, pinned
+source ../emsdk/emsdk_env.sh      # in every new shell that builds wasm
 ```
 
-Build the server, the client's wasm core and the map compiler:
+Build the server, the client's wasm core and the map compiler, and install the
+Node packages:
 
 ```sh
 ./scripts/build_server.sh
 ./scripts/build_wasm.sh
-./scripts/build_native.sh arm64 mapc     # or x86_64: the map compiler alone
+./scripts/build_native.sh native mapc    # the map compiler, for this machine
 (cd client && npm ci) && (cd server/edge && npm ci)
+```
+
+Make the development certificate. Browsers only speak WebTransport over TLS,
+even to localhost; this makes a self-signed one the page is told to trust. It
+lasts 13 days: run it again when the client stops connecting.
+
+```sh
+(cd server/edge && npm run certs)
 ```
 
 Run the starter module -- server, WebTransport edge and the web page:
@@ -44,7 +60,23 @@ Run the starter module -- server, WebTransport edge and the web page:
 ./scripts/run_stack.sh --module starter
 ```
 
-and open the address it prints (`http://localhost:8080/?server=...`).
+and open the address it prints (`http://localhost:8080/?server=...`), in Chrome
+or another Chromium browser (WebTransport with a self-signed certificate).
+
+## Digidream Studio from source
+
+The studio (github.com/projectdigidream/digidream-studio) runs on this engine's
+code, so from source it needs the two side by side, as `engine` and `studio`:
+
+```sh
+cd ..                                    # the folder that holds engine/
+git clone https://github.com/projectdigidream/digidream-studio.git studio
+cd engine
+./scripts/build_mapc_wasm.sh             # the map compiler, for the studio's bakes
+./scripts/run_stack.sh --module starter
+```
+
+then open `http://localhost:8080/studio/`. Its own README has the rest.
 
 ## Make it an app
 

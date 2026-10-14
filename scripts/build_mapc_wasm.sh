@@ -20,7 +20,7 @@
 set -euo pipefail
 
 if ! command -v em++ >/dev/null 2>&1; then
-  echo "em++ not found -- run scripts/setup_emsdk.sh then: source emsdk/emsdk_env.sh" >&2
+  echo "em++ not found -- run scripts/setup_emsdk.sh then: source ../emsdk/emsdk_env.sh" >&2
   exit 1
 fi
 
