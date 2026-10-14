@@ -65,6 +65,11 @@ while [[ $# -gt 0 ]]; do
     # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
     # kits must not carry kits).
     --no-kits) NO_KITS=1; shift ;;
+    # The studio WITHOUT its bundled plugins (no sprite, texture, sound or music
+    # editor, no Code, no packager): an empty plugin index, so the studio starts
+    # with none and the Plugins page can still install them. No kits either --
+    # only the packager plugin uses them.
+    --no-plugins) NO_PLUGINS=1; NO_KITS=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -246,9 +251,14 @@ if [[ $STUDIO -eq 1 ]]; then
   cp -R "../$ED/src" "$OUT/$ED/src"
   cp -R "../$ED/vendor" "$OUT/$ED/vendor"
   cp ../studio/wasm/dist/mapc.mjs ../studio/wasm/dist/mapc.wasm "$OUT/$ED/wasm/dist/"
-  [[ -f ../studio/plugins/index.json ]] || { echo "[app] no studio plugins (studio/plugins/index.json)" >&2; exit 1; }
-  node ../studio/tools/vendor_plugins.mjs --check >&2 || { echo "[app] the studio's plugins are not as vendored: node studio/tools/vendor_plugins.mjs" >&2; exit 1; }
-  cp -R ../studio/plugins "$OUT/studio/plugins"
+  if [[ ${NO_PLUGINS:-0} -eq 1 ]]; then
+    mkdir -p "$OUT/studio/plugins"
+    echo '{ "plugins": [] }' > "$OUT/studio/plugins/index.json"
+  else
+    [[ -f ../studio/plugins/index.json ]] || { echo "[app] no studio plugins (studio/plugins/index.json)" >&2; exit 1; }
+    node ../studio/tools/vendor_plugins.mjs --check >&2 || { echo "[app] the studio's plugins are not as vendored: node studio/tools/vendor_plugins.mjs" >&2; exit 1; }
+    cp -R ../studio/plugins "$OUT/studio/plugins"
+  fi
   cp ../studio/sw.js ../studio/VERSION "$OUT/studio/"
   if [[ ${NO_KITS:-0} -eq 0 ]]; then
     # The packager plugin's small kits, preloaded where its page looks

@@ -44,6 +44,8 @@ while [[ $# -gt 0 ]]; do
     # Without the packager's kits inside (packager/scripts/build_kits.sh, whose
     # kits must not carry kits).
     --no-kits) NO_KITS=1; shift ;;
+    # The studio without its bundled plugins (as build_app.sh --no-plugins).
+    --no-plugins) NO_PLUGINS=1; NO_KITS=1; shift ;;
     # The Digidream logo as the launcher icon (branding/icons.mjs), for the
     # studio's own APK. Without it, the engine's plain diamond -- what kits and
     # games keep unless the packager is given an icon.
@@ -293,8 +295,13 @@ if [[ $STUDIO -eq 1 ]]; then
   cp -R "$REPO/$ED/src" "$W/$ED/src"
   cp -R "$REPO/$ED/vendor" "$W/$ED/vendor"
   cp "$REPO/studio/wasm/dist/mapc.mjs" "$REPO/studio/wasm/dist/mapc.wasm" "$W/$ED/wasm/dist/"
-  node "$REPO/studio/tools/vendor_plugins.mjs" --check >&2 || { echo "[apk] the studio's plugins are not as vendored: node studio/tools/vendor_plugins.mjs" >&2; exit 1; }
-  cp -R "$REPO/studio/plugins" "$W/studio/plugins"
+  if [[ ${NO_PLUGINS:-0} -eq 1 ]]; then
+    mkdir -p "$W/studio/plugins"
+    echo '{ "plugins": [] }' > "$W/studio/plugins/index.json"
+  else
+    node "$REPO/studio/tools/vendor_plugins.mjs" --check >&2 || { echo "[apk] the studio's plugins are not as vendored: node studio/tools/vendor_plugins.mjs" >&2; exit 1; }
+    cp -R "$REPO/studio/plugins" "$W/studio/plugins"
+  fi
   cp "$REPO/studio/sw.js" "$REPO/studio/VERSION" "$W/studio/"
   if [[ $NO_KITS -eq 0 ]]; then
     # The packager plugin's small kits, where its page looks (as build_app.sh):
