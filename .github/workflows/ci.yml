@@ -115,6 +115,11 @@ jobs:
       - run: ./scripts/setup_luajit.sh
       - run: ./scripts/build_server.sh
       - run: ./scripts/build_wasm.sh
+      # The map compiler, and the test map baked BEFORE the first test that
+      # starts a server (delta.test.js hosts build/<arch>/test.dnpm; with no
+      # map the server has nothing to host and exits).
+      - run: ./scripts/build_native.sh native mapc
+      - run: ./build/native/mapc maps/test.map build/native/test.dnpm
       - run: npm install
         working-directory: server/edge
       - run: npm run certs
@@ -128,11 +133,9 @@ jobs:
       - run: node client/test/shadows.test.js
       - run: node test/delta.test.js
         working-directory: server/edge
-      - run: ./build/native/mapc maps/test.map build/native/test.dnpm
-        working-directory: .
       - run: node test/mapdata.test.js
         working-directory: server/edge
-      # Needs both the wasm module and a baked map, so it runs after mapc.
+      # Needs both the wasm module and the baked map (above).
       - run: node client/test/mapmesh.test.js
       - run: node test/platform.test.js
         working-directory: server/edge
