@@ -9,24 +9,25 @@
 # build leaves the zip and PNG libraries as dependencies; this bundles them in,
 # because the studio is served as plain files and has no package install.
 #
-#   scripts/vendor_tsprite.sh                 # from ../ThreeSprite
+#   scripts/vendor_tsprite.sh                 # from threesprite/, in this repository
 #   THREESPRITE=/path/to/ThreeSprite scripts/vendor_tsprite.sh
 #
 # The result, studio/vendor/tsprite.js, IS committed: it is the runtime the
-# studio depends on, MIT-licensed, and rebuilding it needs that checkout.
+# studio depends on, MIT-licensed, and rebuilding it needs pnpm install in threesprite/.
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The repository. The engine is $ROOT; modules, the studio, the synth and
 # the rest are beside it, here.
 REPO="$(cd "$ROOT/.." && pwd)"
-TS="${THREESPRITE:-$ROOT/../ThreeSprite}"
+TS="${THREESPRITE:-$REPO/threesprite}"
 [[ -f "$TS/runtime/src/tsprite.ts" ]] || { echo "[vendor] no ThreeSprite checkout at $TS (set THREESPRITE)" >&2; exit 2; }
 ESB="$(ls "$TS/runtime/node_modules/.bin/esbuild" 2>/dev/null || ls -d "$TS"/node_modules/.pnpm/esbuild@*/node_modules/esbuild/bin/esbuild 2>/dev/null | head -1 || true)"
 [[ -n "$ESB" && -x "$ESB" ]] || { echo "[vendor] esbuild not found under $TS (run pnpm install there)" >&2; exit 2; }
 mkdir -p "$REPO/studio/vendor"
 OUT="$REPO/studio/vendor/tsprite.js"
-COMMIT="$(git -C "$TS" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# The last commit that touched the tool (its folder here, or its own checkout).
+COMMIT="$(git -C "$TS" log -1 --format=%h -- . 2>/dev/null || echo unknown)"
 {
   echo "// @threesprite/runtime -- the .tsprite entry point, bundled for the browser."
   echo "// MIT. Built by scripts/vendor_tsprite.sh from ThreeSprite $COMMIT; do not edit here."
