@@ -1151,9 +1151,22 @@ int main(int argc, char** argv) {
                 continue;
             }
 
-            const std::string from = ps.path.empty() || ps.path[0] == '/'
-                                         ? ps.path : src_dir + "/" + ps.path;
+            std::string from = ps.path.empty() || ps.path[0] == '/'
+                                   ? ps.path : src_dir + "/" + ps.path;
             std::FILE* sf = std::fopen(from.c_str(), "rb");
+            if (!sf) {
+                // The source is not where the declaration says (a module whose
+                // relative path to the engine's runtime assumed another layout:
+                // modules/<id> beside an engine/ folder). The copy beside the
+                // map is what the server runs, so it will do -- said, and the
+                // test suite's stale-copy check still compares it.
+                const std::string here = src_dir + "/" + base;
+                if ((sf = std::fopen(here.c_str(), "rb")) != nullptr) {
+                    std::fprintf(stderr, "%s:%d: %s not found; using the copy beside the map, %s\n",
+                                 src_path.c_str(), ps.line, from.c_str(), here.c_str());
+                    from = here;
+                }
+            }
             if (!sf) {
                 // An error, not a warning. A map that declares a script it does
                 // not ship is a map that will load and not work, and finding
