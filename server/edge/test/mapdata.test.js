@@ -21,13 +21,15 @@ import { Core } from '../../../client/src/core.js'
 import { MapAccumulator } from '../../../client/src/maploader.js'
 import { decodeControlMessage, encodeHello, MSG } from '../../../client/src/proto.js'
 import { serverBin } from './serverbin.js'
+import { bakedMapPath } from './helpers.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
 const CERTS = join(HERE, '..', 'certs')
 const WT_PORT = Number(process.env.DNP_WT_PORT ?? 34446)
 const LINK_PORT = Number(process.env.DNP_LINK_PORT ?? 34520)
-const MAP_PATH = process.env.DNP_MAP ?? join(ROOT, 'build', 'arm64', 'test.dnpm')
+// Wherever this machine baked it (build/<arch>/ or build/native/, as CI does).
+const MAP_PATH = bakedMapPath(ROOT) ?? join(ROOT, 'build', 'arm64', 'test.dnpm')
 
 let checks = 0
 let fails = 0
