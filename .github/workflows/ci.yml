@@ -1,0 +1,146 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Cheapest gate first: rejects non-deterministic CONSTRUCTS before spending
+  # time on builds. Catches the float that the golden trace happens not to hit.
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check_no_floats.sh
+      - run: ./scripts/check_source_lists.sh
+      - run: ./scripts/check_render_isolation.sh
+
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - name: unit + property tests
+        run: |
+          ./scripts/build_native.sh native
+          ./build/native/test_math
+          ./build/native/test_proto
+
+  # UBSan catches undefined behaviour that currently compiles into the intended
+  # instruction anyway -- left-shifting a negative value, signed overflow. That
+  # is invisible to every other gate until a compiler upgrade resolves it
+  # differently on one target, at which point client and server silently stop
+  # agreeing. ASan covers the protocol decoders, which parse hostile input.
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check_sanitizers.sh
+
+  # THE gate. Every target must emit a byte-identical hash stream. See
+  # docs/physics-contract.md for why this is a required check and not advisory.
+  #
+  # ubuntu-latest is x86-64 and macos-14 is arm64, so the two runners together
+  # cover both native architectures; the wasm leg runs on ubuntu with emsdk.
+  determinism:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.8
+      - name: cross-target determinism
+        run: ./scripts/check_determinism.sh
+      - name: publish this runner's trace for cross-runner comparison
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-${{ matrix.os }}
+          path: build/determinism/trace_*.txt
+
+  # The per-runner job above proves native-vs-wasm agreement ON one machine.
+  # This proves agreement ACROSS machines and architectures, which is the case
+  # that actually mirrors production: an arm64 server and an x86-64 player.
+  determinism-cross-runner:
+    needs: determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: traces
+      - name: compare every trace from every runner
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find traces -name 'trace_*.txt' | sort)
+          if [ "${#files[@]}" -lt 2 ]; then
+            echo "expected traces from multiple runners, found ${#files[@]}"
+            exit 1
+          fi
+          ref="${files[0]}"
+          echo "reference: $ref"
+          fail=0
+          for f in "${files[@]:1}"; do
+            if cmp -s "$ref" "$f"; then
+              echo "  ok   $f"
+            else
+              echo "  FAIL $f diverges from $ref"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] || { echo "CROSS-RUNNER DETERMINISM FAILED"; exit 1; }
+          echo "all runners agree: $(tail -1 "$ref")"
+
+  # The claim the whole design rests on, measured rather than asserted: a wasm
+  # client predicting against the real native server, with ZERO genuine
+  # mispredictions and a one-ulp injected divergence still detected.
+  prediction:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.8
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: ./scripts/build_server.sh
+      - run: ./scripts/build_wasm.sh
+      - run: npm install
+        working-directory: server/edge
+      - run: npm run certs
+        working-directory: server/edge
+      - run: node ../../client/test/snapshots.test.js
+        working-directory: server/edge
+      - run: node client/test/mapgeom.test.js
+      - run: node client/test/camera.test.js
+      - run: node client/test/entities.test.js
+      - run: node client/test/lighting.test.js
+      - run: node client/test/shadows.test.js
+      - run: node test/delta.test.js
+        working-directory: server/edge
+      - run: ./build/native/mapc maps/test.map build/native/test.dnpm
+        working-directory: .
+      - run: node test/mapdata.test.js
+        working-directory: server/edge
+      # Needs both the wasm module and a baked map, so it runs after mapc.
+      - run: node client/test/mapmesh.test.js
+      - run: node test/platform.test.js
+        working-directory: server/edge
+      # Control case: without the replicated parameters, prediction must fail.
+      - run: DNP_IGNORE_MOTION=1 DNP_WT_PORT=34470 DNP_LINK_PORT=34540 node test/platform.test.js
+        working-directory: server/edge
+      - run: node test/live.test.js
+        working-directory: server/edge
+      - run: node test/prediction.test.js
+        working-directory: server/edge
+      # Loopback has no latency, no loss and no reordering, so it barely
+      # exercises reconciliation at all. The matrix is where the zero-
+      # misprediction claim is actually tested.
+      - run: node tools/netsim/matrix.js
