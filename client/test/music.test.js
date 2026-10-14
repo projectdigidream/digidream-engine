@@ -29,10 +29,9 @@ const REPO = join(ROOT, '..')
 const WASM = join(REPO, 'midisynth', 'tool', 'dist', 'midisynth.mjs')
 const BANK = join(REPO, 'midisynth', 'content', 'patches', 'gm_bank.json')
 const KIT = join(REPO, 'midisynth', 'content', 'drums', 'gm_kit.json')
-// DOOM's own MAP01 music, converted out of the WAD by tools/wad/mus2mid.js and
-// baked by tools/wad/music_all.js. The engine's assets/music/swan_lake.mstk is
-// the fallback the module overrides, and testing the module's track is testing
-// what a player actually hears.
+// A module's own MAP01 track (the private doom2 module, its music converted by
+// the WAD tools in the workspace's doom/ fixtures): testing the module's track
+// is testing what a player actually hears. Absent in a public clone.
 const TRACK = join(REPO, 'modules', 'doom2', 'assets', 'music', 'd_runnin.mstk')
 const INDEX = join(REPO, 'modules', 'doom2', 'assets', 'music', 'index.json')
 const MAPS = join(REPO, 'modules', 'doom2', 'maps')

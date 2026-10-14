@@ -2,8 +2,8 @@
 #
 # One command: engine + one module -> a standalone application.
 #
-#   scripts/make_app.sh --module doom2
-#   scripts/make_app.sh --module doom2 --package
+#   scripts/make_app.sh                          (the starter module)
+#   scripts/make_app.sh --module mygame --package
 #   scripts/make_app.sh --module mygame --name "My Game" --out build/app
 #
 # WHAT THIS IS AND WHY IT IS NOT build_app.sh. build_app.sh STAGES: it copies a
@@ -60,8 +60,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ ${#MODULES[@]} -gt 0 ]] || {
-  echo "usage: $0 --module <name> [--module <name>...] [--package]" >&2; exit 2; }
+# The starter module unless one is named: the one module every checkout has.
+[[ ${#MODULES[@]} -gt 0 ]] || { MODULES=(starter); PASS+=(--module starter); }
 
 # The app id decides the output directory, and this needs to know it to package
 # what it just staged. Same rule build_app.sh uses -- the first module names the

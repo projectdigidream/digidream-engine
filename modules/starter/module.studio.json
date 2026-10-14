@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "id": "starter",
+  "name": "Starter",
+  "about": "A room, a door, a pit, a platform and a spirit: the module the studio starts from.\nMIT -- the textures and the spirit sheet are our own; see LICENSE.",
+  "propIdBase": 1000,
+  "props": [
+    {
+      "id": 1000,
+      "name": "spirit",
+      "radius": 0.35,
+      "height": 1,
+      "speed": 5.2,
+      "solid": true,
+      "art": {
+        "kind": "atlas",
+        "sheet": "SPIR",
+        "states": {
+          "0": "idle",
+          "1": "walk",
+          "2": "Attack",
+          "3": "idle",
+          "4": "death"
+        }
+      }
+    }
+  ],
+  "mobs": {
+    "missiles": {},
+    "mobs": {
+      "spirit": {
+        "hp": 80,
+        "turn_speed": 14,
+        "sight": "42.6667",
+        "pain_chance": 128,
+        "infighting": true,
+        "corpse": true,
+        "initial": "look",
+        "flying": true,
+        "hover_z": "0.4000",
+        "vars": {
+          "ready": 0
+        },
+        "states": {
+          "look": {
+            "anim": 0,
+            "move": "stop",
+            "face": "hold",
+            "transitions": [
+              {
+                "to": "chase",
+                "when": [
+                  {
+                    "cond": "has_target"
+                  },
+                  {
+                    "cond": "target_visible"
+                  }
+                ]
+              }
+            ]
+          },
+          "chase": {
+            "anim": 1,
+            "move": "chase",
+            "face": "target",
+            "interruptible": true,
+            "transitions": [
+              {
+                "to": "look",
+                "when": [
+                  {
+                    "cond": "has_target",
+                    "negate": true
+                  }
+                ]
+              },
+              {
+                "to": "missile",
+                "when": [
+                  {
+                    "cond": "target_within",
+                    "distance": "1.6667"
+                  },
+                  {
+                    "cond": "target_visible"
+                  },
+                  {
+                    "cond": "cooldown_ready",
+                    "var": "ready"
+                  }
+                ]
+              }
+            ]
+          },
+          "pain": {
+            "anim": 3,
+            "move": "stop",
+            "face": "hold",
+            "ticks": 10,
+            "next": "chase"
+          },
+          "death": {
+            "anim": 4,
+            "move": "stop",
+            "face": "hold",
+            "solid": false,
+            "ticks": 100,
+            "next": "death"
+          },
+          "missile": {
+            "anim": 2,
+            "move": "stop",
+            "face": "target",
+            "ticks": 20,
+            "next": "chase",
+            "interruptible": true,
+            "sequence": [
+              {
+                "at": 0,
+                "action": "face"
+              },
+              {
+                "at": 10,
+                "action": "melee",
+                "damage": 9,
+                "range": "1.6667"
+              },
+              {
+                "at": 10,
+                "action": "set_cooldown",
+                "var": "ready",
+                "ticks": 60
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "starter.lua": "-- The starter module's own script: what a player's swing costs a monster.\n--\n-- The engine reports that a swing reached something; what that means is\n-- script (docs/INTERACTION.md). modules/doom2 gets this from weapons.lua;\n-- this module has no weapons and needs one line of it.\nfunction on_attack(attacker, target)\n  if mobs ~= nil and mobs.hurt ~= nil and target ~= nil then mobs.hurt(target, 10, attacker) end\nend\n"
+  },
+  "textures": {
+    "ROCKFLOOR1": {
+      "w": 256,
+      "h": 256
+    },
+    "ROCKWALL1": {
+      "w": 256,
+      "h": 256
+    }
+  },
+  "sprites": {
+    "SPIR": {
+      "image": "SPIR.png"
+    }
+  },
+  "player": {
+    "prop": null,
+    "blend": null,
+    "when": {},
+    "body": {
+      "radius": 0.5,
+      "height": 2
+    },
+    "moves": {},
+    "start": {
+      "weapons": null
+    }
+  }
+}

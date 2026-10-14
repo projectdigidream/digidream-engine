@@ -2,10 +2,12 @@
 #
 # Bring the whole thing up: server, WebTransport edge, dev web server.
 #
+#   scripts/run_stack.sh --module starter        the starter module (engine/modules/starter)
 #   scripts/run_stack.sh [map] [--script <lua>]
 #   scripts/run_stack.sh --map a.dnpm --map b.dnpm --script <lua>
 #
-# THE ENGINE'S OWN TEST MAPS NEED --module doom2.
+# SOME OF THE ENGINE'S OWN TEST MAPS NEED --module doom2, a private module
+# (with the DOOM fixtures) that a public checkout does not have:
 #
 #   scripts/run_stack.sh --module doom2 maps/doors.dnpm
 #

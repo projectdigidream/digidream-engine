@@ -110,6 +110,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The server links LuaJIT, pinned and built by this script (third_party/
+      # is not in git).
+      - run: ./scripts/setup_luajit.sh
       - run: ./scripts/build_server.sh
       - run: ./scripts/build_wasm.sh
       - run: npm install

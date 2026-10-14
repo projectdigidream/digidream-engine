@@ -92,8 +92,12 @@ PROBE
 selftest_lua_detector
 
 # --- native targets -------------------------------------------------------
-for arch in arm64 x86_64; do
-  if clang++ "${FLAGS[@]}" -arch "$arch" "${SRCS[@]}" -o "$WORK/gt_$arch" 2>/dev/null; then
+# On macOS both architectures, through -arch (one clang builds both, and Rosetta
+# runs x86_64). Elsewhere -arch does not exist: the host's own, built plainly.
+if [[ "$(uname -s)" == "Darwin" ]]; then ARCHES=(arm64 x86_64); else ARCHES=("$(uname -m)"); fi
+for arch in "${ARCHES[@]}"; do
+  if [[ "$(uname -s)" == "Darwin" ]]; then ARCHFLAG=(-arch "$arch"); else ARCHFLAG=(); fi
+  if clang++ "${FLAGS[@]}" "${ARCHFLAG[@]}" "${SRCS[@]}" -o "$WORK/gt_$arch" 2>/dev/null; then
     assert_lua_free "native-$arch" "$WORK/gt_$arch"
     if "$WORK/gt_$arch" 1 >/dev/null 2>&1; then
       # The chunk trace first (maps added and removed from a running world),

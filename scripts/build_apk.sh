@@ -2,9 +2,9 @@
 #
 # One module, one APK: the engine, a level and the server, on a phone.
 #
-#   ./scripts/build_apk.sh                 # doom2, its first map, debug-signed
-#   ./scripts/build_apk.sh --module doom2 --map map05.dnpm
-#   ./scripts/build_apk.sh --module doom2 --log   # writes Download/Digidream/doom2-log.txt
+#   ./scripts/build_apk.sh                 # starter, its first map, debug-signed
+#   ./scripts/build_apk.sh --module mygame --map level2.dnpm
+#   ./scripts/build_apk.sh --module mygame --log   # writes Download/Digidream/mygame-log.txt
 #
 # WHAT IS IN IT. The same client the browser loads, the same authoritative
 # server the desktop runs -- cross-compiled for arm64 -- and one module's maps
@@ -30,7 +30,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
-MODULE="doom2"
+# The starter module unless one is named: the one module every checkout has.
+MODULE="starter"
 MAP=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,6 +63,8 @@ STUDIO="${STUDIO:-0}"
 NO_KITS="${NO_KITS:-0}"
 ICON="${ICON:-0}"
 MODULE_DIR="$REPO/modules/$MODULE"
+# Else the engine's own (modules/starter ships with it).
+[[ -d "$MODULE_DIR" ]] || MODULE_DIR="$ROOT/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[apk] no such module: modules/$MODULE" >&2; exit 2; }
 [[ $STUDIO -eq 0 || -f "$REPO/studio/wasm/dist/mapc.mjs" ]] || {
   echo "[apk] --studio needs the map compiler as wasm: run scripts/build_mapc_wasm.sh" >&2; exit 2; }

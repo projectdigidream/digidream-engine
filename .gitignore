@@ -22,3 +22,15 @@ emsdk/
 third_party/
 client/wasm/dist/
 .dnp-state/
+
+# The DOOM fixtures live in the private workspace (doom/, linked in by
+# doom/install.sh): nothing taken from DOOM is part of the public engine.
+/maps/doom1
+/maps/doom_map01.map
+/maps/doom.lua
+/maps/doom_monsters.lua
+/maps/mobs/doom_monsters.lua
+/maps/scripts/doom.lua
+/tools/wad
+/scripts/run_doomworld.sh
+/test/doom

@@ -45,6 +45,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 MODULE_DIR="$REPO/modules/$MODULE"
+# Else the engine's own (modules/starter ships with it).
+[[ -d "$MODULE_DIR" ]] || MODULE_DIR="$ROOT/modules/$MODULE"
 [[ -d "$MODULE_DIR" ]] || { echo "[ios] no such module: modules/$MODULE" >&2; exit 2; }
 if [[ -z "$MAP" ]]; then
   MAP="$(ls "$MODULE_DIR/maps/"*.dnpm 2>/dev/null | head -1 | xargs -n1 basename 2>/dev/null || true)"

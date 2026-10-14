@@ -1,0 +1,2 @@
+# animations.txt -- written by the studio from module.studio.json.
+# Its textures that are sprite sheets (docs/TEXTURE_SHEETS.md).

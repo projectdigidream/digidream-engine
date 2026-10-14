@@ -2,9 +2,9 @@
 #
 # Stage one MODULE into a standalone desktop application.
 #
-#   scripts/build_app.sh --module doom2
+#   scripts/build_app.sh                                    (the starter module)
 #   scripts/build_app.sh --module mygame --name "My Game" --out build/app
-#   scripts/build_app.sh --module doom2 --module extras      (several, in order)
+#   scripts/build_app.sh --module mygame --module extras    (several, in order)
 #
 # The output is a self-contained directory that Electron can run directly:
 #
@@ -77,7 +77,8 @@ done
 STUDIO="${STUDIO:-0}"
 NO_KITS="${NO_KITS:-0}"
 
-[[ ${#MODULES[@]} -gt 0 ]] || { echo "usage: $0 --module <name> [--module <name>...]" >&2; exit 2; }
+# The starter module unless one is named: the one module every checkout has.
+[[ ${#MODULES[@]} -gt 0 ]] || MODULES=(starter)
 
 # The first module names the app unless told otherwise. A one-module app is the
 # common case and having to spell the name twice is a way to get it wrong once.
@@ -88,8 +89,11 @@ NO_KITS="${NO_KITS:-0}"
 # Every failure here is cheap and every one of them is confusing later: a module
 # that does not exist stages an empty tree, and a module with no baked maps
 # produces an app that starts and hosts nothing.
+# A module beside the engine (the workspace's modules/), else the engine's own
+# (modules/starter ships with it).
+moddir() { if [[ -d "../modules/$1" ]]; then echo "../modules/$1"; else echo "modules/$1"; fi; }
 for m in "${MODULES[@]}"; do
-  d="../modules/$m"
+  d="$(moddir "$m")"
   [[ -d "$d" ]] || { echo "no module at $d" >&2; exit 1; }
   count=$(find "$d/maps" -name '*.dnpm' 2>/dev/null | wc -l | tr -d ' ')
   [[ "$count" -gt 0 ]] || {
@@ -102,7 +106,7 @@ if [[ -z "$APP_NAME" ]]; then
   # [[:space:]][[:space:]]* rather than \+ -- BSD sed (macOS) does not have \+,
   # and it fails by matching nothing rather than by complaining, so the name
   # quietly fell back to the module id.
-  APP_NAME=$(sed -n 's/^name[[:space:]][[:space:]]*//p' "../modules/${MODULES[0]}/module.txt" 2>/dev/null | head -1)
+  APP_NAME=$(sed -n 's/^name[[:space:]][[:space:]]*//p' "$(moddir "${MODULES[0]}")/module.txt" 2>/dev/null | head -1)
   [[ -n "$APP_NAME" ]] || APP_NAME="${MODULES[0]}"
 fi
 
@@ -179,7 +183,7 @@ for m in "${MODULES[@]}"; do
   # in it is the module's business. Doom's sprite lumps include names with a
   # backslash in them (VILE\1) and any copy that reconstructs paths by hand gets
   # those wrong.
-  cp -R "../modules/$m/." "$OUT/modules/$m/"
+  cp -R "$(moddir "$m")/." "$OUT/modules/$m/"
   # The .map sources and the editor sidecars are authoring inputs, not runtime
   # ones -- the server reads only the baked .dnpm. Dropping them keeps a doom2
   # app from carrying 32 copies of a file nothing opens.

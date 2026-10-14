@@ -1,0 +1,4 @@
+name    Starter
+id      starter
+about   A room, a door, a pit, a platform and a spirit: the module the studio starts from.
+about   MIT -- the textures and the spirit sheet are our own; see LICENSE.

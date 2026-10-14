@@ -1,0 +1,802 @@
+{
+  "version": 1,
+  "name": "first",
+  "texscale": 32,
+  "grid": 0.25,
+  "nextId": 65,
+  "sectors": {
+    "s1": {
+      "id": "s1",
+      "kind": "auto",
+      "floor": 0,
+      "ceil": 4,
+      "light": 200,
+      "thickness": 0,
+      "tag": 0,
+      "floorTex": "ROCKFLOOR1",
+      "ceilTex": "ROCKFLOOR1",
+      "verts": [
+        {
+          "id": "v2",
+          "x": -8,
+          "y": -6,
+          "edge": {
+            "id": "e3",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v4",
+          "x": 8,
+          "y": -6,
+          "edge": {
+            "id": "e5",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v50",
+          "x": 8,
+          "y": -2,
+          "edge": {
+            "id": "e51",
+            "flags": {
+              "usable": true
+            },
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v52",
+          "x": 8,
+          "y": 2,
+          "edge": {
+            "id": "e53",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v6",
+          "x": 8,
+          "y": 6,
+          "edge": {
+            "id": "e7",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v8",
+          "x": -8,
+          "y": 6,
+          "edge": {
+            "id": "e9",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        }
+      ]
+    },
+    "s10": {
+      "id": "s10",
+      "kind": "auto",
+      "floor": 0,
+      "ceil": 0,
+      "light": 180,
+      "thickness": 0,
+      "tag": 0,
+      "floorTex": "ROCKFLOOR1",
+      "ceilTex": "ROCKFLOOR1",
+      "verts": [
+        {
+          "id": "v11",
+          "x": 8,
+          "y": -2,
+          "edge": {
+            "id": "e12",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": "ROCKWALL1",
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v13",
+          "x": 10,
+          "y": -2,
+          "edge": {
+            "id": "e14",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": "ROCKWALL1",
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v15",
+          "x": 10,
+          "y": 2,
+          "edge": {
+            "id": "e16",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": "ROCKWALL1",
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v17",
+          "x": 8,
+          "y": 2,
+          "edge": {
+            "id": "e18",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": "ROCKWALL1",
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        }
+      ]
+    },
+    "s19": {
+      "id": "s19",
+      "kind": "auto",
+      "floor": 0,
+      "ceil": 5,
+      "light": 160,
+      "thickness": 0,
+      "tag": 0,
+      "floorTex": "ROCKFLOOR1",
+      "ceilTex": "ROCKFLOOR1",
+      "verts": [
+        {
+          "id": "v20",
+          "x": 10,
+          "y": -4,
+          "edge": {
+            "id": "e21",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v22",
+          "x": 22,
+          "y": -4,
+          "edge": {
+            "id": "e23",
+            "flags": {
+              "usable": true
+            },
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v24",
+          "x": 22,
+          "y": 4,
+          "edge": {
+            "id": "e25",
+            "flags": {
+              "usable": true
+            },
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v26",
+          "x": 10,
+          "y": 4,
+          "edge": {
+            "id": "e27",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v54",
+          "x": 10,
+          "y": 2,
+          "edge": {
+            "id": "e55",
+            "flags": {
+              "usable": true
+            },
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v56",
+          "x": 10,
+          "y": -2,
+          "edge": {
+            "id": "e57",
+            "flags": {},
+            "middle": "ROCKWALL1",
+            "upper": null,
+            "lower": null,
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        }
+      ]
+    },
+    "s28": {
+      "id": "s28",
+      "kind": "auto",
+      "floor": -1,
+      "ceil": 4,
+      "light": 120,
+      "thickness": 0,
+      "tag": 0,
+      "floorTex": "ROCKFLOOR1",
+      "ceilTex": "ROCKFLOOR1",
+      "verts": [
+        {
+          "id": "v29",
+          "x": 2,
+          "y": 1,
+          "edge": {
+            "id": "e30",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v31",
+          "x": 5,
+          "y": 1,
+          "edge": {
+            "id": "e32",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v33",
+          "x": 5,
+          "y": 4,
+          "edge": {
+            "id": "e34",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v35",
+          "x": 2,
+          "y": 4,
+          "edge": {
+            "id": "e36",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        }
+      ]
+    },
+    "s37": {
+      "id": "s37",
+      "kind": "auto",
+      "floor": 1,
+      "ceil": 4,
+      "light": 220,
+      "thickness": 0.5,
+      "tag": 0,
+      "floorTex": "ROCKFLOOR1",
+      "ceilTex": "ROCKFLOOR1",
+      "verts": [
+        {
+          "id": "v38",
+          "x": -5,
+          "y": -3,
+          "edge": {
+            "id": "e39",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v40",
+          "x": -2,
+          "y": -3,
+          "edge": {
+            "id": "e41",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v42",
+          "x": -2,
+          "y": 0,
+          "edge": {
+            "id": "e43",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        },
+        {
+          "id": "v44",
+          "x": -5,
+          "y": 0,
+          "edge": {
+            "id": "e45",
+            "flags": {},
+            "middle": null,
+            "upper": null,
+            "lower": "ROCKWALL1",
+            "xoff": 0,
+            "yoff": 0,
+            "unpegUpper": false,
+            "unpegLower": false,
+            "force": null
+          }
+        }
+      ]
+    }
+  },
+  "order": [
+    "s1",
+    "s10",
+    "s19",
+    "s28",
+    "s37"
+  ],
+  "spawns": [
+    {
+      "id": "p46",
+      "tag": "start",
+      "x": -4,
+      "y": 3,
+      "z": 0
+    }
+  ],
+  "lights": [
+    {
+      "id": "l47",
+      "x": 0,
+      "y": 0,
+      "z": 3,
+      "r": 255,
+      "g": 220,
+      "b": 170,
+      "radius": 14,
+      "intensity": 1
+    },
+    {
+      "id": "l48",
+      "x": 16,
+      "y": 0,
+      "z": 4,
+      "r": 170,
+      "g": 200,
+      "b": 255,
+      "radius": 12,
+      "intensity": 1
+    }
+  ],
+  "entities": [
+    {
+      "id": "n49",
+      "kind": "mob",
+      "name": "spirit",
+      "x": 18,
+      "y": 0,
+      "z": 0,
+      "dormant": false
+    }
+  ],
+  "triggers": [
+    {
+      "id": "t58",
+      "name": "door: shut",
+      "event": null,
+      "once": false,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "sector_at_rest",
+          "sector": {
+            "sector": "s10"
+          }
+        }
+      ],
+      "actions": [
+        {
+          "a": "sector_move",
+          "sector": {
+            "sector": "s10"
+          },
+          "surface": "ceiling",
+          "to": "base_ceiling",
+          "speed": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t59",
+      "name": "door: open from s19",
+      "event": "on_interact",
+      "once": false,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "side_is",
+          "side": {
+            "edgeTwin": "e14"
+          }
+        },
+        {
+          "c": "sector_at_rest",
+          "sector": "behind"
+        },
+        {
+          "c": "sector_offset_at_least",
+          "sector": "behind",
+          "z": "0.25",
+          "negate": true
+        }
+      ],
+      "actions": [
+        {
+          "a": "sector_move",
+          "sector": "behind",
+          "surface": "ceiling",
+          "to": "lowest_neighbour_ceiling",
+          "offset": [
+            -1,
+            8
+          ],
+          "speed": [
+            1,
+            4
+          ]
+        },
+        {
+          "a": "run_after",
+          "trigger": {
+            "trigger": "t58"
+          },
+          "after": "behind",
+          "ticks": 90
+        }
+      ]
+    },
+    {
+      "id": "t60",
+      "name": "door: close from s19",
+      "event": "on_interact",
+      "once": false,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "side_is",
+          "side": {
+            "edgeTwin": "e14"
+          }
+        },
+        {
+          "c": "sector_at_rest",
+          "sector": "behind"
+        },
+        {
+          "c": "sector_offset_at_least",
+          "sector": "behind",
+          "z": "0.25"
+        }
+      ],
+      "actions": [
+        {
+          "a": "sector_move",
+          "sector": "behind",
+          "surface": "ceiling",
+          "to": "base_ceiling",
+          "speed": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t61",
+      "name": "door: open from s1",
+      "event": "on_interact",
+      "once": false,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "side_is",
+          "side": {
+            "edgeTwin": "e18"
+          }
+        },
+        {
+          "c": "sector_at_rest",
+          "sector": "behind"
+        },
+        {
+          "c": "sector_offset_at_least",
+          "sector": "behind",
+          "z": "0.25",
+          "negate": true
+        }
+      ],
+      "actions": [
+        {
+          "a": "sector_move",
+          "sector": "behind",
+          "surface": "ceiling",
+          "to": "lowest_neighbour_ceiling",
+          "offset": [
+            -1,
+            8
+          ],
+          "speed": [
+            1,
+            4
+          ]
+        },
+        {
+          "a": "run_after",
+          "trigger": {
+            "trigger": "t58"
+          },
+          "after": "behind",
+          "ticks": 90
+        }
+      ]
+    },
+    {
+      "id": "t62",
+      "name": "door: close from s1",
+      "event": "on_interact",
+      "once": false,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "side_is",
+          "side": {
+            "edgeTwin": "e18"
+          }
+        },
+        {
+          "c": "sector_at_rest",
+          "sector": "behind"
+        },
+        {
+          "c": "sector_offset_at_least",
+          "sector": "behind",
+          "z": "0.25"
+        }
+      ],
+      "actions": [
+        {
+          "a": "sector_move",
+          "sector": "behind",
+          "surface": "ceiling",
+          "to": "base_ceiling",
+          "speed": [
+            1,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t63",
+      "name": "raise the pit",
+      "event": "on_interact",
+      "once": false,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "side_is",
+          "side": {
+            "edge": "e23"
+          }
+        },
+        {
+          "c": "sector_at_rest",
+          "sector": {
+            "sector": "s28"
+          }
+        }
+      ],
+      "actions": [
+        {
+          "a": "sector_move",
+          "sector": {
+            "sector": "s28"
+          },
+          "surface": "floor",
+          "to": "highest_neighbour_floor",
+          "speed": [
+            1,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "id": "t64",
+      "name": "exit",
+      "event": "on_interact",
+      "once": true,
+      "enabled": true,
+      "conditions": [
+        {
+          "c": "side_is",
+          "side": {
+            "edge": "e25"
+          }
+        }
+      ],
+      "actions": [
+        {
+          "a": "log",
+          "text": "exit reached"
+        },
+        {
+          "a": "change_map"
+        }
+      ]
+    }
+  ],
+  "extraLua": ""
+}

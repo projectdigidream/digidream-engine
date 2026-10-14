@@ -1,0 +1,62 @@
+# first.map -- written by the studio from first.studio.json.
+# Edit the level there; this file is rewritten on every bake.
+
+body radius 0.5 height 2
+texscale 32
+
+script ../../../engine/maps/scripts/mob_vocab.lua
+script ../../../engine/maps/scripts/mobs.lua
+script ../../../engine/maps/scripts/trigger_vocab.lua
+script ../../../engine/maps/scripts/triggers.lua
+script module.lua
+script first.lua
+
+sector floor 0 ceil 4 light 200 floortex ROCKFLOOR1 ceiltex ROCKFLOOR1
+  vertex -8 -6 wall tex ROCKWALL1
+  vertex 8 -6 wall tex ROCKWALL1
+  vertex 8 -2 neighbor 1 usable tex ROCKWALL1
+  vertex 8 2 wall tex ROCKWALL1
+  vertex 8 6 wall tex ROCKWALL1
+  vertex -8 6 wall tex ROCKWALL1
+  hole
+    vertex 2 4 neighbor 3 lower ROCKWALL1
+    vertex 5 4 neighbor 3 lower ROCKWALL1
+    vertex 5 1 neighbor 3 lower ROCKWALL1
+    vertex 2 1 neighbor 3 lower ROCKWALL1
+  end
+end
+
+sector floor 0 ceil 0 light 180 floortex ROCKFLOOR1 ceiltex ROCKFLOOR1
+  vertex 8 -2 wall tex ROCKWALL1 upper ROCKWALL1 lower ROCKWALL1
+  vertex 10 -2 neighbor 2 tex ROCKWALL1 upper ROCKWALL1 lower ROCKWALL1
+  vertex 10 2 wall tex ROCKWALL1 upper ROCKWALL1 lower ROCKWALL1
+  vertex 8 2 neighbor 0 tex ROCKWALL1 upper ROCKWALL1 lower ROCKWALL1
+end
+
+sector floor 0 ceil 5 light 160 floortex ROCKFLOOR1 ceiltex ROCKFLOOR1
+  vertex 10 -4 wall tex ROCKWALL1
+  vertex 22 -4 wall usable tex ROCKWALL1
+  vertex 22 4 wall usable tex ROCKWALL1
+  vertex 10 4 wall tex ROCKWALL1
+  vertex 10 2 neighbor 1 usable tex ROCKWALL1
+  vertex 10 -2 wall tex ROCKWALL1
+end
+
+sector floor -1 ceil 4 light 120 floortex ROCKFLOOR1 ceiltex ROCKFLOOR1
+  vertex 2 1 neighbor 0 lower ROCKWALL1
+  vertex 5 1 neighbor 0 lower ROCKWALL1
+  vertex 5 4 neighbor 0 lower ROCKWALL1
+  vertex 2 4 neighbor 0 lower ROCKWALL1
+end
+
+sector floor 1 ceil 4 light 220 thickness 0.5 floortex ROCKFLOOR1 ceiltex ROCKFLOOR1
+  vertex -5 -3 open lower ROCKWALL1
+  vertex -2 -3 open lower ROCKWALL1
+  vertex -2 0 open lower ROCKWALL1
+  vertex -5 0 open lower ROCKWALL1
+end
+
+spawn start -4 3 0
+
+light 0 0 3 color 255 220 170 radius 14 intensity 1
+light 16 0 4 color 170 200 255 radius 12 intensity 1

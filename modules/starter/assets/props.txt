@@ -1,0 +1,9 @@
+# props.txt -- written by the studio for module starter.
+# Ids 1000.. are this module's; the studio hands them out.
+
+prop 1000 spirit radius 0.35 height 1 speed 5.2 solid
+atlas 1000 sheet SPIR anim idle
+atlas 1000 state 1 sheet SPIR anim walk
+atlas 1000 state 2 sheet SPIR anim Attack
+atlas 1000 state 3 sheet SPIR anim idle
+atlas 1000 state 4 sheet SPIR anim death
