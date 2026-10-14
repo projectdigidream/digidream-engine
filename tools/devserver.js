@@ -71,7 +71,9 @@ for (let i = 2; i < process.argv.length; i++) {
     //
     // The path form is not a mistake anybody has to make deliberately: shell
     // completion produces it.
-    const candidates = isAbsolute(given) ? [given] : [join(REPO, 'modules', given), join(REPO, given), join(ROOT, given)]
+    // The engine's own modules/ last (the starter lives there), as the build
+    // scripts look: a module beside the engine first, then the engine's.
+    const candidates = isAbsolute(given) ? [given] : [join(REPO, 'modules', given), join(REPO, given), join(ROOT, given), join(ROOT, 'modules', given)]
     const root = candidates.find((p) => existsSync(p))
     if (!root) {
       // LOUDLY, AND FATAL. `join(REPO, 'modules', 'modules/doom2')` is a
