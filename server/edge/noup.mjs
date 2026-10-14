@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { WebTransport } from '@fails-components/webtransport'
-import { Edge } from '~/DoomNetPlatformer/server/edge/src/edge.js'
-const CERTS = '~/DoomNetPlatformer/server/edge/certs'
+import { Edge } from './src/edge.js'
+const CERTS = fileURLToPath(new URL('./certs', import.meta.url))
 const edge = new Edge({
   port: 34640, host: '127.0.0.1', path: '/dnp',
   upstreamPort: 34641,          // nothing is listening there
