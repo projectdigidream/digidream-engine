@@ -368,21 +368,35 @@ check(st.replayedTicks > 0, `replay actually ran (${st.replayedTicks} ticks re-s
 // frame. It is also the failure mode most likely to happen for real: protocol R1
 // violations, where the client predicts with a different input than it sent.
 {
+  //
+  // The disagreement must be one the simulation can SEE. A single Q1.15 step of
+  // an axis is below the resolution of the velocity it scales, so both sides
+  // compute the same state and every comparison is an honest exact match --
+  // the control then passed only when an unrelated starved snapshot happened to
+  // land in the window, which at 150 ms and more it usually did not. Reversing
+  // the axis for one tick is still a single-tick, single-field fault.
   const before = c.predictor.stats.mispredictions + c.predictor.stats.starvedDivergences
 
   await c.frame({ moveX: 0.5 })
   const t = c.predictor.tick
   const poisoned = { ...c.predictor.inputs.get(t) }
-  poisoned.moveX += 1        // one Q1.15 step: the smallest possible disagreement
+  poisoned.moveX = -poisoned.moveX
   c.predictor.inputs.set(t, poisoned)
 
-  for (let i = 0; i < 60; i++) { await c.frame({ moveY: 0.3 }); c.drain(); await sleep(15) }
-  await sleep(500)
-  c.drain()
+  // Keep going until the server has answered for tick t (a round trip and the
+  // input buffer, so it scales with latency), then a little longer.
+  const deadline = Date.now() + 3000 + NETSIM.latencyMs * 8
+  let answered = 0
+  while (Date.now() < deadline && answered < 10) {
+    await c.frame({ moveY: 0.3 })
+    for (const s of c.pending) if (s.lastInputTick >= t) answered += 1
+    c.drain()
+    await sleep(15)
+  }
 
   const after = c.predictor.stats.mispredictions + c.predictor.stats.starvedDivergences
   check(after > before,
-        `a ONE-STEP input disagreement is detected (${after - before} divergences)`)
+        `a one-tick input disagreement is detected (${after - before} divergences, ${answered} snapshots past it)`)
 }
 
 try { c.wt.close() } catch {}
