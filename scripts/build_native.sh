@@ -55,6 +55,15 @@ SRCS=(
   "$ROOT/core/src/nav/navgraph.cpp"
 )
 
+# `build_native.sh <arch> mapc`: the map compiler alone (what the packager's
+# kit build needs), without the test binaries -- each of those compiles the
+# whole core again, and all of them take a long while.
+if [[ "${2:-}" == "mapc" ]]; then
+  clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/tools/mapc/main.cpp" -o "$OUT/mapc"
+  echo "[build] mapc -> $OUT/mapc"
+  exit 0
+fi
+
 echo "[build] arch=$ARCH -> $OUT"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_math.cpp"    -o "$OUT/test_math"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_proto.cpp"   -o "$OUT/test_proto"
