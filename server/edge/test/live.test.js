@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebTransport } from '@fails-components/webtransport'
 import { Edge } from '../src/edge.js'
-import { serverBin, doomProps } from './serverbin.js'
+import { serverBin } from './serverbin.js'
 import { isOwnParams } from '../../../client/src/remoteparams.js'
 
 // net.js reaches for the global, exactly as a browser provides it. Installed
@@ -149,7 +149,8 @@ const CONV = { fxToFloat: (v) => Number(v) / 4294967296, toThree: (x, y, z) => (
 // the other one predicts straight through it and is corrected for as long as
 // they overlap. Exactly what main.js does; a harness that skipped it would be
 // measuring a client simpler than the real one.
-const catalogue = parseProps(readFileSync(doomProps, 'utf8'))
+// The catalogue the server loads here: the engine's own (no --props, no module).
+const catalogue = parseProps(readFileSync(join(ROOT, 'assets', 'props.txt'), 'utf8'))
 const mirrorBase = core.M._dnp_mirror_base()
 
 function drive (c, moveX, feedEntities = false) {
