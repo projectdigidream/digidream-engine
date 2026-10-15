@@ -600,6 +600,8 @@ suite_studio () {
   node ../studio/test/topology.test.js | tail -2
   node ../studio/test/mapfmt.test.js | tail -2
   node ../studio/test/pack.test.js | tail -2
+  # The GitHub sync plugin's engine: two devices against a fake GitHub.
+  node ../studio/test/github.sync.test.js | tail -1
   # A .tsprite composed by ThreeSprite's own runtime (vendored) into the atlas
   # the client draws: checked by the client's parser and by tools/tsprite's
   # project-versus-atlas comparison.
