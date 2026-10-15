@@ -682,6 +682,7 @@ suite_studio () {
   node ../studio/test/version.test.js | tail -2
   node ../studio/test/updates.test.js | tail -2
   node ../studio/test/record.test.js | tail -2
+  node ../studio/test/vieworder.test.js | tail -2
   # The studio's tab icon: the Digidream logo at 64 px, made from branding/.
   node ../studio/test/icon.test.js | tail -1
   # Snapshots: what is kept (the newest, then one a day), fingerprints, maps compared.
