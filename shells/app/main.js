@@ -37,6 +37,7 @@
 // you are in Node. app/test/launch.test.js strips the variable and asserts this
 // file loads at all.
 import { app, BrowserWindow, ipcMain, dialog, shell as desktop } from 'electron'
+import { externalUrl } from './links.js'
 import { spawn } from 'node:child_process'
 import { serverSaid } from './said.js'
 import { openGameLog } from './filelog.js'
@@ -374,8 +375,9 @@ async function start () {
       // A web page in the system's browser; https only, so this opens
       // nothing else (no file:, no custom schemes).
       case 'openUrl': {
-        if (!/^https:\/\//.test(String(a))) throw new Error('only https addresses')
-        await desktop.openExternal(String(a))
+        const url = externalUrl(a)
+        if (!url) throw new Error('only https addresses')
+        await desktop.openExternal(url)
         return true
       }
       default: throw new Error(`unknown studio call: ${op}`)

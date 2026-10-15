@@ -679,6 +679,7 @@ suite_studio () {
   # The studio's version: studio/VERSION and src/version.js say the same.
   node ../studio/test/version.test.js | tail -2
   node ../studio/test/updates.test.js | tail -2
+  node ../studio/test/record.test.js | tail -2
   # The studio's tab icon: the Digidream logo at 64 px, made from branding/.
   node ../studio/test/icon.test.js | tail -1
   # Snapshots: what is kept (the newest, then one a day), fingerprints, maps compared.
@@ -756,6 +757,8 @@ suite_app () {
   node shells/app/test/ui_route.test.js | tail -2
   node shells/app/test/said.test.js | tail -1
   node shells/app/test/filelog.test.js | tail -1
+  node shells/app/test/open_url.test.js | tail -1
+  node shells/app/test/shell_files.test.js | tail -1
   # A play-test serves its own module first: another module's hud.json no longer wins it.
   node shells/app/test/play_first.test.js | tail -2
   # The desktop app keeps its port, so the studio's storage survives a relaunch.
