@@ -229,11 +229,19 @@ done
 cp "$MODULE_DIR/maps/"*.dnpm "$W/maps/" 2>/dev/null || true
 
 # The synth and its instruments, when they are built. Optional: a module with
-# no soundtrack is a module, and a missing synth must not fail the build.
-if [[ -d "$REPO/midisynth/tool" ]]; then
+# no soundtrack is a module, and a missing synth must not fail the build. But
+# BUILT, not merely present: tool/dist/ is build output, not in git, and the
+# worklet without the dist/midisynth.mjs it imports is an APK whose music
+# fails to load on the phone ("the audio worklet failed to load") -- which is
+# what a release built from a clean export shipped. As build_app.sh does: the
+# synth whole, or not at all, and said.
+if [[ -f "$REPO/midisynth/tool/dist/midisynth.mjs" ]]; then
   mkdir -p "$W/synth" "$W/synth-content"
   cp -R "$REPO/midisynth/tool/." "$W/synth/" 2>/dev/null || true
   cp -R "$REPO/midisynth/content/." "$W/synth-content/" 2>/dev/null || true
+else
+  echo "[apk] NO SYNTH: midisynth/tool/dist/midisynth.mjs is missing; build it with" >&2
+  echo "      midisynth/scripts/build_wasm.sh, or this APK has no music" >&2
 fi
 # The sound-effects engine (docs/SOUNDS.md): one file, served at /sfx/. Optional
 # like the synth -- without it the game has music and no sound effects -- and
