@@ -185,7 +185,10 @@
       useModule: (module) => call('useModule', { module: module ?? '' }),
       share: (name, bytes) => call('share', { name, data: b64encode(new Uint8Array(bytes)) }),
       importFile: (accept) => call('importFile', { accept: accept ?? '' })
-        .then((r) => (r ? { name: r.name, bytes: b64decode(r.data) } : null))
+        .then((r) => (r ? { name: r.name, bytes: b64decode(r.data) } : null)),
+      // A web page (the studio's "a new version is out"), in the system's
+      // browser: the WebView would replace the studio with it.
+      openUrl: (url) => call('openUrl', { url })
     }
   }
 })()

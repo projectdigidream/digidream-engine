@@ -471,6 +471,11 @@ final class ShellController: UIViewController, WKScriptMessageHandlerWithReply, 
       case "deleteFile":
         guard let f = tree.file(a["path"] as? String ?? "") else { fail("refused path"); return }
         done((try? FileManager.default.removeItem(at: f)) != nil)
+      case "openUrl":
+        // A web page in Safari (the studio's update notice); https only.
+        guard let s = a["url"] as? String, s.hasPrefix("https://"), let u = URL(string: s) else { fail("only https addresses"); return }
+        DispatchQueue.main.async { UIApplication.shared.open(u) }
+        done(true)
       case "launch":
         guard let module = a["module"] as? String, let map = a["map"] as? String,
               let modDir = tree.file(module), let mapFile = tree.file(module + "/maps/" + map),

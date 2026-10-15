@@ -14,6 +14,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- The studio's shells open a web page in the system's browser (`openUrl`,
+  https only): the studio's "a new version is out" notice links to its
+  release without replacing the studio (Android) or opening a bare window.
+
 ## 0.1.2 -- 2026-10-15
 
 ### Fixed

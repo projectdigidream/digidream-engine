@@ -36,7 +36,7 @@
 // `process.type` is the tell: 'browser' is a real main process, undefined means
 // you are in Node. app/test/launch.test.js strips the variable and asserts this
 // file loads at all.
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell as desktop } from 'electron'
 import { spawn } from 'node:child_process'
 import { serverSaid } from './said.js'
 import { openGameLog } from './filelog.js'
@@ -370,6 +370,13 @@ async function start () {
         const r = await dialog.showOpenDialog(win, { properties: ['openFile'] })
         if (r.canceled || !r.filePaths[0]) return null
         return { name: basename(r.filePaths[0]), bytes: new Uint8Array(await readFileAsync(r.filePaths[0])) }
+      }
+      // A web page in the system's browser; https only, so this opens
+      // nothing else (no file:, no custom schemes).
+      case 'openUrl': {
+        if (!/^https:\/\//.test(String(a))) throw new Error('only https addresses')
+        await desktop.openExternal(String(a))
+        return true
       }
       default: throw new Error(`unknown studio call: ${op}`)
     }

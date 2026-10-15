@@ -353,6 +353,15 @@ public final class MainActivity extends Activity {
           reply(id, true, "true");
           return;
         }
+        // A web page in the system's browser (the studio's update notice);
+        // https only, so this is no way to open anything else.
+        case "openUrl": {
+          String url = a.getString("url");
+          if (!url.startsWith("https://")) { reply(id, false, "only https addresses"); return; }
+          ui.post(() -> startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))));
+          reply(id, true, "true");
+          return;
+        }
         case "launch": {
           launch(a.getString("module"), a.getString("map"));
           reply(id, true, "true");
