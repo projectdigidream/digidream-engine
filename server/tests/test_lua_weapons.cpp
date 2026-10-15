@@ -1151,6 +1151,18 @@ int main(int argc, char** argv) {
     std::printf("  CONTROL: a well-formed weapon drew %d complaints\n",
                 (int)num("good_complaints"));
     CHECK(num("good_complaints") == 0);
+    // A swing's fraction as the studio writes it, {n, d}, is read as that exact
+    // number: left a table, it reached add_effect and the arc was never set.
+    if (!run("local d = { label = 'Arc', order = 92, initial = 'ready',"
+             "  swing = { damage = 5, half_arc = { 1, 8 }, sweep_from = { -1, 8 } },"
+             "  phases = { ready = { anim = 0 } } }\n"
+             "local before = weapons.load_errors()\n"
+             "weapons.check_weapon('arced', d)\n"
+             "arc_complaints = weapons.load_errors() - before\n"
+             "arc_exact = (type(d.swing.half_arc) ~= 'table' and d.swing.half_arc == fx.frac(1, 8)"
+             "  and d.swing.sweep_from == fx.frac(-1, 8)) and 1 or 0\n", "a fraction")) return 1;
+    CHECK(num("arc_complaints") == 0);
+    CHECK(num("arc_exact") == 1);
 
     // ------------------------------------------------- the panel is generated
     //

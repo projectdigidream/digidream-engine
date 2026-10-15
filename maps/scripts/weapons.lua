@@ -145,6 +145,9 @@ local function is_int(v) return type(v) == "number" and v == math.floor(v) end
 local function as_fx(v, where, what)
   if type(v) == "string" then return fx.parse(v) end
   if is_int(v) then return fx.int(v) end
+  -- {numerator, denominator}, as triggers.lua takes it and the studio writes
+  -- a fraction (half_arc = { 1, 8 }). Left as a table it reached add_effect.
+  if type(v) == "table" and is_int(v[1]) and is_int(v[2]) and v[2] ~= 0 then return fx.frac(v[1], v[2]) end
   if type(v) == "number" then
     complain("%s: `%s` is %s, which is not exact. Write it as a string " ..
              "('%s') or a fraction, so it means the same on every build.",
