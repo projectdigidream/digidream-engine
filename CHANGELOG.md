@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.1.3 -- 2026-10-15
+
 ### Added
 
 - The studio's shells open a web page in the system's browser (`openUrl`,
