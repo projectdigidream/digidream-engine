@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.1.4.1 -- 2026-10-15
+
 ### Fixed
 
 - **The studio on Android could not reach GitHub**: the shell answers every
