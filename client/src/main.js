@@ -729,7 +729,7 @@ if (LIVE) {
         touch?.setLayout(uiLayout, scheme === SCHEME.FPS ? 'fps' : 'platformer')
         loadLayout(m.levelName ?? null)
         // The legend says the controls this scheme has.
-        if (scheme === SCHEME.FPS) {
+        if (scheme === SCHEME.FPS && !touch) {
           const help = document.getElementById('help')
           if (help) help.textContent = 'click to look   WASD move   mouse look   LMB/F fire   RMB alt   SPACE jump   E use   Esc release'
         }
@@ -2296,7 +2296,10 @@ addEventListener('blur', () => held.clear())
 // held every movement turns the view and the mouse buttons are the triggers.
 const mouseHeld = new Set()
 addEventListener('mousedown', (e) => {
-  if (!isFps()) return
+  // A PHONE has no pointer to lock: the view turns with the touch controls,
+  // and a tap arrives here as a mouse click too. Asking for the lock on it was
+  // refused, and the refusal's hint stayed on screen for good.
+  if (!isFps() || touch) return
   // A click on a script's panel is the panel's: it must not take the pointer
   // (which would hide the very cursor clicking it), and while a modal panel is
   // open the game has no pointer to take.
@@ -2321,6 +2324,7 @@ let pointerRefusal = null
 // Whether the controls were taken (a cutscene) on the last frame.
 let cutsceneHeld = false
 const showPointerHint = (why = null) => {
+  if (touch) return
   if (why) plog(`refused: ${why}`)
   pointerHint = true
   // Refused: get focus back natively now, so the next click finds it there.
@@ -2390,7 +2394,7 @@ function takePointer (auto = false) {
 // modal panel closing. Browsers let a page that released the pointer itself
 // take it again without a click; where one refuses, the hint says to click.
 function retakePointer () {
-  if (!isFps() || document.pointerLockElement === renderer.domElement || uiModal) return
+  if (touch || !isFps() || document.pointerLockElement === renderer.domElement || uiModal) return
   nativeFocus()
   takePointer(true)
 }
