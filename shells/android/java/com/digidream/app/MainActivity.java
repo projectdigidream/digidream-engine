@@ -63,6 +63,11 @@ import java.util.Map;
  * that is not our own asset origin with a 404 instead of letting WebView fetch
  * it. The server is a child process, the link is loopback, and every asset is
  * in the APK.
+ *
+ * <p>THE STUDIO IS THE ONE EXCEPTION, and a narrow one: a studio build (start.txt
+ * {@code studio=1}) may reach, over https, the hosts its bundled plugins declare
+ * ({@code "net:<host>"} in plugin.json: the GitHub sync's api.github.com) and its
+ * own update check's. A game build has none. test/studio_net.test.js holds it.
  */
 public final class MainActivity extends Activity {
   private static final String TAG = "digidream";
@@ -89,6 +94,13 @@ public final class MainActivity extends Activity {
   private String bundledModule;
   /** Whether the build staged the studio (start.txt's `studio=1`): opens it first, serves its modules. */
   private boolean studio;
+  /**
+   * The hosts the STUDIO may reach (https only): the ones its bundled plugins
+   * declare in plugin.json ({@code "net:<host>"}, a GitHub sync's
+   * api.github.com) and the studio's own update check. A game has none:
+   * nothing leaves the device (see {@link #serve}).
+   */
+  private java.util.Set<String> netHosts = java.util.Collections.emptySet();
   /** What the build wrote to start.txt, kept for the missing-page report. */
   private Props start;
 
@@ -192,6 +204,7 @@ public final class MainActivity extends Activity {
       start = Props.read(new File(gameDir, "start.txt"));
       bundledModule = start.need("module");
       studio = "1".equals(start.get("studio"));
+      if (studio) netHosts = studioNetHosts();
       if ("1".equals(start.get("log"))) {
         fileLog.open(this, bundledModule, "Digidream " + bundledModule + ", built " + start.get("built")
             + "; " + Build.MANUFACTURER + " " + Build.MODEL + ", Android " + Build.VERSION.RELEASE
@@ -606,6 +619,13 @@ public final class MainActivity extends Activity {
     if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) {
       return null;
     }
+    // THE STUDIO'S ONE WAY OUT: https to a host a bundled plugin declared
+    // (net:<host>) or the studio's update check -- passed to WebView to fetch.
+    // A game build has no such hosts, so for it nothing changes.
+    if (!netHosts.isEmpty() && url.startsWith("https://")) {
+      String host = android.net.Uri.parse(url).getHost();
+      if (host != null && netHosts.contains(host.toLowerCase())) return null;
+    }
     if (!url.startsWith(ORIGIN + "/")) {
       Log.w(TAG, "refused an off-origin request: " + url);
       return notFound();
@@ -692,6 +712,34 @@ public final class MainActivity extends Activity {
     headers.put("Access-Control-Allow-Origin", "*");
     res.setResponseHeaders(headers);
     return res;
+  }
+
+  /**
+   * The studio's reachable hosts: api.github.com (its update check,
+   * studio/src/updates.js), and every {@code net:<host>} a bundled plugin's
+   * plugin.json asks for (studio/plugins/index.json lists them). A plugin
+   * that is not in the APK asks for nothing here.
+   */
+  private java.util.Set<String> studioNetHosts() {
+    java.util.Set<String> hosts = new java.util.HashSet<>();
+    hosts.add("api.github.com");
+    try {
+      byte[] idx = assetBytes("studio/plugins/index.json");
+      JSONArray ids = idx == null ? new JSONArray() : new JSONObject(new String(idx, java.nio.charset.StandardCharsets.UTF_8)).optJSONArray("plugins");
+      for (int i = 0; ids != null && i < ids.length(); i++) {
+        byte[] pj = assetBytes("studio/plugins/" + ids.optString(i) + "/plugin.json");
+        if (pj == null) continue;
+        JSONArray perms = new JSONObject(new String(pj, java.nio.charset.StandardCharsets.UTF_8)).optJSONArray("permissions");
+        for (int k = 0; perms != null && k < perms.length(); k++) {
+          String p = perms.optString(k);
+          if (p.startsWith("net:") && p.length() > 4) hosts.add(p.substring(4).toLowerCase());
+        }
+      }
+    } catch (Exception e) {
+      Log.w(TAG, "the studio's plugins could not be read for their hosts: " + e.getMessage());
+    }
+    Log.i(TAG, "the studio may reach: " + hosts);
+    return hosts;
   }
 
   private byte[] assetBytes(String path) {

@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **The studio on Android could not reach GitHub**: the shell answers every
+  request off the app's own origin with a 404 (so a game reaches nothing),
+  and that refused the GitHub sync plugin and the studio's update check too.
+  A studio build now lets through https to the hosts its bundled plugins
+  declare (`net:<host>`) and api.github.com; a game build still reaches
+  nothing.
+
 ## 0.1.3 -- 2026-10-15
 
 ### Added
