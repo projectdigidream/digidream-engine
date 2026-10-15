@@ -67,6 +67,16 @@ A rebuild of 0.1.1 (VERSION stayed 0.1.1) with everything below.
   their whole module.
 - Play runs only the module played; modules no longer shadow each other's
   files.
+- No music or sound effects in Android games: the synth's worklet shipped
+  without the synth it imports and without the sound engine ("Failed to load
+  worklet module script"). `build_apk.sh` carries the synth whole or not at
+  all (the packager's kits had the same fault; see its changelog).
+- `run_stack.sh --module starter` failed from a fresh clone: the web server
+  did not look in the engine's own `modules/`.
+- `setup_emsdk.sh` installed Emscripten inside the engine while every script
+  looks beside it (`../emsdk`); it installs there now.
+- mapc refused a map whose declared script was not where its path said, even
+  with the script beside the map; it falls back to that copy and warns.
 
 ### Added
 
