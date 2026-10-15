@@ -14,6 +14,10 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.1.5 -- 2026-10-15
+
+No changes to the engine itself: its kits, built again for studio 0.3.4.
+
 ## 0.1.4.1 -- 2026-10-15
 
 ### Fixed
