@@ -240,6 +240,49 @@ static void test_impulse_away() {
     CHECK(r.body.impulse.x == fx::zero());                 // CONTROL: once, not every tick held
 }
 
+static void test_negate() {
+    std::printf("weapons: `negate` inverts a condition, and survives the wire\n");
+    static WeaponTable t;
+    t.clear();
+    WeaponDef& w = t.weapons[t.weapon_count++];
+    name(w.name, "vent"); w.phase_count = 3; w.initial = 0;
+    w.var_count = 1; w.vars[0] = 0;
+    name(w.phases[0].name, "ready");
+    name(w.phases[1].name, "fire"); w.phases[1].ticks = 2;
+    name(w.phases[2].name, "vent"); w.phases[2].ticks = 2;
+    // ready: [pressed & heat is NOT 0 -> vent] [pressed -> fire]
+    WCondDef hot = cond(WCond::VarIs); hot.var = 0; hot.n = 0; hot.negate = true;
+    trans(w.phases[0], 2, { cond(WCond::Pressed), hot });
+    trans(w.phases[0], 1, { cond(WCond::Pressed) });
+    WStep& f = step(w.phases[1], WAct::AddVar); f.var = 0; f.value = 1;
+    WStep& v = step(w.phases[2], WAct::SetVar); v.var = 0; v.value = 0;
+    t.initial_have = 1;
+    Run r(t);
+    r.step(0);
+    r.step(1); r.step(0); r.step(0); r.step(0);
+    CHECK(r.s.vars[0] == 1);                               // cold: fired
+    r.step(1);
+    CHECK(r.s.phase == 2 && r.s.vars[0] == 0);             // hot: vented, not fired
+    // CONTROL: the same table without `negate` vents when cold instead.
+    static WeaponTable plain;
+    plain = t;
+    plain.weapons[0].phases[0].transitions[0].conds[1].negate = false;
+    Run q(plain);
+    q.step(0);
+    q.step(1);
+    CHECK(q.s.phase == 2 && q.s.vars[0] == 0);
+    CHECK(plain.hash() != t.hash());                       // the flag is in the hash
+    // The wire keeps it.
+    static u8 buf[1 << 16];
+    ByteWriter bw(buf, sizeof(buf));
+    CHECK(encode_weapon_table(bw, t));
+    static WeaponTable back;
+    ByteReader br(buf, bw.size());
+    CHECK(decode_weapon_table(br, back));
+    CHECK(back.weapons[0].phases[0].transitions[0].conds[1].negate);
+    CHECK(!back.weapons[0].phases[0].transitions[0].conds[0].negate);
+}
+
 static void test_table_round_trip() {
     std::printf("weapons: the table survives the wire, and a corrupt one is refused\n");
     WeaponTable& t = doomish();
@@ -279,6 +322,7 @@ int main() {
     test_goto_hops_and_vars();
     test_swing_persists_until_another();
     test_impulse_away();
+    test_negate();
     test_table_round_trip();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

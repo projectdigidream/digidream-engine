@@ -205,6 +205,14 @@ local function check_value(spec, v, where, ctx)
   end
 end
 
+-- `negate` belongs to every condition rather than to one, as in the mob
+-- vocabulary, so it is checked here and not listed in each condition's args.
+local function check_negate(t, where)
+  if t.negate ~= nil and type(t.negate) ~= "boolean" then
+    complain("%s: `negate` must be true or false", where)
+  end
+end
+
 -- A whole table against a whole field list. `where` is what a complaint says.
 local function check_fields(t, spec_by_name, where, ctx, spec_list)
   for k, v in pairs(t) do
@@ -491,8 +499,9 @@ function W.check_weapon(name, def, deferred)
           if type(tr.when) == "string" then
             local args = {}
             for k, v in pairs(tr) do
-              if k ~= "when" and k ~= "to" then args[k] = v end
+              if k ~= "when" and k ~= "to" and k ~= "negate" then args[k] = v end
             end
+            check_negate(tr, twhere)
             local spec = COND[tr.when]
             if spec == nil then
               complain("%s: unknown condition '%s'", twhere, tr.when)
@@ -517,7 +526,10 @@ function W.check_weapon(name, def, deferred)
                   complain("%s: unknown condition '%s'", owhere, one.cond)
                 else
                   local args = {}
-                  for k, v in pairs(one) do if k ~= "cond" then args[k] = v end end
+                  for k, v in pairs(one) do
+                    if k ~= "cond" and k ~= "negate" then args[k] = v end
+                  end
+                  check_negate(one, owhere)
                   check_fields(args, index_by_name(spec.args), owhere, ctx, spec.args)
                   for k, v in pairs(args) do one[k] = v end
                 end
@@ -1048,16 +1060,22 @@ end
 -- the transition itself, or a LIST of {cond = name, ...args} ALL of which must
 -- hold. The list is what lets a transition say "the button went down and there
 -- is no ammunition", which one condition cannot.
+-- `negate = true` inverts any one condition, as a monster's does; a negated
+-- `chance` still draws, so the random stream does not depend on it.
+local function holds(c, fn, a)
+  return (fn(c, a) and true or false) ~= (a.negate == true)
+end
+
 local function transition_fires(c, tr)
   if type(tr.when) == "string" then
     local fn = conds[tr.when]
-    return fn ~= nil and fn(c, tr) and true or false
+    return fn ~= nil and holds(c, fn, tr)
   end
   -- An empty list would be vacuously true, which is `always` written the long
   -- way round and almost certainly a mistake; it is refused at load.
   for _, one in ipairs(tr.when or {}) do
     local fn = conds[one.cond]
-    if fn == nil or not fn(c, one) then return false end
+    if fn == nil or not holds(c, fn, one) then return false end
   end
   return true
 end

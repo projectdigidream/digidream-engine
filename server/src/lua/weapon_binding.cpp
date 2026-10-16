@@ -231,6 +231,7 @@ bool compile_cond(Reader& r, int c, const char* name, const std::string& where,
     if (!cond_by_name(name, out.kind)) return r.fail(where, std::string("unknown condition '") + name + "'");
     const std::string button = r.str_at(c, "button");
     out.trigger = button == "secondary" ? sim::TRIGGER_SECONDARY : sim::TRIGGER_PRIMARY;
+    r.bool_at(c, "negate", out.negate);
     i64 v = 0; bool has = false;
     switch (out.kind) {
         case WCond::HeldFor: case WCond::PhaseElapsed:

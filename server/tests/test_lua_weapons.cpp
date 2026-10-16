@@ -974,6 +974,46 @@ int main(int argc, char** argv) {
             },
             vars = { barrel = 0 },
           },
+
+          -- NEGATE, in a list: a press while `heat` is NOT 0 vents instead of
+          -- firing. Written the way an author writes "is not": `var_is` with
+          -- `negate`, there being no `var_is_not`.
+          ventgun = {
+            label = "Vent Gun", order = 23, initial = "ready",
+            phases = {
+              ready = { transitions = {
+                { when = { { cond = "button_pressed" },
+                           { cond = "var_is", var = "heat", value = 0, negate = true } },
+                  to = "vent" },
+                { when = "button_pressed", to = "fire" } } },
+              fire = { anim = 2, ticks = 4, next = "ready", sequence = {
+                { at = 0, action = "add_var", var = "heat", value = 1 } } },
+              vent = { anim = 3, ticks = 4, next = "ready", sequence = {
+                { at = 0, action = "set_var", var = "heat", value = 0 },
+                { at = 0, action = "add_var", var = "vents", value = 1 } } },
+            },
+            vars = { heat = 0, vents = 0 },
+          },
+
+          -- NEGATE on the one-condition form, whose arguments sit on the
+          -- transition: `check` goes to `b` when `mode` is not 0.
+          togglegun = {
+            label = "Toggle", order = 24, initial = "ready",
+            phases = {
+              ready = { transitions = {
+                { when = "button_pressed", to = "check" } } },
+              check = { transitions = {
+                { when = "var_is", var = "mode", value = 0, negate = true, to = "b" },
+                { when = "always", to = "a" } } },
+              a = { anim = 2, ticks = 4, next = "ready", sequence = {
+                { at = 0, action = "set_var", var = "mode", value = 1 },
+                { at = 0, action = "add_var", var = "path", value = 1 } } },
+              b = { anim = 3, ticks = 4, next = "ready", sequence = {
+                { at = 0, action = "set_var", var = "mode", value = 0 },
+                { at = 0, action = "add_var", var = "path", value = 10 } } },
+            },
+            vars = { mode = 0, path = 0 },
+          },
         },
       }
       platformer_errors = weapons.load_errors()
@@ -1060,6 +1100,23 @@ int main(int argc, char** argv) {
     CHECK(barrel_main == 1);
     CHECK(barrel_alt == 2);
 
+    // NEGATE. Three presses: fire (heat 1), vent (heat back to 0), fire.
+    if (!pattern("ventgun", ".1....1....1....")) return 1;
+    const int heat = var_of("heat"), vents = var_of("vents");
+    std::printf("  negate: three presses -> heat %d, vents %d\n", heat, vents);
+    // CONTROL in the numbers: a machine that ignored `negate` would vent on
+    // every press (heat 0, vents 3), and one that dropped the negated
+    // condition would never vent (heat 3, vents 0).
+    CHECK(heat == 1 && vents == 1);
+    // The one-condition form. The first press finds `mode` at 0, so the
+    // negated `var_is` does not hold and `always` takes it to `a` (+1); the
+    // second finds it at 1, which the negation makes hold, so `b` (+10).
+    if (!pattern("togglegun", ".1....1....")) return 1;
+    const int path = var_of("path");
+    std::printf("  negate on one condition: two presses -> path %d\n", path);
+    // CONTROL in the number: ignoring `negate` goes to `b` both times (20).
+    CHECK(path == 11);
+
     // ================================================================
     // EVERY BAD TABLE IS REFUSED, and this is the assertion the validating
     // loader exists for. A loader that accepted everything would pass every
@@ -1116,6 +1173,10 @@ int main(int argc, char** argv) {
         {"a required weapon field left out",
          "weapons.check_weapon('b12', { order = 90, initial = 'ready',"
          "  phases = { ready = {} } })"},
+        {"a `negate` that is not true or false",
+         "weapons.check_weapon('b13', { label = 'B', order = 90, initial = 'ready',"
+         "  phases = { ready = { transitions = {"
+         "    { when = { { cond = 'always', negate = 'yes' } }, to = 'ready' } } } } })"},
     };
     std::printf("  --- every bad table must be refused ---\n");
     int refused = 0;
@@ -1134,7 +1195,7 @@ int main(int argc, char** argv) {
 
     // And a GOOD table alongside them, so "it refuses everything" is not the
     // explanation for the block above. A checker that complained about every
-    // input would satisfy all twelve.
+    // input would satisfy all thirteen.
     if (!run("local before = weapons.load_errors()\n"
              "weapons.check_weapon('good', { label = 'Good', order = 91,"
              "  initial = 'ready', vars = { heat = 0 },"

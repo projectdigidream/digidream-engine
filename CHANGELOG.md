@@ -49,6 +49,9 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   not run it again from the start. A boss with phases is no longer sent back
   to phase 1 by every hit. Works in any state a module enters as a reaction,
   in both mob runtimes (docs/MOBS.md).
+- Weapon conditions take `negate = true`, as a monster's do: "the counter is
+  not 0" is `var_is` with `negate`, without falling back to `lua`. Predicted
+  like the rest of the weapon (docs/WEAPONS.md).
 - Wall textures can be turned and scaled like a flat's: `angle` (degrees) and
   `scale` on a wall's `vertex` line, turned about the side's texture origin,
   then shifted by `xoff`/`yoff`, then scaled (docs/MAP_AUTHOR.md, "Walls").

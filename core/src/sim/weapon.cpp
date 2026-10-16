@@ -79,7 +79,7 @@ struct Ctx {
     i32 random(i32 lo, i32 hi) noexcept { return weapon_random(seed, agent, tick, draws++, lo, hi); }
 };
 
-bool cond_holds(Ctx& c, const WCondDef& k) noexcept {
+bool cond_test(Ctx& c, const WCondDef& k) noexcept {
     const u8 m = bit_of(k.trigger);
     switch (k.kind) {
         case WCond::Always:   return true;
@@ -108,6 +108,10 @@ bool cond_holds(Ctx& c, const WCondDef& k) noexcept {
     }
     return false;
 }
+
+// `negate` inverts any condition, as a monster's does. A negated `chance`
+// still draws, so the random stream is the same either way.
+bool cond_holds(Ctx& c, const WCondDef& k) noexcept { return cond_test(c, k) != k.negate; }
 
 void report(Ctx& c, u8 phase, u8 step, const WStep& a) noexcept {
     WeaponEvent e;
@@ -401,7 +405,7 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                 for (u32 j = 0; j < tr.count; ++j) {
                     const WCondDef& c = tr.conds[j];
                     w.u8v(static_cast<u8>(c.kind)); w.u8v(c.trigger); w.u8v(c.var);
-                    w.u8v(static_cast<u8>((c.flag ? 1 : 0) | (c.has ? 2 : 0)));
+                    w.u8v(static_cast<u8>((c.flag ? 1 : 0) | (c.has ? 2 : 0) | (c.negate ? 4 : 0)));
                     w.i32v(c.n); w.fxraw(c.speed);
                 }
             }
@@ -509,9 +513,9 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                     const u8 flags = r.u8v();
                     c.n = r.i32v(); c.speed = r.fxraw();
                     if (!r.ok() || kind > static_cast<u8>(WCond::Falling) || c.trigger > 1 ||
-                        c.var >= MAX_WEAPON_VARS || flags > 3) return false;
+                        c.var >= MAX_WEAPON_VARS || flags > 7) return false;
                     c.kind = static_cast<WCond>(kind);
-                    c.flag = flags & 1; c.has = (flags & 2) != 0;
+                    c.flag = flags & 1; c.has = (flags & 2) != 0; c.negate = (flags & 4) != 0;
                 }
             }
         }

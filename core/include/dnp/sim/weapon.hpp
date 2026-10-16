@@ -70,6 +70,7 @@ struct WCondDef {
     u8    var = 0;                     // a var's slot
     bool  flag = false;                // grounded's `value`; `has` = a value given
     bool  has = false;
+    bool  negate = false;              // holds when the condition does not
     i32   n = 0;                       // ticks, n, percent, value
     fx    speed{};                     // moving / falling; `has` says given
 };

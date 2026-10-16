@@ -257,7 +257,8 @@ weapon_vocab = {
             "ammunition', which one condition cannot: `no_ammo` on its own " ..
             "fires while a weapon is merely being HELD, so an empty weapon " ..
             "would be taken out of the player's hands the instant they chose " ..
-            "it, every tick, and could never be carried at all." },
+            "it, every tick, and could never be carried at all.\n" ..
+            "Any condition takes `negate = true`, which inverts it." },
   },
 
   -- ----------------------------------------------------------- conditions
@@ -265,6 +266,10 @@ weapon_vocab = {
   -- Read by `transitions`. Every one of them is answerable from what the
   -- server already knows about the player this tick; none of them casts a ray
   -- or walks the level, because this runs for every player every tick.
+  --
+  -- EVERY condition accepts `negate = true`, which inverts it, as in the mob
+  -- vocabulary: "var is not 0" is `var_is` with `negate`. It is not listed in
+  -- each condition's args for the same reason it is not there.
   conditions = {
     { name = "always", args = {},
       doc = "Fires as soon as it is reached. For the last entry in a list, " ..
