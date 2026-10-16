@@ -129,8 +129,21 @@ mobs.load{
             -- call it an orphan, and a fixture the loader complains about is
             -- not a graph anybody could author.
             { to = 'leave',  when = { { cond = 'var_at_least', var = 'shots', value = 9999 } } },
+            -- Entered directly by the test, as `leave` is.
+            { to = 'barrage', when = { { cond = 'var_at_least', var = 'shots', value = 9999 } } },
           },
         },
+        -- Three shots spread over a long state: a hit can land between them.
+        barrage = {
+          anim = 4, move = 'stop', ticks = 64, next = 'chase',
+          sequence = {
+            { at = 8,  action = 'hitscan', damage = 1, range = '20' },
+            { at = 24, action = 'hitscan', damage = 1, range = '20' },
+            { at = 40, action = 'hitscan', damage = 1, range = '20' },
+          },
+        },
+        -- A reaction: back to whatever it interrupted (`next = '@previous'`).
+        pain = { anim = 5, move = 'stop', ticks = 16, next = '@previous' },
         attack = {
           anim = 2, move = 'stop', ticks = 40, next = 'chase',
           sequence = {
@@ -329,6 +342,72 @@ int main(int argc, char** argv) {
                 rec.calls.size(),
                 rt.graph.str(rt.graph.states[rt.graph.kinds[0].first_state + m->state].name));
     rec.leaves_to = nullptr;
+
+    // --- pain resumes what it interrupted (next = '@previous') ---------------
+    //
+    // RESUMED, not re-entered: a hit after the barrage's first shot must not
+    // fire that shot again, and the two still to come fire once each, at their
+    // deadlines pushed back by exactly the time spent in pain.
+    {
+        const i32 barrage = rt.graph.state_by_name(rt.graph.kinds[0], "barrage", 7);
+        const i32 pain = rt.graph.state_by_name(rt.graph.kinds[0], "pain", 4);
+        CHECK(barrage >= 0 && pain >= 0);
+        rec.calls.clear();
+        CHECK(mob_enter(rt, mob_e, "barrage", 7, tick));
+        const u32 began = m->entered;
+        step(THINK * 2);                               // past the shot at 8, short of 24
+        const size_t first = rec.calls.size();
+        CHECK(first == 1 && first > 0 && rec.calls[0].index == 1);
+        const u32 elapsed_at_hit = tick - began;
+        const u16 seq_at_hit = m->seq_i;
+        CHECK(mob_enter(rt, mob_e, "pain", 4, tick));  // what `hurt` does
+        CHECK(m->state == pain);
+        const u32 hit_at = tick;
+        // Until it is back: pain lasts 16, seen on the think at or after.
+        u32 guard = 0;
+        while (m->state == pain && guard++ < 10) step(THINK);
+        CHECK(m->state == barrage);
+        const u32 back_at = m->entered + elapsed_at_hit;   // the tick it resumed on
+        CHECK(back_at >= hit_at + 16);
+        CHECK(m->seq_i == seq_at_hit);
+        CHECK(m->entered == back_at - elapsed_at_hit);     // elapsed carried on, not restarted
+        // The rest of the barrage, and then its expiry.
+        guard = 0;
+        while (m->state == barrage && guard++ < 20) step(THINK);
+        u32 one = 0, two = 0, three = 0;
+        for (const Recorder::Call& c : rec.calls) {
+            if (c.state != "barrage") continue;
+            if (c.index == 1) ++one;
+            if (c.index == 2) ++two;
+            if (c.index == 3) ++three;
+        }
+        CHECK(one == 1 && two == 1 && three == 1);
+        CHECK(m->state != barrage);                         // it ran out and moved on
+        std::printf("  pain resumed the barrage at %u ticks in: shots fired %u/%u/%u (once each)\n",
+                    elapsed_at_hit, one, two, three);
+
+        // CONTROL: entering it afresh DOES fire the first shot again -- what
+        // a fixed `next = 'barrage'` would have done after every hit.
+        rec.calls.clear();
+        CHECK(mob_enter(rt, mob_e, "barrage", 7, tick));
+        step(THINK * 2);
+        u32 again = 0;
+        for (const Recorder::Call& c : rec.calls) if (c.state == "barrage" && c.index == 1) ++again;
+        CHECK(again == 1);
+        std::printf("  CONTROL: re-entered instead, the first shot fires again (%u)\n", again);
+
+        // A second hit DURING pain still returns to the barrage, not to pain.
+        CHECK(mob_enter(rt, mob_e, "barrage", 7, tick));
+        step(THINK);
+        CHECK(mob_enter(rt, mob_e, "pain", 4, tick));
+        step(THINK);
+        CHECK(mob_enter(rt, mob_e, "pain", 4, tick));
+        guard = 0;
+        while (m->state == pain && guard++ < 10) step(THINK);
+        CHECK(m->state == barrage);
+        std::printf("  hit twice, it still goes back to '%s'\n",
+                    rt.graph.str(rt.graph.states[rt.graph.kinds[0].first_state + m->state].name));
+    }
 
     // --- a kind the loop cannot run is refused, not half-tracked -------------
     {

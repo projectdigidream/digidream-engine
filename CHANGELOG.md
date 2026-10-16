@@ -43,6 +43,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- A monster's `pain` can go back to what it was doing: `next = "@previous"`
+  returns to the state the hit interrupted and resumes it where it was, its
+  elapsed time and its sequence, so a hit during a barrage or a summon does
+  not run it again from the start. A boss with phases is no longer sent back
+  to phase 1 by every hit. Works in any state a module enters as a reaction,
+  in both mob runtimes (docs/MOBS.md).
 - Wall textures can be turned and scaled like a flat's: `angle` (degrees) and
   `scale` on a wall's `vertex` line, turned about the side's texture origin,
   then shifted by `xoff`/`yoff`, then scaled (docs/MAP_AUTHOR.md, "Walls").

@@ -226,6 +226,17 @@ void enter(MobRuntime& rt, sim::World& w, Mob& m, i32 state, u32 tick) {
         std::fprintf(stderr, "[mobenter] %u %u %s cpp\n", tick, m.entity,
                      rt.graph.str(st.name));
     }
+    // Where it was, for a reaction to come back to -- unless where it was IS a
+    // reaction, whose own snapshot still says where to return (mobs.lua enter).
+    if (m.state >= 0 && static_cast<u32>(m.state) < k.state_count &&
+        rt.graph.states[k.first_state + m.state].next != NEXT_PREVIOUS) {
+        m.has_prev = true;
+        m.prev_state = m.state;
+        m.prev_elapsed = tick - m.entered;
+        m.prev_seq_i = m.seq_i;
+        m.prev_state_ticks = m.state_ticks;
+        m.prev_anim = m.anim;
+    }
     m.state = static_cast<i16>(state);
     m.entered = tick;
     // HOW LONG THIS TIME. Rolled here because `enter` is the one place every
@@ -240,6 +251,30 @@ void enter(MobRuntime& rt, sim::World& w, Mob& m, i32 state, u32 tick) {
     set_anim(w, m, st.anim);
     if (st.solid >= 0) w.agent_mut(m.entity).solid = st.solid != 0;
     if (st.move == Move::Stop) set_move(w, m, fx::zero(), fx::zero(), m.aim, 0);
+}
+
+// BACK TO THE STATE A REACTION INTERRUPTED, exactly as mobs.lua's resume():
+// its elapsed time, its place in its sequence and the length it was rolled to,
+// not re-entered -- so steps already run do not run again and nothing is
+// rolled twice. False with nothing to go back to.
+bool resume(MobRuntime& rt, sim::World& w, Mob& m, u32 tick) {
+    const Kind& k = rt.graph.kinds[static_cast<u32>(m.kind)];
+    if (!m.has_prev || m.prev_state < 0 || static_cast<u32>(m.prev_state) >= k.state_count) return false;
+    const State& st = rt.graph.states[k.first_state + m.prev_state];
+    static const bool trace = [] {
+        const char* v = std::getenv("DNP_MOB_TRACE");
+        return v != nullptr && v[0] == '1';
+    }();
+    if (trace) std::fprintf(stderr, "[mobenter] %u %u %s cpp\n", tick, m.entity, rt.graph.str(st.name));
+    m.has_prev = false;
+    m.state = m.prev_state;
+    m.entered = tick - m.prev_elapsed;
+    m.state_ticks = m.prev_state_ticks;
+    m.seq_i = m.prev_seq_i;
+    set_anim(w, m, m.prev_anim);
+    if (st.solid >= 0) w.agent_mut(m.entity).solid = st.solid != 0;
+    if (st.move == Move::Stop) set_move(w, m, fx::zero(), fx::zero(), m.aim, 0);
+    return true;
 }
 
 // Where the next waypoint is, or the target itself.
@@ -530,7 +565,11 @@ void think(MobRuntime& rt, sim::World& w, Mob& m, u32 tick, ActionSink* lua) {
 
     if (m.state_ticks >= 0 &&
         static_cast<i64>(tick) - static_cast<i64>(m.entered) >= m.state_ticks) {
-        enter(rt, w, m, st.next, tick);
+        if (st.next == NEXT_PREVIOUS) {
+            if (!resume(rt, w, m, tick)) enter(rt, w, m, k.initial, tick);
+        } else {
+            enter(rt, w, m, st.next, tick);
+        }
     }
 }
 

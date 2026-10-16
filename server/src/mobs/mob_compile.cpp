@@ -19,6 +19,8 @@
 // added a condition here without touching the loader. This walks the finished
 // tables, so the only thing it can disagree with is itself.
 //
+#include <cstring>
+
 #include "mobs/mob_runtime.hpp"
 
 extern "C" {
@@ -375,7 +377,9 @@ bool compile_kind(lua_State* L, int def_idx, MobGraph& g, Kind& k,
         {
             size_t n = 0;
             const char* s = opt_str(L, st_idx, "next", n);
-            st.next = s ? static_cast<i16>(g.state_by_name(k, s, n)) : -1;
+            st.next = !s ? static_cast<i16>(-1)
+                    : (n == 9 && std::memcmp(s, "@previous", 9) == 0) ? NEXT_PREVIOUS
+                    : static_cast<i16>(g.state_by_name(k, s, n));
             if (s != nullptr) lua_pop(L, 1);
         }
 

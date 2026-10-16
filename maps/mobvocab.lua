@@ -200,7 +200,8 @@ mobs.load{
         peer_up   = { anim = 1, move = 'stop', face = 'target', ticks = 10, next = 'stalk' },
         peer_down = { anim = 1, move = 'stop', face = 'target', ticks = 10, next = 'stalk' },
 
-        pain = { anim = 3, move = 'stop', face = 'hold', ticks = 8, next = 'stalk' },
+        -- A reaction: back to whatever the hit interrupted, resumed where it was.
+        pain = { anim = 3, move = 'stop', face = 'hold', ticks = 8, next = '@previous' },
         death = { anim = 4, move = 'stop', face = 'hold', solid = false,
                   ticks = 60, next = 'death' },
       },

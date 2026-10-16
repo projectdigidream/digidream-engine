@@ -240,6 +240,36 @@ check(distinct > 5, `the world changed over the run (${distinct} distinct hashes
 const pains = (r) => r.decisions.filter((d) => d.endsWith(' pain')).length
 check(pains(cpp) > 0 && pains(cpp) === pains(lua),
       `monsters flinched, as often in both (${pains(cpp)} and ${pains(lua)})`)
+// AND WENT BACK. The fixture's pain is a reaction (`next = '@previous'`), so
+// a flinch that runs its course returns each monster to the state the hit
+// interrupted -- in both runtimes, as often. A flinch cut short by another
+// hit or by death says nothing either way and is not counted.
+const resumes = (r) => {
+  const byMob = new Map()
+  for (const d of r.decisions) {
+    const [, idx, st] = d.split(' ')
+    if (!byMob.has(idx)) byMob.set(idx, [])
+    byMob.get(idx).push(st)
+  }
+  let back = 0
+  let elsewhere = 0
+  for (const seq of byMob.values()) {
+    for (let i = 1; i + 1 < seq.length; i++) {
+      if (seq[i] !== 'pain' || seq[i - 1] === 'pain') continue
+      const after = seq[i + 1]
+      if (after === 'pain' || after === 'death') continue
+      if (after === seq[i - 1]) back++
+      else elsewhere++
+    }
+  }
+  return { back, elsewhere }
+}
+{
+  const c = resumes(cpp)
+  const l = resumes(lua)
+  check(c.back > 0 && c.back === l.back && c.elsewhere === 0 && l.elsewhere === 0,
+        `a flinch went back to what it interrupted, in both (${c.back} and ${l.back}; elsewhere ${c.elsewhere}/${l.elsewhere})`)
+}
 
 // WHERE THE RNG PARTS, which is usually before where the world does: the two
 // runtimes share one stream, and a draw one makes and the other skips moves

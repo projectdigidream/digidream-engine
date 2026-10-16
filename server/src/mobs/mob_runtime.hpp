@@ -54,6 +54,14 @@ struct Mob {
     u32  hurt_at = 0;
 
     i32  anim = -1;
+    // WHERE IT WAS before the state it is in, for a reaction (`next =
+    // "@previous"`) to resume: mobs.lua's m.prev, field for field.
+    bool has_prev = false;
+    i16  prev_state = -1;
+    u32  prev_elapsed = 0;
+    u16  prev_seq_i = 0;
+    i32  prev_state_ticks = -1;
+    i32  prev_anim = -1;
     // How long THIS entry of the current state lasts: `ticks` plus whatever
     // `ticks_jitter` rolled on the way in. -1 for a state with no timeout.
     i32  state_ticks = -1;

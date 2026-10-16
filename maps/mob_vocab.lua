@@ -312,7 +312,10 @@ mob_vocab = {
             "is no duration to lengthen." },
     { name = "next", type = "state", optional = true,
       doc = "Where it goes when `ticks` runs out. Absent with `ticks` set is " ..
-            "a state that ends and stays, which the loader refuses." },
+            "a state that ends and stays, which the loader refuses. " ..
+            "\"@previous\" makes it a REACTION: back to the state it " ..
+            "interrupted, resumed where it was (its time, its place in its " ..
+            "sequence), not re-entered -- for `pain`." },
     { name = "sequence", type = "table", optional = true,
       doc = "Ordered {at = <ticks after entry>, ...action}. `at` is relative " ..
             "to entering the state and is a DEADLINE, not a countdown: a mob " ..

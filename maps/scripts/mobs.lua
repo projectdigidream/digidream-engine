@@ -56,6 +56,8 @@ end
 -- a shape the engine does not have -- so this loaded there and raised on the
 -- first real server, which is the harness testing itself rather than the code.
 local fx, vec3 = _G.fx, _G.vec3
+-- A state's `next` that means "back to the state it interrupted" (see resume).
+local PREVIOUS = "@previous"
 local ZERO = fx.int(0)
 local ONE  = fx.int(1)
 
@@ -646,9 +648,10 @@ function M.load(data)
                  "mid-animation -- name where it goes, even if that is itself.",
                  sw)
       end
-      if st.next ~= nil and d.states[st.next] == nil then
-        complain("%s: `next` is '%s', which is not one of this mob's states",
-                 sw, tostring(st.next))
+      if st.next ~= nil and st.next ~= PREVIOUS and d.states[st.next] == nil then
+        complain("%s: `next` is '%s', which is not one of this mob's states " ..
+                 "(or \"%s\", back to the state it interrupted)",
+                 sw, tostring(st.next), PREVIOUS)
       end
 
       for i, entry in ipairs(st.sequence or {}) do
@@ -1058,6 +1061,40 @@ end
 local TRACE = (os ~= nil and os.getenv ~= nil and os.getenv("DNP_MOB_TRACE") == "1") or false
 M.TRACE = TRACE
 
+-- `next = "@previous"`: A REACTION, which goes back to what it interrupted.
+--
+-- `pain` is the one the runtime enters itself, and with a fixed `next` every
+-- hit sent a boss with phases back to the first of them. So every way into a
+-- state keeps where the mob was in the one it is leaving -- which state, how
+-- far in, how far through its sequence, how long it was rolled to last, its
+-- animation -- and a state whose `next` is "@previous" goes back to exactly
+-- that when it runs out: RESUMED, not re-entered, so a summon a hit cut into
+-- does not summon twice and a barrage does not start again. Leaving one
+-- reaction for another (a second hit during pain) keeps the first snapshot,
+-- so it still returns to what it was doing before either.
+local function is_reaction(st) return st ~= nil and st.next == PREVIOUS end
+
+local function resume(m, tick)
+  local p = m.prev
+  if p == nil or m.def.states[p.name] == nil then
+    -- Nothing to go back to (a reaction on the very first state): start where
+    -- the mob starts.
+    return false
+  end
+  if TRACE then
+    print(("[mobenter] %d %d %s %s"):format(dnp.tick(), m.idx, p.name, m.cpp and "cpp" or "lua"))
+  end
+  local st = m.def.states[p.name]
+  m.prev = nil
+  m.state, m.st, m.entered = p.name, st, tick - p.elapsed
+  m.state_ticks = p.state_ticks
+  m.seq_i = p.seq_i
+  if p.anim ~= nil then set_anim(m, p.anim) end
+  if st.solid ~= nil and m.e:valid() then m.e:set_solid(st.solid) end
+  if st.move == "stop" then set_move(m, ZERO, ZERO, m.aim) end
+  return true
+end
+
 local function enter(m, name, tick)
   if TRACE then
     print(("[mobenter] %d %d %s %s"):format(
@@ -1076,6 +1113,11 @@ local function enter(m, name, tick)
   end
   local st = m.def.states[name]
   if st == nil then return end
+  -- Where it was, for a reaction to come back to (see PREVIOUS).
+  if m.st ~= nil and not is_reaction(m.st) then
+    m.prev = { name = m.state, elapsed = tick - m.entered, seq_i = m.seq_i,
+               state_ticks = m.state_ticks, anim = m.anim }
+  end
   m.state, m.st, m.entered = name, st, tick
   -- HOW LONG THIS TIME. Rolled here rather than read in `think`, because
   -- `enter` is the one place every way into a state passes through -- a
@@ -3056,7 +3098,11 @@ local function think(m, tick)
   end
 
   if m.state_ticks ~= nil and tick - m.entered >= m.state_ticks then
-    enter(m, st.next, tick)
+    if st.next == PREVIOUS then
+      if not resume(m, tick) then enter(m, m.def.initial, tick) end
+    else
+      enter(m, st.next, tick)
+    end
     return
   end
 end

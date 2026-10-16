@@ -157,6 +157,10 @@ struct SeqEntry {
     i32 jitter = -1;
 };
 
+// `next = "@previous"` (mobs.lua PREVIOUS): a reaction that resumes the state
+// it interrupted rather than entering a fixed one.
+inline constexpr i16 NEXT_PREVIOUS = -2;
+
 struct State {
     u32  name = 0;          // index into MobGraph::strings
     i32  anim = -1;         // index into MobGraph::strings, or -1
@@ -167,7 +171,7 @@ struct State {
     // Extra ticks, rolled on entry. -1 for absent, which is NOT zero: both
     // runtimes draw exactly when the graph carries the field.
     i32  ticks_jitter = -1;
-    i16  next = -1;
+    i16  next = -1;         // or NEXT_PREVIOUS: back to the state it interrupted
     u16  first_trans = 0, trans_count = 0;
     u16  first_seq = 0, seq_count = 0;
 };
