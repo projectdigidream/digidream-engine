@@ -754,6 +754,8 @@ int l_weapon_sync(lua_State* L) {
 // One tick of this player's weapon, by the core. `events` is what weapons.lua
 // must now carry out, in order: {action, weapon, phase, step, aim, count,
 // offsets}, all indices 0-based, `offsets` the per-pellet brad the core drew.
+// NIL when there are none, which is nearly every tick: an empty table made
+// sixty times a second per player is garbage for nothing.
 int l_weapon_step(lua_State* L) {
     const i32 a = entity_agent(L, 1);
     const u32 tick = static_cast<u32>(luaL_checknumber(L, 2));
@@ -768,6 +770,7 @@ int l_weapon_step(lua_State* L) {
     const u32 hops = world.step_weapon(static_cast<u32>(a), c->table,
                                        world.live_input(static_cast<u32>(a)).weapon, tick, c->seed, log);
     lua_pushnumber(L, hops);
+    if (log.count() == 0) { lua_pushnil(L); return 2; }
     lua_createtable(L, static_cast<int>(log.count()), 0);
     for (u32 i = 0; i < log.count(); ++i) {
         const sim::WeaponEvent& e = log.at(i);
@@ -794,24 +797,38 @@ int l_weapon_step(lua_State* L) {
 // dnp.weapon_state(e) -> the machine's state, for weapons.lua to read back:
 // have, current, armed, phase, swing_phase (0-based, -1 for none), entered,
 // vars and ammo (1-based arrays in slot and pool order).
+//
+// dnp.weapon_state(e, into) fills `into` instead, and its `vars` and `ammo`
+// arrays, and returns it: weapons.lua reads this every tick for every player,
+// and three new tables each time were most of what the read cost.
 int l_weapon_state(lua_State* L) {
     const i32 a = entity_agent(L, 1);
     if (a < 0) { lua_pushnil(L); return 1; }
     const sim::WeaponState& s = context_of(L).world->weapon(static_cast<u32>(a));
     const auto idx = [&](u8 v, u8 none) { lua_pushnumber(L, v == none ? -1 : v); };
-    lua_createtable(L, 0, 8);
+    if (lua_istable(L, 2)) lua_pushvalue(L, 2);
+    else lua_createtable(L, 0, 8);
     lua_pushnumber(L, s.have);                 lua_setfield(L, -2, "have");
     idx(s.current, sim::NO_WEAPON);            lua_setfield(L, -2, "current");
     idx(s.armed, sim::NO_WEAPON);              lua_setfield(L, -2, "armed");
     idx(s.phase, sim::NO_PHASE);               lua_setfield(L, -2, "phase");
     idx(s.swing_phase, sim::NO_PHASE);         lua_setfield(L, -2, "swing_phase");
     lua_pushnumber(L, s.entered);              lua_setfield(L, -2, "entered");
-    lua_createtable(L, sim::MAX_WEAPON_VARS, 0);
+    // The table's own array when it has one, a new one when not.
+    const auto array = [&](const char* name, int n) {
+        lua_getfield(L, -1, name);
+        if (lua_istable(L, -1)) return;
+        lua_pop(L, 1);
+        lua_createtable(L, n, 0);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, name);
+    };
+    array("vars", static_cast<int>(sim::MAX_WEAPON_VARS));
     for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) { lua_pushnumber(L, s.vars[i]); lua_rawseti(L, -2, static_cast<int>(i + 1)); }
-    lua_setfield(L, -2, "vars");
-    lua_createtable(L, sim::MAX_AMMO_POOLS, 0);
+    lua_pop(L, 1);
+    array("ammo", static_cast<int>(sim::MAX_AMMO_POOLS));
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) { lua_pushnumber(L, s.ammo[i]); lua_rawseti(L, -2, static_cast<int>(i + 1)); }
-    lua_setfield(L, -2, "ammo");
+    lua_pop(L, 1);
     return 1;
 }
 

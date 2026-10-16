@@ -624,6 +624,27 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                          static_cast<unsigned long long>(perf.bp_full), perf.ticks,
                          static_cast<double>(perf.bp_full) / n);
         }
+        // AND WHICH CALLBACKS the Lua time went to, across every VM -- the
+        // game's and each level's -- the costliest first. A level's copy of a
+        // script counts with the others of the same name.
+        {
+            std::unordered_map<std::string, u64> by;
+            if (game_vm.is_open()) game_vm.take_perf_breakdown(by);
+            for (u32 li = 0; li < level_count(); ++li) {
+                if (is_live(li) && level(li).vm.is_open()) level(li).vm.take_perf_breakdown(by);
+            }
+            std::vector<std::pair<u64, std::string>> top;
+            for (auto& [k, v] : by) top.push_back({v, k});
+            std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+            std::string line;
+            for (size_t i = 0; i < top.size() && i < 6; ++i) {
+                char part[256];
+                std::snprintf(part, sizeof(part), "%s%.0f us %s", i ? ", " : "",
+                              static_cast<double>(top[i].first) / n, top[i].second.c_str());
+                line += part;
+            }
+            if (!line.empty()) std::fprintf(stderr, "[perf]   lua by callback: %s\n", line.c_str());
+        }
         perf = Perf{perf.every, 0, 0, 0, 0, 0, 0};
     }
 
@@ -1058,6 +1079,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             std::fprintf(stderr, "[srv] cannot start the game's Lua: %s\n", game_vm.last_error());
             return false;
         }
+        game_vm.set_perf_breakdown(perf.every != 0);
         game_ctx = lua::WorldContext{};
         game_ctx.game        = true;
         game_ctx.map_changes = this;
@@ -2289,6 +2311,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                          levels[li].path.c_str(), L.vm.last_error());
             return false;
         }
+        L.vm.set_perf_breakdown(perf.every != 0);
         L.ctx.world       = &L.world;
         L.ctx.poses       = &L.host->poses;
         L.ctx.rewind_tick = L.host->rewind_tick;

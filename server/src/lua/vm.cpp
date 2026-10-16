@@ -552,6 +552,12 @@ void Vm::end_hook(const char* fn_name, u32 tick, int nargs) {
     }
     const u64 call_us = now_us() - call_start;
     script_us_this_tick_ += call_us;
+    if (perf_on_) {
+        const char* slash = std::strrchr(current_, '/');
+        char key[192];
+        std::snprintf(key, sizeof(key), "%s in %s", fn_name, slash ? slash + 1 : current_);
+        perf_by_[key] += call_us;
+    }
     if (call_us > worst_call_us_) {
         worst_call_us_ = call_us;
         std::snprintf(worst_call_what_, sizeof(worst_call_what_), "%s in %s",
@@ -568,6 +574,11 @@ void Vm::call_hook(const char* fn_name, u32 tick) {
         if (!begin_hook_at(fn_name, i)) continue;
         end_hook(fn_name, tick, 0);
     }
+}
+
+void Vm::take_perf_breakdown(std::unordered_map<std::string, u64>& into) {
+    for (const auto& [k, v] : perf_by_) into[k] += v;
+    perf_by_.clear();
 }
 
 void Vm::gc_step() {

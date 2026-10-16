@@ -249,7 +249,12 @@ W.pickup_sounds = nil
 -- panel's read-out list, and the "first phase declared" default.
 local ammo_order = {}
 
+-- KEPT until the pools change (W.load is the only place they do): the HUD asks
+-- every tick, and a fresh list sorted with a closure each time was the largest
+-- single cost of a weapon tick.
+local sorted_cache = nil
 local function sorted_ammo()
+  if sorted_cache ~= nil then return sorted_cache end
   local out = {}
   for name, a in pairs(W.ammo) do out[#out + 1] = { name = name, def = a } end
   table.sort(out, function(x, y)
@@ -257,6 +262,7 @@ local function sorted_ammo()
     if ox ~= oy then return ox < oy end
     return x.name < y.name             -- a total order, so the panel is stable
   end)
+  sorted_cache = out
   return out
 end
 
@@ -287,6 +293,7 @@ function W.load(t)
       check_fields(a, AMMO_FIELD, "ammo '" .. name .. "'",
                    { deferred = {} }, vocab.ammo_fields)
       W.ammo[name] = a
+      sorted_cache = nil
       ammo_order[#ammo_order + 1] = name
     end
   end
@@ -1073,9 +1080,11 @@ local function send_predict(e, inv, def, state)
   if def and def.ammo then
     shots = math.floor((inv.ammo[def.ammo] or 0) / (def.per or 1))
   end
-  local sig = tostring(def and def.name) .. "/" .. tostring(shots)
-  if state.predicted == sig then return end
-  state.predicted = sig
+  -- Compared as they are, not as a string built to compare: this runs every
+  -- tick for every player, and a change is rare.
+  local name = def and def.name
+  if state.predicted and state.predicted_name == name and state.predicted_shots == shots then return end
+  state.predicted, state.predicted_name, state.predicted_shots = true, name, shots
   local list = {}
   for _, p in ipairs((def and def.predict) or {}) do
     if PREDICT_ON[p.on] and type(p.sound) == "string" then
@@ -1094,11 +1103,21 @@ end
 local function publish_hud(e, inv, def, state)
   if dnp.hud == nil then return end
   local pool = def and def.ammo
-  local parts = { tostring(def and def.name) }
-  for _, a in ipairs(sorted_ammo()) do parts[#parts + 1] = tostring(inv.ammo[a.name] or 0) end
-  local sig = table.concat(parts, ",")
-  if state.hud_sig == sig then return end
-  state.hud_sig = sig
+  -- What it showed last, kept as values and compared one by one: a string
+  -- built every tick to compare was garbage for a change that is rare.
+  local pools = sorted_ammo()
+  local last = state.hud_last
+  local same = last ~= nil and last.name == (def and def.name) and last.n == #pools
+  if same then
+    for i, a in ipairs(pools) do
+      if last[i] ~= (inv.ammo[a.name] or 0) then same = false; break end
+    end
+  end
+  if same then return end
+  last = last or {}
+  state.hud_last = last
+  last.name, last.n = def and def.name, #pools
+  for i, a in ipairs(pools) do last[i] = inv.ammo[a.name] or 0 end
   local t = {
     hp_max = W.health.max or 100,
     weapon = (def and def.name) or "",
@@ -1281,18 +1300,35 @@ local function core_tick(e, idx, now, X)
   end
 
   -- DOWN: the inventory, as scripts left it -- a pickup, the panel, a load.
+  -- Handed down only when it differs from what the machine held at the end of
+  -- the last tick (`state.core`, read back below), which nearly every tick it
+  -- does not: the machine changed nothing in between, so the sync would be a
+  -- no-op. A fresh state (rearmed, or the table compiled again) always syncs.
   local have = 0
   for name, held in pairs(inv.have) do
     local i = held and X.weapons[name]
     if i then have = bit.bor(have, bit.lshift(1, i)) end
   end
-  local ammo = {}
-  for i, pool in ipairs(X.pool_names) do ammo[i] = inv.ammo[pool] or 0 end
-  dnp.weapon_sync(e, have, X.weapons[inv.current] or -1, ammo)
+  local cur_i = X.weapons[inv.current] or -1
+  local core = state.core
+  local differs = core == nil or state.core_for ~= X or core.have ~= have or core.current ~= cur_i
+  if not differs then
+    local ca = core.ammo
+    for i, pool in ipairs(X.pool_names) do
+      if ca[i] ~= (inv.ammo[pool] or 0) then differs = true; break end
+    end
+  end
+  if differs then
+    local ammo = state.sync_ammo or {}
+    state.sync_ammo = ammo
+    for i, pool in ipairs(X.pool_names) do ammo[i] = inv.ammo[pool] or 0 end
+    dnp.weapon_sync(e, have, cur_i, ammo)
+  end
 
   local hops, events = dnp.weapon_step(e, now)
-  local s = dnp.weapon_state(e)
+  local s = dnp.weapon_state(e, core)
   if s == nil then return end
+  state.core, state.core_for = s, X
 
   -- UP: what the machine spent and switched to.
   for i, pool in ipairs(X.pool_names) do inv.ammo[pool] = s.ammo[i] end
@@ -1306,7 +1342,9 @@ local function core_tick(e, idx, now, X)
   state.weapon = wname
   state.phase = names[s.phase + 1]
   state.entered = s.entered
-  state.vars = {}
+  -- In place when the weapon is the same; a new table when it is not, so a
+  -- variable of the last weapon is not left behind in this one's.
+  if state.vars_for ~= wname then state.vars = {}; state.vars_for = wname end
   for slot, vname in ipairs(X.var_names[wname]) do state.vars[vname] = s.vars[slot] end
 
   -- THE SWING, written when it changes: the weapon's on arming, a phase's
@@ -1431,11 +1469,12 @@ local function watch_weapons(e, idx)
   if inv == nil then return end
   local pool = inv.current and W.defs[inv.current] and W.defs[inv.current].ammo
   local n = pool and (inv.ammo[pool] or 0) or nil
-  local was = watched[idx]
-  watched[idx] = { current = inv.current, pool = pool, n = n }
-  if was == nil then return end
-  if was.current ~= inv.current then tell_graphs("changed", e, inv.current) end
-  if pool ~= nil and pool == was.pool and n == 0 and (was.n or 0) > 0 then tell_graphs("out_of_ammo", e, inv.current) end
+  local w = watched[idx]
+  if w == nil then watched[idx] = { current = inv.current, pool = pool, n = n }; return end
+  local was_current, was_pool, was_n = w.current, w.pool, w.n
+  w.current, w.pool, w.n = inv.current, pool, n
+  if was_current ~= inv.current then tell_graphs("changed", e, inv.current) end
+  if pool ~= nil and pool == was_pool and n == 0 and (was_n or 0) > 0 then tell_graphs("out_of_ammo", e, inv.current) end
 end
 
 --- Which phase a player's weapon is in. For tests and for a debug panel.

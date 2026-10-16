@@ -126,6 +126,13 @@ public:
     // its own moment.
     void gc_step();
 
+    // WHERE THE LUA TIME GOES, by callback: "on_tick in weapons.lua" and its
+    // microseconds, summed over the calls since the last take. Only while on
+    // (the server's --perf), so a server nobody is measuring formats nothing.
+    void set_perf_breakdown(bool on) noexcept { perf_on_ = on; }
+    // Adds this VM's sums into `into` and starts them again.
+    void take_perf_breakdown(std::unordered_map<std::string, u64>& into);
+
     // Call a global function of no arguments, if it exists. Errors are caught,
     // counted and logged once -- a script that throws must not take the tick
     // with it, and must not be silently ignored either.
@@ -216,6 +223,9 @@ private:
     // Time actually spent inside Lua this tick -- the sum of the callbacks,
     // which is the only part of a tick this class is entitled to blame.
     u64  script_us_this_tick_ = 0;
+
+    bool perf_on_ = false;
+    std::unordered_map<std::string, u64> perf_by_;
 };
 
 }  // namespace dnp::server::lua
