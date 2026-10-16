@@ -809,6 +809,7 @@ function conds.chance(c, a) return dnp.random(0, 99) < a.percent end
 
 function conds.var_at_least(c, a) return (c.state.vars[a.var] or 0) >= a.value end
 function conds.var_is(c, a)       return (c.state.vars[a.var] or 0) == a.value end
+function conds.cooldown_ready(c, a) return c.now >= (c.state.vars[a.var] or 0) end
 
 -- WHAT THE BODY IS DOING, so an attack can differ in the air.
 --
@@ -926,8 +927,54 @@ function acts.telegraph(c, a)
   world(c.e, "telegraph", a)
 end
 
-function acts.set_var(c, a) c.state.vars[a.var] = a.value end
-function acts.add_var(c, a) c.state.vars[a.var] = (c.state.vars[a.var] or 0) + a.value end
+-- THE VARS A COOLDOWN NAMES, by weapon: the ones whose value outlives putting
+-- the weapon away (the core's WeaponDef::cool_slot). Worked out once per
+-- definition, from its steps and its conditions.
+local cool_vars_of = setmetatable({}, { __mode = "k" })
+local function cool_vars(def)
+  local out = cool_vars_of[def]
+  if out ~= nil then return out end
+  out = {}
+  for _, ph in pairs(def.phases or {}) do
+    for _, entry in ipairs(ph.sequence or {}) do
+      if entry.action == "set_cooldown" and entry.var then out[entry.var] = true end
+    end
+    for _, tr in ipairs(ph.transitions or {}) do
+      if tr.when == "cooldown_ready" and tr.var then out[tr.var] = true end
+      if type(tr.when) == "table" then
+        for _, one in ipairs(tr.when) do
+          if one.cond == "cooldown_ready" and one.var then out[one.var] = true end
+        end
+      end
+    end
+  end
+  cool_vars_of[def] = out
+  return out
+end
+
+-- A var written: a cooldown's keeps the value for the next time this weapon
+-- is armed.
+local function keep(c, var)
+  if c.def == nil or not cool_vars(c.def)[var] then return end
+  local by = c.state.cool
+  if by == nil then by = {}; c.state.cool = by end
+  local w = by[c.state.weapon]
+  if w == nil then w = {}; by[c.state.weapon] = w end
+  w[var] = c.state.vars[var]
+end
+
+function acts.set_var(c, a) c.state.vars[a.var] = a.value; keep(c, a.var) end
+function acts.add_var(c, a)
+  c.state.vars[a.var] = (c.state.vars[a.var] or 0) + a.value
+  keep(c, a.var)
+end
+-- mobs.lua's set_cooldown: a deadline, now + ticks, plus up to `jitter` more.
+function acts.set_cooldown(c, a)
+  local t = a.ticks
+  if (a.jitter or 0) > 0 then t = t + dnp.random(0, a.jitter) end
+  c.state.vars[a.var] = c.now + t
+  keep(c, a.var)
+end
 
 function acts.goto(c, a) c.jump = a.phase end
 
@@ -1039,6 +1086,9 @@ local function rearm(e, idx, inv, now)
   st.weapon = inv.current
   st.vars = {}
   for k, v in pairs((def and def.vars) or {}) do st.vars[k] = v end
+  -- A cooldown carries on where it was when the weapon was put away.
+  local kept = st.cool and st.cool[inv.current]
+  if kept then for k, v in pairs(kept) do st.vars[k] = v end end
   enter(st, def and def.initial, now)
   apply_weapon_params(e, def)
 end

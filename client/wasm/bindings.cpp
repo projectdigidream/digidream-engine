@@ -625,7 +625,7 @@ unsigned dnp_world_animation_state(const sim::World* w, unsigned idx) {
 
 // The weapon state as 32-bit words, in this order; the length is asked for,
 // not assumed, as the agent buffers' are.
-constexpr unsigned WEAPON_BUF32_LEN = 6 + 4 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS;
+constexpr unsigned WEAPON_BUF32_LEN = 6 + 4 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + sim::MAX_WEAPON_COOLDOWNS;
 
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_weapon_buf32_len() { return WEAPON_BUF32_LEN; }
@@ -640,6 +640,8 @@ void dnp_world_read_weapon(const sim::World* w, unsigned idx, unsigned* out32) {
     out32[8] = s.held_since[0]; out32[9] = s.held_since[1];
     for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) out32[10 + i] = static_cast<unsigned>(s.vars[i]);
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) out32[10 + sim::MAX_WEAPON_VARS + i] = s.ammo[i];
+    for (u32 i = 0; i < sim::MAX_WEAPON_COOLDOWNS; ++i)
+        out32[10 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + i] = static_cast<unsigned>(s.cool[i]);
 }
 
 // Adopt the server's (reconciliation step 2, as dnp_world_write_agent).
@@ -654,6 +656,8 @@ void dnp_world_write_weapon(sim::World* w, unsigned idx, const unsigned* in32) {
     s.held_since[0] = in32[8]; s.held_since[1] = in32[9];
     for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) s.vars[i] = static_cast<i32>(in32[10 + i]);
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) s.ammo[i] = static_cast<u16>(in32[10 + sim::MAX_WEAPON_VARS + i]);
+    for (u32 i = 0; i < sim::MAX_WEAPON_COOLDOWNS; ++i)
+        s.cool[i] = static_cast<i32>(in32[10 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + i]);
 }
 
 // The weapon held in display slot `n` (1-based: the n-th held weapon by the
@@ -1101,6 +1105,9 @@ unsigned dnp_test_snapshot(unsigned char* out, unsigned cap, unsigned options) {
     s.weapon.held_since[0] = 70003; s.weapon.held_since[1] = 70004;
     for (u32 i = 0; i < sim::MAX_WEAPON_VARS; ++i) s.weapon.vars[i] = -100 - static_cast<i32>(i);
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) s.weapon.ammo[i] = static_cast<u16>(200 + i);
+    // Five cooldowns and three unset, so the encoder's "up to the last one set"
+    // is exercised rather than the full array.
+    for (u32 i = 0; i < 5; ++i) s.weapon.cool[i] = 300 + static_cast<i32>(i);
     s.anchor.raw = 0x55;
     s.jumps_used = 1;
     s.attack_left = 2;

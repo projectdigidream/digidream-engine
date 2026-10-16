@@ -40,8 +40,8 @@ const WEAPON_VFX_MAX = 40
 
 // The weapon state's words (client/wasm/bindings.cpp dnp_world_read_weapon):
 // have, current, phase, armed, swing phase, previous buttons, entered, done,
-// two held-since ticks, four vars, eight pools.
-const WEAPON_BUF32_LEN = 22
+// two held-since ticks, four vars, eight pools, eight cooldown deadlines.
+const WEAPON_BUF32_LEN = 30
 
 // map.hpp's path_flag::LOOP.
 export const PATH_LOOP = 1
@@ -600,7 +600,8 @@ export class WasmWorld {
       have: u[b], current: u[b + 1], phase: u[b + 2], armed: u[b + 3], swingPhase: u[b + 4],
       prevButtons: u[b + 5], entered: u[b + 6], done: u[b + 7], heldSince: [u[b + 8], u[b + 9]],
       vars: [u[b + 10] | 0, u[b + 11] | 0, u[b + 12] | 0, u[b + 13] | 0],
-      ammo: Array.from(u.subarray(b + 14, b + 22))
+      ammo: Array.from(u.subarray(b + 14, b + 22)),
+      cool: Array.from(u.subarray(b + 22, b + 30), (v) => v | 0)
     }
   }
 
@@ -609,13 +610,15 @@ export class WasmWorld {
     const u = this.core.views.u32
     const b = this.core.weaponbuf / 4
     if (!k) k = { have: 0, current: 255, phase: 255, armed: 255, swingPhase: 255, prevButtons: 0,
-                  entered: 0, done: 0, heldSince: [0, 0], vars: [0, 0, 0, 0], ammo: [0, 0, 0, 0, 0, 0, 0, 0] }
+                  entered: 0, done: 0, heldSince: [0, 0], vars: [0, 0, 0, 0], ammo: [0, 0, 0, 0, 0, 0, 0, 0],
+                  cool: [0, 0, 0, 0, 0, 0, 0, 0] }
     u[b] = k.have >>> 0
     u[b + 1] = k.current; u[b + 2] = k.phase; u[b + 3] = k.armed; u[b + 4] = k.swingPhase
     u[b + 5] = k.prevButtons; u[b + 6] = k.entered >>> 0; u[b + 7] = k.done >>> 0
     u[b + 8] = k.heldSince[0] >>> 0; u[b + 9] = k.heldSince[1] >>> 0
     for (let i = 0; i < 4; i++) u[b + 10 + i] = k.vars[i] >>> 0
     for (let i = 0; i < 8; i++) u[b + 14 + i] = k.ammo[i] ?? 0
+    for (let i = 0; i < 8; i++) u[b + 22 + i] = (k.cool?.[i] ?? 0) >>> 0
     this.core.M._dnp_world_write_weapon(this.ptr, idx, this.core.weaponbuf)
   }
 

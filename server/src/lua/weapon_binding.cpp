@@ -58,11 +58,12 @@ Compiled* compiled_of(lua_State* L) {
 // string, and an event goes back to it the same way.
 const char* const ACT_NAME[] = {
     "consume", "set_var", "add_var", "goto", "set_anim", "switch_if_empty", "impulse",
+    "set_cooldown",
 };
 const char* const REPORTED_NAME[] = {
     "hitscan", "launch", "damage_area", "telegraph", "vfx", "sound",
 };
-static_assert(sizeof(ACT_NAME) / sizeof(ACT_NAME[0]) == static_cast<size_t>(WAct::Impulse) + 1,
+static_assert(sizeof(ACT_NAME) / sizeof(ACT_NAME[0]) == static_cast<size_t>(WAct::SetCooldown) + 1,
               "ACT_NAME must name every action the core performs, in order");
 static_assert(sizeof(REPORTED_NAME) / sizeof(REPORTED_NAME[0]) ==
                   static_cast<size_t>(WAct::Sound) - static_cast<size_t>(WAct::Hitscan) + 1,
@@ -71,14 +72,14 @@ static_assert(sizeof(REPORTED_NAME) / sizeof(REPORTED_NAME[0]) ==
 const char* const COND_NAME[] = {
     "always", "button_pressed", "button_released", "button_held", "held_for",
     "has_ammo", "no_ammo", "phase_elapsed", "chance", "var_at_least", "var_is",
-    "grounded", "moving", "falling",
+    "grounded", "moving", "falling", "cooldown_ready",
 };
-static_assert(sizeof(COND_NAME) / sizeof(COND_NAME[0]) == static_cast<size_t>(WCond::Falling) + 1,
+static_assert(sizeof(COND_NAME) / sizeof(COND_NAME[0]) == static_cast<size_t>(WCond::CooldownReady) + 1,
               "COND_NAME must name every condition, in order");
 
 const char* act_name(WAct a) {
     const u8 v = static_cast<u8>(a);
-    if (v <= static_cast<u8>(WAct::Impulse)) return ACT_NAME[v];
+    if (v <= static_cast<u8>(WAct::SetCooldown)) return ACT_NAME[v];
     return REPORTED_NAME[v - static_cast<u8>(WAct::Hitscan)];
 }
 
@@ -257,6 +258,12 @@ bool compile_cond(Reader& r, int c, const char* name, const std::string& where,
         case WCond::Grounded:
             r.bool_at(c, "value", out.flag, &out.has);
             break;
+        case WCond::CooldownReady: {
+            const i32 slot = index_in(wn.vars, r.str_at(c, "var").c_str());
+            if (slot < 0) return r.fail(where, "names a var the weapon does not declare");
+            out.var = static_cast<u8>(slot);
+            break;
+        }
         case WCond::Moving: case WCond::Falling:
             if (!r.fx_at(c, "speed", where, out.speed, &out.has)) return false;
             break;
@@ -292,6 +299,18 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
             s.var = static_cast<u8>(slot);
             if (!r.int_at(e, "value", where, INT32_MIN, INT32_MAX, v)) return false;
             s.value = static_cast<i32>(v);
+            break;
+        }
+        case WAct::SetCooldown: {
+            const i32 slot = index_in(wn.vars, r.str_at(e, "var").c_str());
+            if (slot < 0) return r.fail(where, "names a var the weapon does not declare");
+            s.var = static_cast<u8>(slot);
+            v = 0;
+            if (!r.int_at(e, "ticks", where, 0, 1 << 30, v)) return false;
+            s.value = static_cast<i32>(v);
+            v = 0;
+            if (!r.int_at(e, "jitter", where, 0, 1 << 30, v)) return false;
+            s.jitter = static_cast<i32>(v);
             break;
         }
         case WAct::Goto: {
@@ -678,6 +697,10 @@ int l_weapons_compile(lua_State* L) {
         lua_pop(L, 1);
     }
 
+    if (r.err.empty() && !sim::weapon_assign_cooldowns(t)) {
+        r.fail("cooldowns", "more cooldowns across the weapons than the core holds");
+    }
+
     if (!r.err.empty()) { lua_pushnil(L); lua_pushstring(L, r.err.c_str()); return 2; }
 
     c->seed = t.hash();
@@ -844,6 +867,9 @@ int l_weapon_reset(lua_State* L) {
     fresh.have = s.have;
     fresh.current = s.current;
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) fresh.ammo[i] = s.ammo[i];
+    // Cooldowns start again too: a new world may count its ticks from
+    // somewhere else, so a deadline from the old one means nothing here.
+    if (const Compiled* c = compiled_of(L)) sim::weapon_fresh_cooldowns(c->table, fresh);
     s = fresh;
     return 0;
 }

@@ -32,6 +32,7 @@ inline constexpr u32 MAX_PHASE_STEPS      = 16;   // sequence entries
 inline constexpr u32 MAX_PHASE_TRANSITIONS = 8;
 inline constexpr u32 MAX_TRANSITION_CONDS = 4;    // an AND-list
 inline constexpr u32 MAX_WEAPON_VARS      = 4;
+inline constexpr u32 MAX_WEAPON_COOLDOWNS = 8;    // the whole table's, see WeaponDef::cool_slot
 inline constexpr u32 MAX_AMMO_POOLS       = 8;
 inline constexpr u32 MAX_WEAPON_EVENTS    = 96;   // per tick, the whole world
 inline constexpr u32 MAX_PELLETS          = 32;
@@ -40,6 +41,7 @@ inline constexpr u32 WEAPON_HOPS          = 5;    // weapons.lua's MAX_HOPS
 
 inline constexpr u8  NO_WEAPON = 0xFF;
 inline constexpr u8  NO_PHASE  = 0xFF;
+inline constexpr u8  NO_COOL   = 0xFF;
 inline constexpr i8  NO_POOL   = -1;
 inline constexpr u16 PHASE_WAITS = 0xFFFF;        // a phase with no `ticks`
 
@@ -48,12 +50,13 @@ inline constexpr u16 PHASE_WAITS = 0xFFFF;        // a phase with no `ticks`
 enum class WCond : u8 {
     Always = 0, Pressed, Released, Held, HeldFor, HasAmmo, NoAmmo,
     PhaseElapsed, Chance, VarAtLeast, VarIs, Grounded, Moving, Falling,
+    CooldownReady,
 };
 
 // And its actions. The first group the core performs itself; the second it
 // REPORTS, as a WeaponEvent, for the world to carry out.
 enum class WAct : u8 {
-    Consume = 0, SetVar, AddVar, Goto, SetAnim, SwitchIfEmpty, Impulse,
+    Consume = 0, SetVar, AddVar, Goto, SetAnim, SwitchIfEmpty, Impulse, SetCooldown,
     // reported:
     Hitscan = 16, Launch, DamageArea, Telegraph, Vfx, Sound,
 };
@@ -116,16 +119,17 @@ struct WMissile {
 struct WStep {
     u16  at = 0;
     WAct action = WAct::Consume;
-    u8   var = 0;          // set_var / add_var
+    u8   var = 0;          // set_var / add_var / set_cooldown
     u8   phase = NO_PHASE; // goto
     i8   pool = NO_POOL;   // consume's `ammo`, NO_POOL = the weapon's own
-    i32  value = 0;        // set_var / add_var value; consume n (0 = the weapon's per)
+    i32  value = 0;        // set_var / add_var value; consume n (0 = the weapon's per);
+                           // set_cooldown's ticks
     u16  state = 0;        // set_anim
     // impulse
     fx   speed{};
     fx   vertical{};
     WTowards towards = WTowards::Facing;
-    i32  jitter = 0;       // degrees
+    i32  jitter = 0;       // degrees; set_cooldown: up to this many extra ticks
     // hitscan: what the core needs to aim it, and what a predicting client
     // needs to draw it
     u8   count = 1;        // pellets / missiles
@@ -178,6 +182,14 @@ struct WeaponDef {
     WSwing swing{};
     u8   var_count = 0;
     i32  vars[MAX_WEAPON_VARS]{};    // starting values
+    // COOLDOWNS OUTLIVE A SWITCH. A var that `set_cooldown` or `cooldown_ready`
+    // names holds a deadline (an absolute tick, as a monster's does), and a
+    // weapon's vars start again whenever it is re-armed -- so switching away
+    // and back would clear the cooldown. Each such var therefore has a slot in
+    // the player's WeaponState::cool, which a re-arm restores it from. Derived
+    // from the steps and conditions (weapon_assign_cooldowns), never sent.
+    u8   cool_slot[MAX_WEAPON_VARS]{NO_COOL, NO_COOL, NO_COOL, NO_COOL};
+    static_assert(MAX_WEAPON_VARS == 4, "cool_slot's initializer names every var");
     u8   phase_count = 0;
     WPhase phases[MAX_WEAPON_PHASES]{};
 };
@@ -243,6 +255,9 @@ struct WeaponState {
     u32 held_since[2]{};             // tick + 1 the trigger went down; 0 = up
     i32 vars[MAX_WEAPON_VARS]{};
     u16 ammo[MAX_AMMO_POOLS]{};
+    // Every weapon's cooldown deadlines, by WeaponDef::cool_slot: what a
+    // re-arm puts back in its vars.
+    i32 cool[MAX_WEAPON_COOLDOWNS]{};
 };
 
 // Something the world must do because a weapon said so.
@@ -312,6 +327,9 @@ u32 step_weapon(const WeaponTable& t, WeaponState& s, WeaponBody& body,
 // weapons held (or the lowest-order one), the highest-order of them current,
 // every pool at its `initial`.
 void weapon_fresh(const WeaponTable& t, WeaponState& s) noexcept;
+// Every cooldown back to its weapon's declared start: part of weapon_fresh,
+// and of a reset that keeps the inventory (a respawn, a new world).
+void weapon_fresh_cooldowns(const WeaponTable& t, WeaponState& s) noexcept;
 
 // Whether the current weapon can fire `n` (0: its own `per`).
 bool weapon_has_ammo(const WeaponTable& t, const WeaponState& s, u8 weapon, u16 n = 0) noexcept;
@@ -321,6 +339,12 @@ bool weapon_has_ammo(const WeaponTable& t, const WeaponState& s, u8 weapon, u16 
 const WSwing* weapon_swing(const WeaponTable& t, const WeaponState& s) noexcept;
 
 void hash_weapon_state(StateHasher& h, const WeaponState& s) noexcept;
+
+// Gives each var a cooldown names its WeaponDef::cool_slot, in weapon then var
+// order. False when the table names more than MAX_WEAPON_COOLDOWNS, which the
+// compiler refuses (the weapons then run in Lua) and the decoder rejects.
+// Both call it, so the two sides derive the same slots from the same table.
+bool weapon_assign_cooldowns(WeaponTable& t) noexcept;
 
 // The table on the wire (WEAPON_DEFS). One encoder, one decoder; the decoder
 // refuses anything out of range, as the map loader does.

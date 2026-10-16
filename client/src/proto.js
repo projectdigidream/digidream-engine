@@ -806,6 +806,10 @@ export function decodeSnapshot (buf) {
     k.vars = [r.i32(), r.i32(), r.i32(), r.i32()]
     k.ammo = []
     for (let i = 0; i < 8; i++) k.ammo.push(r.u16())
+    // Cooldown deadlines, up to the last one set (MAX_WEAPON_COOLDOWNS = 8).
+    k.cool = [0, 0, 0, 0, 0, 0, 0, 0]
+    const nCool = r.u8()
+    for (let i = 0; i < nCool; i++) { const v = r.i32(); if (i < 8) k.cool[i] = v }
     snap.self.weapon = k
   }
   // Which generation of the movement parameters the server computed this state

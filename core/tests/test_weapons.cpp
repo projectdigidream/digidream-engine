@@ -283,6 +283,76 @@ static void test_negate() {
     CHECK(!back.weapons[0].phases[0].transitions[0].conds[0].negate);
 }
 
+// A BFG that may fire once every 20 ticks, and a pistol to switch to.
+static WeaponTable& cooled() {
+    static WeaponTable t;
+    t.clear();
+    WeaponDef& b = t.weapons[t.weapon_count++];
+    name(b.name, "bfg"); b.order = 7; b.phase_count = 2; b.initial = 0;
+    b.var_count = 2; b.vars[0] = 0; b.vars[1] = 0;      // 0: the cooldown, 1: a plain counter
+    name(b.phases[0].name, "ready"); name(b.phases[1].name, "fire"); b.phases[1].ticks = 2;
+    WCondDef ready = cond(WCond::CooldownReady); ready.var = 0;
+    trans(b.phases[0], 1, { cond(WCond::Pressed), ready });
+    WStep& cd = step(b.phases[1], WAct::SetCooldown); cd.var = 0; cd.value = 20;
+    WStep& n = step(b.phases[1], WAct::AddVar); n.var = 1; n.value = 1;
+    WStep& hs = step(b.phases[1], WAct::Hitscan); hs.count = 1; hs.range = fx::from_int(40);
+    WeaponDef& p = t.weapons[t.weapon_count++];
+    name(p.name, "pistol"); p.order = 2; p.phase_count = 1; p.initial = 0;
+    name(p.phases[0].name, "ready");
+    t.initial_have = 0b11;
+    CHECK(weapon_assign_cooldowns(t));
+    return t;
+}
+
+static void test_cooldown() {
+    std::printf("weapons: a cooldown gates the next shot, and outlives a switch\n");
+    WeaponTable& t = cooled();
+    CHECK(t.weapons[0].cool_slot[0] == 0 && t.weapons[0].cool_slot[1] == NO_COOL);
+    CHECK(t.weapons[1].cool_slot[0] == NO_COOL);
+    Run r(t);
+    r.step(0, 0);                                          // the bfg
+    CHECK(r.s.current == 0);
+    const u32 fired_at = r.tick;
+    CHECK(r.step(1) == 1);                                 // ready: it fires
+    CHECK(r.s.vars[0] == static_cast<i32>(fired_at + 20) && r.s.cool[0] == r.s.vars[0]);
+    r.step(0); r.step(0);
+    CHECK(r.step(1) == 0);                                 // cooling: a press does nothing
+    r.step(0);
+    r.step(0, 1); r.step(0, 1);                            // put it away...
+    CHECK(r.s.armed == 1);
+    r.step(0, 0);                                          // ...and take it out again
+    CHECK(r.s.armed == 0 && r.s.vars[0] == static_cast<i32>(fired_at + 20));
+    CHECK(r.s.vars[1] == 0);                               // CONTROL: a plain var starts again
+    CHECK(r.step(1) == 0);                                 // still cooling
+    while (r.tick < fired_at + 20) r.step(0);
+    CHECK(r.step(1) == 1);                                 // the deadline passed: it fires
+    // A fresh player and a reset start every cooldown again.
+    WeaponState f{};
+    weapon_fresh(t, f);
+    CHECK(f.cool[0] == 0);
+    // The wire does not carry the slots; the decoder derives the same ones.
+    static u8 buf[1 << 16];
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(encode_weapon_table(w, t));
+    static WeaponTable back;
+    ByteReader rd(buf, w.size());
+    CHECK(decode_weapon_table(rd, back));
+    CHECK(back.weapons[0].cool_slot[0] == 0 && back.weapons[0].cool_slot[1] == NO_COOL);
+    // More than the core holds is refused.
+    static WeaponTable many;
+    many.clear();
+    for (u32 k = 0; k < 3; ++k) {
+        WeaponDef& d = many.weapons[many.weapon_count++];
+        d.name[0] = static_cast<char>('a' + k); d.phase_count = 1; d.var_count = 3;
+        for (u8 v = 0; v < 3; ++v) {
+            WStep& c = step(d.phases[0], WAct::SetCooldown); c.var = v; c.value = 5;
+        }
+    }
+    CHECK(!weapon_assign_cooldowns(many));                 // 9 > MAX_WEAPON_COOLDOWNS
+    many.weapon_count = 2;
+    CHECK(weapon_assign_cooldowns(many));                  // CONTROL: 6 fit
+}
+
 static void test_table_round_trip() {
     std::printf("weapons: the table survives the wire, and a corrupt one is refused\n");
     WeaponTable& t = doomish();
@@ -323,6 +393,7 @@ int main() {
     test_swing_persists_until_another();
     test_impulse_away();
     test_negate();
+    test_cooldown();
     test_table_round_trip();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

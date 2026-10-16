@@ -348,6 +348,14 @@ weapon_vocab = {
             "and it is deliberately not the same as `grounded = false`: the " ..
             "top of a jump is airborne and is not a dive." },
 
+    { name = "cooldown_ready",
+      args = { { name = "var", type = "var" } },
+      doc = "The deadline `set_cooldown` wrote into the var has passed. The " ..
+            "monster pair: a deadline rather than a counter, so it costs " ..
+            "nothing while it waits. Unlike any other var, a cooldown " ..
+            "outlives putting the weapon away, so switching away and back " ..
+            "does not clear it; a respawn does." },
+
     { name = "lua",
       args = { { name = "fn", type = "string" } },
       doc = "The escape hatch: the name of a global function, called with " ..
@@ -506,6 +514,16 @@ weapon_vocab = {
     { name = "add_var",
       args = { { name = "var", type = "var" }, { name = "value", type = "int" } },
       doc = "For a combo step or a refire count." },
+
+    { name = "set_cooldown",
+      args = { { name = "var", type = "var" }, { name = "ticks", type = "int" },
+               { name = "jitter", type = "int", optional = true,
+                 doc = "Up to this many extra ticks, rolled here." } },
+      doc = "Writes tick + ticks into the var, for `cooldown_ready` to read. " ..
+            "A BFG that may fire once every 96 ticks without being held in " ..
+            "its firing phase that long, which would also stop the player " ..
+            "switching weapons: `set_cooldown` as it fires, and " ..
+            "`cooldown_ready` beside the press that starts it." },
 
     { name = "goto",
       args = { { name = "phase", type = "phase" } },

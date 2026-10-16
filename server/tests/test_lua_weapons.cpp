@@ -1014,6 +1014,21 @@ int main(int argc, char** argv) {
             },
             vars = { mode = 0, path = 0 },
           },
+
+          -- COOLDOWN: once every 30 ticks, without holding the player in
+          -- `fire` that long (which is what stops them switching weapons).
+          coolgun = {
+            label = "Cool Gun", order = 25, initial = "ready",
+            phases = {
+              ready = { transitions = {
+                { when = { { cond = "button_pressed" },
+                           { cond = "cooldown_ready", var = "cd" } }, to = "fire" } } },
+              fire = { anim = 2, ticks = 2, next = "ready", sequence = {
+                { at = 0, action = "set_cooldown", var = "cd", ticks = 30 },
+                { at = 0, action = "add_var", var = "shots", value = 1 } } },
+            },
+            vars = { cd = 0, shots = 0 },
+          },
         },
       }
       platformer_errors = weapons.load_errors()
@@ -1024,8 +1039,9 @@ int main(int argc, char** argv) {
     CHECK(num("platformer_errors") == 0);
 
     // Drive one weapon through a written button pattern, one character a tick:
-    // '1' primary down, '2' secondary down, '.' nothing. Spelling the input out
-    // is what makes "one tick after the window" a thing that can be written.
+    // '1' primary down, '2' secondary down, '.' nothing, 'x' put it away for
+    // the alt-fire gun, 'y' take it out again. Spelling the input out is what
+    // makes "one tick after the window" a thing that can be written.
     u32 pat_tick = 90000;
     const auto pattern = [&](const char* weapon, const char* pat) {
         const std::string setup =
@@ -1043,6 +1059,13 @@ int main(int argc, char** argv) {
             u16 mask = 0;
             if (*c == '1') mask = proto::button::ATTACK_PRIMARY;
             else if (*c == '2') mask = proto::button::ATTACK_SECONDARY;
+            if (*c == 'x' || *c == 'y') {
+                const std::string sw =
+                    "local inv = weapons.get(dnp.players()[1]:index())\n"
+                    "inv.have.altgun = true\n"
+                    "inv.current = '" + std::string(*c == 'x' ? "altgun" : weapon) + "'\n";
+                if (!run(sw.c_str(), "switching weapons")) return false;
+            }
             set_buttons(mask);
             const std::string step =
                 "local p = dnp.players()[1]\n"
@@ -1116,6 +1139,24 @@ int main(int argc, char** argv) {
     std::printf("  negate on one condition: two presses -> path %d\n", path);
     // CONTROL in the number: ignoring `negate` goes to `b` both times (20).
     CHECK(path == 11);
+
+    // COOLDOWN. A second press 5 ticks after the first finds it cooling...
+    if (!pattern("coolgun", ".1....1....")) return 1;
+    const int cool_soon = var_of("shots");
+    // ...and one 36 ticks after does not.
+    if (!pattern("coolgun", std::string(".1").append(35, '.').append("1.").c_str())) return 1;
+    const int cool_late = var_of("shots");
+    // PUT AWAY AND TAKEN OUT AGAIN, then pressed at tick 10 and at tick 41.
+    // The switch starts `shots` again, as any var; the cooldown carries on, so
+    // the press at 10 is refused and the one at 41 fires: one shot. Had the
+    // switch cleared the cooldown, both would fire.
+    if (!pattern("coolgun", std::string(".1...x..y.1").append(30, '.').append("1.").c_str())) return 1;
+    const int cool_switched = var_of("shots");
+    std::printf("  cooldown: shots %d (pressed again at 5), %d (at 36), %d (switched away and back)\n",
+                cool_soon, cool_late, cool_switched);
+    CHECK(cool_soon == 1);
+    CHECK(cool_late == 2);                                 // CONTROL: it does end
+    CHECK(cool_switched == 1);
 
     // ================================================================
     // EVERY BAD TABLE IS REFUSED, and this is the assertion the validating

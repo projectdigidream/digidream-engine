@@ -57,6 +57,10 @@ void enter(WeaponState& s, u8 phase, u32 tick) noexcept {
 void arm(const WeaponTable& t, WeaponState& s, u32 tick) noexcept {
     const WeaponDef& d = t.weapons[s.current];
     for (u32 i = 0; i < MAX_WEAPON_VARS; ++i) s.vars[i] = i < d.var_count ? d.vars[i] : 0;
+    // A cooldown carries on where it was when the weapon was put away.
+    for (u32 i = 0; i < d.var_count; ++i) {
+        if (d.cool_slot[i] < MAX_WEAPON_COOLDOWNS) s.vars[i] = s.cool[d.cool_slot[i]];
+    }
     s.armed = s.current;
     s.swing_phase = NO_PHASE;
     enter(s, d.initial, tick);
@@ -105,6 +109,7 @@ bool cond_test(Ctx& c, const WCondDef& k) noexcept {
         }
         case WCond::Falling:
             return c.body.vel.z < (k.has ? -k.speed : fx::zero());
+        case WCond::CooldownReady: return static_cast<i64>(c.tick) >= c.s.vars[k.var];
     }
     return false;
 }
@@ -148,6 +153,12 @@ void report(Ctx& c, u8 phase, u8 step, const WStep& a) noexcept {
     c.log.push(e);
 }
 
+// A var written: a cooldown's slot keeps the same value, for the next re-arm.
+void wrote_var(Ctx& c, u8 var) noexcept {
+    const u8 slot = c.def.cool_slot[var];
+    if (slot < MAX_WEAPON_COOLDOWNS) c.s.cool[slot] = c.s.vars[var];
+}
+
 void perform(Ctx& c, u8 phase, u8 step, const WStep& a) noexcept {
     switch (a.action) {
         case WAct::Consume: {
@@ -158,8 +169,17 @@ void perform(Ctx& c, u8 phase, u8 step, const WStep& a) noexcept {
             c.s.ammo[pool] = static_cast<u16>(left < 0 ? 0 : left);
             return;
         }
-        case WAct::SetVar: c.s.vars[a.var] = a.value; return;
-        case WAct::AddVar: c.s.vars[a.var] += a.value; return;
+        case WAct::SetVar: c.s.vars[a.var] = a.value; wrote_var(c, a.var); return;
+        case WAct::AddVar: c.s.vars[a.var] += a.value; wrote_var(c, a.var); return;
+        case WAct::SetCooldown: {
+            // mobs.lua's set_cooldown: a deadline, this tick + ticks, plus up
+            // to `jitter` more from the weapon's stream.
+            i64 until = static_cast<i64>(c.tick) + a.value;
+            if (a.jitter > 0) until += c.random(0, a.jitter);
+            c.s.vars[a.var] = static_cast<i32>(until);
+            wrote_var(c, a.var);
+            return;
+        }
         case WAct::Goto:   c.jump = a.phase; return;
         case WAct::SetAnim: c.body.anim_set = true; c.body.anim = a.state; return;
         case WAct::SwitchIfEmpty:
@@ -211,6 +231,44 @@ void weapon_fresh(const WeaponTable& t, WeaponState& s) noexcept {
         if (s.current == NO_WEAPON || t.weapons[w].order > t.weapons[s.current].order) s.current = w;
     }
     for (u32 p = 0; p < t.pool_count; ++p) s.ammo[p] = t.pools[p].initial;
+    weapon_fresh_cooldowns(t, s);
+}
+
+void weapon_fresh_cooldowns(const WeaponTable& t, WeaponState& s) noexcept {
+    for (i32& v : s.cool) v = 0;
+    for (u8 w = 0; w < t.weapon_count; ++w) {
+        const WeaponDef& d = t.weapons[w];
+        for (u32 i = 0; i < d.var_count; ++i) {
+            if (d.cool_slot[i] < MAX_WEAPON_COOLDOWNS) s.cool[d.cool_slot[i]] = d.vars[i];
+        }
+    }
+}
+
+bool weapon_assign_cooldowns(WeaponTable& t) noexcept {
+    u32 next = 0;
+    for (u8 w = 0; w < t.weapon_count; ++w) {
+        WeaponDef& d = t.weapons[w];
+        bool named[MAX_WEAPON_VARS]{};
+        for (u8 p = 0; p < d.phase_count; ++p) {
+            const WPhase& ph = d.phases[p];
+            for (u8 i = 0; i < ph.step_count; ++i) {
+                if (ph.steps[i].action == WAct::SetCooldown && ph.steps[i].var < MAX_WEAPON_VARS) named[ph.steps[i].var] = true;
+            }
+            for (u8 k = 0; k < ph.transition_count; ++k) {
+                const WTransition& tr = ph.transitions[k];
+                for (u8 j = 0; j < tr.count; ++j) {
+                    if (tr.conds[j].kind == WCond::CooldownReady && tr.conds[j].var < MAX_WEAPON_VARS) named[tr.conds[j].var] = true;
+                }
+            }
+        }
+        for (u32 i = 0; i < MAX_WEAPON_VARS; ++i) {
+            d.cool_slot[i] = NO_COOL;
+            if (!named[i]) continue;
+            if (next >= MAX_WEAPON_COOLDOWNS) return false;
+            d.cool_slot[i] = static_cast<u8>(next++);
+        }
+    }
+    return true;
 }
 
 const WSwing* weapon_swing(const WeaponTable& t, const WeaponState& s) noexcept {
@@ -298,6 +356,7 @@ void hash_weapon_state(StateHasher& h, const WeaponState& s) noexcept {
     h.u32v(s.held_since[0]); h.u32v(s.held_since[1]);
     for (i32 v : s.vars) h.i32v(v);
     for (u16 a : s.ammo) h.u32v(a);
+    for (i32 v : s.cool) h.i32v(v);
 }
 
 // --- the table on the wire --------------------------------------------------
@@ -474,7 +533,7 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                 s.range = r.fxraw(); s.effect = r.u16v(); s.sound = r.u32v();
                 const u8 flags = r.u8v();
                 if (!r.ok()) return false;
-                const bool own = act <= static_cast<u8>(WAct::Impulse);
+                const bool own = act <= static_cast<u8>(WAct::SetCooldown);
                 const bool rep = act >= static_cast<u8>(WAct::Hitscan) && act <= static_cast<u8>(WAct::Sound);
                 if (!own && !rep) return false;
                 if (tw > 2 || flags > 3 || s.var >= MAX_WEAPON_VARS || s.count > MAX_PELLETS) return false;
@@ -512,7 +571,7 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                     c.trigger = r.u8v(); c.var = r.u8v();
                     const u8 flags = r.u8v();
                     c.n = r.i32v(); c.speed = r.fxraw();
-                    if (!r.ok() || kind > static_cast<u8>(WCond::Falling) || c.trigger > 1 ||
+                    if (!r.ok() || kind > static_cast<u8>(WCond::CooldownReady) || c.trigger > 1 ||
                         c.var >= MAX_WEAPON_VARS || flags > 7) return false;
                     c.kind = static_cast<WCond>(kind);
                     c.flag = flags & 1; c.has = (flags & 2) != 0; c.negate = (flags & 4) != 0;
@@ -521,7 +580,7 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
         }
     }
     if (!r.ok()) return false;
-    return true;
+    return weapon_assign_cooldowns(t);
 }
 
 }  // namespace
@@ -549,6 +608,7 @@ void WeaponTable::clear() noexcept {
         d.swing = WSwing{};
         d.var_count = 0;
         for (i32& v : d.vars) v = 0;
+        for (u8& k : d.cool_slot) k = NO_COOL;
         d.phase_count = 0;
         for (WPhase& ph : d.phases) ph = WPhase{};
     }

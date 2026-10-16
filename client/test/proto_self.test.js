@@ -71,6 +71,7 @@ for (const grappling of [false, true]) {
     check(k.heldSince[0] === 70003 && k.heldSince[1] === 70004, 'armed: the held-since ticks')
     check(k.vars.join() === '-100,-101,-102,-103', `armed: vars (${k.vars})`)
     check(k.ammo.join() === '200,201,202,203,204,205,206,207', `armed: ammo (${k.ammo})`)
+    check(k.cool.join() === '300,301,302,303,304,0,0,0', `armed: cooldowns, up to the last set (${k.cool})`)
   }
   // And everything after it still lands: the block's length is right.
   check(s?.self.avatar === 77 && s?.self.stateHash === 0x0123456789ABCDEFn && s?.hp === 123,

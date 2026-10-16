@@ -52,6 +52,13 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 - Weapon conditions take `negate = true`, as a monster's do: "the counter is
   not 0" is `var_is` with `negate`, without falling back to `lua`. Predicted
   like the rest of the weapon (docs/WEAPONS.md).
+- Weapons have cooldowns, the monster pair: `set_cooldown` writes a deadline
+  into a var and `cooldown_ready` waits for it. A BFG can fire once every 96
+  ticks without its firing phase lasting that long, so the player can still
+  switch weapons. A cooldown outlives putting the weapon away; a respawn
+  clears it. Predicted on the client like the rest of the weapon. The weapon
+  block of a snapshot grows by a byte (and four per cooldown in use), so a
+  client and a server must both be this version.
 - Wall textures can be turned and scaled like a flat's: `angle` (degrees) and
   `scale` on a wall's `vertex` line, turned about the side's texture origin,
   then shifted by `xoff`/`yoff`, then scaled (docs/MAP_AUTHOR.md, "Walls").

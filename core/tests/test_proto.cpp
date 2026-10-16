@@ -298,6 +298,9 @@ TEST_FN void test_snapshot_roundtrip() {
             k.held_since[0] = rng.next_u32(); k.held_since[1] = rng.next_u32();
             for (i32& v : k.vars) v = static_cast<i32>(rng.next_u32());
             for (u16& a : k.ammo) a = static_cast<u16>(rng.next_u32());
+            // Cooldowns up to a random last one, so every length is written.
+            const u32 cools = rng.next_u32() % (sim::MAX_WEAPON_COOLDOWNS + 1);
+            for (u32 c = 0; c < cools; ++c) k.cool[c] = static_cast<i32>(rng.next_u32());
         }
         self.anchor      = Handle::make(rng.next_below(1000), 3);
         self.jumps_used  = static_cast<u8>(rng.next_below(4));
@@ -392,6 +395,7 @@ TEST_FN void test_snapshot_roundtrip() {
                         a.held_since[1] == b.held_since[1];
             for (u32 v = 0; v < sim::MAX_WEAPON_VARS; ++v) same = same && a.vars[v] == b.vars[v];
             for (u32 p = 0; p < sim::MAX_AMMO_POOLS; ++p) same = same && a.ammo[p] == b.ammo[p];
+            for (u32 c = 0; c < sim::MAX_WEAPON_COOLDOWNS; ++c) same = same && a.cool[c] == b.cool[c];
             CHECK(same);
         }
 

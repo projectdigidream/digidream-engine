@@ -165,6 +165,11 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.u32v(k.held_since[0]); w.u32v(k.held_since[1]);
         for (i32 v : k.vars) w.i32v(v);
         for (u16 a : k.ammo) w.u16v(a);
+        // The cooldowns, up to the last one set: nearly always none.
+        u8 n = sim::MAX_WEAPON_COOLDOWNS;
+        while (n > 0 && k.cool[n - 1] == 0) --n;
+        w.u8v(n);
+        for (u8 i = 0; i < n; ++i) w.i32v(k.cool[i]);
     }
     w.u16v(s.avatar);
     // The observer's OWN animation state (design 4.1). Ungated: the local agent
@@ -209,6 +214,12 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         k.held_since[0] = r.u32v(); k.held_since[1] = r.u32v();
         for (i32& v : k.vars) v = r.i32v();
         for (u16& a : k.ammo) a = r.u16v();
+        // More than the core holds is read past, not kept: no server sends it.
+        const u8 n = r.u8v();
+        for (u8 i = 0; i < n; ++i) {
+            const i32 v = r.i32v();
+            if (i < sim::MAX_WEAPON_COOLDOWNS) k.cool[i] = v;
+        }
     }
     s.avatar          = r.u16v();
     s.animation_state = r.u16v();
