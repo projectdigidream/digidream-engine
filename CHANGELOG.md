@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.0 -- 2026-10-16
+
 ### Fixed
 
 - Client prediction: a prediction made from a different input than the one

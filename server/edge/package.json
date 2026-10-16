@@ -1,7 +1,7 @@
 {
   "name": "dnp-edge",
   "license": "MIT",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "WebTransport terminator: speaks WebTransport to browsers, relays framed messages to the C++ server over a local socket.",
