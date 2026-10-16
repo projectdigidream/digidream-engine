@@ -447,6 +447,11 @@ suite_lua () {
     # and a corpse with no death state is refused by the studio and the runtime
     # alike. The body half is read back by the client's own catalogue parser.
     node ../studio/test/mobs.test.js | tail -2
+    # The monster and weapon editors' words compiled to plain vocabulary (rules
+    # for any state, only once, end branches, phase speeds), RUN by mobs.lua in
+    # the fake world: a boss roars once, pain keeps its phase, an end branch
+    # wins -- each with the control that the same brain without the word fails.
+    node ../studio/test/brainc.test.js | tail -1
   else
     echo "  skip lua tests (run: scripts/setup_luajit.sh)"
   fi
@@ -616,6 +621,9 @@ suite_studio () {
   # The brain as a graph: every way the runtime leaves a state is an arrow,
   # and the automatic arrangement places every state, initial first.
   node ../studio/test/graph.test.js | tail -2
+  # The vocabulary in words: every phrase the editors offer names a real
+  # condition or action and its real arguments, and its units round-trip.
+  node ../studio/test/phrases.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2
