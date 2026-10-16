@@ -115,14 +115,25 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
   // from the winding, so it is every wall, always; on a tiling texture it reads
   // as "slightly off" rather than as backwards, which is why it survived a
   // first look at the render.
-  const uA = side.xOffset + len
-  const uB = side.xOffset
-  const vAt = (z) => anchorZ - z + side.yOffset
+  //
+  // AND STYLED AS A FLAT IS (flatUV), in the same order an author says it:
+  // turned about the texture origin -- u = 0 at b, v = 0 at the anchor line --
+  // then shifted by the offsets, then drawn `scale` times larger. With no turn
+  // and a scale of one this is exactly the u and v walls always had.
+  const turns = side.turns ?? 0
+  const k = side.scale > 0 ? side.scale : 1
+  const c = turns !== 0 ? Math.cos(turns * Math.PI * 2) : 1
+  const sn = turns !== 0 ? Math.sin(turns * Math.PI * 2) : 0
+  const uvAt = (d, z) => {
+    const u0 = d
+    const v0 = anchorZ - z
+    return [(u0 * c - v0 * sn + side.xOffset) / k, (u0 * sn + v0 * c + side.yOffset) / k]
+  }
   const uvs = [
-    uA, vAt(zBot),
-    uA, vAt(zTop),
-    uB, vAt(zTop),
-    uB, vAt(zBot)
+    ...uvAt(len, zBot),
+    ...uvAt(len, zTop),
+    ...uvAt(0, zTop),
+    ...uvAt(0, zBot)
   ]
 
   return {

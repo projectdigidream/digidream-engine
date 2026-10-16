@@ -835,9 +835,104 @@ static void test_sector_effects() {
     }
 }
 
+// A WALL'S TEXTURE ANGLE AND SCALE (version 15): a map that uses them is
+// written as 15, round-trips them, and hashes them; one that does not is
+// written as it always was. The block is canonical -- in side order, none
+// twice, never a "no change" entry, never a zero scale -- so every bit of it
+// either changes the hash or is refused.
+static void test_wall_styles() {
+    std::printf("mapfile: wall texture angle and scale -- version 15 only when used, canonical\n");
+    static MapStorage src;
+    static MapStorage dst;
+    static u8 buf[16384];
+    src.clear();
+    build_reference(src);
+    const u64 bare = src.hash();
+    src.side_render_mut(1).angle = 0x40000000u;            // a quarter turn
+    src.side_render_mut(3).scale = fx::from_int(2);         // twice the size
+    CHECK(src.hash() != bare);      // CONTROL for what follows: the styles ARE hashed
+
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+    const size_t n = w.size();
+    CHECK(buf[4] == 15);
+    {
+        ByteReader r(buf, n);
+        CHECK(load_map(r, dst) == MapLoadStatus::Ok);
+        CHECK(dst.hash() == src.hash());
+        const RenderData rd = dst.render_view();
+        CHECK(rd.side(1).angle == 0x40000000u && rd.side(1).scale == fx::one());
+        CHECK(rd.side(3).angle == 0 && rd.side(3).scale == fx::from_int(2));
+        u32 others = 0;
+        for (u32 i = 0; i < dst.view().side_count; ++i) if (i != 1 && i != 3 && !rd.side(i).styled()) ++others;
+        CHECK(others == dst.view().side_count - 2);
+    }
+
+    // Unstyled, unchanged: written as 13 (no effects either) and hashed as before.
+    {
+        static MapStorage plain;
+        static u8 pb[16384];
+        plain.clear();
+        build_reference(plain);
+        ByteWriter pw(pb, sizeof(pb));
+        CHECK(save_map(plain, pw));
+        CHECK(pb[4] == 13 && plain.hash() == bare);
+    }
+
+    // The block is the last thing before the eight-byte hash: two entries of
+    // {u32 side, u32 angle, i64 scale}.
+    const size_t at = n - 8 - 2 * 16;
+    const auto status = [&](void (*mutate)(u8*), size_t off) {
+        static u8 m[16384];
+        std::memcpy(m, buf, n);
+        mutate(m + off);
+        ByteReader r(m, n);
+        return load_map(r, dst);
+    };
+    const auto put32 = [](u8* p, u32 v) { for (int k = 0; k < 4; ++k) p[k] = static_cast<u8>(v >> (8 * k)); };
+    (void)put32;
+    {   // CONTROL: the buffer as written loads.
+        ByteReader r(buf, n);
+        CHECK(load_map(r, dst) == MapLoadStatus::Ok);
+    }
+    // The second entry naming the first's side again (out of order, twice).
+    CHECK(status([](u8* p) { const u8 first = p[-16]; p[0] = first; p[1] = p[2] = p[3] = 0; }, at + 16) == MapLoadStatus::BadIndex);
+    // A side the map does not have.
+    CHECK(status([](u8* p) { p[0] = 0xFF; p[1] = 0x7F; p[2] = 0; p[3] = 0; }, at + 16) == MapLoadStatus::BadIndex);
+    // An entry that says "no change": the first's quarter turn set back to none.
+    CHECK(status([](u8* p) { p[0] = p[1] = p[2] = p[3] = 0; }, at + 4) == MapLoadStatus::BadIndex);
+    // A scale of zero, written by the writer itself.
+    {
+        static MapStorage z;
+        static u8 zb[16384];
+        z.clear();
+        build_reference(z);
+        z.side_render_mut(2).scale = fx::zero();
+        ByteWriter zw(zb, sizeof(zb));
+        CHECK(save_map(z, zw));
+        ByteReader zr(zb, zw.size());
+        CHECK(load_map(zr, dst) == MapLoadStatus::BadIndex);
+    }
+    // NO DON'T-CARE BYTES: every bit of the block, flipped, is refused or moves
+    // the hash -- a byte the reader ignored would load to the same hash.
+    u32 silent = 0;
+    for (size_t b = at; b < at + 32; ++b) {
+        for (int bit = 0; bit < 8; ++bit) {
+            static u8 m[16384];
+            std::memcpy(m, buf, n);
+            m[b] ^= static_cast<u8>(1u << bit);
+            ByteReader r(m, n);
+            const MapLoadStatus st = load_map(r, dst);
+            if (st == MapLoadStatus::Ok && dst.hash() == src.hash()) ++silent;
+        }
+    }
+    CHECK(silent == 0);
+}
+
 int main() {
     std::printf("== core/geom map file suite ==\n");
     test_sector_effects();
+    test_wall_styles();
     test_roundtrip();
     test_matches_hardcoded_map();
     test_holes_round_trip();

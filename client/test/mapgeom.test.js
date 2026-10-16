@@ -450,5 +450,43 @@ console.log('\n--- transparent surfaces ---')
   check(mergeByTexture([a, b])[0].alpha === 1, 'each group carries the opacity its material needs')
 }
 
+console.log('\n--- a wall\'s texture angle and scale ---')
+{
+  // Side 0 (a=0 at x 0, b=1 at x 10): a solid wall 10 long, floor 0 to ceiling 8.
+  const wallUVs = (style) => {
+    const m = fixture()
+    Object.assign(m.sides[0], { xOffset: 1.5, yOffset: -0.5 }, style)
+    return find(buildSectorSurfaces(m, 0), SURFACE.MIDDLE, 0).uvs
+  }
+  const plain = wallUVs({})
+  const explicit = wallUVs({ turns: 0, scale: 1 })
+  check(plain.every((v, i) => near(v, explicit[i])), 'no turn and a scale of one draw exactly what a wall always drew')
+  // What a wall always drew: u = xOffset + distance from b, v = anchor - z + yOffset.
+  const anchor = 8
+  const expect = [1.5 + 10, anchor - 0 - 0.5, 1.5 + 10, anchor - 8 - 0.5, 1.5, anchor - 8 - 0.5, 1.5, anchor - 0 - 0.5]
+  check(plain.every((v, i) => near(v, expect[i])), `and that is the wall's old u and v (${plain.join(',')})`)
+
+  const big = wallUVs({ scale: 2 })
+  check(big.every((v, i) => near(v, plain[i] / 2)), 'scale 2 draws the texture twice the size, offsets included')
+
+  // A quarter turn: (u0, v0) -> (-v0, u0), then the offsets, then the scale.
+  const turned = wallUVs({ turns: 0.25 })
+  const quarter = (d, z) => [-(anchor - z) + 1.5, d - 0.5]
+  const want = [...quarter(10, 0), ...quarter(10, 8), ...quarter(0, 8), ...quarter(0, 0)]
+  check(turned.every((v, i) => near(v, want[i], 1e-9)), `a quarter turn turns it about the texture origin (${turned.map((x) => x.toFixed(2)).join(',')})`)
+  check(!turned.every((v, i) => near(v, plain[i])), 'CONTROL: and a turn does change what is drawn')
+  // Every field of the side takes it: the shared edge's upper and lower too.
+  const m = fixture({ f1: 2, c1: 6 })
+  m.sides[1].scale = 4
+  const s = buildSectorSurfaces(m, 0)
+  const m0 = fixture({ f1: 2, c1: 6 })
+  const s0 = buildSectorSurfaces(m0, 0)
+  for (const kind of [SURFACE.UPPER, SURFACE.LOWER]) {
+    const a = find(s, kind, 1).uvs
+    const b = find(s0, kind, 1).uvs
+    check(a.every((v, i) => near(v, b[i] / 4)), `the ${kind === SURFACE.UPPER ? 'upper' : 'lower'} field takes the side's scale too`)
+  }
+}
+
 console.log(`\nmapgeom: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

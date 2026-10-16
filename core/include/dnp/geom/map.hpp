@@ -320,11 +320,23 @@ struct SideRender {
     fx  x_offset{};   // texture alignment along the wall
     fx  y_offset{};
 
-    // As SurfaceStyle::alpha, and only that: a wall already has its offsets and
-    // its pegging, and Doom's walls do not rotate or scale. What was missing
-    // was the grate -- a two-sided line with a holed picture on it, which this
-    // renderer drew as a solid sheet.
+    // As SurfaceStyle::alpha: a two-sided line with a holed picture on it (a
+    // grate), which this renderer once drew as a solid sheet.
     u8  alpha = 255;
+
+    // AS A FLAT'S STYLE, for the wall's own plane (docs/MAP_AUTHOR.md):
+    // turned by `angle` (a turn in 2^32) about the side's texture origin --
+    // where u is 0, at b, and v is 0, at the pegging's anchor -- then shifted by
+    // the offsets above, then drawn `scale` times larger. Doom's walls do
+    // neither, so both default to "no change", and a side that keeps them is
+    // drawn exactly as before. Every field of the side (upper, middle, lower)
+    // takes the same style, as they share the offsets.
+    u32 angle = 0;
+    fx  scale = fx::one();
+
+    // Whether the side rotates or scales its texture at all: what the file
+    // writes in its version-15 block and the hash folds in, and nothing else.
+    bool styled() const noexcept { return angle != 0 || scale.raw != fx::one().raw; }
 };
 
 struct SectorRender {

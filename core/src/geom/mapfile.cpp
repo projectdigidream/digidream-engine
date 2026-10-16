@@ -21,10 +21,15 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     // THE OLDEST VERSION THAT CAN SAY IT. A map without sector effects is
     // written as version 13, byte for byte what it was before 14 existed, so
     // adding effects to the format changes no file that does not use them:
-    // not a committed level, not a studio bake, not a generated module.
+    // not a committed level, not a studio bake, not a generated module. And
+    // one whose walls neither turn nor scale their textures is 14 at most, for
+    // the same reason.
     const bool has_effects = store.effect_count() > 0;
+    u32 styled_sides = 0;
+    for (u32 i = 0; i < m.side_count; ++i) if (rd.side(i).styled()) ++styled_sides;
+    const u16 version = styled_sides > 0 ? MAP_VERSION : has_effects ? static_cast<u16>(14) : static_cast<u16>(13);
     w.u32v(MAP_MAGIC);
-    w.u16v(has_effects ? MAP_VERSION : static_cast<u16>(13));
+    w.u16v(version);
     w.u16v(0);   // flags, reserved
 
     w.u32v(m.point_count);
@@ -48,7 +53,8 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.fxraw(store.body_radius());
     w.fxraw(store.body_height());
     w.fxraw(store.texture_scale());
-    if (has_effects) w.u32v(store.effect_count());   // 14
+    if (version >= 14) w.u32v(store.effect_count());   // 14
+    if (version >= 15) w.u32v(styled_sides);           // 15
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -203,6 +209,19 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         }
     }
 
+    // Walls that turn or scale their texture (15): only those, in side order,
+    // so a map with none writes nothing here and a styled one has exactly one
+    // encoding.
+    if (version >= 15) {
+        for (u32 i = 0; i < m.side_count; ++i) {
+            const SideRender& r = rd.side(i);
+            if (!r.styled()) continue;
+            w.u32v(i);
+            w.u32v(r.angle);
+            w.fxraw(r.scale);
+        }
+    }
+
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
     // running different geometry from the server is a detectable condition
     // rather than an unexplained series of collision disagreements.
@@ -245,6 +264,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const fx body_height = r.fxraw();
     const fx texture_scale = r.fxraw();
     const u32 fx_count = version >= 14 ? r.u32v() : 0;
+    const u32 styled_count = version >= 15 ? r.u32v() : 0;
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
     if (fx_count > MAX_MAP_FX) { store.clear(); return MapLoadStatus::TooLarge; }
 
@@ -792,6 +812,28 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             }
         }
         if (!store.add_effect(e)) { store.clear(); return MapLoadStatus::TooLarge; }
+    }
+
+    // WALLS THAT TURN OR SCALE THEIR TEXTURE (15). As strict as the rest: in
+    // side order with none twice, a real side, a scale above zero (a division),
+    // and never an entry that says "no change" -- the writer never makes one,
+    // and accepting one would give a default wall two encodings, one of them a
+    // byte the hash does not see.
+    if (styled_count > side_count) { store.clear(); return MapLoadStatus::BadIndex; }
+    {
+        u32 next = 0;
+        for (u32 k = 0; k < styled_count; ++k) {
+            const u32 i = r.u32v();
+            const u32 angle = r.u32v();
+            const fx scale = r.fxraw();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            if (i >= side_count || i < next || scale.raw <= 0) { store.clear(); return MapLoadStatus::BadIndex; }
+            SideRender& sr = store.side_render_mut(i);
+            sr.angle = angle;
+            sr.scale = scale;
+            if (!sr.styled()) { store.clear(); return MapLoadStatus::BadIndex; }
+            next = i + 1;
+        }
     }
 
     const u64 want_hash = r.u64v();

@@ -113,7 +113,11 @@ export function readMap (map) {
       peg: u32[b32 + 7],
       xOffset: fxToFloat(i64[b64]),
       yOffset: fxToFloat(i64[b64 + 1]),
-      alpha: u32[b32 + 8] / 255
+      alpha: u32[b32 + 8] / 255,
+      // The texture's turn and size on the wall's plane, as a flat's style
+      // (mapgeom.js wallQuad). Turns, as everywhere this side.
+      turns: u32[b32 + 9] / 4294967296,
+      scale: fxToFloat(i64[b64 + 2])
     }
   }
 

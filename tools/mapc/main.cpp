@@ -573,6 +573,17 @@ int main(int argc, char** argv) {
                     const int a = std::atoi(tok[++i].c_str());
                     if (a < 0 || a > 255) err(lineno, "alpha must be 0..255, got '%s'", tok[i].c_str());
                     else v.render.alpha = static_cast<u8>(a);
+                } else if (tok[i] == "angle" || tok[i] == "scale") {
+                    // As a flat's `floorangle` and `floorscale`, on the wall's
+                    // own plane: through the same parser, so a turn in degrees
+                    // and a size refused at zero mean exactly what they mean
+                    // on a floor (flat_attr).
+                    if (i + 1 >= tok.size()) { err(lineno, "%s needs a number", tok[i].c_str()); break; }
+                    SurfaceStyle st;
+                    flat_attr(lineno, tok[i], tok[i + 1], st);
+                    if (tok[i] == "angle") v.render.angle = st.angle;
+                    else v.render.scale = st.scale;
+                    ++i;
                 } else if (tok[i] == "unpeg-upper") v.render.peg_flags |= peg_flag::UPPER_UNPEGGED;
                 else if (tok[i] == "unpeg-lower") v.render.peg_flags |= peg_flag::LOWER_UNPEGGED;
                 else err(lineno, "unknown edge attribute '%s'", tok[i].c_str());

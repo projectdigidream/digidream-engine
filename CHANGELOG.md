@@ -43,6 +43,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- Wall textures can be turned and scaled like a flat's: `angle` (degrees) and
+  `scale` on a wall's `vertex` line, turned about the side's texture origin,
+  then shifted by `xoff`/`yoff`, then scaled (docs/MAP_AUTHOR.md, "Walls").
+  `.dnpm` version 15, written only when a wall uses them, so every existing map
+  stays byte for byte what it was. The studio's side is briefed in
+  docs/WALL_STYLES.md.
 - Sprites from one ThreeSprite sheet that are on screen together draw as one
   buffer: one draw call per sheet instead of one per sprite (Gem Hollow's
   level: 220 draws -> 54, the picture unchanged). A sheet with one sprite on
