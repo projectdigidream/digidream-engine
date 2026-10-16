@@ -452,6 +452,9 @@ suite_lua () {
     # the fake world: a boss roars once, pain keeps its phase, an end branch
     # wins -- each with the control that the same brain without the word fails.
     node ../studio/test/brainc.test.js | tail -1
+    # The editor's preview runs the same compiled brains as the engine: the
+    # same scripted hits give the same path through the states as mobs.lua.
+    node ../studio/test/brainsim.test.js | tail -1
   else
     echo "  skip lua tests (run: scripts/setup_luajit.sh)"
   fi
