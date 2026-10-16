@@ -627,6 +627,9 @@ suite_studio () {
   # The vocabulary in words: every phrase the editors offer names a real
   # condition or action and its real arguments, and its units round-trip.
   node ../studio/test/phrases.test.js | tail -1
+  # A missile's flight on the Missiles page, against the arcs the engine's own
+  # test flies: a throw that lands, a drop, a low and a high throw, a bounce.
+  node ../studio/test/missileflight.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2
