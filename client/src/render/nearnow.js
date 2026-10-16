@@ -63,7 +63,7 @@ export class NearPresent {
       vx = (n.x - m.x) / span
       vy = (n.y - m.y) / span
       vz = (n.z - m.z) / span
-      if (Math.hypot(vx, vy, vz) * 60 > MAX_SPEED) { vx = 0; vy = 0; vz = 0 }
+      if (n.jump || Math.hypot(vx, vy, vz) * 60 > MAX_SPEED) { vx = 0; vy = 0; vz = 0 }
     }
     const ahead = Math.max(0, Math.min(MAX_AHEAD, now - n.tick))
     const k = shoved ? shoved(n.tick) : null
@@ -79,13 +79,20 @@ export class NearPresent {
       r = { tick: n.tick, x: target.x, y: target.y, z: target.z, vx, vy, vz, at: now, ex: 0, ey: 0, ez: 0 }
       this.rec.set(key, r)
     } else if (r.tick !== n.tick) {
-      // A NEW SAMPLE: what the old guess says for now, against the new one.
-      // The difference is kept as an error that settles, not shown as a jump.
-      const step = now - r.at
-      const was = { x: r.x + r.vx * step, y: r.y + r.vy * step, z: r.z + r.vz * step }
-      r.ex += was.x - target.x
-      r.ey += was.y - target.y
-      r.ez += was.z - target.z
+      if (n.jump) {
+        // A TELEPORT (ent_field::TELEPORTED): there, at once. Settling the
+        // difference as an error would slide it across the room in a quarter
+        // of a second -- the one thing a teleport must not look like.
+        r.ex = 0; r.ey = 0; r.ez = 0
+      } else {
+        // A NEW SAMPLE: what the old guess says for now, against the new one.
+        // The difference is kept as an error that settles, not shown as a jump.
+        const step = now - r.at
+        const was = { x: r.x + r.vx * step, y: r.y + r.vy * step, z: r.z + r.vz * step }
+        r.ex += was.x - target.x
+        r.ey += was.y - target.y
+        r.ez += was.z - target.z
+      }
       r.tick = n.tick
     }
     r.x = target.x; r.y = target.y; r.z = target.z

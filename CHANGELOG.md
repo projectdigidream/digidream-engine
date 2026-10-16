@@ -33,8 +33,38 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   repeat, up to four, and shrinks back as they age out. One hitch, or a link
   that never runs dry, keeps the two-tick buffer it had.
 
+- A monster's `set_param` added an effect every time it ran and never took
+  one away. The effect stack holds 256 for the whole world, so a monster
+  setting its speed on entering each of its states used it up within minutes,
+  and from then on every effect anywhere (a weapon's swing, a slow) silently
+  failed. It now replaces its own last value.
+- A saved game brought monsters back in their first state with fresh vars, so
+  a boss's "only once" phase change (a hidden var plus the phase's states)
+  was undone by every reload. A save now keeps each monster's state, where it
+  was in it, and its vars, cooldowns as the time left. It resumes rather than
+  re-enters, so a `set_cooldown` on the way into a phase does not run again.
+- mobs.lua's own runtime (monsters not on the C++ loop) did two things the
+  C++ loop does not, found by running a teleporting, slamming monster through
+  both:
+  - A monster whose action sent it to another state, such as flinching from
+    its own blast, carried on with the rest of the old sequence from the
+    start, so it slammed twice.
+  - A turn that an action made without sending it was then skipped, so the
+    monster faced the old way.
+
+  Both now match the C++ loop.
+- A monster's volley fired due east (aim near 0) flew its left-hand shots
+  along the middle one: the offsets made the heading negative, which reads
+  as 0. A mancubus's three shots were two lines.
+
 ### Changed
 
+- Missile `gravity` is a fall, in units a second squared, acting on a vertical
+  speed: a missile with it flies an arc. It used to be added to the height
+  every tick, a steady climb. A monster throws such a missile on the one arc
+  that lands on its target (`speed` is horizontal); a player's starts along
+  their aim, and their own client flies the same arc. Cinderfall's
+  `slag_glob` (`gravity = "9"`) now falls as it was written to.
 - `weapons.lua` costs about a third less per tick (median 99 -> 64 us for one
   player on DOOM II): the sorted ammunition list is kept, the HUD and predicted
   sounds compare values instead of building strings, the inventory is handed
@@ -59,6 +89,28 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   clears it. Predicted on the client like the rest of the weapon. The weapon
   block of a snapshot grows by a byte (and four per cooldown in use), so a
   client and a server must both be this version.
+- Monsters can teleport: `teleport` with `to = "behind"` (the target's back,
+  or a little to one side of it) or `"near"` (a random spot around it that
+  it could walk to the target from), an `effect` at both ends, facing the
+  target on arrival. It only lands where its body fits (`dnp.place`, new:
+  a floor, headroom, no wall or body in the way). Clients draw any teleport as
+  a jump rather than a slide (`ent_field::TELEPORTED`, new), including the
+  ones maps and scripts already did.
+- Missiles can make missiles: a `missile` action in a missile's `on_hit`,
+  `on_expire` or new `sequence` (actions by ticks of flight) launches from
+  where it is, on its heading (`towards = "back"` / `"target"`), within a
+  per-shot budget (`max_children`, default 16).
+- Aiming: `lead = true` on a monster's `missile` aims where a moving target
+  will be. `homing_after` delays a homing missile's turn and `homing_cone`
+  makes it give up a target too far round. A player's homing missile locks
+  onto what their auto-aim picks; their client leaves it to the server rather
+  than flying a straight copy. `fx.sqrt`, the core's square root, for scripts.
+- Missiles can bounce: `bounces = N` off walls (the heading reflected about
+  the wall), floors and ceilings (the climb reversed), keeping `bounce_keep`
+  of their speed each time and running `on_bounce` there. `throw = "low"` /
+  `"high"` makes a gravity missile's `speed` its launch speed, and a monster's
+  throw takes the flat angle or the lob that lands. `dnp.sweep_hit` now also
+  returns what the map stopped it with: a wall's normal, or floor/ceiling.
 - Wall textures can be turned and scaled like a flat's: `angle` (degrees) and
   `scale` on a wall's `vertex` line, turned about the side's texture origin,
   then shifted by `xoff`/`yoff`, then scaled (docs/MAP_AUTHOR.md, "Walls").

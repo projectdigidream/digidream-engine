@@ -170,10 +170,17 @@ export class EntityView {
       // The newest position as the server holds it, exact, for questions the
       // core answers about it (a predicted blast's reach, render/knock.js).
       ent.fxPos = e.pos
+      // A TELEPORT is a jump, and is drawn as one: the sample is marked, and
+      // nothing interpolates INTO it -- the body holds where it was until the
+      // render time reaches it, then is there. Sliding it across the delay
+      // would draw a monster that blinked behind you running round you instead.
+      const jump = (e.mask & ENT_FIELD.TELEPORTED) !== 0
+      if (jump) ent.jumpTick = snapshot.serverTick
       ent.samples.push({
         tick: snapshot.serverTick,
         x: p.x, y: p.y, z: p.z,
-        facing: e.facing ?? last?.facing ?? 0
+        facing: e.facing ?? last?.facing ?? 0,
+        jump
       })
       // Two seconds of history is far more than the delay needs; the cap is so
       // a long session does not grow one buffer per entity forever.
@@ -241,7 +248,7 @@ export class EntityView {
         continue
       }
 
-      const t = Math.max(0, Math.min(1, (renderTick - a.tick) / (b.tick - a.tick)))
+      const t = b.jump ? 0 : Math.max(0, Math.min(1, (renderTick - a.tick) / (b.tick - a.tick)))
       ent.mesh.position.set(
         a.x + (b.x - a.x) * t,
         a.y + (b.y - a.y) * t + (ent.mesh.userData.yOffset ?? 0),

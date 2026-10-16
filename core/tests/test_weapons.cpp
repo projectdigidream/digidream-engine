@@ -353,6 +353,45 @@ static void test_cooldown() {
     CHECK(weapon_assign_cooldowns(many));                  // CONTROL: 6 fit
 }
 
+static void test_missile_spec_on_the_wire() {
+    std::printf("weapons: a launch's gravity and homing survive the wire\n");
+    static WeaponTable t;
+    t.clear();
+    WeaponDef& w = t.weapons[t.weapon_count++];
+    name(w.name, "lobber"); w.phase_count = 1; w.initial = 0;
+    name(w.phases[0].name, "ready");
+    WStep& l = step(w.phases[0], WAct::Launch);
+    l.count = 1;
+    l.missile.kind = 21; l.missile.speed = fx::from_int(6); l.missile.life = 400;
+    l.missile.gravity = fx::from_frac(98, 10);
+    l.missile.homes = true;
+    l.missile.bounces = true;
+    l.missile.throws = true;
+    static u8 buf[1 << 16];
+    ByteWriter bw(buf, sizeof(buf));
+    CHECK(encode_weapon_table(bw, t));
+    static WeaponTable back;
+    ByteReader br(buf, bw.size());
+    CHECK(decode_weapon_table(br, back));
+    const WMissile& m = back.weapons[0].phases[0].steps[0].missile;
+    CHECK(m.gravity == fx::from_frac(98, 10) && m.homes && m.bounces && m.throws);
+    // CONTROL: the hash moves with each, so a client running a table that
+    // flies its missiles differently is a detected mismatch.
+    static WeaponTable other;
+    other = t;
+    other.weapons[0].phases[0].steps[0].missile.gravity = fx::zero();
+    CHECK(other.hash() != t.hash());
+    other = t;
+    other.weapons[0].phases[0].steps[0].missile.homes = false;
+    CHECK(other.hash() != t.hash());
+    other = t;
+    other.weapons[0].phases[0].steps[0].missile.bounces = false;
+    CHECK(other.hash() != t.hash());
+    other = t;
+    other.weapons[0].phases[0].steps[0].missile.throws = false;
+    CHECK(other.hash() != t.hash());
+}
+
 static void test_table_round_trip() {
     std::printf("weapons: the table survives the wire, and a corrupt one is refused\n");
     WeaponTable& t = doomish();
@@ -394,6 +433,7 @@ int main() {
     test_impulse_away();
     test_negate();
     test_cooldown();
+    test_missile_spec_on_the_wire();
     test_table_round_trip();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

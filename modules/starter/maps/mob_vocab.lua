@@ -573,8 +573,21 @@ mob_vocab = {
         { name = "offset", type = "fx", optional = true,
           doc = "How far in front of the body it appears. Launched clear or " ..
                 "it is touching its owner on the tick it exists." },
+        { name = "towards", type = "enum", optional = true,
+          values = { "on", "back", "target" },
+          doc = "In a missile's `on_hit`, `on_expire` or `sequence`, where " ..
+                "the new ones head from where it is: `on` (the default) the " ..
+                "way it was going, `back` the way it came, `target` at the " ..
+                "target. Elsewhere ignored: a monster fires where it aims." },
+        { name = "lead", type = "bool", optional = true,
+          doc = "Aim where the target WILL be, from its speed and this " ..
+                "missile's, rather than where it is. With no solution (it is " ..
+                "faster than the missile, going away) it aims where it is." },
       },
-      doc = "Launch one of the `missiles` defined in the same file." },
+      doc = "Launch one of the `missiles` defined in the same file. From a " ..
+            "missile's own `on_hit`, `on_expire` or `sequence` it launches " ..
+            "from where that missile is, on the budget of the shot it came " ..
+            "from (`max_children`): a cluster, a split, a trail of bomblets." },
 
     { name = "damage",
       args = { { name = "amount", type = "int" } },
@@ -640,6 +653,31 @@ mob_vocab = {
                { name = "jitter", type = "int", optional = true,
                  doc = "Degrees of random slop on the direction." } },
       doc = "A shove, in world units per second. A lost soul's charge, a leap." },
+
+    { name = "teleport",
+      args = { { name = "to", type = "enum", optional = true,
+                 values = { "near", "behind" },
+                 doc = "`near` (the default): a random spot around the target " ..
+                       "it could walk to the target from. `behind`: at its " ..
+                       "back, or a little to one side of it." },
+               { name = "distance", type = "fx", optional = true,
+                 doc = "How far from the target, default 3. For `near` the " ..
+                       "furthest it goes." },
+               { name = "min", type = "fx", optional = true,
+                 doc = "For `near`: no closer than this, default 0." },
+               { name = "tries", type = "int", optional = true,
+                 doc = "For `near`: random spots tried before giving up, " ..
+                       "default 8." },
+               { name = "effect", type = "int", optional = true,
+                 doc = "A visual effect kind, drawn where it left and where " ..
+                       "it arrived." },
+               { name = "sound", type = "string", optional = true,
+                 doc = "Played where it arrived." } },
+      doc = "Gone from here and somewhere near the target, facing it. Only " ..
+            "to a spot its body fits (a floor, headroom, no wall or body in " ..
+            "the way); with none it stays put. Drawn as a jump, never as a " ..
+            "slide. With no target, `near` blinks around itself and `behind` " ..
+            "does nothing." },
 
     { name = "spawn",
       args = { { name = "mob", type = "mob" },
@@ -907,14 +945,51 @@ mob_vocab = {
             "mid-body; a missile born at ankle height clips the first step " ..
             "it crosses." },
     { name = "gravity", type = "fx", optional = true,
-      doc = "Zero for a Doom fireball, which flies flat. Nonzero for a " ..
-            "grenade." },
+      doc = "How fast it falls, in units a second squared: 9.8 is about a " ..
+            "real throw at a metre a unit. Zero (or absent) for a Doom " ..
+            "fireball, which flies its line. With gravity a monster THROWS " ..
+            "it: the one arc that comes down on the target at this `speed`, " ..
+            "which is horizontal -- so a higher lob is a slower missile. A " ..
+            "player's starts along their aim and falls from there, and " ..
+            "their own client flies the same arc." },
     { name = "life", type = "int", optional = true,
       doc = "Ticks before it expires on its own. A missile with no ceiling " ..
             "on its life leaks a prop slot per shot." },
+    { name = "throw", type = "enum", optional = true, values = { "low", "high" },
+      doc = "With `gravity`: `speed` is the LAUNCH speed, and a monster's " ..
+            "throw picks the angle that lands on the target -- the flat one " ..
+            "(`low`) or the lob (`high`). Out of reach, it throws at 45 " ..
+            "degrees, its furthest. A player's starts at that speed along " ..
+            "their aim. Without `throw`, `speed` is horizontal and there is " ..
+            "one arc." },
+    { name = "bounces", type = "int", optional = true,
+      doc = "How many times it bounces off the map (a wall, a floor, a " ..
+            "ceiling) before it bursts there. A body still stops it: " ..
+            "`on_hit` is for what it reaches." },
+    { name = "bounce_keep", type = "fx", optional = true,
+      doc = "How much of its speed it keeps at each bounce, default 0.6." },
+    { name = "on_bounce", type = "actions", optional = true,
+      doc = "Run where it bounced, each time: a clink, a puff." },
+    { name = "homing_after", type = "int", optional = true,
+      doc = "Ticks of flight before it starts to turn. Fired straight, then " ..
+            "chasing." },
+    { name = "homing_cone", type = "int", optional = true,
+      doc = "Degrees off its nose beyond which it gives up: a target that " ..
+            "far round is let go, and it flies straight from there. Absent " ..
+            "means it never gives up." },
+    { name = "sequence", type = "actions", optional = true,
+      doc = "Actions by its age in flight, `{ at = <ticks since launch>, " ..
+            "action = ... }`, each once, run where it is: bomblets dropped as " ..
+            "it goes. A split that ends it is `life` and `on_expire`." },
+    { name = "max_children", type = "int", optional = true,
+      doc = "How many missiles one shot may make, all its generations " ..
+            "together, default 16. Each is a prop slot, and a missile that " ..
+            "splits into two that split again fills the table in a second " ..
+            "without one." },
     { name = "homing", type = "int", optional = true,
       doc = "Degrees per tick it may turn towards its target. A revenant's " ..
-            "missile. Absent means it flies straight.\n" ..
+            "missile. Absent means it flies straight. A player's locks onto " ..
+            "what their auto-aim picks when it is fired.\n" ..
             "An INT, not an fx: angles here are brad -- a turn is 2^32 -- " ..
             "and brad is a plain Lua number, because 2^32 is exact in a " ..
             "double. Declaring it `fx` made it an fx userdata that then met " ..

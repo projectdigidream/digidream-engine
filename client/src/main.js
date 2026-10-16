@@ -2906,7 +2906,12 @@ function frame (now) {
       ghosts.tick()
       predictor.step(f)
       if (predictor.weapon) ownWeapon.push(predictor.weapon)
-      for (const l of predictor.weapon?.launches ?? []) ghosts.launch(l)
+      // Not one that HOMES or BOUNCES: where it goes depends on where its
+      // target goes, or on the shape of every wall it meets, and the server's
+      // own is drawn instead of a copy that would be wrong.
+      for (const l of predictor.weapon?.launches ?? []) {
+        if (!l.missile?.homes && !l.missile?.bounces) ghosts.launch(l)
+      }
       const after = world.readAgent(agent)
       if (!region && before.sector >= 0 && after.sector < 0 && leftTheCell(after)) {
         // AND STOPPED, not merely put back.
@@ -3252,7 +3257,11 @@ function frame (now) {
         const kR = now === null ? null : three(knock.offset(key, now, others.renderTick))
         if (kR) { pos.x += kR.x; pos.y += kR.y; pos.z += kR.z }
         const last = ent.samples.at(-1)
-        const w = (nowF === null || !last) ? 0 : presentWeight(Math.hypot(last.x - subject.x, last.z - subject.z))
+        let w = (nowF === null || !last) ? 0 : presentWeight(Math.hypot(last.x - subject.x, last.z - subject.z))
+        // A JUMP the present has drawn and the interpolation has not reached
+        // yet: the two are in different rooms, and a blend of them is a body
+        // drawn in neither. The present wins until the delay catches up.
+        if (w > 0 && ent.jumpTick !== undefined && others.renderTick < ent.jumpTick) w = 1
         ent.presentWeight = w
         if (w <= 0) continue
         kept.add(key)

@@ -732,7 +732,9 @@ unsigned dnp_world_weapon_launches(const sim::World* w, long long* out64, unsign
 // z_offset, offset, and the two impact effects' radii -- and six words --
 // life, burst state, burst ticks, effect count, the two effect kinds. Then its
 // blast: three more i64 (radius, knockback, lift) and a seventh word, bit 0
-// "it shoves its owner", bit 1 "it falls off", bit 2 "it has a blast".
+// "it shoves its owner", bit 1 "it falls off", bit 2 "it has a blast", bit 3
+// "it homes", bit 4 "it bounces", bit 5 "its speed is a launch speed". Then a
+// tenth i64, its gravity.
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned phase, unsigned step,
                                   long long* out64, unsigned* out32) {
@@ -747,7 +749,9 @@ unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned
     out32[0] = m.life; out32[1] = m.burst_anim; out32[2] = m.burst_ticks; out32[3] = m.vfx_count;
     out32[4] = m.vfx_kind[0]; out32[5] = m.vfx_kind[1];
     out64[6] = m.blast_radius.raw; out64[7] = m.blast_knockback.raw; out64[8] = m.blast_lift.raw;
-    out32[6] = (m.self_shove ? 1u : 0u) | (m.blast_falloff ? 2u : 0u) | (m.has_blast ? 4u : 0u);
+    out32[6] = (m.self_shove ? 1u : 0u) | (m.blast_falloff ? 2u : 0u) | (m.has_blast ? 4u : 0u) |
+               (m.homes ? 8u : 0u) | (m.bounces ? 16u : 0u) | (m.throws ? 32u : 0u);
+    out64[9] = m.gravity.raw;
     return m.kind;
 }
 

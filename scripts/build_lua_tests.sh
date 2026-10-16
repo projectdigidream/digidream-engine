@@ -113,6 +113,12 @@ clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
 clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
         "$ROOT/server/tests/test_lua_weapons.cpp" "${LINK[@]}" \
         -o "$OUT/test_lua_weapons"
+# What the monster editor asks of the engine (docs/ENGINE_NEEDS.md): each new
+# action shown working and each belief about the runtime settled, on a real
+# World with the real bindings.
+clang++ "${FLAGS[@]}" "${RANGE_SRCS[@]}" \
+        "$ROOT/server/tests/test_lua_mobneeds.cpp" "${LINK[@]}" \
+        -o "$OUT/test_lua_mobneeds"
 # Graphs (docs/GRAPHS.md): the JSON a graph arrives as, the runtime that walks
 # it, and the trigger verbs it runs -- against the real bindings, because the
 # verbs are the triggers' own and act on a real world.

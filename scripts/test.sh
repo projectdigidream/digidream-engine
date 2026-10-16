@@ -412,6 +412,10 @@ suite_lua () {
     # purely to use the parts of the vocabulary Doom does not: charge, combos and
     # alt-fire.
     "./build/lua/test_lua_weapons" .
+    # What the monster editor asks of the engine (docs/ENGINE_NEEDS.md): the
+    # actions it needed, each with a control, and what it believed the runtime
+    # does, settled one way or the other.
+    "./build/lua/test_lua_mobneeds"
     # Game scripts (docs/MODULES.md): the same weapons in a GAME VM with the
     # monsters in a level's, one world under both. A shot crosses from one VM to
     # the other and hurts what the level keeps; the control takes the level away.

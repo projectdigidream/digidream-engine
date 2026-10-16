@@ -454,6 +454,27 @@ function M.missile_defs() return missiles end
 
 -- ONE MISSILE'S FIELDS, against the vocabulary: names and values. Shared by
 -- mobs.load and mobs.add_missiles, which used to accept anything at all.
+-- A missile's `sequence`: the actions as any list's, and each `at` a whole
+-- number of ticks. SORTED by it here, stably, so the flight can walk it once
+-- in order the way a state's sequence is walked.
+local function check_missile_sequence(m, where)
+  if m.sequence == nil then return end
+  check_action_list(m.sequence, where .. " sequence", nil)
+  for i, a in ipairs(m.sequence) do
+    if type(a) == "table" and (type(a.at) ~= "number" or a.at < 0 or a.at ~= math.floor(a.at)) then
+      complain("%s sequence %d: `at` is a whole number of ticks since launch", where, i)
+    end
+  end
+  local order = {}
+  for i, a in ipairs(m.sequence) do order[i] = { i = i, a = a } end
+  table.sort(order, function(x, y)
+    local ax, ay = (type(x.a) == "table" and x.a.at) or 0, (type(y.a) == "table" and y.a.at) or 0
+    if ax ~= ay then return ax < ay end
+    return x.i < y.i
+  end)
+  for i, o in ipairs(order) do m.sequence[i] = o.a end
+end
+
 local function check_missile_fields(name, m)
   local where = ("missile '%s'"):format(name)
   -- Its body, defaulted to its name. Same rule as a mob's, below.
@@ -511,6 +532,8 @@ function M.load(data)
     local where = ("missile '%s'"):format(name)
     check_action_list(m.on_hit, where .. " on_hit", nil)
     check_action_list(m.on_expire, where .. " on_expire", nil)
+    check_action_list(m.on_bounce, where .. " on_bounce", nil)
+    check_missile_sequence(m, where)
   end
 
   for name, d in pairs(data.mobs or {}) do
@@ -1041,10 +1064,16 @@ end
 
 local function set_move(m, mx, my, aim, buttons)
   buttons = buttons or 0
-  if m.mx == mx and m.my == my and m.aim == aim and m.buttons == buttons then
+  -- Against what was last SENT, as the C++ loop's set_move compares, not
+  -- against `m.aim`: an action may turn the steering aim without sending it
+  -- (teleport does, so both runtimes send it at the same moment), and
+  -- comparing against the field it had just written skipped the send, so a
+  -- monster that flinched straight after a teleport faced the old way in Lua.
+  if m.mx == mx and m.my == my and m.sent_aim == aim and m.buttons == buttons then
+    m.aim = aim
     return
   end
-  m.mx, m.my, m.aim, m.buttons = mx, my, aim, buttons
+  m.mx, m.my, m.aim, m.sent_aim, m.buttons = mx, my, aim, aim, buttons
   -- POSITIONAL, because that is what the binding takes:
   -- entity:set_input(move_x, move_y, aim [, buttons]). Passing a table looked
   -- fine against the test harness -- which stored whatever it was handed --
@@ -1460,8 +1489,8 @@ function acts.face(m, a)
     -- all, which is a property of the GRAPH and so is the same on both sides.
     h = h + brad_of_degrees(dnp.random(-a.jitter, a.jitter))
   end
-  m.aim = wrap_brad(h)
-  m.e:set_input(m.mx or ZERO, m.my or ZERO, m.aim, m.buttons or 0)
+  -- Through set_move, as the C++ loop's `face` is, so what was sent is known.
+  set_move(m, m.mx or ZERO, m.my or ZERO, wrap_brad(h), m.buttons or 0)
 end
 
 function acts.set_angle(m, a)
@@ -1720,22 +1749,85 @@ function acts.melee(m, a)
   end
 end
 
+-- WHERE A MOVING TARGET WILL BE when a missile of horizontal `speed` from
+-- `from` can meet it, or nil when it cannot (faster than the missile, going
+-- away). In SECONDS OF FLIGHT rather than units, so the quadratic's terms stay
+-- small: at a few hundred units the squares of distances overflow Q32.32.
+local function intercept(from, target, speed)
+  if speed <= ZERO or target.vel == nil then return nil end
+  local q, v = target:pos(), target:vel()
+  local dx, dy = (q.x - from.x) / speed, (q.y - from.y) / speed
+  local vx, vy = v.x / speed, v.y / speed
+  -- |D + V t| = t, in those units: (V.V - 1) t^2 + 2 (D.V) t + D.D = 0.
+  local a = vx * vx + vy * vy - fx.int(1)
+  local b = (dx * vx + dy * vy) * fx.int(2)
+  local c = dx * dx + dy * dy
+  local t
+  if a == ZERO then
+    if b >= ZERO then return nil end
+    t = -c / b
+  else
+    local disc = b * b - a * c * fx.int(4)
+    if disc < ZERO then return nil end
+    local r = fx.sqrt(disc)
+    local t1, t2 = (-b - r) / (a * fx.int(2)), (-b + r) / (a * fx.int(2))
+    if t1 > t2 then t1, t2 = t2, t1 end
+    t = (t1 > ZERO) and t1 or t2
+    if t <= ZERO then return nil end
+  end
+  return vec3.new(q.x + v.x * t, q.y + v.y * t, q.z)
+end
+M.intercept = intercept
+
 function acts.missile(m, a)
   local n = a.count or 1
   local arc = a.arc or 0
-  -- THE HEIGHT IT IS THROWN AT. A monster is already turned towards its
-  -- target, so the horizontal half is done; this is the half that was missing,
-  -- and without it an imp on a balcony threw fireballs over the floor below it
-  -- forever. One slope for the whole volley, so an arc of three stays an arc.
-  local slope = nil
-  if m.target ~= nil and not m.target_prop and m.target:valid() then
-    slope = slope_to(m.e, m.target)
+  local base, slope, origin = m.aim or 0, nil, nil
+  local parent = m.parent
+  local tgt = (m.target ~= nil and not m.target_prop and m.target:valid()) and m.target or nil
+  if parent ~= nil then
+    -- FROM A MISSILE (its on_hit, on_expire or sequence): from where it is,
+    -- heading on its way unless told otherwise. Flat: a cluster spreads in
+    -- the plane it burst in, and a child with gravity falls from there.
+    origin = m.impact or (parent.p:valid() and parent.p:pos()) or nil
+    if origin == nil then return end
+    local towards = a.towards or "on"
+    if towards == "back" then
+      base = wrap_brad(parent.ang + 2147483648)
+    elseif towards == "target" and tgt ~= nil then
+      base = aim_at(origin, tgt:pos())
+      local q = tgt:pos()
+      local run = dnp.length(vec3.new(q.x - origin.x, q.y - origin.y, ZERO))
+      if run > ZERO then slope = (eye_of(tgt) - origin.z) / run end
+    else
+      base = parent.ang
+    end
+  elseif tgt ~= nil then
+    -- THE HEIGHT IT IS THROWN AT. A monster is already turned towards its
+    -- target, so the horizontal half is done; this is the half that was
+    -- missing, and without it an imp on a balcony threw fireballs over the
+    -- floor below it forever. One slope for the whole volley, so an arc of
+    -- three stays an arc.
+    slope = slope_to(m.e, tgt)
+    -- LEADING: at where the target will be when this missile gets there.
+    local def = missiles[a.kind]
+    if a.lead and def ~= nil then
+      local from = m.e:pos()
+      local at = intercept(from, tgt, def.speed)
+      if at ~= nil then
+        base = aim_at(from, at)
+        local run = dnp.length(vec3.new(at.x - from.x, at.y - from.y, ZERO))
+        if run > ZERO then slope = (at.z + (eye_of(tgt) - tgt:pos().z) - eye_of(m.e)) / run end
+        m.lead_at = at
+      end
+    end
   end
   for i = 1, n do
     -- Centred on the aim: three shots with an arc of 10 go -10, 0, +10.
     local off = (n == 1) and 0 or ((i - 1) - (n - 1) / 2) * arc
-    launch(m, a.kind, (m.aim or 0) + off * 4294967296 / 360, a.offset, slope)
+    launch(m, a.kind, base + off * 4294967296 / 360, a.offset, slope, origin)
   end
+  m.lead_at = nil
 end
 
 function acts.impulse(m, a)
@@ -1754,6 +1846,74 @@ function acts.impulse(m, a)
   ang = wrap_brad(ang)
   local d = dnp.dir(ang)
   m.e:add_impulse(vec3.new(d.x * a.speed, d.y * a.speed, a.vertical or ZERO))
+end
+
+-- TELEPORT: gone from here and somewhere near the target, with an effect at
+-- both ends. `behind` is `distance` behind the target's back (then a little
+-- either side, so a target with its back to a wall still gets something);
+-- `near`, the default, a random spot between `min` and `distance` from it, up
+-- to `tries` of them. Every candidate must be somewhere this body can STAND
+-- (dnp.place: a floor, headroom, no wall or body within its radius), and a
+-- `near` one somewhere it could WALK to the target from: a spot behind a wall
+-- it could see through a window is not near in any sense a player feels. With
+-- nowhere that qualifies it stays put, and nothing is drawn.
+--
+-- With no target, `near` is around itself (a blink) and `behind` does nothing.
+--
+-- `near` draws twice per try and stops at the first spot that qualifies. Both
+-- runtimes run this same function, so they draw alike.
+local DEG = 4294967296 / 360
+local BEHIND = { 0, 30, -30, 60, -60 }
+function acts.teleport(m, a)
+  local to = a.to or "near"
+  local tgt = nil
+  if m.target ~= nil and not m.target_prop and m.target:valid() then tgt = m.target end
+  if to == "behind" and tgt == nil then return end
+  local centre = tgt and tgt:pos() or m.e:pos()
+  local r, h = m.e:param("radius"), m.e:param("height")
+  local far = a.distance or fx.int(3)
+  local close = a.min or ZERO
+  local there = tgt and tgt:sector() or nil
+  local function try(ang, d)
+    local dir = dnp.dir(wrap_brad(ang))
+    local at, sector = dnp.place(vec3.new(centre.x + dir.x * d, centre.y + dir.y * d, centre.z),
+                                 r, h, m.e)
+    if at == nil then return nil end
+    if to == "near" and there ~= nil and sector ~= there and
+       dnp.find_path(sector, there, r, h, m.def.jump_height) == nil then
+      return nil
+    end
+    return at
+  end
+  local at = nil
+  if to == "behind" then
+    local back = tgt:facing() + 2147483648
+    for _, off in ipairs(BEHIND) do
+      at = try(back + math.floor(off * DEG), far)
+      if at ~= nil then break end
+    end
+  else
+    for _ = 1, a.tries or 8 do
+      local ang = math.floor(dnp.random(0, 359) * DEG)
+      local d = close + (far - close) * fx.frac(dnp.random(0, 100), 100)
+      at = try(ang, d)
+      if at ~= nil then break end
+    end
+  end
+  if at == nil then return end
+  local from = m.e:pos()
+  if a.effect then dnp.vfx(a.effect, from, m.aim or 0, 0) end
+  m.e:teleport(at)
+  -- Facing what it came for, which is the point of arriving behind somebody.
+  -- The AIM only, which both runtimes take from here (M.run_action hands it
+  -- back to the C++ loop). Not the input, the route or the position cache:
+  -- those are each runtime's own, and setting them here from the Lua record
+  -- -- stale for a mob the C++ loop owns -- made the two disagree the tick
+  -- after every teleport. The move itself is a command, applied after the
+  -- scripts, and both see the new place on the next tick.
+  if tgt ~= nil then m.aim = wrap_brad(aim_at(at, tgt:pos())) end
+  if a.effect then dnp.vfx(a.effect, at, m.aim or 0, 0) end
+  if a.sound then dnp.sound(a.sound, at) end
 end
 
 function acts.spawn(m, a)
@@ -2091,8 +2251,14 @@ end
 -- base every tick and therefore cannot drift (design §6).
 --
 -- add_effect(name, op, value [, ticks]); ticks 0 or absent is permanent.
+-- REPLACES its own previous value, by tag. It used to add an effect per call
+-- and never take one away, and the effect stack holds 256 for the whole world:
+-- a boss that set its speed on entering each of its states used the stack up in
+-- a few minutes, and from then on every effect anywhere -- a weapon's swing, a
+-- slow -- silently failed to apply. Defined after M.tagged_effect, below.
+local set_param_tagged
 function acts.set_param(m, a)
-  m.e:add_effect(a.param, "set", a.value)
+  set_param_tagged(m.e, "set_param/" .. a.param, a.param, "set", a.value)
 end
 
 -- Effects that replace rather than stack, by (entity, tag).
@@ -2119,6 +2285,8 @@ function M.tagged_effect(e, tag, param, op, value, ticks)
   tagged[key] = (eid ~= 0) and eid or nil
   return eid
 end
+
+set_param_tagged = M.tagged_effect
 
 -- Drop every tagged effect this entity holds. For a weapon being put away, and
 -- for a slot about to be reused by somebody else.
@@ -2244,14 +2412,22 @@ end
 
 -- Run a sequence's due entries. Returns true if the mob left the state.
 local function run_due(m, tick)
-  local seq = m.st.sequence
+  local st = m.st
+  local seq = st.sequence
   if seq == nil then return false end
-  local age = tick - m.entered
+  local entered = m.entered
+  local age = tick - entered
   while m.seq_i <= #seq and seq[m.seq_i].at <= age do
     local a = seq[m.seq_i]
     m.seq_i = m.seq_i + 1
     local fn = acts[a.action]
     if fn ~= nil and fn(m, a) then return true end   -- `goto` said stop
+    -- WATCHED, as the C++ loop watches: an action that sends this mob to
+    -- another state, or into the same one again -- its own blast making it
+    -- flinch, a death -- leaves a sequence that no longer belongs to it. Going
+    -- on walked the OLD table from step 1 of the new entry, so a monster hurt
+    -- by its own slam slammed again, and the runtimes parted there.
+    if m.st ~= st or m.entered ~= entered or not m.e:valid() then return true end
   end
   return false
 end
@@ -2679,19 +2855,102 @@ M.hurt = hurt
 
 -- --------------------------------------------------------------- missiles
 
+-- THE VERTICAL SPEED A THROW STARTS WITH, units a second, for a missile with
+-- `gravity`. At a target, the one arc that lands on its middle: `speed` is the
+-- HORIZONTAL speed, so the flight takes distance / speed seconds whatever the
+-- arc, and there is exactly one starting climb that comes down where the target
+-- is. A higher lob is a slower missile. With no target, the launch's own slope
+-- (a player's pitch) times its speed.
+--
+-- Solved for the flight as it is actually stepped, not the textbook parabola:
+-- each tick the vertical speed drops by g/60 and then the missile rises by
+-- speed/60, which lands n ticks later g*n/7200 lower than the continuous arc.
+-- Hence the extra g/120 -- without it every throw fell short by g*t/120.
+local SIXTY = fx.int(60)
+local ONE = fx.int(1)
+-- A THROW AT A LAUNCH SPEED (`throw = "low"` / `"high"`): the angle that lands
+-- on the target at `speed` along the line of flight, so the horizontal speed is
+-- what that angle leaves. Returns the vertical speed and the horizontal one.
+--
+-- tan = (v^2 -/+ sqrt(v^4 - g (g x^2 + 2 y v^2))) / (g x), written in
+-- k = g x / v^2 and m = g y / v^2 so no term is a fourth power of a speed --
+-- which in Q32.32 overflows at fifty units a second. Out of reach (nothing
+-- under the root) it throws at 45 degrees, its furthest. With no target, along
+-- the launch's slope. Then the same g/120 as throw_vz, for the stepped flight.
+local function throw_at_speed(def, from, target, slope, at)
+  local v, g = def.speed, def.gravity
+  local tan = slope or ZERO
+  if target ~= nil and target:valid() and v > ZERO then
+    local q = at or target:pos()
+    local x = dnp.length(vec3.new(q.x - from.x, q.y - from.y, ZERO))
+    if x > ZERO then
+      local y = q.z + (eye_of(target) - target:pos().z) - from.z
+      local k = g * x / (v * v)
+      local m = g * y / (v * v)
+      local disc = ONE - k * k - m * fx.int(2)
+      if disc < ZERO then
+        tan = ONE
+      else
+        local r = fx.sqrt(disc)
+        tan = (def.throw == "high" and (ONE + r) or (ONE - r)) / k
+      end
+    end
+  end
+  local h = v / fx.sqrt(ONE + tan * tan)
+  local vz = h * tan
+  if target ~= nil and target:valid() then vz = vz + g / fx.int(120) end
+  return vz, h
+end
+
+local function throw_vz(def, from, target, slope, at)
+  local v = def.speed
+  if target ~= nil and target:valid() and v > ZERO then
+    -- At where it will be, when the throw leads it.
+    local q = at or target:pos()
+    local d = dnp.length(vec3.new(q.x - from.x, q.y - from.y, ZERO))
+    if d > ZERO then
+      local t = d / v
+      local eye = q.z + (eye_of(target) - target:pos().z)
+      return (eye - from.z) / t + def.gravity * t / fx.int(2)
+             + def.gravity / fx.int(120)
+    end
+  end
+  return (slope or ZERO) * v
+end
+
+-- A shot's children, all generations together: what `max_children` counts.
+local MAX_CHILDREN = 16
+-- Launched while update_missiles walks `flying`: queued, and added after the
+-- walk. A key added to a table pairs() is walking is undefined in Lua.
+local walking, queued = false, {}
+
 -- `slope` is rise per unit of horizontal run, and nil is the flat flight every
 -- missile in this file had before there was an auto-aim. See M.autoaim.
-function launch(m, kind, ang, offset, slope)
+function launch(m, kind, ang, offset, slope, origin)
   local def = missiles[kind]
   if def == nil then return end
-  local from = m.e:pos()
+  -- A whole turn, always. A volley's offsets are added to the aim, and with
+  -- the aim near 0 (due east) the left-hand shots came out negative -- which
+  -- the bindings take as an unsigned turn, so they all flew at 0: a spread of
+  -- five was three lines.
+  ang = wrap_brad(ang)
+  -- A MISSILE'S CHILD: on the budget of the shot it came from, refused once
+  -- that is spent. Each is a prop slot, and a missile that splits into two
+  -- that split again fills the table in a second.
+  local family = m.parent and m.parent.family or nil
+  if family ~= nil then
+    if family.left <= 0 then return end
+    family.left = family.left - 1
+  end
+  local from = origin or m.e:pos()
   local d = dnp.dir(ang)
   local off = offset or ZERO
   -- Clear of the shooter's own body, or it is touching its owner on the tick
-  -- it appears -- which bursts it on the thing that fired it.
+  -- it appears -- which bursts it on the thing that fired it. A child starts
+  -- at its parent's height, which already is where it was flying.
   local p = dnp.spawn_prop(def.prop,
     vec3.new(from.x + d.x * off, from.y + d.y * off,
-             from.z + (def.z_offset or ZERO)))
+             from.z + (origin and ZERO or (def.z_offset or ZERO))))
   if p == nil then return end
   -- WHICH WAY IT IS POINTING. A missile is the one prop with a heading worth
   -- replicating, and without this every rocket reported zero -- so an eight-view
@@ -2699,10 +2958,26 @@ function launch(m, kind, ang, offset, slope)
   -- angle, which reads as the art missing its rotations.
   p:set_facing(wrap_brad(ang))
   if def.anim_fly then p:set_animation(def.anim_fly) end
-  flying[p:index()] = {
+  local s = {
     p = p, def = def, dir = d, ang = ang, slope = slope,
-    owner = m, target = m.target, born = dnp.tick(),
+    -- What it homes on: a monster's target, or what a player's auto-aim
+    -- picked as they fired (M.launch_from), which is not the owner's
+    -- `target` -- that stays nil for a player, see synthetic_owner.
+    owner = m, target = m.homing_target or m.target, born = dnp.tick(),
+    family = family or { left = def.max_children or MAX_CHILDREN },
   }
+  -- A FALLING MISSILE carries a vertical speed that gravity changes each tick.
+  -- Thrown at its target by a monster; along the launch's slope by a player,
+  -- whose own client flies the same arc from the same numbers.
+  if def.gravity ~= nil and def.gravity ~= ZERO then
+    local aim_at_target = (not m.player and origin == nil) and m.target or nil
+    if def.throw ~= nil then
+      s.vz, s.speed = throw_at_speed(def, p:pos(), aim_at_target, slope, m.lead_at)
+    else
+      s.vz = throw_vz(def, p:pos(), aim_at_target, slope, m.lead_at)
+    end
+  end
+  if walking then queued[#queued + 1] = s else flying[p:index()] = s end
 end
 
 -- The owner record a non-mob acts through.
@@ -2744,7 +3019,14 @@ function M.launch_from(e, kind, ang, offset, slope)
   -- input during the flight (see damage_area).
   owner.launch_input = e.input_tick ~= nil and e:input_tick() or nil
   owner.launch_tick = dnp.tick()
+  -- A HOMING ONE locks onto what the auto-aim would correct this shot
+  -- towards, as it is fired: a player has no target of their own.
+  local def = missiles[kind]
+  if def ~= nil and def.homing then
+    owner.homing_target = M.autoaim(e, M.autoaim_range, M.autoaim_h)
+  end
   launch(owner, kind, ang, offset, slope)
+  owner.homing_target = nil
   return owner
 end
 
@@ -2919,6 +3201,8 @@ function M.add_missiles(t)
       check_missile_fields(name, def)
       check_action_list(def.on_hit, ("missile '%s' on_hit"):format(name), nil)
       check_action_list(def.on_expire, ("missile '%s' on_expire"):format(name), nil)
+      check_action_list(def.on_bounce, ("missile '%s' on_bounce"):format(name), nil)
+      check_missile_sequence(def, ("missile '%s'"):format(name))
     end
     if #problems > before then
       for i = before + 1, #problems do print("mobs: " .. problems[i]) end
@@ -2939,7 +3223,24 @@ end
 -- a fireball with nobody left to hit still has to expire. Skipping it leaks a
 -- prop slot per shot, which is a slower and much more confusing failure than a
 -- dropped frame.
+-- A MISSILE'S OWN ACTIONS -- its on_hit, on_expire or sequence -- run by its
+-- OWNER, so `melee` and `damage_area` mean the same in a missile as they do in
+-- a state and the runtime needs no second copy of either. With `target` the
+-- thing it reached (or its own), `impact` where it is, and `parent` this
+-- missile: what a `missile` action launches children from.
+local function missile_acts(s, list, impact, target)
+  local o = s.owner
+  local saved_t, saved_p = o and o.target, o and o.parent
+  if o then o.target, o.impact, o.parent = target, impact, s end
+  for _, a in ipairs(list) do
+    local fn = acts[a.action]
+    if fn then fn(o, a) end
+  end
+  if o then o.target, o.impact, o.parent = saved_t, nil, saved_p end
+end
+
 local function update_missiles(tick)
+  walking = true
   for idx, s in pairs(flying) do
     local def = s.def
     if not s.p:valid() then
@@ -2948,44 +3249,60 @@ local function update_missiles(tick)
       if tick >= s.burst_at then s.p:despawn(); flying[idx] = nil end
     elseif tick - s.born > (def.life or 300) then
       if def.on_expire then
-        if s.owner then s.owner.impact = s.p:pos() end
-        for _, a in ipairs(def.on_expire) do
-          local fn = acts[a.action]
-          if fn then fn(s.owner, a) end
-        end
-        if s.owner then s.owner.impact = nil end
+        missile_acts(s, def.on_expire, s.p:pos(), s.owner and s.owner.target)
       end
       s.p:despawn(); flying[idx] = nil
     else
+      -- ITS SEQUENCE, by age: what it does on the way, where it is.
+      local seq = def.sequence
+      if seq ~= nil then
+        local age = tick - s.born
+        s.seq_i = s.seq_i or 1
+        while s.seq_i <= #seq and (seq[s.seq_i].at or 0) <= age do
+          local a = seq[s.seq_i]
+          s.seq_i = s.seq_i + 1
+          missile_acts(s, { a }, s.p:pos(), s.target)
+        end
+      end
       local p = s.p:pos()
-      local step = def.speed / fx.int(60)
+      -- Its own speed when it has one (a throw at a launch speed, a bounce
+      -- that slowed it), the definition's otherwise.
+      local step = (s.speed or def.speed) / fx.int(60)
 
       -- HOMING, before the step: turn towards the target by at most `homing`
       -- degrees, then fly straight for one tick. Turning after moving would
       -- have it arrive at where the target was.
-      if def.homing and s.target ~= nil and s.target:valid() then
+      if def.homing and s.target ~= nil and s.target:valid() and
+         tick - s.born >= (def.homing_after or 0) then
         local want = aim_at(p, s.target:pos())
         local d = want - s.ang
         while d > 2147483647 do d = d - 4294967296 end
         while d < -2147483648 do d = d + 4294967296 end
-        local cap = def.homing * 4294967296 / 360
-        if d > cap then d = cap elseif d < -cap then d = -cap end
-        s.ang = s.ang + d
-        s.dir = dnp.dir(s.ang)
-        -- VERTICALLY TOO, for a missile that was launched with a slope. A
-        -- revenant's tracer that steers in plan and holds the height it left
-        -- with follows you round a corner and then flies over your head.
-        -- From the missile's own position, not through slope_to: it is a PROP,
-        -- and `p` is the point it is steering from this tick anyway.
-        if s.slope ~= nil then
-          local q = s.target:pos()
-          local run = dnp.length(vec3.new(q.x - p.x, q.y - p.y, ZERO))
-          if run > ZERO then s.slope = (eye_of(s.target) - p.z) / run end
+        -- Too far round to chase: let go, and fly straight from here on.
+        if def.homing_cone and math.abs(d) > def.homing_cone * 4294967296 / 360 then
+          s.target = nil
+          d = nil
         end
-        -- And the SPRITE turns with it. A revenant's missile that steers but
-        -- keeps its launch heading shows the wrong one of its eight views for
-        -- the rest of its flight.
-        s.p:set_facing(wrap_brad(s.ang))
+        local cap = def.homing * 4294967296 / 360
+        if d ~= nil then
+          if d > cap then d = cap elseif d < -cap then d = -cap end
+          s.ang = s.ang + d
+          s.dir = dnp.dir(s.ang)
+          -- VERTICALLY TOO, for a missile that was launched with a slope. A
+          -- revenant's tracer that steers in plan and holds the height it left
+          -- with follows you round a corner and then flies over your head.
+          -- From the missile's own position, not through slope_to: it is a PROP,
+          -- and `p` is the point it is steering from this tick anyway.
+          if s.slope ~= nil then
+            local q = s.target:pos()
+            local run = dnp.length(vec3.new(q.x - p.x, q.y - p.y, ZERO))
+            if run > ZERO then s.slope = (eye_of(s.target) - p.z) / run end
+          end
+          -- And the SPRITE turns with it. A revenant's missile that steers but
+          -- keeps its launch heading shows the wrong one of its eight views for
+          -- the rest of its flight.
+          s.p:set_facing(wrap_brad(s.ang))
+        end
       end
 
       -- WHAT DOES IT REACH FIRST -- a wall, or somebody?
@@ -3007,15 +3324,49 @@ local function update_missiles(tick)
       -- sinking through the floor until a wall turned up. Gravity is part of
       -- the line for the tick, as the move below adds it.
       local climb = s.slope or ZERO
-      if def.gravity and def.gravity ~= ZERO and step > ZERO then climb = climb + def.gravity / step end
-      local what, at = dnp.sweep_hit(p, s.dir, step,
+      -- FALLING: this tick's vertical speed, gravity taken off first, and the
+      -- rise it gives. The sweep is along that line, so a lob that drops onto a
+      -- floor or a head stops where it meets it.
+      local dz = nil
+      if s.vz ~= nil then
+        s.vz = s.vz - def.gravity / SIXTY
+        dz = s.vz / SIXTY
+        climb = step > ZERO and dz / step or ZERO
+      end
+      local what, at, wall_x, wall_y, plane = dnp.sweep_hit(p, s.dir, step,
                                      s.radius or def.radius or du(11),
                                      s.p, s.owner and s.owner.e or nil, climb)
       local hit = (what ~= nil and what ~= false) and what or nil
       local blocked = what ~= nil
       local nx, ny = p.x + s.dir.x * step, p.y + s.dir.y * step
 
-      if hit ~= nil or blocked then
+      local bounces = s.bounces
+      if bounces == nil then bounces = def.bounces or 0 end
+      if hit == nil and blocked and bounces > 0 then
+        -- A BOUNCE, off the map only: a body it reaches is what on_hit is for.
+        -- A floor or a ceiling turns its climb round; a wall turns its heading
+        -- about the wall's normal. Either way it keeps `bounce_keep` of its
+        -- speed, and flies on from where it met it next tick.
+        s.bounces = bounces - 1
+        local keep = def.bounce_keep or fx.frac(6, 10)
+        if at ~= nil then s.p:set_pos(at) end
+        if plane ~= nil and plane ~= 0 then
+          if s.vz ~= nil then s.vz = -s.vz * keep end
+          if s.slope ~= nil then s.slope = -s.slope end
+        elseif wall_x ~= nil then
+          -- The wall's normal, named apart from `nx`/`ny` below (the next
+          -- position), which shadowed it the first time and reflected the
+          -- missile off a normal eleven units long.
+          local dot = s.dir.x * wall_x + s.dir.y * wall_y
+          local rx, ry = s.dir.x - wall_x * dot * fx.int(2), s.dir.y - wall_y * dot * fx.int(2)
+          s.ang = wrap_brad(dnp.atan2(ry, rx))
+          s.dir = dnp.dir(s.ang)
+          s.p:set_facing(s.ang)
+          if s.vz ~= nil then s.vz = s.vz * keep end
+        end
+        s.speed = (s.speed or def.speed) * keep
+        if def.on_bounce then missile_acts(s, def.on_bounce, at or s.p:pos(), nil) end
+      elseif hit ~= nil or blocked then
         if at ~= nil then s.p:set_pos(at) end
         -- ON A WALL TOO, not only on a body.
         --
@@ -3034,18 +3385,9 @@ local function update_missiles(tick)
           -- as the target -- so `melee` and `damage_area` mean the same in a
           -- missile as they do in a state, and the runtime does not need a
           -- second copy of either.
-          local saved = s.owner and s.owner.target
-          if s.owner then
-            s.owner.target = hit
-            -- Where it landed, for the actions that are about a PLACE rather
-            -- than about the mob: damage_area and vfx.
-            s.owner.impact = at or s.p:pos()
-          end
-          for _, a in ipairs(def.on_hit) do
-            local fn = acts[a.action]
-            if fn then fn(s.owner, a) end
-          end
-          if s.owner then s.owner.target = saved; s.owner.impact = nil end
+          -- Where it landed is the impact, for the actions that are about a
+          -- PLACE rather than about the mob: damage_area and vfx.
+          missile_acts(s, def.on_hit, at or s.p:pos(), hit)
         end
         if def.anim_burst then
           s.p:set_animation(def.anim_burst)
@@ -3054,10 +3396,17 @@ local function update_missiles(tick)
           s.p:despawn(); flying[idx] = nil
         end
       else
-        s.p:set_pos(vec3.new(nx, ny, p.z + (def.gravity or ZERO)
-                             + (s.slope ~= nil and s.slope * step or ZERO)))
+        s.p:set_pos(vec3.new(nx, ny, p.z + (dz or (s.slope ~= nil and s.slope * step or ZERO))))
       end
     end
+  end
+  walking = false
+  -- The children launched on the way, in the order they were: they fly from
+  -- the next tick, as a missile a monster fires does.
+  for i = 1, #queued do
+    local q = queued[i]
+    if q.p:valid() then flying[q.p:index()] = q end
+    queued[i] = nil
   end
 end
 
@@ -3414,11 +3763,47 @@ check_vocabulary_matches_implementation(conds, acts)
 -- No `return M`: the VM discards a script's return value, and a map reaches
 -- this through the global above.
 
--- PERSISTENCE (docs/SAVING.md): the monsters still alive, where they are
--- and how hurt. Checkpoint fidelity: a monster comes back in its initial state
--- of mind, not mid-attack, and the dead do not come back at all.
+-- PERSISTENCE (docs/SAVING.md): the monsters still alive, where they are,
+-- how hurt, which state they were in and their vars. The dead do not come back
+-- at all.
+--
+-- THE STATE AND THE VARS TOGETHER, or neither. A boss's "only once" phase
+-- change is a hidden var plus the states of the phase it led to; a save that
+-- kept the var and dropped the state brought the boss back in phase 1 with the
+-- flag that would have moved it on already set -- stuck there for good.
+--
+-- RESUMED, NOT RE-ENTERED, as `@previous` resumes: entering the state again
+-- would run its sequence again, and a `set_cooldown` on the way into a phase
+-- would then wipe the cooldown the save had just put back. A monster saved
+-- mid-flinch comes back in what the flinch interrupted. The target is not
+-- saved; the next think finds one.
+--
+-- TIMES ARE KEPT AS TIME LEFT or time spent. A cooldown's var holds an
+-- absolute tick, and the world a save is loaded into may count from somewhere
+-- else.
+local function cooldown_vars(def)
+  local out = {}
+  for _, st in pairs(def.states or {}) do
+    for _, a in ipairs(st.sequence or {}) do
+      if a.action == "set_cooldown" and a.var then out[a.var] = true end
+    end
+    for _, tr in ipairs(st.transitions or {}) do
+      for _, c in ipairs(tr.when or {}) do
+        if c.cond == "cooldown_ready" and c.var then out[c.var] = true end
+      end
+    end
+  end
+  return out
+end
+
+local function var_of(m, k)
+  if m.cpp and dnp.mob_var ~= nil then return dnp.mob_var(m.idx, k) end
+  return m.vars[k]
+end
+
 if dnp ~= nil and dnp.persist ~= nil then
   dnp.persist("mobs", function()
+    local now = dnp.tick()
     local idxs = {}
     for idx, m in pairs(live) do
       if (m.hp or 0) > 0 and m.e:valid() then idxs[#idxs + 1] = idx end
@@ -3427,12 +3812,44 @@ if dnp ~= nil and dnp.persist ~= nil then
     local out = {}
     for _, idx in ipairs(idxs) do
       local m = live[idx]
+      -- `done` is how many sequence steps have run, which is the C++ loop's
+      -- index and one less than mobs.lua's, so a save reads the same from
+      -- either. A length of nil is "no `ticks`", which the C++ loop says as -1.
+      local state, elapsed, done, state_ticks
+      if m.cpp and dnp.mob_resume_point ~= nil then
+        state, elapsed, done, state_ticks = dnp.mob_resume_point(m.idx)
+      else
+        local p = is_reaction(m.st) and (m.prev or {}) or nil
+        if p then
+          state, elapsed, done, state_ticks = p.name, p.elapsed, (p.seq_i or 1) - 1, p.state_ticks
+        else
+          state, elapsed, done, state_ticks = m.state, now - (m.entered or now), (m.seq_i or 1) - 1, m.state_ticks
+        end
+      end
+      if state_ticks ~= nil and state_ticks < 0 then state_ticks = nil end
+      local vars, left = nil, nil
+      local cool = cooldown_vars(m.def)
+      for k in pairs(m.def.vars or {}) do
+        local v = var_of(m, k)
+        if v ~= nil then
+          if cool[k] then
+            left = left or {}
+            left[k] = math.max(0, v - now)
+          else
+            vars = vars or {}
+            vars[k] = v
+          end
+        end
+      end
       out[#out + 1] = { kind = m.kind, at = m.e:pos(), hp = m.hp,
-                        dormant = m.dormant or nil }
+                        dormant = m.dormant or nil, vars = vars, cooldowns = left,
+                        state = state and { name = state, elapsed = elapsed,
+                                            done = done, ticks = state_ticks } or nil }
     end
     return out
   end, function(list)
     local back = 0
+    local now = dnp.tick()
     for _, s in ipairs(list or {}) do
       local e = M.spawn(s.kind, s.at, { dormant = s.dormant })
       local m = e and live[e:index()]
@@ -3440,6 +3857,23 @@ if dnp ~= nil and dnp.persist ~= nil then
         back = back + 1
         m.hp = s.hp
         if m.cpp and dnp.mob_set ~= nil then dnp.mob_set(m.idx, "hp", s.hp) end
+        local function put(k, v)
+          if m.def.vars == nil or m.def.vars[k] == nil then return end
+          m.vars[k] = v
+          if m.cpp and dnp.mob_var ~= nil then dnp.mob_var(m.idx, k, v) end
+        end
+        for k, v in pairs(s.vars or {}) do put(k, v) end
+        for k, v in pairs(s.cooldowns or {}) do put(k, now + v) end
+        local at = s.state
+        if at ~= nil and m.def.states[at.name] ~= nil then
+          enter(m, at.name, now)
+          local elapsed, done = at.elapsed or 0, at.done or 0
+          if m.cpp then
+            dnp.mob_set(m.idx, "resume", elapsed, done, at.ticks or -1)
+          else
+            m.entered, m.seq_i, m.state_ticks, m.prev = now - elapsed, done + 1, at.ticks, nil
+          end
+        end
       end
     end
     print(("mobs: restored %d of %d"):format(back, #(list or {})))

@@ -119,6 +119,11 @@ int l_fx_div(lua_State* L) {
 }
 
 int l_fx_unm(lua_State* L) { push_fx(L, -check_fx(L, 1)); return 1; }
+
+// fx.sqrt(x): the core's own square root, exact on every build. Zero for a
+// negative, as fx_sqrt answers rather than trapping. For solving an intercept
+// (mobs.lua's `lead`), which a double's sqrt would make differ by platform.
+int l_fx_sqrt(lua_State* L) { push_fx(L, fx_sqrt(check_fx(L, 1))); return 1; }
 int l_fx_eq(lua_State* L)  { lua_pushboolean(L, check_fx(L, 1) == check_fx(L, 2)); return 1; }
 int l_fx_lt(lua_State* L)  { lua_pushboolean(L, check_fx(L, 1) <  check_fx(L, 2)); return 1; }
 int l_fx_le(lua_State* L)  { lua_pushboolean(L, check_fx(L, 1) <= check_fx(L, 2)); return 1; }
@@ -319,6 +324,7 @@ void open_fx(lua_State* L) {
     lua_pushcfunction(L, l_fx_int);    lua_setfield(L, -2, "int");
     lua_pushcfunction(L, l_fx_frac);   lua_setfield(L, -2, "frac");
     lua_pushcfunction(L, l_fx_parse);  lua_setfield(L, -2, "parse");
+    lua_pushcfunction(L, l_fx_sqrt);   lua_setfield(L, -2, "sqrt");
     lua_pushcfunction(L, l_fx_raw);    lua_setfield(L, -2, "raw");
     lua_pushcfunction(L, l_fx_approx); lua_setfield(L, -2, "approx");
     lua_setglobal(L, "fx");

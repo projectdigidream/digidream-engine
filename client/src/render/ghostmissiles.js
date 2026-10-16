@@ -31,6 +31,19 @@ const toF = (v) => Number(v) / 4294967296
 // shove it gives -- is a hair from the server's.
 const quant = (v) => (v < 0n ? -((-v) >> 20n) : v >> 20n) << 20n
 const quant3 = (p) => ({ x: quant(p.x), y: quant(p.y), z: quant(p.z) })
+// The floor of a square root, of a non-negative BigInt: the core's isqrt128,
+// which has one right answer, so any exact method agrees with it.
+const isqrt = (n) => {
+  if (n < 2n) return n
+  let x = BigInt(Math.floor(Math.sqrt(Number(n))))
+  while (x * x > n) x--
+  while ((x + 1n) * (x + 1n) <= n) x++
+  return x
+}
+// fx_sqrt: sqrt(raw * 2^32), for x >= 0.
+const fxSqrt = (v) => (v <= 0n ? 0n : isqrt(v << 32n))
+// The core's fx divide: (a << 32) / b, truncated toward zero, as BigInt's is.
+const div = (a, b) => (b === 0n ? 0n : (a << 32n) / b)
 
 export const CLAIM_DIST = 3          // units: a server rocket this near a ghost is its copy
 export const BLAST_DIST = 2.5        // units: a server effect this near a ghost blast is a copy
@@ -67,6 +80,20 @@ export class GhostMissiles {
     const m = l.missile
     const g = { pos: quant3(l.pos), dir: l.dir, slope: l.slope, aim: l.aim, m, age: 0,
                 mesh: this.draw.make(m.kind), burstLeft: -1, impact: null, start: { ...l.pos } }
+    // A FALLING MISSILE starts along the aim, its vertical speed the slope
+    // times its speed, as mobs.lua's throw_vz does for a player's launch.
+    // THROWN at a launch speed (`throw`), the speed is along the aim, and
+    // the horizontal is what the slope leaves of it -- throw_at_speed's
+    // speed / sqrt(1 + slope^2), in the same integer steps.
+    if (m.gravity) {
+      const slope = l.slope ?? 0n
+      if (m.throws) {
+        g.speed = div(m.speed, fxSqrt(FX_ONE + mul(slope, slope)))
+        g.vz = mul(g.speed, slope)
+      } else {
+        g.vz = mul(slope, m.speed)
+      }
+    }
     this.flying.push(g)
     this.#place(g)
   }
@@ -83,10 +110,19 @@ export class GhostMissiles {
       if (g.burstLeft >= 0) { g.burstLeft--; continue }
       g.age++
       if (g.age > g.m.life) { g.burstLeft = 0; g.expired = true; continue }
-      const step = g.m.speed / 60n
+      const step = (g.speed ?? g.m.speed) / 60n
       // At its slope, as mobs.lua's flight sweeps: the floor, a ceiling and
-      // a step stop it where its line meets them.
-      const hit = this.world.sweep(g.pos, g.dir, step, g.m.radius, this.agent, g.slope)
+      // a step stop it where its line meets them. A falling one along this
+      // tick's line, gravity taken off first -- the same integer divisions as
+      // the server's fx, which truncate as BigInt's do.
+      let climb = g.slope
+      let dz = null
+      if (g.vz !== undefined) {
+        g.vz -= g.m.gravity / 60n
+        dz = g.vz / 60n
+        climb = step > 0n ? (dz << 32n) / step : 0n
+      }
+      const hit = this.world.sweep(g.pos, g.dir, step, g.m.radius, this.agent, climb)
       if (hit) {
         // dnp.sweep_hit's impact: a tenth short of what it met, at the height
         // it met it -- the world computes it, on the server's bits.
@@ -100,7 +136,7 @@ export class GhostMissiles {
         this.#burst(g)
       } else {
         g.pos = quant3({ x: g.pos.x + mul(g.dir.x, step), y: g.pos.y + mul(g.dir.y, step),
-                         z: g.pos.z + mul(g.slope, step) })
+                         z: g.pos.z + (dz ?? mul(g.slope, step)) })
       }
       this.#place(g)
     }

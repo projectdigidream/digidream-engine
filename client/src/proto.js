@@ -125,7 +125,9 @@ export const ENT_FIELD = {
   // carries the KIND, and kind zero has to keep meaning "a player".
   AVATAR: 1 << 9,
   // Ticks left in another body's swing (u8; 0 not swinging).
-  ATTACK: 1 << 10
+  ATTACK: 1 << 10,
+  // The position is a jump (a teleport), not a move: drawn there, not slid there.
+  TELEPORTED: 1 << 11
 }
 
 // Snapshot header flags (docs/protocol.md §5).

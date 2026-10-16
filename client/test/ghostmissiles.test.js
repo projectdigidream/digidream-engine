@@ -106,5 +106,49 @@ check(!g3.hides('2101/1', 53, { x: 1.5, y: -20 }),
   check(drawn.at.x > 4 && drawn.at.z === 1, 'CONTROL: flat, it is still flying above the floor')
 }
 
+// FALLING: gravity 9 units/s^2, 6 units/s across, launched level 0.67 up. It
+// meets the floor sqrt(2 * 0.67 / 9) = 0.385 s later, 2.31 units on -- the
+// arc mobs.lua flies, from the same integer steps.
+{
+  const lob = { ...missile, speed: FX(6), gravity: FX(9), vfx: [] }
+  drawn.bursts = []
+  const gg = new GhostMissiles({ world, agent: 0, draw, now: () => t })
+  gg.launch({ pos: { x: FX(1), y: FX(5), z: FX(0.6667) }, dir: { x: FX(1), y: 0n }, slope: 0n, aim: 0, missile: lob })
+  let n = 0
+  while (drawn.bursts.length === 0 && n < 120) { gg.tick(); n++ }
+  check(drawn.bursts.length === 1 && Math.abs(drawn.at.x - 1 - 2.31) < 0.15,
+        `a falling one comes down on the floor 2.31 on (${(drawn.at.x - 1).toFixed(3)}, ${n} ticks)`)
+  // CONTROL: no gravity, the same launch flies level on to the wall.
+  drawn.bursts = []
+  const gf = new GhostMissiles({ world, agent: 0, draw, now: () => t })
+  gf.launch({ pos: { x: FX(1), y: FX(5), z: FX(0.6667) }, dir: { x: FX(1), y: 0n }, slope: 0n, aim: 0,
+              missile: { ...missile, speed: FX(6), vfx: [] } })
+  n = 0
+  while (drawn.bursts.length === 0 && n < 200) { gf.tick(); n++ }
+  check(drawn.at.x > 9, `CONTROL: without gravity it reaches the wall (${drawn.at.x.toFixed(3)})`)
+}
+
+// THROWN AT A LAUNCH SPEED (`throw`): 6 a second along a 45-degree aim is
+// 4.24 across and 4.24 up. From 0.67 up at g = 9 it lands 1.08 s later,
+// 4.58 on. CONTROL: the same numbers without `throw` are 6 across and 6 up,
+// and land about 8.6 on.
+{
+  const lob = { ...missile, speed: FX(6), gravity: FX(9), vfx: [], throws: true }
+  drawn.bursts = []
+  const gt = new GhostMissiles({ world, agent: 0, draw, now: () => t })
+  gt.launch({ pos: { x: FX(1), y: FX(5), z: FX(0.6667) }, dir: { x: FX(1), y: 0n }, slope: FX(1), aim: 0, missile: lob })
+  let n = 0
+  while (drawn.bursts.length === 0 && n < 200) { gt.tick(); n++ }
+  const thrown = drawn.at.x - 1
+  check(Math.abs(thrown - 4.58) < 0.15, `a throw at its launch speed lands 4.58 on (${thrown.toFixed(3)})`)
+  drawn.bursts = []
+  const gp = new GhostMissiles({ world, agent: 0, draw, now: () => t })
+  gp.launch({ pos: { x: FX(1), y: FX(5), z: FX(0.6667) }, dir: { x: FX(1), y: 0n }, slope: FX(1), aim: 0,
+              missile: { ...lob, throws: false } })
+  n = 0
+  while (drawn.bursts.length === 0 && n < 200) { gp.tick(); n++ }
+  check(drawn.at.x - 1 > 7.5, `CONTROL: as a horizontal speed it goes further (${(drawn.at.x - 1).toFixed(3)})`)
+}
+
 console.log(`ghostmissiles: ${checks} checks, ${fails} failures`)
 process.exit(fails ? 1 : 0)

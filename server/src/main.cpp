@@ -4422,6 +4422,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     now.avatar          = a.kind == 0 ? L.avatar[i] : 0;
                     now.solid           = a.solid;
                     now.attack_left     = a.mv.attack_left;
+                    now.teleports       = world.teleports(i);
                 }
 
                 if (!now.present) {

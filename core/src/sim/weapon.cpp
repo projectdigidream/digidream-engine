@@ -451,10 +451,12 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                         w.u16v(m.vfx_kind[v]); w.fxraw(m.vfx_radius[v]);
                     }
                     w.u8v(static_cast<u8>((m.self_shove ? 1 : 0) | (m.blast_falloff ? 2 : 0) |
-                                          (m.has_blast ? 4 : 0)));
+                                          (m.has_blast ? 4 : 0) | (m.homes ? 8 : 0) |
+                                          (m.bounces ? 16 : 0) | (m.throws ? 32 : 0)));
                     if (m.has_blast) {
                         w.fxraw(m.blast_radius); w.fxraw(m.blast_knockback); w.fxraw(m.blast_lift);
                     }
+                    w.fxraw(m.gravity);
                 }
             }
             w.u8v(ph.transition_count);
@@ -552,10 +554,14 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                     const u8 bf = r.u8v();
                     m.self_shove = (bf & 1) != 0; m.blast_falloff = (bf & 2) != 0;
                     m.has_blast = (bf & 4) != 0;
+                    m.homes = (bf & 8) != 0;
+                    m.bounces = (bf & 16) != 0;
+                    m.throws = (bf & 32) != 0;
                     if (m.self_shove && !m.has_blast) return false;
                     if (m.has_blast) {
                         m.blast_radius = r.fxraw(); m.blast_knockback = r.fxraw(); m.blast_lift = r.fxraw();
                     }
+                    m.gravity = r.fxraw();
                     if (!r.ok()) return false;
                 }
             }

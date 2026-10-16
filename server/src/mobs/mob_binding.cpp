@@ -416,6 +416,34 @@ int l_mob_state(lua_State* L) {
     return 4;
 }
 
+// dnp.mob_resume_point(entity) -> state name, elapsed, sequence position,
+//                                 state length | nothing
+//
+// Where a SAVE puts this mob back: its state and how far through it -- or, mid
+// reaction (`next = "@previous"`), the state the reaction would go back to,
+// and how far through that. Elapsed rather than the tick it was entered: the
+// world a save is loaded into may count its ticks from somewhere else.
+int l_mob_resume_point(lua_State* L) {
+    MobRuntime& rt = runtime_of(L);
+    Mob* m = mob_of(rt, static_cast<u32>(luaL_checknumber(L, 1)));
+    if (!m || m->kind < 0 || m->state < 0 || rt.world == nullptr) return 0;
+    const Kind& k = rt.graph.kinds[static_cast<u32>(m->kind)];
+    const State& st = rt.graph.states[k.first_state + m->state];
+    if (st.next == NEXT_PREVIOUS) {
+        if (!m->has_prev || m->prev_state < 0) return 0;
+        lua_pushstring(L, rt.graph.str(rt.graph.states[k.first_state + m->prev_state].name));
+        lua_pushnumber(L, m->prev_elapsed);
+        lua_pushnumber(L, m->prev_seq_i);
+        lua_pushnumber(L, m->prev_state_ticks);
+        return 4;
+    }
+    lua_pushstring(L, rt.graph.str(st.name));
+    lua_pushnumber(L, rt.world->tick() - m->entered);
+    lua_pushnumber(L, m->seq_i);
+    lua_pushnumber(L, m->state_ticks);
+    return 4;
+}
+
 // dnp.mob_set(entity, field, value)
 //
 // The few fields a Lua action still writes: hp and dead, which `hurt` owns,
@@ -433,6 +461,16 @@ int l_mob_set(lua_State* L) {
     // How long the CURRENT state lasts, from its entry: `hurt` lengthening a
     // flinch by the hit (mob `pain_time`, mobs.set_pain_ticks).
     else if (std::strcmp(field, "state_ticks") == 0) m->state_ticks = static_cast<i32>(luaL_checknumber(L, 3));
+    // dnp.mob_set(e, "resume", elapsed, seq_i, state_ticks): the state it is in
+    // continued from a resume point (dnp.mob_resume_point) rather than from its
+    // start -- a save loaded, the sequence not run again.
+    else if (std::strcmp(field, "resume") == 0) {
+        const u32 now = rt.world ? rt.world->tick() : 0;
+        m->entered = now - static_cast<u32>(luaL_checknumber(L, 3));
+        m->seq_i = static_cast<u16>(luaL_checknumber(L, 4));
+        m->state_ticks = static_cast<i32>(luaL_checknumber(L, 5));
+        m->has_prev = false;
+    }
     else if (std::strcmp(field, "target") == 0) {
         if (lua_isnil(L, 3)) { m->target = -1; }
         else {
@@ -544,6 +582,7 @@ const luaL_Reg MOB_FUNCS[] = {
     {"mob_untrack", l_mob_untrack},
     {"mob_enter", l_mob_enter},
     {"mob_state", l_mob_state},
+    {"mob_resume_point", l_mob_resume_point},
     {"mob_set", l_mob_set},
     {"mob_var", l_mob_var},
     {nullptr, nullptr},

@@ -309,6 +309,11 @@ inline constexpr u32 AVATAR          = 1u << 9;
 // shape it already has from that body's parameters (design 4.1; the client's
 // own swing is predicted and needs none of this).
 inline constexpr u32 ATTACK          = 1u << 10;
+// THE POSITION IS A JUMP, not a move: the body was teleported since the
+// baseline, so a client draws it at the new place on its tick rather than
+// sliding it there across the interpolation window. No payload; it always
+// travels with POS.
+inline constexpr u32 TELEPORTED      = 1u << 11;
 }  // namespace ent_field
 
 namespace state_flag {

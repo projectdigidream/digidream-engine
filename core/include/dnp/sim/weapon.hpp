@@ -96,6 +96,17 @@ struct WMissile {
     fx  radius{};                 // what it sweeps
     fx  z_offset{};               // above the shooter's feet
     fx  offset{};                 // ahead of the shooter (the launch's `offset`)
+    fx  gravity{};                // units a second squared it falls by; 0 flies its slope
+    // It HOMES (a `homing` turn rate). Its path depends on where the target
+    // goes, which only the server sees, so a client does not fly a copy of it:
+    // a ghost flying straight would be wrong for the whole flight.
+    bool homes = false;
+    // It BOUNCES off the map: the same reason, the server alone flies it.
+    bool bounces = false;
+    // `speed` is its LAUNCH speed (`throw`), so the horizontal is what the
+    // aim's slope leaves of it: speed / sqrt(1 + slope^2), as mobs.lua's
+    // throw_at_speed. A client flies that too.
+    bool throws = false;
     u16 life = 0;                 // ticks before it expires
     u16 burst_anim = NO_ANIM;     // the state it bursts in
     u16 burst_ticks = 0;

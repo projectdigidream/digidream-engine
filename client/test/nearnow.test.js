@@ -48,5 +48,21 @@ const shoveSamples = [{ tick: 100, x: 0, y: 0, z: 0 }, { tick: 102, x: 0.4, y: 0
 const s = new NearPresent().present('k', shoveSamples, 108, 1 / 60, (from) => ({ x: 0.5, y: 0, z: 0 }))
 check(near(s.x, 0.4 + 0.5), `a shoved body is where the shove takes it, counted once (${s.x.toFixed(3)})`)
 
+// A TELEPORT the server says is one (ent_field::TELEPORTED): drawn there at
+// once, with nothing settling -- however short the hop.
+{
+  const j = new NearPresent()
+  const base = [{ tick: 100, x: 0, y: 0, z: 0 }, { tick: 102, x: 0, y: 0, z: 0 }]
+  j.present('j', base, 104, 1 / 60)
+  const hop = [...base, { tick: 104, x: 3, y: 0, z: 0, jump: true }]
+  const r = j.present('j', hop, 105, 1 / 60)
+  check(near(r.x, 3), `a flagged jump is drawn where it landed (${r.x.toFixed(3)})`)
+  // CONTROL: the same hop unflagged is a correction, and settles.
+  const c = new NearPresent()
+  c.present('c', base, 104, 1 / 60)
+  const r2 = c.present('c', [...base, { tick: 104, x: 3, y: 0, z: 0 }], 105, 1 / 60)
+  check(r2.x < 2, `CONTROL: unflagged, it is still on its way (${r2.x.toFixed(3)})`)
+}
+
 console.log(`nearnow: ${checks} checks, ${fails} failures`)
 process.exit(fails ? 1 : 0)

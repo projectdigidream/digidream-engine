@@ -366,7 +366,15 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
                     std::string prop = r.str_at(d, "prop");
                     if (prop.empty()) prop = name;
                     m.kind = r.props ? r.props->kind_by_name(prop.c_str(), prop.size()) : 0;
-                    bool ok = r.fx_at(d, "speed", mw, m.speed) && r.fx_at(d, "z_offset", mw, m.z_offset);
+                    bool ok = r.fx_at(d, "speed", mw, m.speed) && r.fx_at(d, "z_offset", mw, m.z_offset) &&
+                              r.fx_at(d, "gravity", mw, m.gravity);
+                    i64 turn = 0;
+                    ok = ok && r.int_at(d, "homing", mw, 0, 360, turn);
+                    m.homes = turn > 0;
+                    i64 bounces = 0;
+                    ok = ok && r.int_at(d, "bounces", mw, 0, 65535, bounces);
+                    m.bounces = bounces > 0;
+                    m.throws = !r.str_at(d, "throw").empty();
                     bool has_radius = false;
                     ok = ok && r.fx_at(d, "radius", mw, m.radius, &has_radius);
                     if (!has_radius) m.radius = fx::from_frac(11, 48);   // mobs.lua's default

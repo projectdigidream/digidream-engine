@@ -135,6 +135,13 @@ mobs.load{
                                       { cond = 'chance', percent = 35 } } },
             -- The rolled variable, read rather than re-rolled.
             { to = 'roam',   when = { { cond = 'var_at_least', var = 'mood', value = 7 } } },
+            -- TELEPORTS, both kinds, LAST so they cost the edges above nothing:
+            -- around the target when it is far ("further than 14", a negated
+            -- target_within), and onto its back when it is close.
+            { to = 'blink',  when = { { cond = 'target_within', distance = '14', negate = true },
+                                      { cond = 'chance', percent = 25 } } },
+            { to = 'pounce', when = { { cond = 'target_within', distance = '8' },
+                                      { cond = 'chance', percent = 20 } } },
           },
         },
 
@@ -191,6 +198,17 @@ mobs.load{
             { at = 4, action = 'alert_nearby', radius = '24', mob = 'dervish' },
           },
         },
+
+        blink  = { anim = 1, move = 'stop', face = 'target', ticks = 10, next = 'stalk',
+                   sequence = { { at = 2, action = 'teleport', to = 'near', distance = '7',
+                                  min = '3', effect = 1 } } },
+        -- Onto the target's back, and a slam where it lands: everything within
+        -- four units is hit, the other dervishes too, so a run has flinches to
+        -- compare whatever the random stream did to the strikes.
+        pounce = { anim = 1, move = 'stop', face = 'target', ticks = 10, next = 'stalk',
+                   sequence = { { at = 2, action = 'teleport', to = 'behind', distance = '2',
+                                  effect = 1 },
+                                { at = 4, action = 'damage_area', damage = 3, radius = '4' } } },
 
         -- One per costly condition, so the decision trace names which fired.
         giveup    = { anim = 1, move = 'wander', face = 'movement',

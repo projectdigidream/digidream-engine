@@ -22,6 +22,7 @@ void World::reset() noexcept {
         params_[i] = MoveParams{};
         inputs_[i] = proto::InputFrame{};
         weapons_[i] = WeaponState{};
+        teleports_[i] = 0;
         // Generations start at 1, not 0: handle raw 0 means "no entity", and a
         // slot-0 agent at generation 0 would encode to exactly that.
         generation_[i] = 1;
@@ -57,6 +58,7 @@ u32 World::spawn(fx3 pos) noexcept {
             params_[i] = MoveParams{};
             inputs_[i] = proto::InputFrame{};
             weapons_[i] = WeaponState{};
+            teleports_[i] = 0;
 
             if (i + 1 > agent_high_water_) agent_high_water_ = i + 1;
 
@@ -89,6 +91,7 @@ void World::despawn(u32 index) noexcept {
     agents_[index] = AgentState{};
     inputs_[index] = proto::InputFrame{};
     weapons_[index] = WeaponState{};
+    teleports_[index] = 0;
 }
 
 // The effects the server's weapon runtime would send for agent i's events this
@@ -701,6 +704,7 @@ void World::teleport(u32 index, fx3 pos) noexcept {
     if (index >= MAX_AGENTS || !agents_[index].active) return;   // defined no-op
     AgentState& a = agents_[index];
     a.pos = pos;
+    teleports_[index] = static_cast<u8>(teleports_[index] + 1);
 
     // Re-derive the sector. Without this the next tick tests the new position
     // against the old sector's walls, which is how a teleported entity ends up
@@ -1796,6 +1800,7 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
             limit = wall.distance;
             out.hit = true;
             out.distance = wall.distance;
+            out.normal = wall.normal;
             out.point = fx3{from.x + dir.x * wall.distance, from.y + dir.y * wall.distance,
                             sloped ? from.z + slope * wall.distance : from.z};
         }
@@ -1819,6 +1824,8 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
                     out.hit = true;
                     out.distance = t;
                     out.point = fx3{from.x + dir.x * t, from.y + dir.y * t, plane};
+                    out.normal = fx2{};
+                    out.plane = slope < fx::zero() ? -1 : 1;
                 }
             }
         }
@@ -1859,6 +1866,8 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
         out.hit = true;
         out.entity_hit = true;
         out.entity = entity;
+        out.normal = fx2{};
+        out.plane = 0;
         out.distance = t;
         out.point = fx3{from.x + dir.x * t, from.y + dir.y * t,
                         slope != physics::RAY_NO_HEIGHT ? from.z + slope * t : from.z};

@@ -423,6 +423,13 @@ public:
     // Move an entity, re-deriving what its new position implies.
     void teleport(u32 index, fx3 pos) noexcept;
 
+    // How many times this body has been teleported, mod 256: what a snapshot
+    // compares against its baseline to tell a jump from a fast move
+    // (ent_field::TELEPORTED), so a client draws it as one rather than a slide.
+    // NOT in either hash: nothing simulated reads it, and a client's world never
+    // teleports anything.
+    u8 teleports(u32 index) const noexcept { return index < MAX_AGENTS ? teleports_[index] : 0; }
+
     // Add to velocity. RELATIVE on purpose: two effects that each want to push
     // an entity this tick should both push it, where two absolute writes would
     // silently mean "whichever ran last".
@@ -473,6 +480,11 @@ public:
         u32  entity = 0;          // index in the one entity index space
         fx3  point{};             // where it stopped
         fx   distance{};          // how far along `dir` that was
+        // WHAT IT MET, when the map stopped it: a wall's normal (unit, out of
+        // the sector it was in), or `plane` -1 for a floor and +1 for a
+        // ceiling, with no normal. What a bouncing missile reflects off.
+        fx2  normal{};
+        i8   plane = 0;
     };
     // `slope`, when given, is a MISSILE's: it climbs `slope` per unit along
     // `dir`, and the map stops it where that line meets a step, a ceiling or
@@ -833,6 +845,7 @@ private:
     physics::MoveParams  params_[MAX_AGENTS]{};
     proto::InputFrame    inputs_[MAX_AGENTS]{};
     WeaponState          weapons_[MAX_AGENTS]{};
+    u8                   teleports_[MAX_AGENTS]{};
     const fx3*           query_pos_ = nullptr;
     const u8*            query_live_ = nullptr;
     u32                  query_count_ = 0;

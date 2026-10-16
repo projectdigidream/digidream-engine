@@ -2420,6 +2420,60 @@ int l_dnp_length(lua_State* L) {
     return 1;
 }
 
+// dnp.place(pos, radius, height, [ignore]) -> pos, sector | nil
+//
+// WHERE A BODY OF THIS SIZE COULD STAND at `pos`: on the floor under it, with
+// the headroom it needs, no wall within its radius and no other solid body
+// overlapping it -- or nil. For a teleport (mobs.lua's `teleport`), which must
+// not put a monster inside a wall, under a ceiling it does not fit beneath, or
+// inside the player it meant to land behind. `pos.z` decides which floor where
+// footprints overlap (a bridge over a path), as find_sector_at does; the answer
+// is ON that floor. `ignore` is a body not to count (the one being moved).
+//
+// Whether it could then WALK to somewhere is a separate question, and
+// dnp.find_path's: a spot can be perfectly good to stand on and sealed off.
+int l_dnp_place(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    const fx3 p = ctx.to_world(check_vec3(L, 1));
+    const fx radius = check_fx(L, 2);
+    const fx height = check_fx(L, 3);
+    const i32 ignore = lua_isnoneornil(L, 4) ? -1 : entity_agent(L, 4);
+    if (m == nullptr || radius < fx::zero() || height <= fx::zero()) { lua_pushnil(L); return 1; }
+    const fx2 at{p.x, p.y};
+    const physics::SurfaceQuery q = physics::query_surface(*m, at, geom::NO_SECTOR, p.z, height);
+    if (q.sector < 0 || q.ceil_z - q.floor_z < height) { lua_pushnil(L); return 1; }
+    // A wall the body could not pass, within its radius. Only the sector's own
+    // sides: they are what bounds it, and a passable one leads somewhere the
+    // body also fits.
+    const u128 r_sq = static_cast<u128>(static_cast<i128>(radius.raw) * radius.raw);
+    const geom::Sector& sec = m->sectors[q.sector];
+    for (u32 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        if (physics::side_is_passable(*m, si, static_cast<u32>(q.sector), q.floor_z, height)) continue;
+        const geom::Side& sd = m->side(si);
+        if (geom::distance_sq_to_segment(m->point(sd.a), m->point(sd.b), at) < r_sq) {
+            lua_pushnil(L);
+            return 1;
+        }
+    }
+    // Another solid body in the way: plan distance against the two radii, and
+    // only where the two columns overlap in height.
+    for (u32 i = 0; i < ctx.world->agent_high_water(); ++i) {
+        if (static_cast<i32>(i) == ignore) continue;
+        const sim::AgentState& a = ctx.world->agent(i);
+        if (!a.active || !a.solid) continue;
+        const physics::MoveParams& pm = ctx.world->params(i);
+        if (a.pos.z >= q.floor_z + height || a.pos.z + pm.height <= q.floor_z) continue;
+        const fx dx = a.pos.x - p.x, dy = a.pos.y - p.y;
+        const fx reach = radius + pm.radius;
+        if (dx * dx + dy * dy < reach * reach) { lua_pushnil(L); return 1; }
+    }
+    push_vec3(L, ctx.to_local(fx3{p.x, p.y, q.floor_z}));
+    lua_pushnumber(L, ctx.sector_to_local(q.sector));
+    return 2;
+}
+
 // dnp.sweep(from, dir, distance) -> blocked, impact
 //
 // Does a straight line of `distance` from `from` along `dir` reach, or does the
@@ -2461,7 +2515,9 @@ int l_dnp_sweep(lua_State* L) {
 
 // dnp.sweep_hit(from, dir, distance, radius, [ignore_a], [ignore_b], [slope])
 //   -> nil                     nothing in reach
-//   -> false, impact           the map stopped it
+//   -> false, impact, nx, ny, plane
+//                              the map stopped it: a wall's normal (nx, ny, fx),
+//                              or `plane` -1 floor / +1 ceiling (0 for a wall)
 //   -> entity, impact          an entity stopped it
 //
 // One question, one answer. `dnp.sweep` reports geometry ONLY, so a caller
@@ -2523,7 +2579,12 @@ int l_dnp_sweep_hit(lua_State* L) {
     // The height is the hit's: the start's for a flat sweep, and on a sloped
     // one where the line met what stopped it (on the floor, for a floor).
     push_vec3(L, ctx.to_local(fx3{from.x + dir.x * d, from.y + dir.y * d, hit.point.z}));
-    return 2;
+    if (hit.entity_hit) return 2;
+    // What it met, for a missile that bounces off it.
+    push_fx(L, hit.normal.x);
+    push_fx(L, hit.normal.y);
+    lua_pushnumber(L, hit.plane);
+    return 5;
 }
 
 // dnp.find_path(from_sector, to_sector, [radius], [height], [jump_height])
@@ -3323,6 +3384,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"sweep", l_dnp_sweep},
     {"sweep_hit", l_dnp_sweep_hit},
     {"find_path", l_dnp_find_path},
+    {"place", l_dnp_place},
     {"atan2", l_dnp_atan2},
     {"blast_reach", l_dnp_blast_reach},
     {"knock_impulse", l_dnp_knock_impulse},

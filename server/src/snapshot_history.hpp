@@ -42,6 +42,9 @@ struct EntitySample {
     bool solid           = true;
     // Ticks left in its swing (proto::ent_field::ATTACK); 0 when not swinging.
     u8   attack_left     = 0;
+    // World::teleports: a count that moved since the baseline is a JUMP, sent
+    // as proto::ent_field::TELEPORTED beside the position.
+    u8   teleports       = 0;
 };
 
 struct SnapshotRecord {
@@ -145,6 +148,10 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     if (now.avatar != was.avatar) mask |= proto::ent_field::AVATAR;
     if (now.solid != was.solid) mask |= proto::ent_field::SOLID;
     if (now.attack_left != was.attack_left) mask |= proto::ent_field::ATTACK;
+    // Counted rather than flagged, so it holds against any baseline: every
+    // snapshot whose baseline is older than the jump says so, until one is
+    // acknowledged that is newer.
+    if (now.teleports != was.teleports) mask |= proto::ent_field::TELEPORTED | proto::ent_field::POS;
     return mask;
 }
 

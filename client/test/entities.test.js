@@ -77,6 +77,29 @@ console.log('\n--- interpolation ---')
   check(near(mesh.position.x, 10), `held at the last known position (x=${mesh.position.x})`)
 }
 
+console.log('\n--- a teleport is a jump, not a slide ---')
+{
+  const scene = fakeScene()
+  const view = new EntityView({ makeMesh: fakeMesh, scene })
+  const TELEPORTED = 1 << 11
+  view.ingest(snap(100, [posEnt(4, 1, 0, 0, 0)]), CONV)
+  view.ingest(snap(110, [{ ...posEnt(4, 1, 30, 0, 0), mask: ENT.POS | TELEPORTED }]), CONV)
+  const mesh = [...scene.objects][0]
+  // The render time is 106, between the two samples: a move would be drawn
+  // 60% of the way, a jump is drawn where it was until it happens.
+  view.update(110, 0)
+  check(near(mesh.position.x, 0), `before the jump's tick it is where it was (x=${mesh.position.x})`)
+  view.update(110 + INTERP_DELAY_TICKS, 0)
+  check(near(mesh.position.x, 30), `and on it, where it went (x=${mesh.position.x})`)
+  check(view.entities.get(4).jumpTick === 110, 'the jump is remembered, for the present path')
+  // CONTROL: the same two samples without the flag are an ordinary move.
+  const plain = new EntityView({ makeMesh: fakeMesh, scene: fakeScene() })
+  plain.ingest(snap(100, [posEnt(4, 1, 0, 0, 0)]), CONV)
+  plain.ingest(snap(110, [posEnt(4, 1, 30, 0, 0)]), CONV)
+  plain.update(110, 0)
+  check(plain.entities.get(4).mesh.position.x > 10, 'CONTROL: without the flag it slides')
+}
+
 console.log('\n--- absence means unchanged ---')
 {
   const scene = fakeScene()
