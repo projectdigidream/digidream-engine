@@ -233,10 +233,15 @@ async function phase (name, args, rounds, play, describe) {
   const args = ['--port', String(LINK_PORT), '--module', 'doom2', ...maps.flatMap((m) => ['--map', m])]
   if (CONTROL) args.push('--game-script', join(ROOT, 'maps', 'scripts', 'leak_test.lua'))
   const { lives } = await phase('doom', args, ROUNDS, () => life(3000),
-                                (r) => `(${r.panels} panel(s), ${r.sounds} sound(s))`)
-  const panels = lives.reduce((a, r) => a + r.panels, 0)
+                                (r) => `(${Object.keys(r.hud).length} HUD value(s), ${r.sounds} sound(s))`)
+  // A REAL LIFE is one the game's weapons saw: they told this player's HUD
+  // what is in hand. This counted weapon PANELS, and the panel has been opt-in
+  // since 2026-10-06 (weapons.load{ panel = true }), which DOOM II does not ask
+  // for -- so it counted none, every life, and failed whenever the suite got
+  // this far.
+  const told = lives.filter((r) => r.hud.weapon !== undefined).length
   const sounds = lives.reduce((a, r) => a + r.sounds, 0)
-  check(panels >= lives.length && sounds > 0, `every life was a real one: panels opened, sounds heard (${panels}, ${sounds})`)
+  check(told === lives.length && sounds > 0, `every life was a real one: the HUD told the weapon, sounds heard (${told} of ${lives.length}, ${sounds})`)
   // THE HUD'S VALUES (HUD_SET, docs/UI_LAYOUT.md 4.3), published by the
   // weapons runtime with no script of the module's own: the weapon in hand and
   // the pool it draws from.

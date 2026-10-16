@@ -300,7 +300,13 @@ async function session ({ echo, giveAll = false, fps = false }) {
       c.seen.currents.add(k.current)
       if (c.seen.ammoStart === null) c.seen.ammoStart = k.ammo.reduce((a, b) => a + b, 0)
       c.seen.ammoLow = Math.min(c.seen.ammoLow, k.ammo.reduce((a, b) => a + b, 0))
-      if (c.predictor.takeClockAdjust() > 0) await c.frame({ ...input, weapon: NO_WEAPON })
+      // As main.js does: a tick more, or one FEWER -- a tick's time passes
+      // without a frame. Only adding them, this client's lead over the server
+      // crept up to 10-17 ticks, and the bodies it aims at and its ghost
+      // rockets meet were that much staler than the server's.
+      const adj = c.predictor.takeClockAdjust()
+      if (adj > 0) await c.frame({ ...input, weapon: NO_WEAPON })
+      if (adj < 0) await sleep(16)
       await sleep(15)
     }
     await sleep(250)
