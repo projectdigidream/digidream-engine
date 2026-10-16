@@ -19,6 +19,16 @@ import { STATE_FLAG, SNAP_FLAG } from './proto.js'
 
 const HISTORY = 256   // ticks of input kept for replay; ~4s at 60 Hz
 
+// Two input frames say the same thing: every field either holds, compared by
+// value. Not by identity -- a copy of the same frame is the same input.
+function sameInput (a, b) {
+  if (a === b) return true
+  if (a == null || b == null) return false
+  for (const k in a) if (a[k] !== b[k]) return false
+  for (const k in b) if (!(k in a)) return false
+  return true
+}
+
 export class Predictor {
   /**
    * @param {import('./core.js').WasmWorld} world  local sim, one agent
@@ -30,12 +40,14 @@ export class Predictor {
 
     this.tick = 0                 // client input tick, ahead of the server
     this.inputs = new Map()       // tick -> input frame
-    // tick -> { hash, epoch }. The epoch matters as much as the hash: a tick
+    // tick -> { hash, epoch, input }. The epoch matters as much as the hash: a tick
     // predicted under one parameter generation and confirmed under another was
     // computed from different constants on the two sides, and comparing hashes
     // alone reports that as a defect. docs/protocol.md §8.4 says a client MUST
     // NOT apply parameters retroactively to ticks before effective_tick; this
-    // is how that is honoured when the change lands mid-replay.
+    // is how that is honoured when the change lands mid-replay. `input` is the
+    // frame the hash was computed FROM, so a comparison can tell whether the
+    // prediction still speaks for the input on record (see reconcile).
     this.predicted = new Map()
 
     this.synced = false           // adopted an authoritative state yet?
@@ -80,6 +92,7 @@ export class Predictor {
       replayedTicks: 0,
       exactMatches: 0,
       mispredictions: 0,        // genuine: same inputs, different answer
+      inputChanged: 0,          // of those: the input on record is not the one predicted with
       starvedDivergences: 0,    // expected: the server simulated input we never sent
       paramsStale: 0,           // expected: our rules are one generation behind
       paramsStuck: 0,           // NOT expected: they have been behind too long
@@ -120,7 +133,7 @@ export class Predictor {
       ? this.world.weaponFrame() : null
 
     const s = this.world.readAgent(this.agent)
-    this.predicted.set(this.tick, { hash: s.hash, epoch: this.paramEpoch })
+    this.predicted.set(this.tick, { hash: s.hash, epoch: this.paramEpoch, input: frame })
     this.stats.ticks += 1
 
     this._trim()
@@ -265,9 +278,30 @@ export class Predictor {
     // apples to apples.
     if (snapEpoch === this.paramEpoch) this.paramsStaleRun = 0
 
+    // THE PREDICTIONS MUST SPEAK FOR THE INPUTS ON RECORD (protocol R1), for
+    // every tick the server has consumed since the last snapshot -- not only
+    // the one this snapshot answers for, because snapshots come every few
+    // ticks and step over the rest. The record is what was sent and what every
+    // replay uses; a prediction's hash was computed from whatever was in hand
+    // when that tick was last simulated. If the two differ, the client
+    // predicted with one input and holds another as sent -- and when no
+    // replay ran the changed input before the server answered past it, the
+    // hashes agree and the fault passes unseen for good. Whether it was caught
+    // used to depend on the client's lead over the snapshot interval: a
+    // timing accident, not a check.
+    let recordChanged = false
+    for (let k = Math.max(this.lastAppliedTick + 1, t - HISTORY); k <= t; k++) {
+      const p = this.predicted.get(k)
+      if (p !== undefined && !sameInput(p.input, this.inputs.get(k))) { recordChanged = true; break }
+    }
+
     const mine = this.predicted.get(t)
     if (mine !== undefined) {
-      if (mine.hash === snapshot.self.stateHash) {
+      if (recordChanged) {
+        this.stats.mispredictions += 1
+        this.stats.inputChanged += 1
+        verdict = 'mispredicted'
+      } else if (mine.hash === snapshot.self.stateHash) {
         this.stats.exactMatches += 1
         verdict = 'exact'
       } else if (serverRepeats > 0 || firstComparison) {
@@ -344,7 +378,7 @@ export class Predictor {
       this.world.setInput(this.agent, frame)
       this._impulsesAt(k)
       this.world.step()
-      this.predicted.set(k, { hash: this.world.readAgent(this.agent).hash, epoch: this.paramEpoch })
+      this.predicted.set(k, { hash: this.world.readAgent(this.agent).hash, epoch: this.paramEpoch, input: frame })
       this.stats.replayedTicks += 1
     }
   }

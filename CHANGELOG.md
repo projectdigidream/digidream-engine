@@ -14,28 +14,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
-## 0.1.5 -- 2026-10-15
-
-No changes to the engine itself: its kits, built again for studio 0.3.4.
-
-## 0.1.4.1 -- 2026-10-15
-
 ### Fixed
 
-- **The studio on Android could not reach GitHub**: the shell answers every
-  request off the app's own origin with a 404 (so a game reaches nothing),
-  and that refused the GitHub sync plugin and the studio's update check too.
-  A studio build now lets through https to the hosts its bundled plugins
-  declare (`net:<host>`) and api.github.com; a game build still reaches
-  nothing.
-
-## 0.1.3 -- 2026-10-15
-
-### Added
-
-- The studio's shells open a web page in the system's browser (`openUrl`,
-  https only): the studio's "a new version is out" notice links to its
-  release without replacing the studio (Android) or opening a bare window.
+- Client prediction: a prediction made from a different input than the one
+  on record (protocol R1) went unnoticed when the next snapshot answered past
+  that tick before any replay ran it. Whether it was caught depended on the
+  client's lead over the snapshot interval, so `prediction.test.js` failed
+  about half the time. Every tick the server consumed since the last snapshot
+  is now checked against the input its prediction came from.
 
 ## 0.1.2 -- 2026-10-15
 
