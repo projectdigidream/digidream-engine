@@ -112,6 +112,15 @@ export class TouchState {
     this.stick = null
     /** Buttons currently held, by region id. */
     this.pressed = new Set()
+    // A TAP IS SEEN AT LEAST ONCE. The game reads the held buttons when it
+    // samples input, once a tick at best and once a frame on a slow phone; a
+    // tap pressed and let go between two samples was never seen, and FIRE
+    // "did nothing" one tap in two. A press no sample has read yet is kept,
+    // let go, until one has.
+    /** Held buttons a sample has read since they went down. */
+    this.read = new Set()
+    /** Buttons let go before any sample read them: read once more, then gone. */
+    this.unread = new Set()
 
     // Accumulated since the last time the frame loop took them. Deltas rather
     // than absolutes because the camera owns its own yaw and zoom and this only
@@ -153,6 +162,7 @@ export class TouchState {
       else this.pointers.get(id).kind = 'ignored'
     } else if (kind !== 'camera') {
       this.pressed.add(kind)
+      this.read.delete(kind)
     }
   }
 
@@ -196,6 +206,7 @@ export class TouchState {
     if (this.stick === id) this.stick = null
     if (p.kind !== 'camera' && p.kind !== 'stick' && p.kind !== 'ignored') {
       this.pressed.delete(p.kind)
+      if (!this.read.has(p.kind)) this.unread.add(p.kind)
     }
     // The pinch is over the moment either finger leaves. Keeping the distance
     // would make the next single-finger drag zoom by the gap between them.
@@ -219,6 +230,7 @@ export class TouchState {
   clearAll () {
     this.pointers.clear()
     this.pressed.clear()
+    this.unread.clear()
     this.stick = null
     this.pinch = null
   }
@@ -233,7 +245,9 @@ export class TouchState {
   /** The OR of every held button's bit, given a region id -> bit table. */
   buttons (bits) {
     let out = 0
-    for (const id of this.pressed) out |= bits[id] ?? 0
+    for (const id of this.pressed) if (bits[id] !== undefined) { out |= bits[id]; this.read.add(id) }
+    // A tap let go before this: seen now, by the reader its bit belongs to.
+    for (const id of this.unread) if (bits[id] !== undefined) { out |= bits[id]; this.unread.delete(id) }
     return out
   }
 

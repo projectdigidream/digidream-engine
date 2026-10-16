@@ -289,5 +289,33 @@ console.log('\n--- whether to show the controls at all ---')
         'CONTROL: a placed key the server never named is not drawn')
 }
 
+console.log('\n--- a tap between two samples is still seen ---')
+{
+  // A slow phone samples input once a frame: a quick tap went down and came up
+  // before any sample, and FIRE did nothing one tap in two (a tester, 2026-10-17).
+  const t = new TouchState()
+  t.down(1, 740, 520, REGIONS)
+  t.up(1)
+  check(t.buttons(BITS) === BITS.jump, 'a tap no sample saw is seen by the next one')
+  check(t.buttons(BITS) === 0, 'once: the sample after has it let go')
+  // CONTROL: a press a sample read while held is not read again after it ends.
+  const h = new TouchState()
+  h.down(1, 740, 520, REGIONS)
+  check(h.buttons(BITS) === BITS.jump, 'CONTROL: held and read')
+  h.up(1)
+  check(h.buttons(BITS) === 0, 'CONTROL: let go after being read, it is gone at once')
+  // A reader whose bits do not name it leaves the tap for the one that does.
+  const k = new TouchState()
+  k.down(1, 740, 520, REGIONS)
+  k.up(1)
+  check(k.buttons({ other: 1 }) === 0 && k.buttons(BITS) === BITS.jump, 'the tap goes to the reader its bit belongs to')
+  // And blur forgets it, as it forgets what is held.
+  const c = new TouchState()
+  c.down(1, 740, 520, REGIONS)
+  c.up(1)
+  c.clearAll()
+  check(c.buttons(BITS) === 0, 'everything let go at once forgets a tap not yet seen')
+}
+
 console.log(`\ntouch: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

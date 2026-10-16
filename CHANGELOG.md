@@ -14,6 +14,19 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- Android: Back quit the app from wherever it was pressed. It now goes back
+  in the page -- a dialog closes, the studio's previous page, a play-test
+  back to the studio -- and only where there is nowhere further back does the
+  app go to the background, keeping its place for when it comes back.
+- Android: the keyboard covered the field being typed in, and a tap meant for
+  the next field typed into this one. Full screen, Android never shortened
+  the window for the keyboard; the page is now lifted by its height.
+- Touch: a quick tap on a button (FIRE) was lost when it went down and up
+  between two input samples, one tap in two on a slow phone. A press is now
+  seen by at least one sample.
+
 ## 0.2.0 -- 2026-10-16
 
 ### Fixed

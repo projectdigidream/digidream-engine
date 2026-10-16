@@ -64,6 +64,7 @@
         android:screenOrientation="sensorLandscape"
         android:launchMode="singleTask"
         android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+        android:windowSoftInputMode="adjustResize"
         android:resizeableActivity="false">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />

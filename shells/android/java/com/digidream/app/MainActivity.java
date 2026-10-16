@@ -13,7 +13,9 @@ import android.os.Looper;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -169,7 +171,22 @@ public final class MainActivity extends Activity {
       }
     });
     web.addJavascriptInterface(new Bridge(), "dnpNative");
-    setContentView(web);
+    // ROOM FOR THE KEYBOARD. Full screen, Android does not shrink the window
+    // when the keyboard opens (adjustResize is ignored), so the keyboard sat
+    // over the field being typed in and a tap meant for the next field typed
+    // into this one. The page is lifted by the keyboard's height instead: the
+    // WebView gets shorter, and the page brings the focused field into view.
+    FrameLayout root = new FrameLayout(this);
+    root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      getWindow().setDecorFitsSystemWindows(false);
+      root.setOnApplyWindowInsetsListener((v, insets) -> {
+        int ime = insets.getInsets(WindowInsets.Type.ime()).bottom;
+        if (v.getPaddingBottom() != ime) v.setPadding(0, 0, 0, ime);
+        return insets;
+      });
+    }
+    setContentView(root);
 
     new Thread(this::boot, "dnp-boot").start();
   }
@@ -1014,6 +1031,23 @@ public final class MainActivity extends Activity {
   public void onWindowFocusChanged(boolean has) {
     super.onWindowFocusChanged(has);
     if (has) immersive();
+  }
+
+  // BACK GOES BACK, IN THE PAGE: a dialog shut, the studio's previous page, a
+  // play-test back to the studio (its ◀ Studio link). The page says whether it
+  // took it (window.dnpBack, studio/src/main.js). When it did not -- the
+  // studio's Home, a game -- the app goes to the background rather than
+  // finishing, so coming back finds it where it was, not on a fresh Home.
+  private static final String BACK_JS =
+      "(function(){try{if(window.dnpBack)return !!window.dnpBack();"
+      + "var b=document.getElementById('studio-back');if(b&&!b.hidden){location.href=b.href;return true}"
+      + "}catch(e){}return false})()";
+
+  @Override
+  @SuppressWarnings("deprecation")
+  public void onBackPressed() {
+    if (web == null) { super.onBackPressed(); return; }
+    web.evaluateJavascript(BACK_JS, (took) -> { if (!"true".equals(took)) moveTaskToBack(true); });
   }
 
   // OUT OF SIGHT, OUT OF EARSHOT. Nothing paused the page when the app went to

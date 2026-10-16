@@ -630,6 +630,9 @@ suite_studio () {
   # A missile's flight on the Missiles page, against the arcs the engine's own
   # test flies: a throw that lands, a drop, a low and a high throw, a bounce.
   node ../studio/test/missileflight.test.js | tail -1
+  # The placeholder pictures a recipe's missile and weapon are drawn with until
+  # they have art (a missile with no prop is never fired), decoded back.
+  node ../studio/test/placeholders.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2
