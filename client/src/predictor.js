@@ -57,6 +57,14 @@ export class Predictor {
     // small positive margin of buffered input at the server.
     this.targetMargin = 2
     this.tickAdjust = 0           // ticks to skip (-) or duplicate (+) next frame
+    // Which of the last snapshots reported a tick the server ran on a repeated
+    // input of ours (see _steerClock), and whether the clock has settled after
+    // the join at all.
+    this.dryRuns = []
+    this.clockSettled = false
+    this.effectiveMargin = this.targetMargin
+    this.marginWindow = 120       // snapshots: about four seconds
+    this.maxMarginBoost = 4
 
     this.lastSnapshot = null      // { serverTick, lastInputTick }, for starvation detection
 
@@ -355,7 +363,7 @@ export class Predictor {
     this.lastAppliedTick = t
     this._replayFrom(t)
 
-    this._steerClock(snapshot.inputMargin)
+    this._steerClock(snapshot.inputMargin, serverRepeats)
     return { verdict }
   }
 
@@ -386,11 +394,33 @@ export class Predictor {
   // Steer the client's tick offset so the server keeps a small buffer of input
   // in hand. One tick at a time, never a snap: a client that jumps its clock
   // produces a burst of mispredictions indistinguishable from a determinism bug.
-  _steerClock (margin) {
+  //
+  // THE TARGET GROWS WHEN THE SERVER KEEPS RUNNING DRY. Two ticks suits a
+  // steady link; one whose frames arrive unevenly -- a busy machine, a slow
+  // phone -- dips to empty between snapshots, and the server runs a tick on a
+  // repeated input. That repeat is not only a misprediction: it moves every
+  // later input one server tick on, so whatever the client timed in server
+  // ticks lands a tick apart from the server's. So the target grows by one
+  // less than the number of the last 120 snapshots (about four seconds) that
+  // reported a repeat, up to four, and falls back as they age out. One repeat
+  // alone changes nothing -- a single hitch is not a bad link, and holding
+  // extra input for it is latency paid for nothing -- and a link that never
+  // runs dry keeps exactly the base. (Measuring jitter from the margins' dips
+  // raised the target on quiet links too.) Not before the clock first
+  // settles, either: a join runs dry while it catches up.
+  _steerClock (margin, repeats = 0) {
+    if (!this.clockSettled && margin >= this.targetMargin) this.clockSettled = true
+    this.dryRuns.push(repeats > 0 && this.clockSettled)
+    if (this.dryRuns.length > this.marginWindow) this.dryRuns.shift()
+    let dry = 0
+    for (const d of this.dryRuns) if (d) dry++
+    const boost = Math.min(this.maxMarginBoost, Math.max(0, dry - 1))
+    const target = this.targetMargin + boost
+    this.effectiveMargin = target
     // A band of one above the target: coming down from a burst, a band of two
     // settled at the top of it -- two ticks, 33 ms, held for nothing.
-    if (margin < this.targetMargin) this.tickAdjust = 1
-    else if (margin > this.targetMargin + 1) this.tickAdjust = -1
+    if (margin < target) this.tickAdjust = 1
+    else if (margin > target + 1) this.tickAdjust = -1
     else this.tickAdjust = 0
   }
 

@@ -771,6 +771,9 @@ for i = 0, THINK - 1 do buckets[i] = {} end
 local spawned = 0
 local corpses = {}
 local flying = {}          -- missiles in flight, by prop index
+-- A player's own rocket shoves waiting for the input they were meant for (see
+-- damage_area): { e, origin, a, share, due }.
+local owed_shoves = {}
 local players = {}         -- refreshed once a tick, not once a mob
 local asleep = false
 
@@ -1879,7 +1882,22 @@ function acts.damage_area(m, a)
         -- Knockback and slow apply whether or not the damage rounded to zero at
         -- the edge of the falloff: being on the fringe of a blast still shoves
         -- you, and a wave that pushes without hurting is a real thing to write.
-        M.apply_hit(e, p, a, share, spared)
+        --
+        -- THE OWNER'S OWN SHOVE lands on the input it was meant for. Their
+        -- client applies it in the step of the input as many ticks after the
+        -- launch as the rocket flew; here the rocket flew in server ticks, and
+        -- each tick the server ran on a repeated input in between left the
+        -- player that much behind it -- so the shove landed early, and every
+        -- snapshot until the next correction mispredicted. Held until the
+        -- player's input reaches it; on a steady link that is now.
+        local due = own and spared and m.launch_input ~= nil and e.input_tick ~= nil
+                    and m.launch_input + (dnp.tick() - m.launch_tick) or nil
+        local at = due and e:input_tick() or nil
+        if due ~= nil and at ~= nil and at < due then
+          owed_shoves[#owed_shoves + 1] = { e = e, origin = p, a = a, share = share, due = due }
+        else
+          M.apply_hit(e, p, a, share, spared)
+        end
       end
     end
   end
@@ -2677,6 +2695,13 @@ local synthetic_owner = M.synthetic_owner
 function M.launch_from(e, kind, ang, offset, slope)
   if e == nil or not e:valid() then return end
   local owner = synthetic_owner(e, ang)
+  -- ON THE PLAYER'S CLOCK as well as the world's: which of their inputs this
+  -- launch came out of, and when. A rocket's flight is in server ticks, but
+  -- its owner's client times the shove of its own blast in its input ticks,
+  -- and the two part by a tick whenever the server runs one on a repeated
+  -- input during the flight (see damage_area).
+  owner.launch_input = e.input_tick ~= nil and e:input_tick() or nil
+  owner.launch_tick = dnp.tick()
   launch(owner, kind, ang, offset, slope)
   return owner
 end
@@ -3123,6 +3148,23 @@ function on_tick()
   -- FIRST, before anything reads or writes input: last tick's presses end here.
   release_presses()
   refresh_players()
+
+  -- Owed rocket shoves whose input has come (see damage_area), before the
+  -- step that consumes it -- where the owner's client applies it.
+  if #owed_shoves > 0 then
+    local keep = {}
+    for _, o in ipairs(owed_shoves) do
+      local at = o.e:valid() and o.e:input_tick() or nil
+      if at == nil then
+        -- Gone, or nobody plays it any more: nothing to shove.
+      elseif at >= o.due then
+        M.apply_hit(o.e, o.origin, o.a, o.share, true)
+      else
+        keep[#keep + 1] = o
+      end
+    end
+    owed_shoves = keep
+  end
 
   -- NOBODY HERE: stop.
   --

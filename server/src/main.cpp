@@ -147,6 +147,11 @@ struct Host {
     // nobody plays. What e:player() answers, so the game VM can key a player's
     // state by something that survives walking into another world.
     u32  player[sim::MAX_AGENTS]{};
+    // Which of its player's inputs each body's step consumes THIS tick: the
+    // session's last applied input tick, set as the inputs are taken. It does
+    // not move on a tick the server ran on a repeated input, which is what
+    // lets a script time something on the player's own clock (e:input_tick()).
+    u32  input_tick[sim::MAX_AGENTS]{};
 
     // Sounds scripts asked for since the last snapshots (dnp.sound), in this
     // world's coordinates. Per WORLD, like the vfx queue: whoever is in it
@@ -952,6 +957,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.avatar    = H.avatar;
         game_ctx.effects   = &H.effects;
         game_ctx.player    = H.player;
+        game_ctx.input_tick = H.input_tick;
         game_ctx.sounds    = &H.sounds;
         game_ctx.commands  = commands;
         game_ctx.level     = li;
@@ -2334,6 +2340,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.avatar = L.avatar;
         L.ctx.levels = this;
         L.ctx.player = L.host->player;
+        L.ctx.input_tick = L.host->input_tick;
         L.ctx.cross  = this;
         L.ctx.sounds = &L.host->sounds;
         L.ctx.controls = controls;
@@ -3042,6 +3049,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         for (auto& [id, s] : sessions) {
             if (s.has_agent && s.level == li) {
                 L.world.set_input(s.agent, s.take());
+                L.host->input_tick[s.agent] = s.last_applied_tick;
                 L.host->rewind_tick[s.agent] = rewind_for(L.world.input(s.agent), L.world.tick());
             }
         }
@@ -4001,6 +4009,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         for (auto& [id, s] : sessions) {
             if (s.has_agent && in_region(s.level)) {
                 H.world.set_input(s.agent, s.take());
+                H.input_tick[s.agent] = s.last_applied_tick;
                 H.rewind_tick[s.agent] = rewind_for(H.world.input(s.agent), H.world.tick());
             }
         }

@@ -153,6 +153,20 @@ int l_entity_player(lua_State* L) {
     return 1;
 }
 
+// e:input_tick() -> which of this player's inputs the step about to run
+// consumes, or nil for a body nobody plays. The PLAYER's clock, not the
+// world's: on a tick the server runs without fresh input (a repeat) it stays
+// where it was, so something timed from a player's input -- their own
+// rocket's shove, which their client predicts on its input ticks -- can wait
+// for the input it was meant for.
+int l_entity_input_tick(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.input_tick == nullptr || ctx.player == nullptr || ctx.player[a] == 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, ctx.input_tick[a]);
+    return 1;
+}
+
 // Writes are deferred. Named as verbs, never as assignments, because a script
 // that reads the value back inside the same callback will see the old one.
 int l_entity_teleport(lua_State* L) {
@@ -645,6 +659,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"sector", l_entity_sector},
     {"index", l_entity_index_of},
     {"player", l_entity_player},
+    {"input_tick", l_entity_input_tick},
     {"teleport", l_entity_teleport},
     {"set_input", l_entity_set_input},
     {"press", l_entity_press},

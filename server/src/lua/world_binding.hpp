@@ -355,6 +355,9 @@ struct WorldContext {
     // level (a session's id), or 0 for a body nobody plays. Borrowed from the
     // host. e:player() reads it; null means nobody is anybody (a test).
     const u32*        player = nullptr;
+    // Which of its player's inputs each body's step consumes this tick
+    // (Host::input_tick). e:input_tick() reads it; null means no clock (a test).
+    const u32*        input_tick = nullptr;
     CrossSink*        cross = nullptr;
     // The world's sounds waiting for the snapshots (dnp.sound). Borrowed from
     // the host; null means a script's sounds go nowhere (a test).

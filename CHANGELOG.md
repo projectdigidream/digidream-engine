@@ -22,6 +22,16 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   client's lead over the snapshot interval, so `prediction.test.js` failed
   about half the time. Every tick the server consumed since the last snapshot
   is now checked against the input its prediction came from.
+- A player's own rocket jump mispredicted whenever the server ran a tick on a
+  repeated input during the rocket's flight: the rocket flies in server ticks,
+  the client times the shove in its input ticks, and the shove landed early on
+  the server. It now waits for the owner's input (new `e:input_tick()`).
+- On an uneven link (a busy machine, a slow phone) the server kept running out
+  of the client's input, and every repeated tick moved the rest a tick apart.
+  When the server keeps running dry (repeats in two or more of the last four
+  seconds' snapshots), the client's input buffer grows by a tick per extra
+  repeat, up to four, and shrinks back as they age out. One hitch, or a link
+  that never runs dry, keeps the two-tick buffer it had.
 
 ### Changed
 
