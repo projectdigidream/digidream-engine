@@ -515,6 +515,9 @@ suite_client () {
   node client/test/tdz.test.js | grep -E 'FAIL|failures'
   node client/test/neighbourhood.test.js | grep -E 'FAIL|failures'
   node client/test/props.test.js | grep -E 'FAIL|failures'
+  # Sprites of one sheet on screen draw as one buffer, corner for corner; what
+  # must not be batched (a lone one, a cross-fade, off screen) draws alone.
+  node client/test/spritebatch.test.js | grep -E 'FAIL|failures'
   # ThreeSprite sheets: where a trimmed frame sits on its canvas, how that
   # becomes a quad hanging off the feet, and which rectangle of the packed
   # image it samples. Pure arithmetic over a manifest -- no sheet, no GPU.

@@ -1249,6 +1249,20 @@ dnpStats.scene = () => {
   }
   return out
 }
+// What the camera would draw, by kind: visible meshes on a layer it renders,
+// with a material, split by whether a sheet shares it -- for the sprite
+// batching (render/spritebatch.js) and its tests.
+dnpStats.drawn = () => {
+  const out = { shared: 0, own: 0, batches: 0, layered: 0 }
+  scene.traverseVisible((o) => {
+    if (!o.isMesh || !o.material) return
+    if (!cam3.layers.test(o.layers)) { out.layered++; return }
+    if (o.name === 'sprite-batch') out.batches++
+    else if (o.material.userData?.shared) out.shared++
+    else out.own++
+  })
+  return out
+}
 // Pixel ratio, capped and overridable.
 //
 // The fragment shader is where this renderer's time goes -- lighting, occlusion
@@ -1759,6 +1773,8 @@ const onGround = (x, z) => simStore.findSector(x, -z) >= 0
 // nothing does not need one -- so a failure here leaves props drawn as bodies
 // and says so once.
 let props = null
+// What the last frame batched (render/spritebatch.js), for the overlay.
+let spriteBatch = null
 let vfx = null
 // Tracer accounting, for the HUD. See the counting site in drainSnapshots.
 let vfxSeen = 0
@@ -3539,6 +3555,10 @@ function frame (now) {
                   world.getParamRaw(agent, CLIMB_AUTO_ID) === 0n
     touch.setShown(holds ? ['grab'] : [])
   }
+  // ONE DRAW PER SPRITE SHEET (render/spritebatch.js): last, so every body
+  // has been placed, turned and animated for this frame.
+  // ?batch=0 draws every sprite alone, as before: for comparing.
+  if (props && params.get('batch') !== '0') spriteBatch = props.batchInto(scene, cam3)
   const tDraw = performance.now()
   sky.update(cam3)
   renderer.render(scene, cam3)
@@ -3620,7 +3640,8 @@ function frame (now) {
       // what it is holding, not a guess from this side.
       `rebuilds/s ${rebuildRate}   geo ${renderer.info.memory.geometries}   ` +
       `tex ${renderer.info.memory.textures}` +
-      `${props ? `   props ${props.animated.size}` : ''}\n` +
+      `${props ? `   props ${props.animated.size}` : ''}` +
+      `${spriteBatch ? `   batched ${spriteBatch.quads} in ${spriteBatch.batches}, ${spriteBatch.alone} alone` : ''}\n` +
       // "of 16.7" is the budget the frame is being spent against, not a second
       // measurement -- it is the display's interval, derived from fps. Blank
       // until fps has a sample, because "of 1000.0" in the first half second

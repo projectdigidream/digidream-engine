@@ -43,6 +43,11 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- Sprites from one ThreeSprite sheet that are on screen together draw as one
+  buffer: one draw call per sheet instead of one per sprite (Gem Hollow's
+  level: 220 draws -> 54, the picture unchanged). A sheet with one sprite on
+  screen, a sprite mid-cross-fade and per-PNG (DOOM) sprites draw as before.
+  `?batch=0` turns it off; the debug overlay says what was batched.
 - `--perf` reports the Lua time by callback ("on_tick in weapons.lua"), across
   the game's VM and every level's.
 

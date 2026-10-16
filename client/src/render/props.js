@@ -26,6 +26,7 @@
  * by hand and by artists, and a parser that refuses the whole thing over one
  * typo teaches people not to touch it.
  */
+import { SpriteBatcher } from './spritebatch.js'
 import { frameKey, quadFor, uvFor } from './atlas.js'
 import { CONDITIONS, defaultStates } from './animstate.js'
 
@@ -840,6 +841,19 @@ export class PropRegistry {
     // anyway -- each frame has its own trim and so its own size.
     writeAtlasFrame(mesh.geometry, entry.atlas, key,
                     entry.atlas.worldHeight * propScale(a.def))
+  }
+
+  /**
+   * Draw this frame's sheet sprites one draw per sheet (render/spritebatch.js).
+   * After everything has placed, turned and animated them, before rendering.
+   */
+  batchInto (scene, camera) {
+    if (!this.batcher) this.batcher = new SpriteBatcher({ THREE: this.THREE })
+    const meshes = []
+    for (const [mesh, a] of this.animated) {
+      if (a.def.type === 'atlas' && mesh.parent) meshes.push(mesh)
+    }
+    return this.batcher.build(meshes, scene, camera)
   }
 
   /** Forget meshes that have left the scene, so a long session does not grow. */
