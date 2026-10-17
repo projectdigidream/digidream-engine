@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.1 -- 2026-10-17
+
 ### Fixed
 
 - Android: Back quit the app from wherever it was pressed. It now goes back
