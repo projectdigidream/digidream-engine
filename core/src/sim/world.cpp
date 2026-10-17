@@ -141,8 +141,11 @@ void World::present_weapon(u32 i, const WeaponTable& t) noexcept {
                 l.weapon = e.weapon; l.phase = e.phase; l.step = e.step;
                 l.aim = e.aim + brad(static_cast<u32>(e.offsets[p]));
                 l.dir = fx_dir(l.aim);
-                l.pos = fx3{a.pos.x + l.dir.x * st.missile.offset, a.pos.y + l.dir.y * st.missile.offset,
-                            a.pos.z + st.missile.z_offset};
+                // Its `z_offset`, or the body's middle when the missile gave none.
+            const fx zo = st.missile.z_offset == MISSILE_AT_MIDDLE ? params_[i].height / 2
+                                                                   : st.missile.z_offset;
+            l.pos = fx3{a.pos.x + l.dir.x * st.missile.offset, a.pos.y + l.dir.y * st.missile.offset,
+                        a.pos.z + zo};
                 l.slope = slope;
             }
         } else if (e.action == WAct::Vfx && st.effect != 0) {
@@ -1914,7 +1917,11 @@ World::SweepHit World::sweep_entities(fx3 from, fx2 dir, fx dist, fx radius,
         if (sloped && slope != fx::zero()) {
             const fx2 end{from.x + dir.x * limit, from.y + dir.y * limit};
             const fx end_z = from.z + slope * limit;
-            const i32 es = geom::find_sector(*map_, end);
+            // AT ITS HEIGHT, not by footprint. Under a platform the smallest
+            // footprint is the platform's, whose floor is over the missile's
+            // head -- so a missile flying beneath one, descending at all, was
+            // "through" that floor and burst where it was, on nothing.
+            const i32 es = geom::find_sector_at(*map_, end, end_z, radius);
             if (es >= 0) {
                 const geom::Sector& sec = map_->sector(static_cast<u32>(es));
                 const fx plane = slope < fx::zero() ? sec.floor_z : sec.ceil_z;

@@ -38,6 +38,7 @@
 // file loads at all.
 import { app, BrowserWindow, ipcMain, dialog, shell as desktop } from 'electron'
 import { externalUrl } from './links.js'
+import { exitVerdict } from './serverexit.js'
 import { spawn } from 'node:child_process'
 import { serverSaid } from './said.js'
 import { openGameLog } from './filelog.js'
@@ -84,9 +85,6 @@ const files = studioFiles(GAME_RW)
 // The editor the app opens and returns to: the studio, plugins and all
 // (docs/PLUGINS.md). The suite, its fork with the plugins, became it at 0.2.0.
 const EDITOR = '/studio/'
-// Set while a play-test restarts the server, so its exit is not mistaken for
-// a crash by the handler below.
-let restarting = false
 
 /**
  * A free TCP port for the link between the shell and the game server.
@@ -179,22 +177,26 @@ function spawnServer (linkPort, extra = {}) {
   // 'close', not 'exit': its output has all arrived by then, so the dialog
   // below can quote the end of it.
   p.on('close', (code, sig) => {
-    // SIGTERM here is almost always US: before-quit kills it. Anything else is
-    // the server actually failing, and the two deserve different words.
-    log(sig === 'SIGTERM' && app.isQuiting
-        ? 'server stopped (SIGTERM from the shell, as intended)'
+    // JUDGED BY THIS PROCESS (serverexit.js): one the shell stopped itself --
+    // for a restart, or on quit -- or that is no longer the one it runs, went
+    // as intended, however late its 'close' arrives.
+    const verdict = exitVerdict({ intended: p.dnpStopping === true, current: p === serverProc,
+                                  quitting: !!app.isQuiting, playTest: !!extra.map, studio: !!manifest.studio })
+    log(verdict === 'expected'
+        ? `server stopped, as intended (code=${code} signal=${sig})`
         : `server exited unexpectedly (code=${code} signal=${sig})`)
+    if (verdict === 'expected') return
     // The server going away is not something to paper over: without it there
     // is no game, and a window that keeps rendering a frozen world while
     // saying nothing is the failure the edge already learned to report.
     // A play-test's server failing is a content error, not the app's: back to
     // the studio, whose Play log shows what the server said, rather than quit.
-    if (!app.isQuiting && !restarting && extra.map && manifest.studio && win && !win.isDestroyed() && statics) {
+    if (verdict === 'back-to-studio' && win && !win.isDestroyed() && statics) {
       playLog(`[shell] the server stopped during the play-test (code=${code} signal=${sig}); back to the studio`)
       win.loadURL(`http://127.0.0.1:${statics.port}${EDITOR}`)
       return
     }
-    if (!app.isQuiting && !restarting) {
+    {
       const said = serverSaid(tail)
       dialog.showErrorBox('The game server stopped',
         `It exited with ${code ?? sig}.` + (said ? ` It said:\n\n${said}` : ' It said nothing.') + logHint())
@@ -208,16 +210,16 @@ function spawnServer (linkPort, extra = {}) {
 // studio just wrote. A fresh port each time: the old process may hold the
 // last one for a moment after it is gone.
 async function restartServer (extra) {
-  restarting = true
   relay?.stop()
   if (serverProc && serverProc.exitCode === null) {
+    // Marked BEFORE the kill: its 'close' comes after the restart is done.
+    serverProc.dnpStopping = true
     await new Promise((resolve) => { serverProc.once('exit', resolve); serverProc.kill() })
   }
   const linkPort = await freePort()
   serverProc = spawnServer(linkPort, extra)
   relay = new Relay({ port: linkPort, log })
   relay.start((msg) => { if (win && !win.isDestroyed()) win.webContents.send('dnp:down', msg) })
-  restarting = false
 }
 
 // Told AFTER the page is loaded, so the listener registered by net_local.js

@@ -122,7 +122,10 @@ ent.__eq = function(a, b) return a.i == b.i end
 function ent:index() return self.i end
 function ent:kind() return self.k end
 function ent:name() return self.n end
-function ent:sector() return SECTORS[self.s] end
+-- The sector's NUMBER, as the engine's binding gives it (-1 for a body in
+-- another level). It gave the sector here, more generously than the engine,
+-- and so hid a condition that indexed the number as a sector and threw.
+function ent:sector() return self.s end
 function ent:hp() return self.health end
 function ent:set_hp(v) self.health = v; note(("hp %d %d"):format(self.i, v)) end
 function ent:set_solid(b) note(("solid %d %s"):format(self.i, tostring(b))) end
@@ -428,6 +431,32 @@ static void test_a_broken_table_loads_nothing() {
         f.exec(src.c_str());
         CHECK_MSG(f.truth("OK == true"), t);
     }
+}
+
+// A body's sector, by tag: entity:sector() is a number, and the condition has
+// to look the sector up rather than index the number.
+static void test_entity_in_sector_tag() {
+    std::printf("triggers: entity_in_sector_tag finds the body's sector by its number\n");
+    Fixture f;
+    CHECK(f.open());
+    CHECK(f.exec(R"LUA(
+add_entity(5, 0, nil, -1)          -- a player in another level
+triggers.load{ name = 'tagged', triggers = {
+  { name = 'in tag 1', event = 'on_interact',
+    conditions = { { c = 'entity_in_sector_tag', tag = 1 } },
+    actions = { { a = 'counter_add', counter = 'one' } } },
+  { name = 'in tag 3', event = 'on_interact',
+    conditions = { { c = 'entity_in_sector_tag', tag = 3 } },
+    actions = { { a = 'counter_add', counter = 'three' } } },
+} }
+)LUA"));
+    // The player stands in sector 0, whose tag is 1.
+    f.fire("on_interact", 1, {"ENT(0)", "2", "SEC(0)"});
+    CHECK(f.truth("triggers.counter('one') == 1"));
+    CHECK(f.truth("triggers.counter('three') == 0"));   // CONTROL: the other tag does not match
+    // Standing in no sector of this level: no match, and no error.
+    f.fire("on_interact", 2, {"ENT(5)", "2", "SEC(0)"});
+    CHECK(f.truth("triggers.counter('one') == 1"));
 }
 
 static void test_conditions_select() {
@@ -1485,6 +1514,7 @@ int main(int argc, char** argv) {
     std::printf("== server/lua trigger runtime suite ==\n");
     test_the_vocabulary_and_the_runtime_agree();
     test_a_broken_table_loads_nothing();
+    test_entity_in_sector_tag();
     test_conditions_select();
     test_a_door_is_a_sector_and_a_side();
     test_a_sector_can_be_moved_sideways();

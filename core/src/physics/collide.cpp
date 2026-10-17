@@ -952,6 +952,17 @@ RayHit raycast(const MapData& map, i32 sector, fx2 from, fx2 dir, fx max_dist,
     return hit;
 }
 
+bool reach_clear(const geom::MapData& map, i32 sector, fx2 from, fx2 to, fx z) noexcept {
+    const fx2 d{to.x - from.x, to.y - from.y};
+    const fx dist = length(d);
+    if (dist <= fx::zero()) return true;
+    const fx2 dir{d.x / dist, d.y / dist};
+    const RayHit hit = raycast(map, sector, from, dir, dist, 0, z);
+    if (!hit.blocked) return true;
+    if (hit.height_block != 0) return true;
+    return hit.distance <= fx::zero() || hit.distance >= dist;
+}
+
 // The middle of a column, and then one end of it. See the header.
 bool can_see(const geom::MapData& map, i32 from_sector, fx3 eye,
              fx2 target, fx low, fx high) noexcept {

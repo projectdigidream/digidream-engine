@@ -248,6 +248,97 @@ static void test_a_swing_does_not_reach_through_a_wall() {
     CHECK(hit2);
 }
 
+// --- a blow at arm's length: walls and doors stop it, ledges do not -----------
+//
+// A monster's `melee` is a distance test, and a distance says nothing about the
+// level: a claw reached through a wall, and through a shut door, to a player
+// standing on the far side (physics::reach_clear). Three rooms in a row, the
+// middle one a door half a unit thick, open or shut.
+struct Doorway {
+    MapStorage store;
+    MapData    view{};
+    Doorway(fx door_ceil, fx east_floor) {
+        const fx2 west[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(40)}, {F(0), F(40)}};
+        const fx2 door[] = {{F(20), F(0)}, {fx::from_frac(41, 2), F(0)}, {fx::from_frac(41, 2), F(40)}, {F(20), F(40)}};
+        const fx2 east[] = {{fx::from_frac(41, 2), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {fx::from_frac(41, 2), F(40)}};
+        store.add_sector(west, 4, F(0), F(10), 1);
+        store.add_sector(door, 4, F(0), door_ceil, 2);
+        store.add_sector(east, 4, east_floor, F(10), 3);
+        store.add_side(0, 0, 1, NO_SECTOR, 0); store.add_side(0, 1, 2, 1, 0);
+        store.add_side(0, 2, 3, NO_SECTOR, 0); store.add_side(0, 3, 0, NO_SECTOR, 0);
+        store.add_side(1, 0, 1, NO_SECTOR, 0); store.add_side(1, 1, 2, 2, 0);
+        store.add_side(1, 2, 3, NO_SECTOR, 0); store.add_side(1, 3, 0, 0, 0);
+        store.add_side(2, 0, 1, NO_SECTOR, 0); store.add_side(2, 1, 2, NO_SECTOR, 0);
+        store.add_side(2, 2, 3, NO_SECTOR, 0); store.add_side(2, 3, 0, 1, 0);
+        view = store.view();
+    }
+};
+
+static void test_a_blow_stops_at_walls_and_shut_doors() {
+    std::printf("reach: a blow is stopped by a wall and a shut door, not by a ledge\n");
+    // From just west of the door to just east of it, at a striker's middle.
+    const fx2 from{fx::from_frac(39, 2), F(20)};
+    const fx2 to{fx::from_frac(43, 2), F(20)};
+    const fx mid = fx::from_frac(1, 2);
+    static Doorway open(F(8), F(0));
+    static Doorway shut(F(0), F(0));
+    static Doorway ledge(F(8), F(1));      // the far room a step up
+    CHECK(reach_clear(open.view, 0, from, to, mid));     // CONTROL: through an open door
+    CHECK(!reach_clear(shut.view, 0, from, to, mid));    // a shut door
+    CHECK(reach_clear(ledge.view, 0, from, to, mid));    // a step up is not a wall
+    static Split wall;
+    CHECK(!reach_clear(wall.view, 0, fx2{F(19), F(20)}, fx2{F(21), F(20)}, mid));   // a plain wall
+    // A wall BEHIND the target is in nobody's way.
+    CHECK(reach_clear(wall.view, 0, fx2{F(17), F(20)}, fx2{F(19), F(20)}, mid));
+    // And the flat cast the swing uses goes straight through the shut door,
+    // which is why this is its own question.
+    const RayHit flat = raycast(shut.view, 0, from, fx2{fx::one(), fx::zero()}, F(2), 0);
+    CHECK(!flat.blocked);
+}
+
+// --- a missile under a platform -------------------------------------------------
+//
+// A deck over a path: two footprints, the deck's inside the path's, its floor
+// above the path's ceiling. Where a sloped missile's flight ends, the sector it
+// is in decides which floor or ceiling stops it -- and asked by footprint, the
+// deck's (the smaller) answered for a missile flying under it, whose floor was
+// over its head: it burst where it was, on nothing.
+struct Deck {
+    MapStorage store;
+    MapData    view{};
+    Deck() {
+        const fx2 path[] = {{F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}};
+        const fx2 deck[] = {{F(15), F(0)}, {F(25), F(0)}, {F(25), F(40)}, {F(15), F(40)}};
+        store.add_sector(path, 4, F(0), F(3), 1);
+        store.add_sector(deck, 4, F(4), F(12), 2);
+        for (u16 i = 0; i < 4; ++i) store.add_side(0, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, 0);
+        view = store.view();
+    }
+};
+
+static void test_a_missile_under_a_platform_flies_on() {
+    std::printf("sweep: a missile under a platform is not stopped by the platform's floor\n");
+    static Deck d;
+    static sim::World w;
+    w.reset();
+    w.set_map(&d.view);
+    w.set_map_storage(&d.store);
+    const fx r = fx::from_frac(1, 4);
+    // Under the deck, coming down gently: from x 10 to 20, height 1 to 0.9.
+    const sim::World::SweepHit under = w.sweep_entities(fx3{F(10), F(20), F(1)}, fx2{fx::one(), fx::zero()},
+                                                        F(10), r, -1, -1, -1, -fx::from_frac(1, 100));
+    std::printf("  under the deck: %s at %lld\n", under.hit ? "STOPPED" : "flies on",
+                static_cast<long long>(under.distance.raw >> 32));
+    CHECK(!under.hit);
+    // CONTROL: one above the deck, coming down onto it, is stopped by its floor,
+    // five units on (from height 5 at a fall of 0.2 a unit, to the deck at 4).
+    const sim::World::SweepHit over = w.sweep_entities(fx3{F(16), F(20), F(5)}, fx2{fx::one(), fx::zero()},
+                                                       F(6), r, -1, -1, -1, -fx::from_frac(1, 5));
+    CHECK(over.hit && over.plane == -1);
+    CHECK(fx_abs(over.distance - F(5)) < fx::from_frac(1, 100));
+}
+
 // --- looking DOWN a step ------------------------------------------------------
 //
 // The bug this was written for: "when the player is standing on a step lower
@@ -388,6 +479,8 @@ static void test_can_see_still_says_no() {
 }
 
 int main() {
+    test_a_missile_under_a_platform_flies_on();
+    test_a_blow_stops_at_walls_and_shut_doors();
     test_an_open_neighbour_does_not_block();
     test_a_raised_floor_blocks_sight_below_it();
     test_a_low_ceiling_blocks_sight_above_it();

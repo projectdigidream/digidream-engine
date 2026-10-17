@@ -22,6 +22,28 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   app into that page, and Back sent the app away with the page still in it.
   A link out now opens in the phone's browser, and Back on such a page goes
   back.
+- **The desktop app said its game server had stopped when it had not.**
+  Starting a play-test right after another, or the first after making or
+  changing a module, could show an error box quoting the previous server's
+  log, drop back to the studio, or quit the app. The previous server's normal
+  stop, which comes in late, was taken for the new one failing.
+- A monster's `melee` reached through walls and shut doors to whoever stood
+  behind them. It now needs a clear reach, as a swing does; a ledge does not
+  stop it, its own height test judges that.
+- A trigger with the `entity_in_sector_tag` condition raised an error on every
+  event it judged, and cut short whatever had set the event off -- a monster's
+  attack on the player among them.
+- `mobs.hurt(target, amount, attacker)` raised an error when given the
+  attacking entity (as a module's own `on_attack` hands it over) and the target
+  fights back. It takes an entity now, as well as a monster's record.
+- In the starter module, and every module made from it, each swing that landed
+  cost twice: its own script charged one beside the engine's. It now sets what
+  a player's swing costs instead (`mobs.player_damage`).
+- A missile flying under a platform burst on nothing the moment it came down
+  at all: the platform's floor, above it, was taken for its own.
+- A missile that gives no `z_offset` started at its shooter's feet, and at that
+  height every step and sill it crossed stopped it: walls nobody could see. It
+  now starts at the shooter's middle, as Doom launches.
 
 ### Added
 

@@ -321,7 +321,12 @@ end
 
 COND.entity_in_sector_tag = function(args)
   if EV.entity == nil then return false end
-  local s = EV.entity:sector()
+  -- entity:sector() is the sector's NUMBER (-1 when the body stands in another
+  -- level), not the sector: indexing it as one threw on every event, from
+  -- inside whatever action fired the event -- a monster's melee aborted at the
+  -- player it had just hurt.
+  local i = EV.entity:sector()
+  local s = (i ~= nil and i >= 0) and dnp.sector(i) or nil
   return s ~= nil and s:tag() == args.tag
 end
 

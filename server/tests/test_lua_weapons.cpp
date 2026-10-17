@@ -2763,6 +2763,59 @@ int main(int argc, char** argv) {
         CHECK(bursting_trail == 0);                  // nothing more comes out of a burst
     }
 
+    // ================================================================
+    // mobs.hurt WITH AN ENTITY for the attacker, as a module's on_attack hands
+    // one over: it is not a record, and infighting indexed its `e` and threw.
+    std::printf("-- hurt with an attacking entity; melee asks for a clear reach --\n");
+    {
+        CHECK(run("local p = dnp.players()[1]\n"
+                  "local pp = p:pos()\n"
+                  "hv = mobs.spawn('zombieman', vec3.new(pp.x + fx.int(6), pp.y, pp.z))\n"
+                  "ha = mobs.spawn('zombieman', vec3.new(pp.x + fx.int(8), pp.y, pp.z))\n"
+                  "mobs.acts.sleep(mobs.live[hv:index()])\n"
+                  "mobs.live[hv:index()].hp = 100\n"
+                  "hurt_ok, hurt_err = pcall(mobs.hurt, hv, 5, ha)\n"
+                  "hurt_err = tostring(hurt_err)\n"
+                  "hurt_hp = mobs.live[hv:index()].hp\n"
+                  "hurt_target = mobs.live[hv:index()].target\n"
+                  "hurt_retarget = (hurt_target ~= nil and hurt_target:index() == ha:index()) and 1 or 0\n"
+                  "-- A player's entity: not a mob, so the owner record a shot uses.\n"
+                  "hurt_ok2 = pcall(mobs.hurt, hv, 5, p)\n", "hurting with entities"));
+        std::printf("  hurt by a zombieman's entity: %s (%s), hp %d, retargeted %d\n",
+                    truthy("hurt_ok") ? "ok" : "raised", str("hurt_err").c_str(),
+                    (int)num("hurt_hp"), (int)num("hurt_retarget"));
+        CHECK(truthy("hurt_ok"));
+        CHECK(num("hurt_hp") == 95);
+        // Imps infight: the one that hit it is its target now -- the line that threw.
+        CHECK(num("hurt_retarget") == 1);
+        CHECK(truthy("hurt_ok2"));
+
+        // MELEE asks the map for a clear reach (dnp.can_reach, physics::reach_clear
+        // and its own test). Told there is a wall, it does not land; told there is
+        // none, the same blow does -- the CONTROL that it reaches at all.
+        CHECK(run("local p = dnp.players()[1]\n"
+                  "local pp = p:pos()\n"
+                  "mh = mobs.spawn('zombieman', vec3.new(pp.x + fx.int(1), pp.y, pp.z))\n"
+                  "local m = mobs.live[mh:index()]\n"
+                  "mobs.acts.sleep(m)\n"
+                  "m.target = p\n"
+                  "local real = dnp.can_reach\n"
+                  "local hp0 = p:hp()\n"
+                  "dnp.can_reach = function() return false end\n"
+                  "mobs.acts.melee(m, { damage = 7, range = fx.int(2) })\n"
+                  "melee_walled = hp0 - p:hp()\n"
+                  "dnp.can_reach = real\n"
+                  "local hp1 = p:hp()\n"
+                  "melee_clear_real = real(mh, p) and 1 or 0\n"
+                  "mobs.acts.melee(m, { damage = 7, range = fx.int(2) })\n"
+                  "melee_open = hp1 - p:hp()\n", "a melee told of a wall"));
+        std::printf("  melee behind a wall: %d lost; in the open: %d lost (the real reach says %d)\n",
+                    (int)num("melee_walled"), (int)num("melee_open"), (int)num("melee_clear_real"));
+        CHECK(num("melee_walled") == 0);
+        CHECK(num("melee_clear_real") == 1);
+        CHECK(num("melee_open") == 7);
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

@@ -976,9 +976,9 @@ mob_vocab = {
             "missile that hits with a different size than it is drawn is a " ..
             "missile players learn to distrust." },
     { name = "z_offset", type = "fx", optional = true,
-      doc = "How far above the shooter's feet it appears. Doom launches from " ..
-            "mid-body; a missile born at ankle height clips the first step " ..
-            "it crosses." },
+      doc = "How far above the shooter's feet it appears. Absent, the " ..
+            "shooter's middle, as Doom launches; a missile born at ankle " ..
+            "height clips the first step it crosses." },
     { name = "gravity", type = "fx", optional = true,
       doc = "How fast it falls, in units a second squared: 9.8 is about a " ..
             "real throw at a metre a unit. Zero (or absent) for a Doom " ..

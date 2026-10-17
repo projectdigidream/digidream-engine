@@ -2622,7 +2622,7 @@ int l_dnp_can_see(lua_State* L) {
             const sim::PropState& p = ctx.world->prop(static_cast<u32>(e));
             pos = p.pos;
             height = p.height;
-            sector = geom::find_sector(*m, fx2{p.pos.x, p.pos.y});
+            sector = geom::find_sector_at(*m, fx2{p.pos.x, p.pos.y}, p.pos.z, p.height);
             return true;
         }
         return false;
@@ -2651,6 +2651,32 @@ int l_dnp_can_see(lua_State* L) {
     lua_pushboolean(L, physics::can_see(*m, from_sector, eye,
                                         fx2{to_pos.x, to_pos.y},
                                         to_pos.z, to_pos.z + to_h) ? 1 : 0);
+    return 1;
+}
+
+// dnp.can_reach(a, b) -> bool
+//
+// IS THERE A WALL BETWEEN TWO BODIES for a blow at arm's length -- a monster's
+// `melee`, which measures a distance and so reached through a wall, or a shut
+// door, to whoever stood on the far side. physics::reach_clear: stopped by a
+// wall or a shut door, not by a ledge (the blow's own height test judges that)
+// nor by a ray that cannot be resolved. Agents only: a blow is struck by a body
+// and at a body.
+int l_dnp_can_reach(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const geom::MapData* m = ctx.world->map();
+    if (m == nullptr) { lua_pushboolean(L, 1); return 1; }
+    proto::Handle* ha = to_handle(L, 1);
+    proto::Handle* hb = to_handle(L, 2);
+    if (ha == nullptr || hb == nullptr) { lua_pushboolean(L, 0); return 1; }
+    const i32 a = resolve(L, ctx, *ha);
+    const i32 b = resolve(L, ctx, *hb);
+    if (a < 0 || b < 0) { lua_pushboolean(L, 0); return 1; }
+    const sim::AgentState& sa = ctx.world->agent(static_cast<u32>(a));
+    const sim::AgentState& sb = ctx.world->agent(static_cast<u32>(b));
+    const fx mid = sa.pos.z + ctx.world->params(static_cast<u32>(a)).height / 2;
+    lua_pushboolean(L, physics::reach_clear(*m, sa.mv.sector, fx2{sa.pos.x, sa.pos.y},
+                                            fx2{sb.pos.x, sb.pos.y}, mid) ? 1 : 0);
     return 1;
 }
 
@@ -2735,7 +2761,9 @@ int l_dnp_sweep(lua_State* L) {
         return 2;
     }
     const fx2 dir = normalize(fx2{dir3.x, dir3.y});
-    const i32 sector = geom::find_sector(*m, fx2{from.x, from.y});
+    // At its height: where footprints nest (a platform over a path), the
+    // smallest one is not necessarily the one it is in.
+    const i32 sector = geom::find_sector_at(*m, fx2{from.x, from.y}, from.z, fx::zero());
     // At the projectile's own height, so a fireball is stopped by the step it
     // would actually hit rather than by the map's floorplan.
     const physics::RayHit hit =
@@ -3621,6 +3649,7 @@ const luaL_Reg DNP_FUNCS[] = {
     {"spawn_enemy", l_dnp_spawn_enemy},
     {"hitscan", l_dnp_hitscan},
     {"can_see", l_dnp_can_see},
+    {"can_reach", l_dnp_can_reach},
     {"length", l_dnp_length},
     {"sweep", l_dnp_sweep},
     {"sweep_hit", l_dnp_sweep_hit},

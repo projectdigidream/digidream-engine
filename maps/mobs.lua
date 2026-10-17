@@ -1740,6 +1740,9 @@ function acts.melee(m, a)
   if p.z + height_of(m.e) + a.range < t.z then return end         -- it is above the reach
   if p.z > t.z + height_of(m.target) + a.range then return end    -- or below it
   if dx * dx + dy * dy <= a.range * a.range then
+    -- AND NO WALL BETWEEN: a distance says nothing about the level, and a claw
+    -- reached through a wall -- or a shut door -- to whoever stood behind it.
+    if dnp.can_reach ~= nil and not dnp.can_reach(m.e, m.target) then return end
     hurt(m.target, a.damage, m)
     -- The same hit effects every other damage path gets. Without this the
     -- knockback, the slow and the blood would all validate at load and do
@@ -2776,6 +2779,18 @@ local handed_over = false
 
 function hurt(target, amount, by)
   if target == nil or not target:valid() then return end
+  -- WHO DEALT IT, as a RECORD. A script may hand over the attacking ENTITY --
+  -- on_attack's `attacker` is one, and `mobs.hurt(target, n, attacker)` reads
+  -- naturally -- which has no `e`, and infighting below indexed it and threw.
+  -- One of ours is its own record; anybody else, the owner record a player's
+  -- shot uses. Gone, it is nobody.
+  if by ~= nil and by.e == nil then
+    if by.valid ~= nil and by:valid() then
+      by = live[by:index()] or M.synthetic_owner(by, by:facing())
+    else
+      by = nil
+    end
+  end
   local m = live[target:index()]
 
   -- ANOTHER LEVEL'S MONSTER. In a region every level's monsters share one
@@ -3048,7 +3063,11 @@ function launch(m, kind, ang, offset, slope, origin)
   -- at its parent's height, which already is where it was flying.
   local p = dnp.spawn_prop(def.prop,
     vec3.new(from.x + d.x * off, from.y + d.y * off,
-             from.z + (origin and ZERO or (def.z_offset or ZERO))))
+             -- No `z_offset`: the shooter's MIDDLE, as Doom launches. It was its
+             -- feet, and a missile at ankle height is stopped by every step
+             -- and sill it crosses. The core works out the same for the rocket
+             -- a player's own client flies (sim::MISSILE_AT_MIDDLE).
+             from.z + (origin and ZERO or (def.z_offset or height_of(m.e) / fx.int(2)))))
   if p == nil then return end
   -- WHICH WAY IT IS POINTING. A missile is the one prop with a heading worth
   -- replicating, and without this every rocket reported zero -- so an eight-view

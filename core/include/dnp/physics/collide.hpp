@@ -279,4 +279,18 @@ RayHit raycast(const geom::MapData& map, i32 sector, fx2 from, fx2 dir, fx max_d
 bool can_see(const geom::MapData& map, i32 from_sector, fx3 eye,
              fx2 target, fx low, fx high) noexcept;
 
+// IS THERE A WALL BETWEEN TWO BODIES AT ARM'S LENGTH? For a blow -- a monster's
+// `melee` -- not for sight.
+//
+// One ray from `from` (in `sector`) to `to`, at height `z` (the striker's
+// middle). Stopped only by a WALL: one-sided, BLOCKING, or a shut door, the
+// sector with its ceiling on its floor (RayHit::height_block 0). A ledge or a
+// low ceiling (height_block +-1) is about the aim and not the map, and the
+// blow's own height test already judged it, so it does not stop one; nor does
+// a ray that could not be resolved -- raycast fails closed, which is right for
+// sight and wrong for something you are touching (the swing learned this on a
+// barrel; see World::resolve_attack). A wall at or past the target is behind
+// it and in nobody's way.
+bool reach_clear(const geom::MapData& map, i32 sector, fx2 from, fx2 to, fx z) noexcept;
+
 }  // namespace dnp::physics

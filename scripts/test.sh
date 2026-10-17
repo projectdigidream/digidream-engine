@@ -795,6 +795,7 @@ suite_app () {
   # app and the devserver, and each file served from the module that named it.
   node shells/app/test/ui_route.test.js | tail -2
   node shells/app/test/said.test.js | tail -1
+  node shells/app/test/serverexit.test.js | tail -1
   node shells/app/test/filelog.test.js | tail -1
   node shells/app/test/open_url.test.js | tail -1
   node shells/app/test/shell_files.test.js | tail -1

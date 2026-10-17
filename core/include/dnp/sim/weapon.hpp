@@ -95,6 +95,11 @@ struct WTransition {
 // 0 is a missile nobody described, which a client does not predict.
 inline constexpr u32 MAX_MISSILE_VFX = 2;
 inline constexpr u16 NO_ANIM = 0xFFFF;
+// A missile's `z_offset` when it gives none: the shooter's MIDDLE, worked out at
+// launch from the body's height (World::present_weapon, mobs.lua's launch). It
+// used to be the shooter's feet, and a missile at ankle height is stopped by
+// every step and sill it crosses -- a wall nobody can see.
+inline constexpr fx MISSILE_AT_MIDDLE = fx::from_raw(INT64_MIN);
 struct WMissile {
     u16 kind = 0;                 // the catalogue prop it is drawn as
     fx  speed{};                  // units a second
