@@ -568,6 +568,9 @@ export function decodeControlMessage (buf) {
     // Whether to show the debug overlay (module.txt `debug off`), after it.
     // Absent from an older server: shown, as it always was.
     msg.debug = r.ok && r.pos < r.buf.length ? r.u8() : 1
+    // The time scale, in thousandths, after it: how fast the game runs in wall
+    // time (the server's --time-scale). Absent from an older server: 1.
+    msg.timeScale = r.ok && r.pos + 2 <= r.buf.length ? r.u16() / 1000 : 1
     return r.ok ? msg : null
   }
   if (type === MSG.SECTOR_MOTION_SET) {

@@ -47,6 +47,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- A time scale, for automated testing: `--time-scale 0.25` on the server, or
+  `DNP_TIME_SCALE=0.25` in the environment of whatever starts it (the desktop
+  app, `run_stack.sh`), runs the game at a quarter speed in real time -- or up
+  to eight times faster. Nothing simulates differently; the client is told and
+  keeps pace, and its numbers block shows `time x0.25`. The solo page takes
+  `?timescale=`. A page publishes its prediction counters for a test to read
+  (`__dnpStats.prediction()`).
+
 - A missile can trail particles for its whole flight: `trail = <particle kind>`
   on the missile. It comes out from launch until the missile bursts or expires,
   through bounces, and on the shooter's own predicted rocket too, at the

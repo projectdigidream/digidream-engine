@@ -57,8 +57,9 @@ namespace {
 // Wall clock lives HERE, in server/, and never in core/. The simulation's notion
 // of time is a tick counter; this only decides when the next tick should happen
 // in real time, and its jitter has no effect on what the tick computes.
+// (A tick's wall time is a sixtieth of a second over the time scale; see the
+// main loop and Server::time_scale_milli.)
 using Clock = std::chrono::steady_clock;
-constexpr auto TICK_PERIOD = std::chrono::nanoseconds(1'000'000'000 / sim::TICK_RATE_HZ);
 
 // Chunk size for MAP_DATA. Well under the link frame cap, and small enough that
 // a slow client does not stall behind one enormous write.
@@ -835,6 +836,14 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // the client draws its numbers block and the controls legend, 0 it launches
     // clean. Sent in WELCOME after `controls`; the page's ?debug= overrides it.
     u8 debug_overlay = 1;
+    // THE TIME SCALE, in thousandths: how fast the game runs in WALL time
+    // (--time-scale, DNP_TIME_SCALE). 1000 is real time; 250 a quarter speed,
+    // which is what a tester driving the game through screenshots wants -- a
+    // monster that crossed the room between two looks at 60 Hz walks a few
+    // steps at 15. A tick is still a sixtieth of a second of GAME time, so
+    // nothing simulates differently: the loop only waits longer between ticks.
+    // Sent in WELCOME, so the client paces its own ticks to match.
+    u16 time_scale_milli = 1000;
     // The modules' `player` lines (docs/PLAYER.md): a parameter for every
     // level (`level` empty) or for one, in module order -- a later module's
     // line for the same key wins, as its `controls` does.
@@ -2272,6 +2281,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         w.u8v(controls);
         // Whether the client shows its debug overlay, appended.
         w.u8v(debug_overlay);
+        // The time scale, in thousandths (1000 real time), appended.
+        w.u16v(time_scale_milli);
         const size_t end = w.size();
         const u32 body_len = static_cast<u32>(end - len_pos - 4);
         buf[len_pos]     = static_cast<u8>(body_len & 0xFF);
@@ -4815,6 +4826,8 @@ int main(int argc, char** argv) {
     const char* env_stall = std::getenv("DNP_LUA_STALL_US");
     u32  perf_every = env_perf ? static_cast<u32>(std::atoi(env_perf)) : 0;
     u32  snapshot_divisor_arg = 2;
+    // --time-scale, or DNP_TIME_SCALE: see Server::time_scale_milli.
+    double time_scale_arg = 0.0;
     u32  lua_stall_us = env_stall ? static_cast<u32>(std::atoi(env_stall)) : 0;
     const char* props_path = nullptr;      // --props wins over any module
     std::vector<std::string> game_script_args;
@@ -4875,6 +4888,10 @@ int main(int argc, char** argv) {
             no_scripts = true;
         } else if (std::strcmp(argv[i], "--script-trust") == 0 && i + 1 < argc) {
             strict_scripts = std::strcmp(argv[++i], "strict") == 0;
+        } else if (std::strcmp(argv[i], "--time-scale") == 0 && i + 1 < argc) {
+            // The game at this speed in wall time: 0.25 a quarter speed, 2
+            // twice as fast. For automated testing. See Server::time_scale_milli.
+            time_scale_arg = std::atof(argv[++i]);
         } else if (std::strcmp(argv[i], "--snapshot-divisor") == 0 && i + 1 < argc) {
             // Snapshots every N ticks: 2 is 30 Hz (the default), 1 is every
             // tick. The client is told the rate in WELCOME.
@@ -4906,6 +4923,16 @@ int main(int argc, char** argv) {
     Server srv;
     srv.perf.every = perf_every;
     srv.snapshot_divisor = snapshot_divisor_arg;
+    // THE TIME SCALE: the flag, else the environment (so an app or a stack
+    // launched with DNP_TIME_SCALE set runs its server at that speed without
+    // being told how). Between a twentieth and eight times real time.
+    if (time_scale_arg <= 0.0) {
+        if (const char* env = std::getenv("DNP_TIME_SCALE")) time_scale_arg = std::atof(env);
+    }
+    if (time_scale_arg > 0.0) {
+        const double t = time_scale_arg < 0.05 ? 0.05 : (time_scale_arg > 8.0 ? 8.0 : time_scale_arg);
+        srv.time_scale_milli = static_cast<u16>(t * 1000.0 + 0.5);
+    }
     srv.param_test = want_param_test;
     if (spawn_tag_arg) {
         srv.spawn_tag = spawn_tag_arg;
@@ -5316,13 +5343,20 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "[srv] listening for edge on 127.0.0.1:%u, %u Hz\n",
                  port, sim::TICK_RATE_HZ);
+    // A tick's wall time, at the time scale: a sixtieth of a second divided by it.
+    const auto tick_period = std::chrono::nanoseconds(
+        1'000'000'000LL * 1000 / (static_cast<long long>(sim::TICK_RATE_HZ) * srv.time_scale_milli));
+    if (srv.time_scale_milli != 1000) {
+        std::fprintf(stderr, "[srv] time scale %.3g: the game runs at %.3g ticks a second of wall time\n",
+                     srv.time_scale_milli / 1000.0, sim::TICK_RATE_HZ * srv.time_scale_milli / 1000.0);
+    }
 
     srv.link.on_session_open([&](u32 id) { srv.on_open(id); });
     srv.link.on_session_close([&](u32 id, u16 r) { srv.on_close(id, r); });
     srv.link.on_control([&](u32 id, const u8* d, size_t n) { srv.on_control(id, d, n); });
     srv.link.on_datagram([&](u32 id, const u8* d, size_t n) { srv.on_datagram(id, d, n); });
 
-    auto next_tick = Clock::now() + TICK_PERIOD;
+    auto next_tick = Clock::now() + tick_period;
     u32 tick_counter = 0;
     // Stopped by a signal: the world is kept on the way out (persist server).
     std::signal(SIGINT, on_stop_signal);
@@ -5360,7 +5394,7 @@ int main(int argc, char** argv) {
                 srv.perf_report(snap_us);
             }
 
-            next_tick += TICK_PERIOD;
+            next_tick += tick_period;
             // If the loop fell far behind (a long stall, a debugger break), do
             // NOT try to catch up by running a burst of ticks: that would make
             // the server briefly simulate faster than the client predicts and
@@ -5370,7 +5404,7 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "[srv] fell %lld ms behind; dropping missed ticks\n",
                              static_cast<long long>(
                                  std::chrono::duration_cast<std::chrono::milliseconds>(behind).count()));
-                next_tick = Clock::now() + TICK_PERIOD;
+                next_tick = Clock::now() + tick_period;
             }
         }
     }

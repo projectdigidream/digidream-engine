@@ -140,6 +140,14 @@ const SPAWN = params.get('spawn') ?? 'start'
 const START_ZOOM = Number(params.get('zoom') ?? 44)
 const START_YAW = Number(params.get('yaw') ?? 45) * Math.PI / 180
 const PAUSED = params.get('paused') === '1'
+// THE TIME SCALE: how fast the game runs in wall time -- the server's, from
+// WELCOME, or ?timescale= for the solo renderer. 0.25 is a quarter speed, for
+// automated testing through screenshots. Ticks stay a sixtieth of a second of
+// game time; this only paces how many run a second, and how fast the others
+// are drawn moving. What only looks (sprite frames, particles, sounds) keeps
+// real time.
+const clampScale = (v) => (Number.isFinite(v) && v > 0 ? Math.min(8, Math.max(0.05, v)) : 1)
+let timeScale = clampScale(Number(params.get('timescale') ?? 1))
 // Perspective by default. ?proj=orthographic gives the parallel projection of
 // design §4 -- the two are framed from the same viewHeight, so switching
 // between them changes the projection and nothing else.
@@ -416,7 +424,7 @@ let skyMessage = null
 // world was handed over, how many snapshots arrived, and -- once the renderer
 // exists -- what three.js says is still alive on the GPU. Declared up here
 // because the handlers that count are installed before the renderer is made.
-const dnpStats = { welcomes: 0, snapshots: 0, gpu: () => null }
+const dnpStats = { welcomes: 0, snapshots: 0, timeScale, gpu: () => null }
 // THE HUD'S SERVER-KNOWN VALUES (HUD_SET), as `hud.<name>`: the held weapon,
 // its ammunition. What the view model draws from now and the HUD layout will
 // (docs/UI_LAYOUT.md). Kept across level changes -- the server re-sends it.
@@ -734,6 +742,10 @@ if (LIVE) {
         markers.clearAll()
         scheme = m.controls ?? SCHEME.PLATFORMER
         if (DEBUG_PARAM !== '0' && DEBUG_PARAM !== '1') showDebug(m.debug !== 0)
+        // The server's pace, which a client running its own ticks faster or
+        // slower than would only fight its clock steering.
+        timeScale = clampScale(m.timeScale ?? 1)
+        dnpStats.timeScale = timeScale
         // The touch controls follow the scheme, and the layout the level.
         touch?.setLayout(uiLayout, scheme === SCHEME.FPS ? 'fps' : 'platformer')
         loadLayout(m.levelName ?? null)
@@ -1739,6 +1751,10 @@ fetch('/sprites/swings.json').then((r) => (r.ok ? r.text() : null)).then((text) 
   swingStyles = parsed.styles
 }).catch(() => {})
 dnpStats.slash = () => ({ live: slash.count, swingers: [...slash.swingers.keys()] })
+// HOW THE PREDICTION IS DOING, and how far this client has ticked: what an
+// automated test reads to judge a run (at a time scale, say) without a person
+// watching the numbers block.
+dnpStats.prediction = () => ({ clientTicks: ticks, serverTick: predictor?.lastAppliedTick ?? null, timeScale, ...(predictor?.stats ?? {}) })
 
 // Camera paths, drawn. OPT-IN, unlike the swing view beside it: a map may hold
 // sixteen paths and each is a spline sampled every frame it moves. That is
@@ -2905,7 +2921,8 @@ function frame (now) {
     if (pinch !== 0) zoomBy(Math.exp(pinch * 0.004))
   }
 
-  acc += dt
+  // At the time scale: a quarter speed runs fifteen ticks a second of wall time.
+  acc += dt * timeScale
   // STEER THE CLOCK: run a tick more, or one fewer, so the server holds the
   // few ticks of our input it needs and no more (Predictor._steerClock). Every
   // tick it holds is a sixtieth of a second between pressing something and its
@@ -3293,7 +3310,7 @@ function frame (now) {
     // On the render clock, not `newest snapshot + this client's tick fraction`:
     // snapshots come every other tick, so that went forward, slid back and
     // jumped two, and every remote body stuttered at 30 Hz.
-    const drawn = renderClock.advance(dt)
+    const drawn = renderClock.advance(dt * timeScale)
     others.update(Math.floor(drawn), drawn - Math.floor(drawn))
     // WHERE EACH REMOTE BODY IS DRAWN, past the plain interpolation:
     //   - a body our blast has shoved is ahead of the stream by the part of
@@ -3733,7 +3750,8 @@ function frame (now) {
   const st = predictor?.stats
   if (debugShown) {
     hud.textContent =
-      `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps\n` +
+      `${LIVE ? 'LIVE' : 'solo'}  ${PROJECTION}  tick ${ticks}   ${fps} fps` +
+      (timeScale !== 1 ? `   time x${timeScale}` : '') + '\n' +
       `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
       `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
       `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
