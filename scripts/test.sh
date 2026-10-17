@@ -646,6 +646,9 @@ suite_studio () {
   # Modules from earlier studios brought up to date as they open: the
   # starter's old script (every swing charged twice) replaced, a changed one kept.
   node ../studio/test/migrate.test.js | tail -1
+  # A ThreeSprite project with no animations yet baked as one still picture
+  # (it was refused, and a monster given a new sprite was drawn nowhere).
+  node ../studio/test/tsprite_still.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2
