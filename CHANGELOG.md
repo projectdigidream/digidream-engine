@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.1.1 -- 2026-10-17
+
 ### Added
 
 - A swing is an attack like any other: the `swing` action takes the swing
