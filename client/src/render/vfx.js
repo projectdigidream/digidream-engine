@@ -15,6 +15,17 @@
 //                        [speed_var <u/s>] [cone <turns>] [gravity <u/s/s>]
 //                        [drag <per second>] [size <u>] [size_end <u>]
 //                        [colour <hex>] [colour_end <hex>] [blend additive|alpha]
+//                        [shape soft|disc|square|hexagon|star] [sprite <name>]
+//
+// WHAT A PARTICLE IS DRAWN AS: `shape` -- `soft`, the soft round dot every
+// particle was before there was a choice, and the default, so a line that
+// says nothing draws exactly as it did; or a hard-edged disc, square, hexagon
+// or five-pointed star, made here in code -- or `sprite`, one of the module's
+// own pictures, found as the HUD's image element finds one (/sprites/<name>.png,
+// then /textures/<name>.png). The sprite wins when a line has both, and the
+// shape is what draws while the picture loads, or if it is not there. Either is
+// tinted by the colour ramp, and its own alpha cuts its outline under either
+// blend. Neither applies to a tracer.
 //
 // The engine attaches no meaning to the number at all. It reports "effect 1
 // happened here, pointing that way, with this parameter"; the file says what a
@@ -39,6 +50,13 @@
 // thing attached to an ENTITY with a lifetime, which is a different feature and
 // is not this one.
 //
+
+/** What a particle can be drawn as, `soft` first: the default. */
+export const PARTICLE_SHAPES = ['soft', 'disc', 'square', 'hexagon', 'star']
+
+// A picture's name: what the HUD's image element takes, a frame key or a path
+// under /sprites/ (`fx/spark`) -- never out of it.
+const SPRITE_NAME = /^(?!.*\.\.)[A-Za-z0-9_][A-Za-z0-9_./-]*$/
 
 /** Read the `vfx` records out of the catalogue text. */
 export function parseVfx (text) {
@@ -97,7 +115,10 @@ export function parseVfx (text) {
           // deadline out. Let go of the trigger and it lapses.
           attach: 0,
           rate: 40,
-          linger: 0.2
+          linger: 0.2,
+          // What each particle is drawn as (see the top of this file).
+          shape: 'soft',
+          sprite: null
         }
       : { id, type, colour: 0xffdd55, width: 0.04, life: 0.12 }
     const NUM = {
@@ -113,7 +134,14 @@ export function parseVfx (text) {
       if (key === 'colour' || key === 'color') d.colour = parseInt(v.replace(/^#|^0x/, ''), 16)
       else if (key === 'colour_end' || key === 'color_end') d.colourEnd = parseInt(v.replace(/^#|^0x/, ''), 16)
       else if (key === 'blend') d.blend = v
-      else if (NUM[key] !== undefined) d[NUM[key]] = Number(v)
+      else if (key === 'shape' || key === 'sprite') {
+        if (type !== 'particles') warnings.push(`line ${i + 1}: '${key}' is for particles; a tracer is a line`)
+        else if (key === 'shape' && !PARTICLE_SHAPES.includes(v)) {
+          warnings.push(`line ${i + 1}: shape '${v}' is not one of ${PARTICLE_SHAPES.join(', ')}`)
+        } else if (key === 'sprite' && !SPRITE_NAME.test(v)) {
+          warnings.push(`line ${i + 1}: sprite '${v}' is not a picture's name`)
+        } else d[key] = v
+      } else if (NUM[key] !== undefined) d[NUM[key]] = Number(v)
       else warnings.push(`line ${i + 1}: unknown vfx attribute '${key}'`)
     }
     kinds.set(id, d)
@@ -320,18 +348,89 @@ export function softDisc (n = 32) {
   return px
 }
 
-export class VfxView {
-  constructor ({ THREE, scene, catalogue, poolSize = 48 }) {
-    this.THREE = THREE
-    // One texture for every particle material, made once. Optional: a stub
-    // THREE without textures (a test) draws square points, as before.
-    this.disc = null
-    if (THREE.DataTexture) {
-      this.disc = new THREE.DataTexture(softDisc(32), 32, 32, THREE.RGBAFormat)
-      this.disc.magFilter = THREE.LinearFilter
-      this.disc.minFilter = THREE.LinearFilter
-      this.disc.needsUpdate = true
+// Whether a point (x, y), each -1..1 with y up, is inside a hard shape. The
+// star is five-pointed, one point up, its inner corners at 0.38 of its reach --
+// a regular pentagram's -- tested as a ten-sided polygon.
+const STAR = Array.from({ length: 10 }, (_, k) => {
+  const a = Math.PI / 2 + k * Math.PI / 5
+  const r = k % 2 === 0 ? 0.95 : 0.95 * 0.382
+  return [r * Math.cos(a), r * Math.sin(a)]
+})
+const INSIDE = {
+  disc: (x, y) => x * x + y * y <= 0.92 * 0.92,
+  square: (x, y) => Math.abs(x) <= 0.8 && Math.abs(y) <= 0.8,
+  // Flat-topped, corners at 0.92.
+  hexagon: (x, y) => Math.abs(y) <= 0.92 * Math.sqrt(3) / 2 &&
+                     Math.sqrt(3) * Math.abs(x) + Math.abs(y) <= 0.92 * Math.sqrt(3),
+  star: (x, y) => {
+    let inside = false
+    for (let i = 0, j = STAR.length - 1; i < STAR.length; j = i++) {
+      const [xi, yi] = STAR[i]
+      const [xj, yj] = STAR[j]
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside
     }
+    return inside
+  }
+}
+
+/**
+ * A PARTICLE'S SHAPE, as RGBA bytes `n` pixels square: `soft` is softDisc, the
+ * rest hard-edged -- opaque inside, clear outside, the rim anti-aliased by four
+ * by four samples a pixel so a hard shape is crisp rather than jagged. White, so
+ * the colour ramp is the colour. Rows run bottom to top, as a DataTexture's do,
+ * so the star points up on screen. Pure; an unknown shape is `soft`.
+ */
+export function particleShape (shape, n = 32) {
+  const inside = INSIDE[shape]
+  if (!inside) return softDisc(n)
+  const px = new Uint8Array(n * n * 4)
+  const S = 4
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      let hit = 0
+      for (let sy = 0; sy < S; sy++) {
+        for (let sx = 0; sx < S; sx++) {
+          if (inside((x + (sx + 0.5) / S) / n * 2 - 1, (y + (sy + 0.5) / S) / n * 2 - 1)) hit++
+        }
+      }
+      const k = (y * n + x) * 4
+      px[k] = 255; px[k + 1] = 255; px[k + 2] = 255; px[k + 3] = Math.round(255 * hit / (S * S))
+    }
+  }
+  return px
+}
+
+/**
+ * Where a module's picture is looked for: as the HUD's image element looks, a
+ * sprite of that name and then a texture of it. A name that already ends in
+ * .png or .webp is that file.
+ */
+export const defaultImageUrls = (name) => {
+  const file = /\.(png|webp)$/i.test(name) ? name : `${name}.png`
+  return [`/sprites/${file}`, `/textures/${file}`]
+}
+
+export class VfxView {
+  /**
+   * `resolveImage(name)` says where a `sprite` picture is: a URL, a list to try
+   * in order, or null for none. The default is defaultImageUrls; the studio,
+   * whose pictures are blob URLs, passes its own. `loader` is a TextureLoader
+   * (made from THREE when absent).
+   */
+  constructor ({ THREE, scene, catalogue, poolSize = 48, resolveImage = defaultImageUrls, loader = null }) {
+    this.THREE = THREE
+    // One texture per shape, made the first time a kind asks for it, the soft
+    // one at once. Optional: a stub THREE without textures (a test) draws
+    // square points, as before.
+    this.disc = null
+    this.shapes = new Map()
+    if (THREE.DataTexture) {
+      this.disc = this.#shapeTexture('soft')
+    }
+    this.resolveImage = resolveImage
+    this.loader = loader ?? (THREE.TextureLoader ? new THREE.TextureLoader() : null)
+    // Each sprite picture once, by name: { texture, state: loading|ready|missing }.
+    this.pictures = new Map()
     this.scene = scene
     this.kinds = catalogue?.kinds ?? new Map()
     this.live = []          // { mesh, born, life }
@@ -349,6 +448,10 @@ export class VfxView {
     // stacking a second emitter on the same body.
     this.emitters = new Map()
 
+    // The pictures the catalogue names, asked for now, so the first burst of a
+    // kind is usually drawn with its own.
+    for (const def of this.kinds.values()) if (def.sprite) this.#picture(def.sprite)
+
     for (let i = 0; i < poolSize; i++) {
       // A unit-length box along +X, scaled per shot. A line primitive would be
       // one pixel wide whatever the distance, which reads as a scratch on the
@@ -362,6 +465,72 @@ export class VfxView {
       mesh.visible = false
       scene.add(mesh)
       this.pool.push(mesh)
+    }
+  }
+
+  #shapeTexture (shape) {
+    const THREE = this.THREE
+    if (!THREE.DataTexture) return null
+    const key = INSIDE[shape] ? shape : 'soft'
+    let t = this.shapes.get(key)
+    if (!t) {
+      t = new THREE.DataTexture(particleShape(key, 32), 32, 32, THREE.RGBAFormat)
+      t.magFilter = THREE.LinearFilter
+      t.minFilter = THREE.LinearFilter
+      t.needsUpdate = true
+      this.shapes.set(key, t)
+    }
+    return t
+  }
+
+  // A module's picture by name, loaded once: the texture when it has arrived,
+  // null while it is on its way or when it is nowhere. Each URL resolveImage
+  // gives is tried in order, as the HUD tries /sprites/ then /textures/.
+  #picture (name) {
+    let p = this.pictures.get(name)
+    if (!p) {
+      p = { texture: null, state: 'loading' }
+      this.pictures.set(name, p)
+      const got = this.resolveImage ? this.resolveImage(name) : null
+      const urls = got == null ? [] : [].concat(got)
+      const THREE = this.THREE
+      const next = (i) => {
+        if (i >= urls.length || !this.loader) {
+          p.state = 'missing'
+          console.warn(`[vfx] no picture '${name}' for a particle; drawing its shape`)
+          return
+        }
+        this.loader.load(urls[i], (tex) => {
+          // As the engine's other pictures are: no colour conversion, and
+          // nearest up close so pixel art stays pixel art.
+          if (THREE.NoColorSpace !== undefined) tex.colorSpace = THREE.NoColorSpace
+          if (THREE.NearestFilter !== undefined) tex.magFilter = THREE.NearestFilter
+          p.texture = tex
+          p.state = 'ready'
+          this.#pictureArrived(name, tex)
+        }, undefined, () => next(i + 1))
+      }
+      next(0)
+    }
+    return p.state === 'ready' ? p.texture : null
+  }
+
+  // What a kind's particles are drawn through: its sprite once that has
+  // arrived, else its shape.
+  #mapFor (def) {
+    if (def.sprite) {
+      const t = this.#picture(def.sprite)
+      if (t) return t
+    }
+    return this.#shapeTexture(def.shape ?? 'soft')
+  }
+
+  // A picture that arrived after bursts of its kind began: they wear it from now.
+  #pictureArrived (name, tex) {
+    for (const b of [...this.parts, ...this.emitters.values()]) {
+      if (b.def.sprite !== name) continue
+      b.points.material.map = tex
+      b.points.material.needsUpdate = true
     }
   }
 
@@ -437,7 +606,7 @@ export class VfxView {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(parts.length * 3), 3))
     const mat = new THREE.PointsMaterial({
       size: def.size ?? 0.1,
-      ...(this.disc ? { map: this.disc } : {}),
+      ...(this.disc ? { map: this.#mapFor(def) } : {}),
       vertexColors: true,
       transparent: true,
       depthWrite: false,
@@ -483,7 +652,7 @@ export class VfxView {
     geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(cap * 3), 3))
     const mat = new THREE.PointsMaterial({
       size: def.size ?? 0.1,
-      ...(this.disc ? { map: this.disc } : {}),
+      ...(this.disc ? { map: this.#mapFor(def) } : {}),
       vertexColors: true,
       transparent: true,
       depthWrite: false,

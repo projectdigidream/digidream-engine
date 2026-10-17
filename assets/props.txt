@@ -131,6 +131,13 @@ vfx 2 tracer colour ff8844 width 0.12 life 0.45
 # the fade: black is invisible under additive blending, so one attribute does
 # both and no shader is needed.
 #
+# WHAT EACH ONE IS DRAWN AS: `shape soft|disc|square|hexagon|star` -- soft, the
+# soft round dot, is the default -- or `sprite <name>`, a picture of the
+# module's own (sprites/<name>.png, else textures/<name>.png), which wins when
+# both are given; the shape draws while it loads, or if it is not there. Both
+# are tinted by the colour ramp, so one white picture gives a burst of any
+# colour.
+#
 # ONE LINE EACH. There is no continuation character: a line not starting with a
 # record keyword is skipped in silence, so a wrapped entry keeps the attributes
 # before the break and loses every one after it. Which is a kind that looks

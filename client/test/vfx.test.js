@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { softDisc } from '../src/render/vfx.js'
 import { parseVfx, tracerEnds, fade, VfxView, emitBurst, stepParticles,
-         rampColour } from '../src/render/vfx.js'
+         rampColour, particleShape, PARTICLE_SHAPES, defaultImageUrls } from '../src/render/vfx.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -425,6 +425,114 @@ console.log('\n--- an attached emitter follows the body it came from ---')
   const sphere = emitBurst({ ...blast, cone: 0.5 }, { x: 0, y: 1, z: 0 }, 0, 2)
   check(sphere.filter((p) => p.vx < 0).length > sphere.length / 4,
         'CONTROL: with the old full-sphere cone, a good part went into the wall')
+}
+
+// --- what a particle is drawn as: a shape, or a picture of the module's -----------
+console.log('vfx: a particle is drawn as a shape or a picture, tinted by its ramp')
+{
+  // The words, read back -- for the studio's editor to round-trip.
+  const { kinds, warnings } = parseVfx([
+    'vfx 30 particles shape star',
+    'vfx 31 particles sprite fx/spark',
+    'vfx 32 particles shape hexagon sprite ember',
+    'vfx 33 particles',
+    'vfx 34 particles shape blob',
+    'vfx 35 tracer shape disc',
+    'vfx 36 particles sprite ../../etc/x'
+  ].join('\n'))
+  check(kinds.get(30).shape === 'star' && kinds.get(30).sprite === null, 'shape star is read back')
+  check(kinds.get(31).sprite === 'fx/spark' && kinds.get(31).shape === 'soft', 'a sprite is read back, its shape the default')
+  check(kinds.get(32).shape === 'hexagon' && kinds.get(32).sprite === 'ember', 'both, on one line')
+  check(kinds.get(33).shape === 'soft' && kinds.get(33).sprite === null, 'a line that says nothing: soft, no sprite')
+  check(warnings.length === 3 && kinds.get(34).shape === 'soft' && kinds.get(35).shape === undefined &&
+        kinds.get(36).sprite === null,
+        `an unknown shape, a tracer's shape and a path out of the folder are refused (${warnings.join(' | ')})`)
+
+  // THE SHAPES. `soft` is softDisc to the byte: nothing that says nothing changes.
+  const n = 32
+  const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i])
+  check(same(particleShape('soft', n), softDisc(n)), 'soft is the soft disc, byte for byte')
+  const alpha = (shape) => { const px = particleShape(shape, n); return (x, y) => px[(y * n + x) * 4 + 3] }
+  // At a point given -1..1, y up (rows run bottom to top).
+  const at = (f, x, y) => f(Math.min(n - 1, Math.floor((x + 1) / 2 * n)), Math.min(n - 1, Math.floor((y + 1) / 2 * n)))
+  const disc = alpha('disc'); const square = alpha('square'); const hex = alpha('hexagon'); const star = alpha('star')
+  check(at(disc, 0, 0) === 255 && at(disc, 0.95, 0.95) === 0, 'a disc: opaque in the middle, clear in the corner')
+  // HARD, which is the point: no fall-off inside, unlike the soft dot.
+  check(at(disc, 0.6, 0) === 255 && alpha('soft')(Math.floor(0.8 * n), n / 2) < 200,
+        'and hard: full at 0.6 out, where the soft dot has faded')
+  check(at(square, 0.7, 0.7) === 255 && at(square, 0.9, 0) === 0, 'a square: its corner in, past its side out')
+  check(at(hex, 0.85, 0) === 255 && at(hex, 0, 0.85) === 0, 'a flat-topped hexagon: a corner to the side, a flat top')
+  check(at(star, 0, 0.6) === 255 && at(star, 0, -0.85) === 0 && at(star, 0, 0) === 255,
+        'a star: a point straight up, a notch straight down')
+  // Anti-aliased rims: some pixel on each shape is neither in nor out.
+  const partial = (shape) => { const px = particleShape(shape, n); for (let k = 3; k < px.length; k += 4) if (px[k] > 0 && px[k] < 255) return true; return false }
+  check(['disc', 'square', 'hexagon', 'star'].every(partial), 'every hard shape has an anti-aliased rim')
+  // White, so the ramp is the colour.
+  const white = (shape) => { const px = particleShape(shape, n); for (let k = 0; k < px.length; k += 4) if (px[k] !== 255 || px[k + 1] !== 255 || px[k + 2] !== 255) return false; return true }
+  check(PARTICLE_SHAPES.every(white), 'every shape is white')
+  // CONTROL: they are five different pictures.
+  const pics = PARTICLE_SHAPES.map((sh) => particleShape(sh, n))
+  let distinct = true
+  for (let i = 0; i < pics.length; i++) for (let j = i + 1; j < pics.length; j++) if (same(pics[i], pics[j])) distinct = false
+  check(distinct, 'CONTROL: the five shapes are five pictures')
+
+  // THE VIEW: a THREE with textures, and a loader whose files arrive when told.
+  const T = {
+    ...THREE,
+    DataTexture: class { constructor (data, w, h) { this.image = { data, width: w, height: h } } },
+    RGBAFormat: 1023, LinearFilter: 1006, NearestFilter: 1003, NoColorSpace: ''
+  }
+  const files = new Set(['/textures/ember.png', 'blob:studio/ember'])
+  const asked = []
+  const pending = []
+  const loader = {
+    load (url, onLoad, _p, onError) {
+      asked.push(url)
+      pending.push(() => (files.has(url) ? onLoad({ url }) : onError(new Error('404'))))
+    }
+  }
+  const flush = () => { while (pending.length) pending.shift()() }
+  const warned = console.warn
+  let warns = 0
+  console.warn = () => { warns++ }
+  const scene = { add () {}, remove () {} }
+  const view = new VfxView({ THREE: T, scene, catalogue: { kinds }, poolSize: 1, loader })
+  const from = { x: 0, y: 1, z: 0 }
+  const burst = (kind) => { view.spawn(kind, from, from, 0); return view.parts[view.parts.length - 1].points.material }
+  // A kind that says nothing wears the soft dot -- the very texture it always did.
+  check(burst(33).map === view.disc, 'a line that says nothing draws through the soft dot, as before')
+  check(burst(30).map.image.data[3] === particleShape('star', 32)[3] &&
+        same(burst(30).map.image.data, particleShape('star', 32)), 'shape star draws through the star')
+  // The sprites the catalogue names were asked for at once, /sprites/ first.
+  check(asked[0] === '/sprites/fx/spark.png' || asked[0] === '/sprites/ember.png',
+        `the pictures are asked for when the view is made, /sprites/ first (${asked.join(', ')})`)
+  // Before it has arrived: its shape. Hexagon for 32.
+  const early = burst(32)
+  check(same(early.map.image.data, particleShape('hexagon', 32)), 'before its picture arrives, a burst draws its shape')
+  flush()   // /sprites/ember.png is not there; /textures/ember.png is asked for
+  flush()
+  check(asked.includes('/textures/ember.png'), 'not a sprite, so a texture of that name, as the HUD looks')
+  check(early.map.url === '/textures/ember.png' && early.needsUpdate === true,
+        'and the burst already in the air wears it from then')
+  check(burst(32).map.url === '/textures/ember.png', 'the sprite wins over the shape once it is there')
+  // A picture that is nowhere: its shape, said once.
+  check(same(burst(31).map.image.data, particleShape('soft', 32)) && warns === 1,
+        `a picture that is nowhere draws its shape, and is said once (${warns})`)
+  console.warn = warned
+
+  // THE STUDIO's pictures are blob URLs: resolveImage says where.
+  const v2 = new VfxView({ THREE: T, scene, catalogue: { kinds }, poolSize: 1, loader,
+                           resolveImage: (name) => (name === 'ember' ? 'blob:studio/ember' : null) })
+  flush()
+  v2.spawn(32, from, from, 0)
+  check(v2.parts[0].points.material.map.url === 'blob:studio/ember', 'resolveImage hands the view its picture')
+  check(defaultImageUrls('fx/spark').join() === '/sprites/fx/spark.png,/textures/fx/spark.png' &&
+        defaultImageUrls('a.webp')[0] === '/sprites/a.webp', 'the default lookup, and a name with its extension')
+
+  // A TRACER is unchanged by any of it.
+  const tv = new VfxView({ THREE: T, scene, catalogue: { kinds }, poolSize: 1, loader })
+  tv.spawn(35, { x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, 0)
+  check(tv.live.length === 1 && tv.parts.length === 0, 'a tracer that named a shape is still a line')
 }
 
 console.log(`\nvfx: ${checks} checks, ${fails} failures`)

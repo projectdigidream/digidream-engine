@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- Particles can be drawn as something other than a soft dot: `shape disc`,
+  `square`, `hexagon` or `star` on a `vfx ... particles` line, hard-edged; or
+  `sprite <name>`, one of the module's own pictures (sprites/, then textures/).
+  Both are tinted by the colour ramp, so one white picture makes a burst of any
+  colour, and a picture's own transparency cuts its outline. A line that says
+  nothing draws as before. The sprite wins when both are given.
+
 ## 0.2.1.1 -- 2026-10-17
 
 ### Added
