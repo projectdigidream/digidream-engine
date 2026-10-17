@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **A link out of the Android app trapped it.** Every address off the app's
+  own was answered with "Digidream has no page at ...", so a link the user
+  followed (the studio's Package page offered one for a kit) turned the whole
+  app into that page, and Back sent the app away with the page still in it.
+  A link out now opens in the phone's browser, and Back on such a page goes
+  back.
+
 ### Added
 
 - A missile can trail particles for its whole flight: `trail = <particle kind>`

@@ -156,6 +156,22 @@ public final class MainActivity extends Activity {
         }
         return res;
       }
+
+      // A LINK OUT OF THE APP opens in the phone's browser. Every request off
+      // our origin is refused (serve), which is right for a request and wrong
+      // for a link followed: the Packager's "Download the kit" took the whole
+      // app to a "no page" screen that Back could not leave.
+      @Override
+      public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
+        String url = req.getUrl().toString();
+        if (!req.isForMainFrame() || url.startsWith(ORIGIN + "/")
+            || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:")) return false;
+        fileLog.line("[shell] a link out of the app" + (url.startsWith("https://") ? ", to the browser: " : ", refused: ") + url);
+        if (url.startsWith("https://")) {
+          try { startActivity(new Intent(Intent.ACTION_VIEW, req.getUrl())); } catch (Exception e) { Log.w(TAG, "nothing opens " + url, e); }
+        }
+        return true;
+      }
     });
     // THE GAME PAGE'S CONSOLE, into the studio's Play log while a play-test
     // runs: an uncaught error, a refused map, a failed fetch -- what logcat
@@ -704,6 +720,7 @@ public final class MainActivity extends Activity {
   private String missingPage(String url) {
     StringBuilder b = new StringBuilder("<body style='background:#0b0d12;color:#cfe3ff;font:13px monospace;padding:16px'>");
     b.append("<b>Digidream has no page at</b><br>").append(esc(url)).append("<br><br>");
+    b.append("<a href='javascript:history.back()' style='color:#8fc1ff;font-size:16px'>&larr; Back</a><br><br>");
     b.append("start.txt: ").append(start == null ? "(not read yet)" : esc(start.toString())).append("<br><br>");
     for (String dir : new String[] {"web", "web/studio"}) {
       String names;
@@ -1047,7 +1064,13 @@ public final class MainActivity extends Activity {
   @SuppressWarnings("deprecation")
   public void onBackPressed() {
     if (web == null) { super.onBackPressed(); return; }
-    web.evaluateJavascript(BACK_JS, (took) -> { if (!"true".equals(took)) moveTaskToBack(true); });
+    web.evaluateJavascript(BACK_JS, (took) -> {
+      if ("true".equals(took)) return;
+      // a page off our origin (a link that should have gone to the browser): back to where it was
+      String at = web.getUrl();
+      if (at != null && !at.startsWith(ORIGIN + "/") && web.canGoBack()) { web.goBack(); return; }
+      moveTaskToBack(true);
+    });
   }
 
   // OUT OF SIGHT, OUT OF EARSHOT. Nothing paused the page when the app went to
