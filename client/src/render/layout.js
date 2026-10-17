@@ -113,6 +113,36 @@ const BUTTONS = [
   { id: 'grab', anchor: 'br', x: -186, y: -158, size: 60, label: 'GRAB', hidden: true }
 ]
 
+// MARKERS (docs/MARKERS.md): small UIs a script hangs on something in the
+// world -- a bar over a monster, a sign over a door. Each is a box (w x h UI
+// units) of the HUD's own elements, its bottom-centre on the point it hangs
+// on; their bindings read the marker's values. These are always there; a
+// layout's `markers` add to them and replace them by name.
+export const DEFAULT_MARKERS = Object.freeze({
+  // A bar: `value` of `max` -- a monster's health, red when low.
+  health: { w: 36, h: 6, elements: [
+    { id: 'bar', type: 'bar', anchor: 'c', w: 36, h: 5, bind: 'value', max: 'max',
+      fill: '#5fbf6a', low: [{ below: 0.5, fill: '#d6a13a' }, { below: 0.25, fill: '#d65b5b' }] }
+  ] },
+  // A line of text: `text`.
+  label: { w: 220, h: 24, elements: [
+    { id: 'text', type: 'text', anchor: 'b', text: '{text}',
+      style: { size: 12, align: 'center', bg: 'rgba(10,12,18,.72)', radius: 3, padding: 3 } }
+  ] },
+  // A pointer, with an optional line of `text` over it.
+  marker: { w: 160, h: 40, elements: [
+    { id: 'text', type: 'text', anchor: 'b', y: -18, text: '{text}', visible: { bind: 'text', op: 'set' },
+      style: { size: 12, align: 'center', color: '#ffd27a' } },
+    { id: 'arrow', type: 'text', anchor: 'b', text: '\u25BC', style: { size: 16, align: 'center', color: '#ffd27a' } }
+  ] },
+  // The debug overlay's health counter (mobs.lua hangs it on every monster
+  // when the module has the overlay on): `value`/`max`.
+  debug_health: { w: 80, h: 16, elements: [
+    { id: 'n', type: 'text', anchor: 'b', text: '{value}/{max}',
+      style: { size: 11, align: 'center', color: '#ffe08a', bg: 'rgba(0,0,0,.6)', radius: 2, padding: 1 } }
+  ] }
+})
+
 export const DEFAULT_LAYOUT = Object.freeze({
   version: 1,
   scale: { reference: 390, min: 1, max: 1 },
@@ -137,7 +167,8 @@ export const DEFAULT_LAYOUT = Object.freeze({
       { id: 'grab', anchor: 'br', x: -220, y: -150, size: 56, label: 'GRAB', hidden: true }
     ]
   },
-  panels: {}
+  panels: {},
+  markers: DEFAULT_MARKERS
 })
 
 // --- fonts and skins, loaded (docs/UI_STYLES.md 2.1, 3) --------------------
@@ -244,7 +275,7 @@ export function parseLayout (json) {
     try { src = JSON.parse(json) } catch (e) { return { ok: false, layout: DEFAULT_LAYOUT, errors: [`not JSON: ${e.message}`], warnings } }
   }
   if (!src || typeof src !== 'object') return { ok: false, layout: DEFAULT_LAYOUT, errors: ['not an object'], warnings }
-  const known = ['version', 'scale', 'theme', 'hud', 'touch', 'touch_fps', 'panels', 'fonts', 'styles', '_about']
+  const known = ['version', 'scale', 'theme', 'hud', 'touch', 'touch_fps', 'panels', 'markers', 'fonts', 'styles', '_about']
   for (const k of Object.keys(src)) if (!known.includes(k)) warnings.push(`unknown key '${k}', ignored`)
   if (src.version !== undefined && src.version !== 1) warnings.push(`version ${src.version}: read as version 1`)
 
@@ -256,6 +287,7 @@ export function parseLayout (json) {
     touch: src.touch === undefined ? DEFAULT_LAYOUT.touch : touchOf(src.touch, 'touch', DEFAULT_LAYOUT.touch, errors, warnings),
     touch_fps: src.touch_fps === undefined ? DEFAULT_LAYOUT.touch_fps : touchOf(src.touch_fps, 'touch_fps', DEFAULT_LAYOUT.touch_fps, errors, warnings),
     panels: {},
+    markers: { ...DEFAULT_MARKERS },
     fonts: [],
     styles: {}
   }
@@ -287,6 +319,15 @@ export function parseLayout (json) {
     const use = typeof p.style === 'string' ? p.style : p.style?.use
     if (use !== undefined && layout.styles[use] === undefined) warnings.push(`panel '${name}': no style '${use}'; the default look is used`)
   }
+  if (src.markers !== undefined) {
+    if (!src.markers || typeof src.markers !== 'object' || Array.isArray(src.markers)) errors.push('`markers` must be an object of templates')
+    else {
+      for (const [name, t] of Object.entries(src.markers)) {
+        const m = markerOf(name, t, errors, warnings)
+        if (m) layout.markers[name] = m
+      }
+    }
+  }
   if (src.hud !== undefined) {
     if (!Array.isArray(src.hud)) errors.push('`hud` must be a list of elements')
     else {
@@ -298,6 +339,24 @@ export function parseLayout (json) {
     }
   }
   return { ok: errors.length === 0, layout, errors, warnings }
+}
+
+// A marker template: a name a script can send ([a-z0-9_], as a panel's), a box
+// in UI units, and the elements in it -- the HUD's, checked as the HUD's are.
+function markerOf (name, t, errors, warnings) {
+  const at = `marker '${name}'`
+  if (!/^[a-z0-9_]{1,24}$/.test(name)) { errors.push(`${at}: a name is 1..24 of [a-z0-9_]`); return null }
+  if (!t || typeof t !== 'object') { errors.push(`${at}: must be an object`); return null }
+  for (const k of Object.keys(t)) if (!['w', 'h', 'elements', '_about'].includes(k)) warnings.push(`${at}: unknown key '${k}', ignored`)
+  const size = (v, d) => (typeof v === 'number' && v > 0 ? v : d)
+  if (!Array.isArray(t.elements)) { errors.push(`${at}: needs \`elements\`, a list`); return null }
+  const ids = new Set()
+  const elements = []
+  for (const el of t.elements) {
+    const e = elementOf(el, at, errors, warnings, ids)
+    if (e) elements.push(e)
+  }
+  return { w: size(t.w, 40), h: size(t.h, 16), elements }
 }
 
 function elementOf (el, where, errors, warnings, ids) {
@@ -439,6 +498,8 @@ function touchOf (t, where, fallback, errors, warnings) {
 /** CSS px per UI unit for a window this size. */
 export function uiScale (layout, width, height) {
   const s = layout?.scale ?? DEFAULT_LAYOUT.scale
+  // FIXED: a marker's box is sized by the SCREEN's scale, not its own size.
+  if (typeof s.fixed === 'number') return s.fixed
   const raw = Math.min(width, height) / (s.reference || 390)
   return Math.max(s.min ?? 0, Math.min(s.max ?? Infinity, raw))
 }

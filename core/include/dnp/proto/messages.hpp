@@ -135,6 +135,13 @@ inline constexpr u8  MSG_SECTOR_SET  = 0x37;
 // (empty for none), each u16 length + bytes. Bit i of InputFrame::actions is
 // action i. Sent once, after WELCOME.
 inline constexpr u8  MSG_KEYS        = 0x38;
+// MARKERS (docs/MARKERS.md): a small UI over something in the world -- a
+// health bar over a monster, a sign over a door, a marker over a goal. Drawn
+// from a template in the module's UI layout, never interacted with. Kept per
+// level and sent to whoever arrives, as a sector's look is. Not simulation
+// state. MARK_SET adds or replaces one (whole); MARK_CLEAR (u32 id) removes it.
+inline constexpr u8  MSG_MARK_SET    = 0x39;
+inline constexpr u8  MSG_MARK_CLEAR  = 0x3A;
 inline constexpr u32 MAX_KEY_ACTIONS = 8;
 inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
 inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
@@ -637,6 +644,37 @@ struct UiEvent {
 // Body only, like SECTOR_MOTION_SET and PARAM_UPDATE: the caller frames it.
 void encode_ui_open(ByteWriter& w, const UiPanel& p) noexcept;
 bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept;
+
+// A MARKER (MSG_MARK_SET): what it hangs on, which template draws it, and the
+// values its template's bindings read. The values are the HUD's kinds, int or
+// text, by a name of [a-z0-9_].
+inline constexpr u32 MARK_MAX_VALUES = 16;
+inline constexpr u8  MARK_ON_ENTITY = 0;   // follows an entity's drawn body
+inline constexpr u8  MARK_AT_POINT  = 1;   // a fixed place in the level's frame
+inline constexpr u8  MARK_FLAG_DEBUG   = 0x01;  // drawn only with the debug overlay
+inline constexpr u8  MARK_FLAG_THROUGH = 0x02;  // drawn through walls, not hidden by them
+struct MarkValue {
+    u8     name_len = 0;
+    char   name[HUD_NAME_MAX]{};
+    u8     kind = HUD_INT;                  // HUD_INT or HUD_STR
+    i32    number = 0;
+    UiText text{};
+};
+struct MarkSet {
+    u32    id = 0;
+    u8     anchor = MARK_ON_ENTITY;
+    Handle handle{};                        // MARK_ON_ENTITY
+    fx3    pos{};                           // MARK_AT_POINT
+    u8     template_len = 0;
+    char   template_name[UI_MAX_TEMPLATE]{};
+    u8     flags = 0;
+    fx     height{};                        // above the body's top, or the point
+    fx     range{};                         // shown within this of the viewer; 0 always
+    u8     count = 0;
+    MarkValue values[MARK_MAX_VALUES]{};
+};
+void encode_mark_set(ByteWriter& w, const MarkSet& m) noexcept;
+bool decode_mark_set(ByteReader& r, MarkSet& out) noexcept;
 void encode_ui_event(ByteWriter& w, const UiEvent& e) noexcept;
 bool decode_ui_event(ByteReader& r, UiEvent& out) noexcept;
 

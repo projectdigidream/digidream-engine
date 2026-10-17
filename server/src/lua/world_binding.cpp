@@ -2262,6 +2262,169 @@ int l_dnp_hud(lua_State* L) {
     return 0;
 }
 
+// --- markers (docs/MARKERS.md) -------------------------------------------------
+
+// A marker's values from {name = number | string | false} at `t`, merged into
+// `m`: a name already there is replaced, `false` removes it, a new one is added
+// (up to MARK_MAX_VALUES). The names and kinds dnp.hud takes, for the same
+// reason -- a marker's template binds them as a HUD layout binds HUD values.
+static void mark_values(lua_State* L, int t, proto::MarkSet& m, const char* who) {
+    if (lua_isnoneornil(L, t)) return;
+    luaL_checktype(L, t, LUA_TTABLE);
+    lua_pushnil(L);
+    while (lua_next(L, t) != 0) {
+        size_t n = 0;
+        const char* name = lua_type(L, -2) == LUA_TSTRING ? lua_tolstring(L, -2, &n) : nullptr;
+        if (name == nullptr || n == 0 || n > proto::HUD_NAME_MAX) {
+            luaL_error(L, "%s: a value's name must be a string of 1..%d characters", who,
+                       static_cast<int>(proto::HUD_NAME_MAX));
+        }
+        for (size_t k = 0; k < n; ++k) {
+            const char c = name[k];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+                luaL_error(L, "%s: '%s' -- a name is [a-z0-9_]", who, name);
+            }
+        }
+        i32 at = -1;
+        for (u8 i = 0; i < m.count; ++i) {
+            if (m.values[i].name_len == n && std::memcmp(m.values[i].name, name, n) == 0) { at = i; break; }
+        }
+        if (lua_isboolean(L, -1) && !lua_toboolean(L, -1)) {
+            if (at >= 0) {
+                for (u8 i = static_cast<u8>(at); i + 1 < m.count; ++i) m.values[i] = m.values[i + 1];
+                --m.count;
+            }
+            lua_pop(L, 1);
+            continue;
+        }
+        if (at < 0) {
+            if (m.count >= proto::MARK_MAX_VALUES) {
+                luaL_error(L, "%s: more than %d values on one marker", who, static_cast<int>(proto::MARK_MAX_VALUES));
+            }
+            at = m.count++;
+            m.values[at] = proto::MarkValue{};
+            m.values[at].name_len = static_cast<u8>(n);
+            std::memcpy(m.values[at].name, name, n);
+        }
+        proto::MarkValue& v = m.values[at];
+        if (lua_isboolean(L, -1)) {
+            v.kind = proto::HUD_INT; v.number = 1;
+        } else if (lua_type(L, -1) == LUA_TNUMBER) {
+            v.kind = proto::HUD_INT;
+            v.number = static_cast<i32>(lua_tonumber(L, -1));
+        } else if (lua_type(L, -1) == LUA_TSTRING) {
+            size_t sn = 0;
+            const char* str = lua_tolstring(L, -1, &sn);
+            v.kind = proto::HUD_STR;
+            v.text = proto::UiText{};
+            v.text.len = static_cast<u16>(std::min<size_t>(sn, proto::UI_MAX_TEXT));
+            std::memcpy(v.text.text, str, v.text.len);
+        } else if (is_fx(L, -1)) {
+            luaL_error(L, "%s: '%s' is an fx; a marker shows whole numbers -- convert it (.int) first", who, name);
+        } else {
+            luaL_error(L, "%s: '%s' must be a number, a string or false", who, name);
+        }
+        lua_pop(L, 1);
+    }
+}
+
+// dnp.mark(on, template, [values], [opts]) -> id | nil
+//
+// Hang a marker on `on` -- an entity, a prop, or a vec3 (a place in this
+// level's frame) -- drawn from the module's UI layout template `template`
+// (docs/MARKERS.md), its bindings reading `values`. opts:
+//   to             a player entity: only they see it (a quest marker of theirs)
+//   height         fx, above the top of the body, or above the point
+//   range          fx, shown only within this of the viewer (default: always)
+//   debug          true: drawn only with the debug overlay, and not sent at all
+//                  when the module has it off (module.txt `debug off`)
+//   through_walls  true: not hidden by the map between it and the camera
+// Nil when it is not hung: nothing to hang it on, or a debug marker in a game
+// that ships without the overlay.
+int l_dnp_mark(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    proto::MarkSet m;
+    if (is_vec3(L, 1)) {
+        m.anchor = proto::MARK_AT_POINT;
+        m.pos = ctx.to_world(check_vec3(L, 1));
+    } else {
+        i32 e = -1;
+        if (proto::Handle* h = to_handle(L, 1)) e = resolve(L, ctx, *h);
+        else if (proto::Handle* h = to_prop(L, 1)) e = resolve_prop(L, ctx, *h);
+        else return luaL_error(L, "dnp.mark: on an entity, a prop or a vec3, not %s", luaL_typename(L, 1));
+        if (e < 0) { lua_pushnil(L); return 1; }
+        m.anchor = proto::MARK_ON_ENTITY;
+        m.handle = proto::Handle::make(static_cast<u32>(e) + 1, ctx.world->generation(static_cast<u32>(e)));
+    }
+    size_t tn = 0;
+    const char* tp = luaL_checklstring(L, 2, &tn);
+    if (!proto::valid_template_name(tp, tn)) {
+        return luaL_error(L, "dnp.mark: template '%s' must be 1..%d of [a-z0-9_]", tp,
+                          static_cast<int>(proto::UI_MAX_TEMPLATE));
+    }
+    m.template_len = static_cast<u8>(tn);
+    std::memcpy(m.template_name, tp, tn);
+    mark_values(L, 3, m, "dnp.mark");
+    i32 to = -1;
+    if (!lua_isnoneornil(L, 4)) {
+        luaL_checktype(L, 4, LUA_TTABLE);
+        lua_getfield(L, 4, "to");
+        if (!lua_isnil(L, -1)) {
+            to = resolve(L, ctx, check_handle(L, -1));
+            if (to < 0) { lua_pop(L, 1); lua_pushnil(L); return 1; }
+        }
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "height");
+        if (!lua_isnil(L, -1)) m.height = check_fx(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "range");
+        if (!lua_isnil(L, -1)) m.range = check_fx(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "debug");
+        if (lua_toboolean(L, -1)) m.flags |= proto::MARK_FLAG_DEBUG;
+        lua_pop(L, 1);
+        lua_getfield(L, 4, "through_walls");
+        if (lua_toboolean(L, -1)) m.flags |= proto::MARK_FLAG_THROUGH;
+        lua_pop(L, 1);
+    }
+    // Debug markers cost a shipped game nothing, and tell its players nothing.
+    if ((m.flags & proto::MARK_FLAG_DEBUG) && !ctx.debug_overlay) { lua_pushnil(L); return 1; }
+    const u32 id = ctx.ui ? ctx.ui->mark(ctx.level, m, to) : 0;
+    if (id == 0) { lua_pushnil(L); return 1; }
+    lua_pushnumber(L, id);
+    return 1;
+}
+
+// dnp.mark_set(id, values) -> true | false
+//
+// Change a marker's values: the names given replace theirs, `false` removes
+// one, the rest stay. Sent again to whoever sees it. False for a marker that is
+// not (any more).
+int l_dnp_mark_set(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 id = static_cast<u32>(luaL_checknumber(L, 1));
+    proto::MarkSet m;
+    if (ctx.ui == nullptr || !ctx.ui->get_mark(ctx.level, id, m)) { lua_pushboolean(L, 0); return 1; }
+    mark_values(L, 2, m, "dnp.mark_set");
+    lua_pushboolean(L, ctx.ui->remark(ctx.level, m) ? 1 : 0);
+    return 1;
+}
+
+// dnp.unmark(id): take a marker down, for everyone who sees it.
+int l_dnp_unmark(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const u32 id = static_cast<u32>(luaL_checknumber(L, 1));
+    if (ctx.ui) ctx.ui->unmark(ctx.level, id);
+    return 0;
+}
+
+// dnp.debug_overlay() -> bool: whether the module launches with the debug
+// overlay (module.txt `debug`), which is when its debug markers are sent.
+int l_dnp_debug_overlay(lua_State* L) {
+    lua_pushboolean(L, ctx_of(L).debug_overlay ? 1 : 0);
+    return 1;
+}
+
 // dnp.ui_close(entity, ui_id)
 int l_dnp_ui_close(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -3385,6 +3548,10 @@ const luaL_Reg DNP_FUNCS[] = {
     {"sweep_hit", l_dnp_sweep_hit},
     {"find_path", l_dnp_find_path},
     {"place", l_dnp_place},
+    {"mark", l_dnp_mark},
+    {"mark_set", l_dnp_mark_set},
+    {"unmark", l_dnp_unmark},
+    {"debug_overlay", l_dnp_debug_overlay},
     {"atan2", l_dnp_atan2},
     {"blast_reach", l_dnp_blast_reach},
     {"knock_impulse", l_dnp_knock_impulse},

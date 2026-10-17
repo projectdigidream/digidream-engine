@@ -41,6 +41,7 @@ static int g_fails = 0;
     } while (0)
 
 static fx F(i64 n) { return fx::from_int(n); }
+static fx Ff(i64 a, i64 b) { return fx::from_frac(a, b); }
 
 struct Room {
     geom::MapStorage store;
@@ -109,6 +110,42 @@ struct RecordingUi : server::lua::UiSink {
         }
         return true;
     }
+    // MARKERS, as the server keeps them: by id, whole, with who sees them.
+    struct Mark { proto::MarkSet m; i32 to; };
+    std::map<u32, Mark> marks;
+    u32 next_mark = 500;
+    int unmarked = 0;
+    u32 mark(u32, const proto::MarkSet& m, i32 to) override {
+        const u32 id = ++next_mark;
+        marks[id] = Mark{m, to};
+        marks[id].m.id = id;
+        return id;
+    }
+    bool get_mark(u32, u32 id, proto::MarkSet& out) override {
+        const auto it = marks.find(id);
+        if (it == marks.end()) return false;
+        out = it->second.m;
+        return true;
+    }
+    bool remark(u32, const proto::MarkSet& m) override {
+        const auto it = marks.find(m.id);
+        if (it == marks.end()) return false;
+        it->second.m = m;
+        return true;
+    }
+    void unmark(u32, u32 id) override { unmarked += static_cast<int>(marks.erase(id)); }
+    // A marker's value by name: its number, its text, or "<none>".
+    std::string value(u32 id, const char* name) const {
+        const auto it = marks.find(id);
+        if (it == marks.end()) return "<no marker>";
+        const proto::MarkSet& m = it->second.m;
+        for (u8 i = 0; i < m.count; ++i) {
+            const proto::MarkValue& v = m.values[i];
+            if (std::string(v.name, v.name_len) != name) continue;
+            return v.kind == proto::HUD_STR ? std::string(v.text.text, v.text.len) : std::to_string(v.number);
+        }
+        return "<none>";
+    }
 };
 static RecordingUi g_ui;
 
@@ -119,6 +156,12 @@ static bool run(const char* src, const char* what) {
         lua_pop(L, 1);
         return false;
     }
+    return true;
+}
+// Whether `src` raises -- for a refusal that is the point of the check.
+static bool raises(const char* src) {
+    if (luaL_dostring(L, src) == 0) return false;
+    lua_pop(L, 1);
     return true;
 }
 static double num(const char* global) {
@@ -1014,6 +1057,82 @@ int main(int argc, char** argv) {
           "links": [ ["c.then", "h.in"] ] })"));
         CHECK(run("graphs.call('gold', dnp.players()[1], nil)", "set_hud"));
         CHECK(g_ui.huds.count("gold") == 1);
+    }
+
+    std::printf("-- markers: dnp.mark and the graph nodes (docs/MARKERS.md) --\n");
+    {
+        // THE BINDING. On a place: a point, in the world's frame; values merge.
+        g_ui.marks.clear();
+        CHECK(run("sign = dnp.mark(vec3.new(fx.int(3), fx.int(4), fx.int(1)), 'label', { text = 'Mill' })", "dnp.mark"));
+        const u32 sign = static_cast<u32>(num("sign"));
+        CHECK(g_ui.marks.count(sign) == 1 && g_ui.marks[sign].m.anchor == proto::MARK_AT_POINT &&
+              g_ui.marks[sign].m.pos.x == F(3) && g_ui.marks[sign].m.pos.y == F(4) &&
+              g_ui.value(sign, "text") == "Mill");
+        CHECK(run("set_ok = dnp.mark_set(sign, { text = false, value = 3 })", "dnp.mark_set"));
+        CHECK(truthy("set_ok") && g_ui.value(sign, "text") == "<none>" && g_ui.value(sign, "value") == "3");
+        CHECK(run("dnp.unmark(sign); gone_ok = dnp.mark_set(sign, { value = 4 })", "dnp.unmark"));
+        CHECK(g_ui.marks.count(sign) == 0 && !truthy("gone_ok"));
+        // On a body: its handle as the snapshots carry it, index + 1 and its generation.
+        CHECK(run("on_me = dnp.mark(dnp.players()[1], 'health', { value = 7, max = 9 }, "
+                  "{ height = fx.frac(1, 2), range = fx.int(20), through_walls = true })", "dnp.mark on a body"));
+        const u32 on_me = static_cast<u32>(num("on_me"));
+        CHECK(g_ui.marks.count(on_me) == 1 && g_ui.marks[on_me].m.anchor == proto::MARK_ON_ENTITY &&
+              (g_ui.marks[on_me].m.handle.raw & 0x00FFFFFFu) == player + 1 &&
+              (g_ui.marks[on_me].m.handle.raw >> 24) == world.generation(player) &&
+              g_ui.marks[on_me].m.height == Ff(1, 2) && g_ui.marks[on_me].m.range == F(20) &&
+              (g_ui.marks[on_me].m.flags & proto::MARK_FLAG_THROUGH) != 0);
+        // A DEBUG marker is not even sent when the module ships without the overlay.
+        ctx.debug_overlay = false;
+        CHECK(run("dbg_off = dnp.mark(dnp.players()[1], 'debug_health', { value = 1 }, { debug = true })", "debug off"));
+        ctx.debug_overlay = true;
+        CHECK(run("dbg_on = dnp.mark(dnp.players()[1], 'debug_health', { value = 1 }, { debug = true })", "debug on"));
+        CHECK(!truthy("dbg_off") && truthy("dbg_on"));
+        CHECK(run("dbg_flag = dnp.debug_overlay()", "dnp.debug_overlay") && truthy("dbg_flag"));
+        // CONTROLS: a template that is not a name, and a value that is an fx.
+        CHECK(raises("dnp.mark(dnp.players()[1], 'Big Bar', {})"));
+        CHECK(raises("dnp.mark(dnp.players()[1], 'health', { value = fx.frac(1, 2) })"));
+        CHECK(!raises("dnp.unmark(dnp.mark(dnp.players()[1], 'health', { value = 1 }))"));   // CONTROL
+
+        // THE GRAPH NODES. A bar hung on the caller, hung again (one, not two),
+        // changed, then taken down; and a sign at a place only the caller sees.
+        g_ui.marks.clear();
+        g_ui.unmarked = 0;
+        CHECK(load_graph(R"({ "graph": 1, "name": "markg",
+          "nodes": [ { "id": "t", "type": "on_call", "name": "tag" },
+                     { "id": "m", "type": "mark", "marker": "bar", "template": "health", "value": 40, "max": 100, "height": 0.25 },
+                     { "id": "h", "type": "on_call", "name": "hit" },
+                     { "id": "s", "type": "set_marker", "marker": "bar", "value": 25 },
+                     { "id": "d", "type": "on_call", "name": "drop" },
+                     { "id": "r", "type": "remove_marker", "marker": "bar" },
+                     { "id": "p", "type": "on_call", "name": "sign" },
+                     { "id": "q", "type": "mark", "marker": "sign", "template": "label", "at": "place",
+                       "x": 2, "y": -3, "z": 0, "text": "Exit", "to": "player" } ],
+          "links": [ ["t.then", "m.in"], ["h.then", "s.in"], ["d.then", "r.in"], ["p.then", "q.in"] ] })"));
+        CHECK(run("graphs.call('tag', dnp.players()[1], nil)", "mark"));
+        CHECK(g_ui.marks.size() == 1);
+        const u32 bar = g_ui.marks.begin()->first;
+        CHECK(g_ui.value(bar, "value") == "40" && g_ui.value(bar, "max") == "100" &&
+              (g_ui.marks[bar].m.handle.raw & 0x00FFFFFFu) == player + 1 &&
+              std::string(g_ui.marks[bar].m.template_name, g_ui.marks[bar].m.template_len) == "health" &&
+              g_ui.marks[bar].m.height == Ff(1, 4));
+        CHECK(run("graphs.call('tag', dnp.players()[1], nil)", "mark again"));
+        CHECK(g_ui.marks.size() == 1 && g_ui.unmarked == 1);          // replaced, not doubled
+        const u32 bar2 = g_ui.marks.begin()->first;
+        CHECK(run("graphs.call('hit', dnp.players()[1], nil)", "set_marker"));
+        CHECK(g_ui.value(bar2, "value") == "25" && g_ui.value(bar2, "max") == "100");
+        CHECK(run("graphs.call('sign', dnp.players()[1], nil)", "a place marker"));
+        u32 sign_id = 0;
+        for (const auto& kv : g_ui.marks) if (kv.second.m.anchor == proto::MARK_AT_POINT) sign_id = kv.first;
+        CHECK(sign_id != 0 && g_ui.marks[sign_id].to == static_cast<i32>(player) &&
+              g_ui.marks[sign_id].m.pos.x == F(2) && g_ui.marks[sign_id].m.pos.y == -F(3) &&
+              g_ui.value(sign_id, "text") == "Exit");
+        CHECK(run("graphs.call('drop', dnp.players()[1], nil)", "remove_marker"));
+        CHECK(g_ui.marks.count(bar2) == 0 && g_ui.marks.count(sign_id) == 1);   // the bar, not the sign
+        // CONTROL: a template that is not a name is refused at load, by node.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "markbad",
+          "nodes": [ { "id": "t", "type": "on_call", "name": "x" },
+                     { "id": "m", "type": "mark", "marker": "bar", "template": "Big Bar" } ],
+          "links": [ ["t.then", "m.in"] ] })"));
     }
 
     std::printf("-- entity properties through get_var / set_var / add_var --\n");

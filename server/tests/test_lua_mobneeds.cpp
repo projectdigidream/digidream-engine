@@ -16,6 +16,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <map>
 #include <vector>
 
 #include "dnp/sim/world.hpp"
@@ -86,6 +87,46 @@ struct Map {
         box(F(11), -F(8), F(14), F(8), F(10));
         box(-F(14), -F(3), -F(11), F(3), F(1));
         view = store.view();
+    }
+};
+
+// What a script hangs as markers (docs/MARKERS.md), by id; the rest of the
+// UI sink is not this file's business.
+struct Marks final : server::lua::UiSink {
+    std::map<u32, proto::MarkSet> live;
+    u32 next = 1;
+    u32  open_ui(u32, u32, const proto::UiPanel&) override { return 0; }
+    void close_ui(u32, u32, u32) override {}
+    void set_ui(u32, u32, u32, u16, i32) override {}
+    void set_camera(u32, u32, const proto::CameraSet&) override {}
+    void set_level_camera(u32, const proto::CameraSet&) override {}
+    void set_side_texture(u32, const proto::SideTexture&) override {}
+    void music(u32, i32, const proto::MusicCue&) override {}
+    void screen(u32, i32, const proto::ScreenSet&) override {}
+    void predict_sounds(u32, u32, u32, const proto::PredictSound*, u32) override {}
+    bool hud(u32, i32, const std::vector<server::lua::HudSet>&) override { return true; }
+    u32 mark(u32, const proto::MarkSet& m, i32) override { const u32 id = next++; live[id] = m; live[id].id = id; return id; }
+    bool get_mark(u32, u32 id, proto::MarkSet& out) override {
+        const auto it = live.find(id); if (it == live.end()) return false; out = it->second; return true;
+    }
+    bool remark(u32, const proto::MarkSet& m) override {
+        const auto it = live.find(m.id); if (it == live.end()) return false; it->second = m; return true;
+    }
+    void unmark(u32, u32 id) override { live.erase(id); }
+    // How many hang on entity index `e` from template `t`, and the first one's `value`.
+    int on(u32 e, const char* t, i32* value = nullptr) const {
+        int n = 0;
+        for (const auto& kv : live) {
+            const proto::MarkSet& m = kv.second;
+            if (m.anchor != proto::MARK_ON_ENTITY || (m.handle.raw & 0x00FFFFFFu) != e + 1) continue;
+            if (std::string(m.template_name, m.template_len) != t) continue;
+            if (n++ == 0 && value) {
+                for (u8 i = 0; i < m.count; ++i) {
+                    if (std::string(m.values[i].name, m.values[i].name_len) == "value") *value = m.values[i].number;
+                }
+            }
+        }
+        return n;
     }
 };
 
@@ -200,6 +241,9 @@ int main() {
               { at = 0, action = 'set_param', param = 'move_speed', value = '6' } } },
             pain = still{ anim = 3, ticks = 8, next = '@previous' },
             death = DEATH } },
+        -- A HEALTH BAR over it while it lives (docs/MARKERS.md).
+        barred = { hp = 50, prop = 'zombieman', initial = 'idle', sight = '1', health_bar = 'health',
+          states = { idle = still{}, death = DEATH } },
         -- A BOSS WITH TWO PHASES, the "only once" way: `phase2` is the hidden
         -- flag, `p2` the phase it leads to, `cd` a cooldown set on the way in.
         phaser = { hp = 100, prop = 'zombieman', initial = 'p1', sight = '1',
@@ -892,6 +936,37 @@ int main() {
         if (!run("for idx, m in pairs(mobs.live) do if m.e:valid() then m.e:despawn() end end\n"
                  "mobs.reset()", "clearing the level for the next runtime")) return 1;
         ticks(5);
+    }
+
+    // MARKERS ON MONSTERS: a `health_bar` follows its health and goes when it
+    // dies; with the module's debug overlay on, every monster also carries the
+    // overlay's counter, and with it off, none does.
+    std::printf("markers on monsters\n");
+    {
+        static Marks marks;
+        ctx.ui = &marks;
+        ctx.debug_overlay = true;
+        if (!run("barred = spawn_at('barred', '-6', '-6', true); barred_idx = barred:index()", "a barred monster")) return 1;
+        const u32 b = static_cast<u32>(num("barred_idx"));
+        i32 v = -1;
+        CHECK(marks.on(b, "health", &v) == 1 && v == 50);
+        CHECK(marks.on(b, "debug_health") == 1);
+        if (!run("mobs.hurt(barred, 20, nil)", "hurting it")) return 1;
+        v = -1;
+        CHECK(marks.on(b, "health", &v) == 1 && v == 30);
+        i32 dv = -1;
+        CHECK(marks.on(b, "debug_health", &dv) == 1 && dv == 30);
+        if (!run("mobs.hurt(barred, 100, nil)", "killing it")) return 1;
+        std::printf("  a bar at 50, 30 after a hit, %d marker(s) on it once dead\n",
+                    marks.on(b, "health") + marks.on(b, "debug_health"));
+        CHECK(marks.on(b, "health") == 0 && marks.on(b, "debug_health") == 0);
+        // CONTROL: the module ships with the overlay off -- a bar, no counter.
+        ctx.debug_overlay = false;
+        if (!run("plain = spawn_at('barred', '-4', '-6', true); plain_idx = plain:index()", "another")) return 1;
+        const u32 p = static_cast<u32>(num("plain_idx"));
+        CHECK(marks.on(p, "health") == 1 && marks.on(p, "debug_health") == 0);
+        ctx.debug_overlay = true;
+        ctx.ui = nullptr;
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

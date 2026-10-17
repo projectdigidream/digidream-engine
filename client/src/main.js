@@ -48,6 +48,7 @@ import { sweepOffset, pitchOffset, makeSwingMesh, aimSwing, readSwingShape,
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { SectorFx } from './render/sectorfx.js'
 import { UiView } from './render/ui.js'
+import { MarkerView } from './render/markers.js'
 import { wantsTouch } from './touch.js'
 import { mountTouch } from './render/touchui.js'
 import { parseAnimations, TextureAnimator } from './render/animtex.js'
@@ -468,6 +469,10 @@ let lastSelfAnim = null
 // or the built-in default, which is what index.html and touchui.js drew before.
 // The health box that used to be hard-coded is drawn by the HUD now.
 const hudView = new HudView({ host: document.body, touch: wantsTouch(params) })
+// MARKERS (docs/MARKERS.md): small UIs scripts hang on things in the world,
+// drawn from the layout's `markers` templates over where those things are.
+const markers = new MarkerView({ host: document.body })
+markers.setLayout(DEFAULT_LAYOUT)
 let uiLayout = DEFAULT_LAYOUT
 let uiIndex = null
 const uiAssets = new UiAssets()
@@ -495,12 +500,14 @@ async function loadLayout (levelName) {
     }
     uiLayout = layout
     hudView.setLayout(layout)
+    markers.setLayout(layout)
     ui?.setLayout(layout)
     // Its fonts and skins: drawn with fallbacks at once, and again when they
     // are in, so the first frame never keeps the fallback for good.
     uiAssets.load(layout).then(() => {
       if (uiLayout !== layout) return
       hudView.setLayout(layout)
+      markers.setLayout(layout)
       ui?.setLayout(layout)
     })
     touch?.setLayout(layout, isFps() ? 'fps' : 'platformer')
@@ -723,6 +730,8 @@ if (LIVE) {
     onControl (m) {
       if (m.type === MSG.WELCOME) {
         dnpStats.welcomes++
+        // A new world: the last one's markers hang on things that are gone.
+        markers.clearAll()
         scheme = m.controls ?? SCHEME.PLATFORMER
         if (DEBUG_PARAM !== '0' && DEBUG_PARAM !== '1') showDebug(m.debug !== 0)
         // The touch controls follow the scheme, and the layout the level.
@@ -830,6 +839,8 @@ if (LIVE) {
       else if (m.type === MSG.SIDE_TEXTURE) sideTextures.push(m)
       // Sector looks share the switches' queue, and so their region bookkeeping.
       else if (m.type === MSG.SECTOR_SET) sideTextures.push(m)
+      else if (m.type === MSG.MARK_SET) markers.set(m)
+      else if (m.type === MSG.MARK_CLEAR) markers.clear(m.id)
       else if (m.type === MSG.UI_SET) {
         if (m.what === 'shown') ui.show(m.uiId, m.widgetId, m.value !== 0)
         else if (m.what === 'decor') ui.showDecor(m.uiId, m.decor, m.value !== 0)
@@ -1894,6 +1905,33 @@ try {
 
 // Other players. Interpolated, never predicted -- predicting one means guessing
 // what another person will press (see render/entities.js).
+// Where a marker hangs, in three-space: the top of its entity's body as drawn
+// this frame -- or of our own, which is not in `others` -- or its place; then
+// its own height above that. Null when this client is not drawing the thing.
+const markProbe = new THREE.Vector3()
+const FX_UNIT = 4294967296
+function markAnchor (m, subject) {
+  const up = Number(m.height ?? 0n) / FX_UNIT
+  if (m.anchor === 1) {
+    const p = m.pos
+    return { x: toThreeX(Number(p.x) / FX_UNIT), y: toThreeY(Number(p.z) / FX_UNIT) + up, z: toThreeZ(Number(p.y) / FX_UNIT) }
+  }
+  const index = m.handle & 0x00ffffff
+  const generation = (m.handle >>> 24) & 0xff
+  if (myAgentIndex !== null && index === myAgentIndex + 1) {
+    return subject ? { x: subject.x, y: subject.y + bodyHeight + up, z: subject.z } : null
+  }
+  const ent = others.entities.get(index)
+  if (!ent || ent.generation !== generation || !ent.mesh.visible) return null
+  const tall = ent.kind ? (props?.kinds?.get(ent.kind)?.height ?? 1) : bodyHeight
+  const pos = ent.mesh.position
+  return { x: pos.x, y: pos.y - (ent.mesh.userData.yOffset ?? 0) + tall + up, z: pos.z }
+}
+// A three-space point as the core's engine-space fx (raw BigInt).
+function engineRaw (p) {
+  return { x: BigInt(Math.round(p.x * FX_UNIT)), y: BigInt(Math.round(-p.z * FX_UNIT)), z: BigInt(Math.round(p.y * FX_UNIT)) }
+}
+
 const others = new EntityView({
   // Other players are the same size we are: the body is the MAP's, not this
   // session's, so drawing them at the engine default would put every remote
@@ -3620,6 +3658,25 @@ function frame (now) {
   if (LIVE && latestHp !== undefined && latestHp !== null) {
     hudView.update({ hp: latestHp, map: homeName ?? '' })
     hudView.update(hudValues)
+    // THE MARKERS, now that every body and the camera are where they are drawn.
+    if (markers.count > 0) {
+      const w = innerWidth
+      const h = innerHeight
+      const v = markProbe
+      markers.update({
+        width: w,
+        height: h,
+        project: (p) => {
+          v.set(p.x, p.y, p.z).project(cam3)
+          if (v.z < -1 || v.z > 1) return null
+          return { x: (v.x + 1) / 2 * w, y: (1 - v.y) / 2 * h }
+        },
+        anchorOf: (m) => markAnchor(m, subject),
+        viewer: cam3.position,
+        debug: debugShown,
+        lineClear: (p) => world.lineClear(engineRaw(cam3.position), engineRaw(p))
+      })
+    }
     // And a panel's decor, which is HUD elements too (docs/PANEL_DECOR_VALUES.md).
     ui?.update({ hp: latestHp, map: homeName ?? '' })
     ui?.update(hudValues)

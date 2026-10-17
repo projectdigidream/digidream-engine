@@ -93,6 +93,11 @@ mob_vocab = {
             "checked before anything expensive -- `target_visible` casts a " ..
             "ray, and a ray for every monster on a Doom level every tick is " ..
             "the cost this exists to avoid." },
+    { name = "health_bar", type = "string", optional = true,
+      doc = "A marker template (docs/MARKERS.md) hung over it while it " ..
+            "lives, its `value` (health) and `max` kept current: `health` is the " ..
+            "built-in bar; a module's UI layout can define its own. Gone " ..
+            "when it dies, back when it is revived." },
     { name = "pain_chance", type = "int", optional = true,
       doc = "0-255, rolled when the mob is hurt: the chance it flinches at " ..
             "all. Doom's number, because it is a good one -- a monster that " ..

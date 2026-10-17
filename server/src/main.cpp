@@ -226,6 +226,11 @@ struct Level {
     // Sector looks a script has changed (SECTOR_SET): the latest of each
     // (sector, what, effect kind), kept for whoever arrives, as switches are.
     std::vector<proto::SectorSet> sector_sets;
+    // MARKERS its scripts hung on things (docs/MARKERS.md), by id: kept for
+    // whoever arrives, as a sector's look is, and gone with the level. `to` is
+    // the one agent whose player sees it, or -1 for everyone.
+    struct MarkEntry { proto::MarkSet m; i32 to = -1; };
+    std::map<u32, MarkEntry> marks;
     // The level's camera defaults (dnp.level_camera), sent to everyone who
     // joins. Not simulation state; one CAMERA_SET per joining client.
     proto::CameraSet camera;
@@ -1090,6 +1095,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.game        = true;
         game_ctx.map_changes = this;
         game_ctx.ui          = this;
+        game_ctx.debug_overlay = debug_overlay != 0;
         game_ctx.levels      = this;
         game_ctx.props       = &props;
         game_ctx.cross       = this;
@@ -2080,12 +2086,15 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     send_motion_sets(N, id);
                     for (const auto& t : N.side_textures) send_side_texture(s, m.level, t);
                     for (const auto& t : N.sector_sets) send_sector_set(s, m.level, t, true);
+                    send_marks(s, m.level);
                 }
             }
         }
     }
 
     std::map<u32, Session> sessions;   // ordered: iteration order must not vary
+    u32 next_mark_id_ = 1;             // markers' ids, server-wide (see mark)
+    u32 marks_since_sweep_ = 0;
 
     // How many level-ticks were skipped because nobody was in them. A counter
     // rather than silence: "the server is fast now" and "the server stopped
@@ -2285,6 +2294,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         // And sectors re-lit or re-floored before you arrived -- at once, not
         // faded: a fade is a moment, and you were not there for it.
         for (const auto& t : L.sector_sets) send_sector_set(s, li, t, true);
+        // And its markers -- a sign over a door, a bar over a monster.
+        send_marks(s, li);
         // And the level's camera, if its script set one: the angle the map was
         // made for, and whether it may be turned away from.
         if (L.has_camera) send_camera(s, L.camera);
@@ -2336,6 +2347,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.level       = li;
         L.ctx.map_changes = this;
         L.ctx.ui = this;
+        L.ctx.debug_overlay = debug_overlay != 0;
         L.ctx.hp = L.hp;
         L.ctx.avatar = L.avatar;
         L.ctx.levels = this;
@@ -3313,6 +3325,129 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             Session& s = kv.second;
             if (same_world(s, level_index)) send_sector_set(s, level_index, t, false);
         }
+    }
+
+    // --- markers (docs/MARKERS.md) ----------------------------------------------
+
+    u32 mark(u32 level_index, const proto::MarkSet& m, i32 to) override {
+        if (level_index >= level_count() || !is_live(level_index)) return 0;
+        Level& L = level(level_index);
+        // THE DEPARTED, every so often: a marker whose entity something else
+        // despawned is taken down here, for everyone, rather than kept until a
+        // table that only grows refuses the next one.
+        if (++marks_since_sweep_ >= 64) { marks_since_sweep_ = 0; sweep_marks(level_index); }
+        if (L.marks.size() >= 4096) {
+            std::fprintf(stderr, "[srv] level %u: too many markers, ignoring\n", level_index);
+            return 0;
+        }
+        // One count for the server, not per level: in a region the levels'
+        // markers reach one client together and their ids must not meet.
+        const u32 id = next_mark_id_++;
+        if (next_mark_id_ == 0) next_mark_id_ = 1;
+        Level::MarkEntry& e = L.marks[id];
+        e.m = m;
+        e.m.id = id;
+        e.to = to;
+        broadcast_mark(level_index, e);
+        return id;
+    }
+
+    bool get_mark(u32 level_index, u32 id, proto::MarkSet& out) override {
+        if (level_index >= level_count() || !is_live(level_index)) return false;
+        const auto it = level(level_index).marks.find(id);
+        if (it == level(level_index).marks.end()) return false;
+        out = it->second.m;
+        return true;
+    }
+
+    bool remark(u32 level_index, const proto::MarkSet& m) override {
+        if (level_index >= level_count() || !is_live(level_index)) return false;
+        const auto it = level(level_index).marks.find(m.id);
+        if (it == level(level_index).marks.end()) return false;
+        it->second.m = m;
+        broadcast_mark(level_index, it->second);
+        return true;
+    }
+
+    void unmark(u32 level_index, u32 id) override {
+        if (level_index >= level_count() || !is_live(level_index)) return;
+        Level& L = level(level_index);
+        const auto it = L.marks.find(id);
+        if (it == L.marks.end()) return;
+        const i32 to = it->second.to;
+        L.marks.erase(it);
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (same_world(s, level_index) && (to < 0 || static_cast<i32>(s.agent) == to)) send_unmark(s, id);
+        }
+    }
+
+    // Whether what a marker hangs on is still the thing it was hung on: an
+    // entity gone, or its slot handed to somebody else, takes it with it.
+    bool mark_anchor_alive(const Level& L, const proto::MarkSet& m) const {
+        if (m.anchor != proto::MARK_ON_ENTITY) return true;
+        const u32 raw = m.handle.raw & 0x00FFFFFFu;
+        if (raw == 0) return false;
+        const u32 i = raw - 1;
+        const sim::World& w = L.host->world;
+        const bool active = sim::World::is_prop(i) ? w.prop(i).active : (i < sim::MAX_AGENTS && w.agent(i).active);
+        return active && w.generation(i) == static_cast<u8>(m.handle.raw >> 24);
+    }
+
+    void sweep_marks(u32 level_index) {
+        Level& L = level(level_index);
+        for (auto it = L.marks.begin(); it != L.marks.end();) {
+            if (mark_anchor_alive(L, it->second.m)) { ++it; continue; }
+            const u32 id = it->first;
+            const i32 to = it->second.to;
+            it = L.marks.erase(it);
+            for (auto& kv : sessions) {
+                Session& s = kv.second;
+                if (same_world(s, level_index) && (to < 0 || static_cast<i32>(s.agent) == to)) send_unmark(s, id);
+            }
+        }
+    }
+
+    void broadcast_mark(u32 level_index, const Level::MarkEntry& e) {
+        for (auto& kv : sessions) {
+            Session& s = kv.second;
+            if (same_world(s, level_index) && (e.to < 0 || static_cast<i32>(s.agent) == e.to)) send_mark(s, e.m);
+        }
+    }
+
+    // A level's markers to one session arriving in it (or in its world). Those
+    // whose entity has gone are dropped here, where it is cheap to ask.
+    void send_marks(Session& s, u32 level_index) {
+        Level& L = level(level_index);
+        for (auto it = L.marks.begin(); it != L.marks.end();) {
+            if (!mark_anchor_alive(L, it->second.m)) { it = L.marks.erase(it); continue; }
+            if (it->second.to < 0 || static_cast<i32>(s.agent) == it->second.to) send_mark(s, it->second.m);
+            ++it;
+        }
+    }
+
+    void send_mark(Session& s, const proto::MarkSet& m) {
+        u8 buf[4096];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_MARK_SET);
+        proto::encode_mark_set(w, m);
+        if (!w.ok()) return;
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(s.id, buf, w.size());
+    }
+
+    void send_unmark(Session& s, u32 id) {
+        u8 buf[16];
+        ByteWriter w(buf, sizeof(buf));
+        const size_t len_pos = w.mark();
+        w.u32v(0);
+        w.u8v(proto::MSG_MARK_CLEAR);
+        w.u32v(id);
+        if (!w.ok()) return;
+        finish_frame(buf, len_pos, w.size());
+        link.send_control(s.id, buf, w.size());
     }
 
     // `instant` drops the fade: what an arrival is told is the state now.

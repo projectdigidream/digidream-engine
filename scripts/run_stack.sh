@@ -155,8 +155,12 @@ for probe in "$LINK_PORT:the game server" "$HTTP_PORT:the web server"; do
   fi
 done
 
-SERVER="build/server/dnp-server"
-[[ -x "$SERVER" ]] || { echo "no server binary; run scripts/build_server.sh"; exit 1; }
+# DNP_SERVER_BIN, when set, is the binary to run: the test suite sets it to the
+# server it has just built (build/test-server), and a stack a test starts must
+# run THAT, not whatever build/server last held -- a stale one there paired
+# today's client with an old server, whose snapshots it could not read.
+SERVER="${DNP_SERVER_BIN:-build/server/dnp-server}"
+[[ -x "$SERVER" ]] || { echo "no server binary at $SERVER; run scripts/build_server.sh"; exit 1; }
 [[ -z "$MAP" || -f "$MAP" ]] || { echo "no map at $MAP; run mapc first"; exit 1; }
 [[ -f server/edge/certs/cert-hash.json ]] || {
   echo "no dev certificate; run: (cd server/edge && npm run certs)"; exit 1; }

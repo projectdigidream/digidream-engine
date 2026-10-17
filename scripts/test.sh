@@ -545,6 +545,10 @@ suite_client () {
   # The self block against the C++ encoder's own bytes, every field distinct,
   # the weapon block included, and the weapon state through the wasm world.
   node client/test/proto_self.test.js | grep -E 'FAIL|failures'
+  # MARKERS (docs/MARKERS.md): the core's encoding read by this client, and a
+  # marker drawn over its point, from its template -- hidden behind the camera,
+  # out of range, behind a wall, or a debug one with the overlay off.
+  node client/test/markers.test.js | grep -E 'FAIL|failures'
   # The clock other bodies are drawn at: smooth and never backwards with
   # snapshots at 30 Hz, and the formula it replaced shown to stutter.
   node client/test/renderclock.test.js | grep -E 'FAIL|failures'
@@ -925,6 +929,10 @@ suite_stack () {
      `# Sector looks (SECTOR_SET): a floor, fog and a fading light set by a script;` \
      `# whoever arrives later is told the state. CONTROL: not told to fade.` \
      && node test/sector.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# Markers (docs/MARKERS.md): a script's markers told to who sees them, a` \
+     `# later arrival told the level's, never another player's own; a change` \
+     `# and a removal told to both. CONTROL: the late one lacks the private one.` \
+     && node test/markers.test.js 2>/dev/null | grep -E 'FAIL|failures' \
      `# Panels by name (docs/PANELS.md): a game graph opens, answers a press and` \
      `# the × over the real protocol. CONTROL: a press after the × is dropped.` \
      && node test/panels.test.js 2>/dev/null | grep -E 'FAIL|failures' \

@@ -15,11 +15,13 @@
 //
 #include <emscripten/emscripten.h>
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <unordered_map>
 
 #include "dnp/geom/mapfile.hpp"
+#include "dnp/physics/collide.hpp"
 #include "dnp/physics/params_table.hpp"
 #include "dnp/sim/blast.hpp"
 #include "dnp/sim/testmap.hpp"
@@ -851,6 +853,31 @@ int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long
     return h.hit ? 1 : 0;
 }
 
+// Whether the MAP leaves the straight line from a to b clear (in: six i64,
+// a then b, fx raw): walls, and floors, ceilings and steps along its height.
+// Bodies are not asked. For a marker hidden behind a wall (docs/MARKERS.md):
+// 1 clear, 0 blocked. A line starting outside the map is clear, so a camera
+// out in the void hides nothing.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_line_clear(const sim::World* w, const long long* in64) {
+    const geom::MapData* m = w->map();
+    if (m == nullptr) return 1;
+    const fx3 a{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
+    const fx3 b{fx::from_raw(in64[3]), fx::from_raw(in64[4]), fx::from_raw(in64[5])};
+    const fx2 d{b.x - a.x, b.y - a.y};
+    const fx dist = length(d);
+    if (dist <= fx::zero()) return 1;
+    const i32 s = geom::find_sector_at(*m, fx2{a.x, a.y}, a.z, fx::zero());
+    if (s < 0) return 1;
+    // ABOVE THE ROOM, as the platformer's camera is: the map is drawn with its
+    // ceilings cut away, so the camera sees over walls the ray would call
+    // solid. Only a camera inside a room (first person) has walls between it
+    // and what it looks at.
+    if (a.z >= m->sector(static_cast<u32>(s)).ceil_z) return 1;
+    const physics::RayHit h = physics::raycast(*m, s, fx2{a.x, a.y}, normalize(d), dist, 0, a.z, b.z);
+    return h.blocked ? 0 : 1;
+}
+
 // The effects the predicted weapon would have been sent on the last step
 // (World::weapon_vfx), as a snapshot's vfx: per entry three i64 -- the
 // position -- and three words -- kind, direction, param. At most `cap`.
@@ -1088,6 +1115,42 @@ int dnp_axis_from_buf(const long long* p) {
 // against bytes its own test laid out agrees with itself -- which is how
 // proto.js read the self block's swing counters and dash count in the wrong
 // order, unnoticed, because all three are zero most of the time.
+// A MARK_SET, framed as the server frames control messages (u32 length, then
+// the type), with every field set to a value of its own: what the client's
+// decoder is checked against (client/test/markers.test.js). `point` picks the
+// anchor: 0 an entity, 1 a place.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_test_mark_frame(unsigned char* out, unsigned cap, unsigned point) {
+    proto::MarkSet m;
+    m.id = 4242;
+    m.anchor = point ? proto::MARK_AT_POINT : proto::MARK_ON_ENTITY;
+    m.handle = proto::Handle::make(77, 5);
+    m.pos = fx3{fx::from_int(-3), fx::from_frac(5, 2), fx::from_int(7)};
+    std::memcpy(m.template_name, "health", 6);
+    m.template_len = 6;
+    m.flags = proto::MARK_FLAG_DEBUG | proto::MARK_FLAG_THROUGH;
+    m.height = fx::from_frac(1, 4);
+    m.range = fx::from_int(30);
+    m.count = 3;
+    const auto name = [&](proto::MarkValue& v, const char* n) {
+        v.name_len = static_cast<u8>(std::strlen(n));
+        std::memcpy(v.name, n, v.name_len);
+    };
+    name(m.values[0], "value"); m.values[0].number = -12;
+    name(m.values[1], "max");   m.values[1].number = 300;
+    name(m.values[2], "text");  m.values[2].kind = proto::HUD_STR;
+    m.values[2].text.len = 4; std::memcpy(m.values[2].text.text, "Mill", 4);
+    ByteWriter w(out, cap);
+    w.u32v(0);
+    w.u8v(proto::MSG_MARK_SET);
+    proto::encode_mark_set(w, m);
+    if (!w.ok()) return 0;
+    const u32 len = static_cast<u32>(w.size() - 4);
+    out[0] = static_cast<u8>(len); out[1] = static_cast<u8>(len >> 8);
+    out[2] = static_cast<u8>(len >> 16); out[3] = static_cast<u8>(len >> 24);
+    return static_cast<unsigned>(w.size());
+}
+
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_test_snapshot(unsigned char* out, unsigned cap, unsigned options) {
     const bool grappling = (options & 1u) != 0;

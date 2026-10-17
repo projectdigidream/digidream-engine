@@ -1074,6 +1074,79 @@ TEST_FN void test_ui_pinned() {
     CHECK(!decode_ui_open(rc, got));
 }
 
+TEST_FN void test_mark_set_round_trip() {
+    std::printf("markers: on an entity and at a point, with their values, survive the wire\n");
+    static u8 buf[2048];
+    auto trip = [&](const MarkSet& m, MarkSet& got) {
+        ByteWriter w(buf, sizeof(buf));
+        encode_mark_set(w, m);
+        ByteReader r(buf, w.size());
+        return w.ok() && decode_mark_set(r, got);
+    };
+    auto named = [](MarkValue& v, const char* name) {
+        v.name_len = static_cast<u8>(std::strlen(name));
+        std::memcpy(v.name, name, v.name_len);
+    };
+    MarkSet bar;
+    bar.id = 7;
+    bar.anchor = MARK_ON_ENTITY;
+    bar.handle = Handle::make(41, 3);
+    std::memcpy(bar.template_name, "health", 6);
+    bar.template_len = 6;
+    bar.flags = MARK_FLAG_DEBUG;
+    bar.height = fx::from_frac(1, 4);
+    bar.range = fx::from_int(30);
+    bar.count = 2;
+    named(bar.values[0], "hp");     bar.values[0].number = 35;
+    named(bar.values[1], "hp_max"); bar.values[1].number = 60;
+    MarkSet got;
+    CHECK(trip(bar, got) && got.id == 7 && got.anchor == MARK_ON_ENTITY && got.handle.raw == bar.handle.raw &&
+          got.template_len == 6 && std::memcmp(got.template_name, "health", 6) == 0 &&
+          got.flags == MARK_FLAG_DEBUG && got.height == fx::from_frac(1, 4) && got.range == fx::from_int(30) &&
+          got.count == 2 && got.values[1].name_len == 6 && got.values[1].number == 60);
+    MarkSet sign;
+    sign.id = 8;
+    sign.anchor = MARK_AT_POINT;
+    sign.pos = fx3{fx::from_int(-3), fx::from_frac(5, 2), fx::from_int(1)};
+    std::memcpy(sign.template_name, "label", 5);
+    sign.template_len = 5;
+    sign.count = 1;
+    named(sign.values[0], "text");
+    sign.values[0].kind = HUD_STR;
+    set_text(sign.values[0].text, "The Old Mill");
+    CHECK(trip(sign, got) && got.anchor == MARK_AT_POINT && got.pos.x == fx::from_int(-3) &&
+          got.pos.y == fx::from_frac(5, 2) && got.values[0].kind == HUD_STR &&
+          got.values[0].text.len == 12 && std::memcmp(got.values[0].text.text, "The Old Mill", 12) == 0);
+    // Every cut is refused, never half-read.
+    ByteWriter w(buf, sizeof(buf));
+    encode_mark_set(w, sign);
+    const size_t n = w.size();
+    int accepted = 0;
+    for (size_t k = 0; k < n; ++k) {
+        ByteReader r(buf, k);
+        MarkSet x;
+        if (decode_mark_set(r, x)) ++accepted;
+    }
+    CHECK(accepted == 0);
+    // CONTROLS: what it does not know is refused whole -- an anchor, a value
+    // kind, a name or a template it cannot read.
+    const auto refuses = [&](auto mutate) {
+        MarkSet m = bar;
+        mutate(m);
+        ByteWriter bw(buf, sizeof(buf));
+        encode_mark_set(bw, m);
+        ByteReader r(buf, bw.size());
+        MarkSet x;
+        return !decode_mark_set(r, x);
+    };
+    CHECK(refuses([](MarkSet& m) { m.anchor = 2; }));
+    CHECK(refuses([](MarkSet& m) { m.values[0].kind = 2; }));
+    CHECK(refuses([](MarkSet& m) { m.values[0].name[0] = 'H'; }));
+    CHECK(refuses([](MarkSet& m) { m.template_name[0] = '-'; }));
+    CHECK(refuses([](MarkSet& m) { m.template_len = 0; }));
+    CHECK(!refuses([](MarkSet&) {}));   // and the unmutated one is not
+}
+
 TEST_FN void test_sector_set_round_trip() {
     std::printf("sector set: pictures, light with a fade, and effects survive the wire\n");
     u8 buf[512];
@@ -1308,6 +1381,7 @@ int main() {
     test_screen_set_round_trip();
     test_sky_set_round_trip();
     test_sector_set_round_trip();
+    test_mark_set_round_trip();
     test_ui_pinned();
     test_ui_rejects_hostile_input();
     test_ui_truncation_at_every_length();

@@ -47,6 +47,10 @@ export const MSG = {
   SECTOR_SET: 0x37,
   // The module's own keys (docs/KEYS.md): name, keyboard code, touch label.
   KEYS: 0x38,
+  // MARKERS (docs/MARKERS.md): a small UI hung on an entity or a place, and
+  // its removal by id.
+  MARK_SET: 0x39,
+  MARK_CLEAR: 0x3A,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -669,6 +673,49 @@ export function decodeControlMessage (buf) {
     }
     return r.ok ? { type, fields } : null
   }
+  // A MARKER (docs/MARKERS.md): what it hangs on, its template, and the values
+  // the template binds. Refused whole on what it does not know, as the core's
+  // decoder is: an anchor, a value kind, a name or a template it cannot read.
+  if (type === MSG.MARK_SET) {
+    const id = r.u32()
+    const anchor = r.u8()
+    if (!r.ok || anchor > 1) return null
+    const m = { type, id, anchor, handle: 0, pos: null }
+    if (anchor === 1) m.pos = r.vec3raw()
+    else m.handle = r.u32()
+    const text = (max, re) => {
+      const len = r.u16()
+      if (!r.ok || len > max) return null
+      const b = r.bytes(len)
+      if (!b) return null
+      const v = new TextDecoder().decode(b)
+      return re && !re.test(v) ? null : v
+    }
+    m.template = text(UI_MAX_TEMPLATE, /^[a-z0-9_]+$/)
+    if (m.template === null) return null
+    m.flags = r.u8()
+    m.height = r.fxraw()
+    m.range = r.fxraw()
+    const n = r.u8()
+    if (!r.ok || n > MARK_MAX_VALUES) return null
+    m.values = {}
+    for (let i = 0; i < n; i++) {
+      const name = text(HUD_NAME_MAX, /^[a-z0-9_]+$/)
+      if (name === null) return null
+      const kind = r.u8()
+      if (kind === 0) m.values[name] = r.i32()
+      else if (kind === 1) {
+        const v = text(HUD_STR_MAX)
+        if (v === null) return null
+        m.values[name] = v
+      } else return null
+    }
+    return r.ok ? m : null
+  }
+  if (type === MSG.MARK_CLEAR) {
+    const id = r.u32()
+    return r.ok ? { type, id } : null
+  }
   // What to play the moment this client predicts its own action (§5.7).
   if (type === MSG.SOUND_PREDICT) {
     const group = r.u32()
@@ -895,6 +942,9 @@ export const MAX_SOUNDS = 32
 export const HUD_MAX_FIELDS = 32
 export const HUD_NAME_MAX = 24
 export const HUD_STR_MAX = 128
+export const MARK_MAX_VALUES = 16
+// MARK_SET flags (docs/MARKERS.md).
+export const MARK_FLAG = { DEBUG: 1, THROUGH: 2 }
 // SOUND_PREDICT triggers, as core/include/dnp/proto/messages.hpp numbers them.
 export const PREDICT = {
   JUMP: 1, LAND: 2, PRIMARY: 3, PRIMARY_HELD: 4, SECONDARY: 5, SECONDARY_HELD: 6, SWING: 7

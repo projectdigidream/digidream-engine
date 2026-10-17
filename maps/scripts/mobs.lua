@@ -1432,6 +1432,9 @@ end
 
 local acts = {}
 local hurt                 -- forward: damage anything, defined below
+local hang_markers         -- forward: a mob's markers (docs/MARKERS.md), below
+local health_changed
+local drop_markers
 local launch               -- forward: fire a missile
 
 -- A TURN IS 2^32, and that is exact in a double, which is why every angle in
@@ -1959,6 +1962,7 @@ function acts.revive(m, a)
       if dx * dx + dy * dy <= a.radius * a.radius then
         table.remove(corpses, i)
         c.hp, c.dead = c.max_hp, false
+        hang_markers(c)
         if c.cpp then
           dnp.mob_set(c.idx, "hp", c.hp)
           dnp.mob_set(c.idx, "dead", false)
@@ -2434,6 +2438,31 @@ end
 
 -- ------------------------------------------------------------------ spawning
 
+-- ITS MARKERS (docs/MARKERS.md): the mob's own `health_bar`, and, when the
+-- module launches with the debug overlay, the overlay's health counter over
+-- every monster. Hung while it lives, kept current as its health changes, and
+-- taken down when it dies -- a corpse has no bar.
+function hang_markers(m)
+  if dnp == nil or dnp.mark == nil or not m.e:valid() then return end
+  local values = { value = math.max(0, math.floor(m.hp or 0)), max = math.floor(m.max_hp or m.hp or 0) }
+  if m.def.health_bar and m.marker == nil then m.marker = dnp.mark(m.e, m.def.health_bar, values) end
+  if m.debug_marker == nil and dnp.debug_overlay ~= nil and dnp.debug_overlay() then
+    m.debug_marker = dnp.mark(m.e, "debug_health", values, { debug = true, height = fx.frac(1, 8) })
+  end
+end
+function health_changed(m)
+  if dnp == nil or dnp.mark_set == nil then return end
+  local values = { value = math.max(0, math.floor(m.hp or 0)), max = math.floor(m.max_hp or m.hp or 0) }
+  if m.marker then dnp.mark_set(m.marker, values) end
+  if m.debug_marker then dnp.mark_set(m.debug_marker, values) end
+end
+function drop_markers(m)
+  if dnp == nil or dnp.unmark == nil then return end
+  if m.marker then dnp.unmark(m.marker); m.marker = nil end
+  if m.debug_marker then dnp.unmark(m.debug_marker); m.debug_marker = nil end
+end
+M.hang_markers, M.drop_markers = hang_markers, drop_markers
+
 -- M.spawn(kind, pos) -> entity | nil
 function M.spawn(kind, pos, opts)
   local def = defs[kind]
@@ -2482,6 +2511,7 @@ function M.spawn(kind, pos, opts)
   apply_swing(e, def.swing)
 
   live[m.idx] = m
+  hang_markers(m)
 
   -- THE C++ LOOP TAKES IT, OR THIS ONE DOES -- never both.
   --
@@ -2756,6 +2786,7 @@ function hurt(target, amount, by)
   if m.dead then return end
 
   m.hp = m.hp - amount
+  health_changed(m)
   m.hurt_at = dnp.tick()
   -- A PLAYER is not a mob, and the difference is what infighting means. A
   -- monster shot by another monster turns on it; a monster shot by a player is
@@ -2781,6 +2812,7 @@ function hurt(target, amount, by)
   if m.hp <= 0 then
     m.dead = true
     m.target = nil
+    drop_markers(m)
     if m.cpp then
       dnp.mob_set(m.idx, "dead", true)
       dnp.mob_set(m.idx, "target", nil)
@@ -3142,6 +3174,7 @@ function M.set_health(e, hp)
   if m == nil or m.dead then return false end
   m.hp = math.max(1, math.min(m.max_hp or hp, math.floor(hp)))
   if m.cpp and dnp.mob_set ~= nil then dnp.mob_set(m.idx, "hp", m.hp) end   -- as hurt mirrors it
+  health_changed(m)
   return true
 end
 
@@ -3856,6 +3889,7 @@ if dnp ~= nil and dnp.persist ~= nil then
       if m then
         back = back + 1
         m.hp = s.hp
+        health_changed(m)
         if m.cpp and dnp.mob_set ~= nil then dnp.mob_set(m.idx, "hp", s.hp) end
         local function put(k, v)
           if m.def.vars == nil or m.def.vars[k] == nil then return end

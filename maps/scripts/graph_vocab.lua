@@ -696,6 +696,47 @@ graph_vocab = {
       doc = "Write a HUD value: a panel's changing text (gold, a timer) is a template's " ..
             "{hud.<name>}, so this is how a graph writes on a panel." },
 
+    -- ------------------------------------------------------------- MARKERS
+    -- A small UI hung on something in the world (docs/MARKERS.md): a bar over
+    -- a monster, a sign over a door, a pointer over a goal. Drawn from a
+    -- marker template in the module's UI layout; `health`, `label`, `marker`
+    -- and `debug_health` are built in. A marker is known by its NAME in the
+    -- graph, and by what it hangs on: one name can hang a bar over many
+    -- monsters, each its own.
+    { name = "mark", category = "marker",
+      args = { { name = "marker", type = "string", doc = "Its name in this graph, for set_marker and remove_marker." },
+               { name = "template", type = "string", doc = "A marker template: health, label, marker, debug_health, or one of the module's UI layout." },
+               { name = "at", type = "enum", values = { "entity", "place" }, optional = true,
+                 doc = "On the entity (the event's, or the linked one), or at a place (x, y, z). Defaults to the entity." },
+               { name = "x", type = "number", optional = true, doc = "The place's east-west, units. Or linked." },
+               { name = "y", type = "number", optional = true, doc = "The place's north-south, units. Or linked." },
+               { name = "z", type = "number", optional = true, doc = "The place's height, units. Or linked." },
+               { name = "text", type = "string", optional = true, doc = "What `{text}` shows: a label's line, a pointer's caption." },
+               { name = "value", type = "value", optional = true, doc = "What a bar or `{value}` shows. Or linked." },
+               { name = "max", type = "value", optional = true, doc = "A bar's full amount, `{max}`. Or linked." },
+               { name = "height", type = "number", optional = true, doc = "How far above the top of the body (or the place), units." },
+               { name = "range", type = "number", optional = true, doc = "Shown only within this many units of the viewer. Default: always." },
+               { name = "to", type = "enum", values = { "everyone", "player" }, optional = true,
+                 doc = "Seen by everyone, or only by the player (the event's, or the linked one). Defaults to everyone." },
+               { name = "through_walls", type = "bool", optional = true, doc = "Drawn even with a wall in the way." },
+               { name = "debug", type = "bool", optional = true, doc = "Drawn only with the debug overlay; not sent at all when the module has it off." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "value", "max", "x", "y", "z" }, data_out = {},
+      doc = "Hang a marker on an entity or at a place. Hanging one of the same name on the same thing again replaces it." },
+    { name = "set_marker", category = "marker",
+      args = { { name = "marker", type = "string" },
+               { name = "text", type = "string", optional = true },
+               { name = "value", type = "value", optional = true, doc = "Or linked." },
+               { name = "max", type = "value", optional = true, doc = "Or linked." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "value", "max" }, data_out = {},
+      doc = "Change what a marker shows: the one of that name on the entity (the event's, or the linked one), or the place one when it was hung at a place." },
+    { name = "remove_marker", category = "marker",
+      args = { { name = "marker", type = "string" } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Take a marker down: the one of that name on the entity, or the place one." },
+
     -- --------------------------------------------------------------- INPUT
     -- A player's buttons: the engine's own (jump, attack, ...) and the
     -- module's own keys (module.txt `key` lines, docs/KEYS.md), by name.

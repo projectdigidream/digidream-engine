@@ -163,6 +163,15 @@ struct UiSink {
     // HUD values for whoever watches `agent`, or everyone in the level when it
     // is negative. False when a session would hold more than HUD_MAX_NAMES.
     virtual bool hud(u32 level, i32 agent, const std::vector<HudSet>& set) = 0;
+    // MARKERS (docs/MARKERS.md): a small UI hung on an entity or a point,
+    // drawn by everyone in the level -- or only by whoever watches `to` when
+    // it is not negative -- and by whoever arrives later. `mark` returns its
+    // id (0: refused); `remark` replaces one whole, by its id. Not pure, so a
+    // test's sink need not care.
+    virtual u32  mark(u32 /*level*/, const proto::MarkSet& /*m*/, i32 /*to*/) { return 0; }
+    virtual bool get_mark(u32 /*level*/, u32 /*id*/, proto::MarkSet& /*out*/) { return false; }
+    virtual bool remark(u32 /*level*/, const proto::MarkSet& /*m*/) { return false; }
+    virtual void unmark(u32 /*level*/, u32 /*id*/) {}
 };
 
 struct WorldContext;
@@ -272,6 +281,9 @@ struct WorldContext {
     }
     MapChangeSink*    map_changes = nullptr;
     UiSink*           ui = nullptr;
+    // The module's `debug` line (module.txt): whether a game launches with the
+    // debug overlay, and so whether its debug-only markers are worth sending.
+    bool              debug_overlay = true;
     LevelListSink*    levels = nullptr;
 
     // Health, one per agent slot.

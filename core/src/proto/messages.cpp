@@ -553,6 +553,82 @@ bool decode_ui_open(ByteReader& r, UiPanel& out) noexcept {
     return true;
 }
 
+// --- markers (docs/MARKERS.md) -------------------------------------------------
+
+namespace {
+bool valid_value_name(const u8* s, size_t n) noexcept {
+    if (n == 0 || n > HUD_NAME_MAX) return false;
+    for (size_t i = 0; i < n; ++i) {
+        const u8 ch = s[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) return false;
+    }
+    return true;
+}
+}  // namespace
+
+void encode_mark_set(ByteWriter& w, const MarkSet& m) noexcept {
+    w.u32v(m.id);
+    w.u8v(m.anchor);
+    if (m.anchor == MARK_AT_POINT) w.vec3_raw(m.pos);
+    else w.u32v(m.handle.raw);
+    const u16 tn = m.template_len > UI_MAX_TEMPLATE ? static_cast<u16>(UI_MAX_TEMPLATE) : m.template_len;
+    w.u16v(tn);
+    w.bytes(reinterpret_cast<const u8*>(m.template_name), tn);
+    w.u8v(m.flags);
+    w.fxraw(m.height);
+    w.fxraw(m.range);
+    const u8 n = m.count > MARK_MAX_VALUES ? static_cast<u8>(MARK_MAX_VALUES) : m.count;
+    w.u8v(n);
+    for (u8 i = 0; i < n; ++i) {
+        const MarkValue& v = m.values[i];
+        const u16 nn = v.name_len > HUD_NAME_MAX ? static_cast<u16>(HUD_NAME_MAX) : v.name_len;
+        w.u16v(nn);
+        w.bytes(reinterpret_cast<const u8*>(v.name), nn);
+        w.u8v(v.kind);
+        if (v.kind == HUD_STR) encode_text(w, v.text);
+        else w.i32v(v.number);
+    }
+}
+
+// Refused whole, as UI_OPEN is: an anchor, a value kind or a name it does not
+// know is not something a reader can step over and stay aligned.
+bool decode_mark_set(ByteReader& r, MarkSet& out) noexcept {
+    MarkSet m;
+    m.id = r.u32v();
+    m.anchor = r.u8v();
+    if (!r.ok() || m.anchor > MARK_AT_POINT) return false;
+    if (m.anchor == MARK_AT_POINT) m.pos = r.vec3_raw();
+    else m.handle.raw = r.u32v();
+    const u16 tn = r.u16v();
+    if (!r.ok() || tn > UI_MAX_TEMPLATE) return false;
+    const u8* tp = r.bytes(tn);
+    if (tp == nullptr || !valid_template_name(reinterpret_cast<const char*>(tp), tn)) return false;
+    m.template_len = static_cast<u8>(tn);
+    for (u16 i = 0; i < tn; ++i) m.template_name[i] = static_cast<char>(tp[i]);
+    m.flags = r.u8v();
+    m.height = r.fxraw();
+    m.range = r.fxraw();
+    const u8 n = r.u8v();
+    if (!r.ok() || n > MARK_MAX_VALUES) return false;
+    for (u8 i = 0; i < n; ++i) {
+        MarkValue& v = m.values[i];
+        const u16 nn = r.u16v();
+        if (!r.ok() || nn > HUD_NAME_MAX) return false;
+        const u8* np = r.bytes(nn);
+        if (np == nullptr || !valid_value_name(np, nn)) return false;
+        v.name_len = static_cast<u8>(nn);
+        for (u16 k = 0; k < nn; ++k) v.name[k] = static_cast<char>(np[k]);
+        v.kind = r.u8v();
+        if (!r.ok() || v.kind > HUD_STR) return false;
+        if (v.kind == HUD_STR) { if (!decode_text(r, v.text)) return false; }
+        else v.number = r.i32v();
+    }
+    if (!r.ok()) return false;
+    m.count = n;
+    out = m;
+    return true;
+}
+
 void encode_camera_set(ByteWriter& w, const CameraSet& c) noexcept {
     const u16 n = c.count > CAMERA_MAX_FIELDS ? static_cast<u16>(CAMERA_MAX_FIELDS) : c.count;
     w.u16v(n);

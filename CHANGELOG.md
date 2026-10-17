@@ -27,6 +27,22 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   between two input samples, one tap in two on a slow phone. A press is now
   seen by at least one sample.
 
+### Added
+
+- Markers: small UI hung on things in the world, such as a health bar over a
+  monster, a sign over a door or a pointer over a goal (docs/MARKERS.md).
+  Each is drawn from a template in the module's UI layout (a new `markers`
+  section of the HUD's own elements; `health`, `label`, `marker` and
+  `debug_health` are built in). It follows an entity or sits at a place, and
+  is hidden behind walls, out of `range`, or when not meant for this player.
+  - Lua: `dnp.mark`, `dnp.mark_set`, `dnp.unmark`, `dnp.debug_overlay`.
+  - Graphs: the `mark`, `set_marker` and `remove_marker` nodes.
+  - Monsters: `health_bar = "health"` keeps a bar over a monster while it
+    lives.
+- With the module's debug overlay on, every monster shows its health as a
+  counter over it while the overlay is showing. Nothing is sent when the
+  module ships with `debug off`.
+
 ## 0.2.0 -- 2026-10-16
 
 ### Fixed

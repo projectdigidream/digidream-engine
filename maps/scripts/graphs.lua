@@ -759,6 +759,84 @@ function EXEC.set_hud(g, n, ev, pull)
   return "then"
 end
 
+-- ---------------------------------------------------------------- MARKERS
+--
+-- A small UI hung on something in the world (docs/MARKERS.md), through
+-- dnp.mark. Known in the graph by NAME and by what it hangs on, so one `mark`
+-- node can hang a bar over every monster that walks in, each its own: the key
+-- is "<name>/<entity index>", or "<name>/place" (per player when only one
+-- player sees it).
+local function marker_number(v)
+  if type(v) == "number" then return math.floor(v) end
+  if type(v) == "boolean" then return v and 1 or 0 end
+  if type(v) == "userdata" and v.raw ~= nil then return math.floor(unfx(v)) end
+  return nil
+end
+local function marker_values(n, pull)
+  local values = {}
+  if n.text ~= nil then values.text = tostring(n.text) end
+  local v = pull("value")
+  if v ~= nil then values.value = marker_number(v) or tostring(v) end
+  local mx = pull("max")
+  if mx ~= nil then values.max = marker_number(mx) or tostring(mx) end
+  return values
+end
+-- The marker of this name the node means: on the entity, else this player's
+-- place one, else the place one.
+local function marker_key(g, name, e)
+  g.marks = g.marks or {}
+  if e ~= nil then
+    local k = name .. "/" .. e:index()
+    if g.marks[k] ~= nil then return k end
+    k = name .. "/place/" .. e:index()
+    if g.marks[k] ~= nil then return k end
+  end
+  return name .. "/place"
+end
+function EXEC.mark(g, n, ev, pull)
+  if dnp.mark == nil then return "then" end
+  g.marks = g.marks or {}
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  local place = n.at == "place"
+  local on, key
+  if place then
+    -- A coordinate as written (a number) or linked (a number, or an fx).
+    local coord = function(v)
+      if type(v) == "userdata" and v.raw ~= nil then return v end
+      return fxn(tonumber(v) or 0)
+    end
+    on = vec3.new(coord(pull("x")), coord(pull("y")), coord(pull("z")))
+    key = n.marker .. ((n.to == "player" and e ~= nil) and ("/place/" .. e:index()) or "/place")
+  else
+    if e == nil then return "then" end
+    on, key = e, n.marker .. "/" .. e:index()
+  end
+  if g.marks[key] ~= nil then dnp.unmark(g.marks[key]) end
+  local opts = { through_walls = n.through_walls or nil, debug = n.debug or nil }
+  if n.height ~= nil then opts.height = fxn(n.height) end
+  if n.range ~= nil then opts.range = fxn(n.range) end
+  if n.to == "player" then
+    if e == nil then return "then" end
+    opts.to = e
+  end
+  g.marks[key] = dnp.mark(on, n.template, marker_values(n, pull), opts)
+  return "then"
+end
+function EXEC.set_marker(g, n, ev, pull)
+  if dnp.mark_set == nil then return "then" end
+  local key = marker_key(g, n.marker, entity_of(pull, ev, nil, g.data_src[n.id]))
+  local id = g.marks[key]
+  -- Gone (its entity with it): forgotten here too.
+  if id ~= nil and not dnp.mark_set(id, marker_values(n, pull)) then g.marks[key] = nil end
+  return "then"
+end
+function EXEC.remove_marker(g, n, ev, pull)
+  if dnp.unmark == nil then return "then" end
+  local key = marker_key(g, n.marker, entity_of(pull, ev, nil, g.data_src[n.id]))
+  if g.marks[key] ~= nil then dnp.unmark(g.marks[key]); g.marks[key] = nil end
+  return "then"
+end
+
 -- ------------------------------------------------------------------ INPUT
 --
 -- A button by name: the engine's own (proto::button), or one of the module's
@@ -1859,6 +1937,14 @@ function M.load(data, label)
       bad("node '%s': no button '%s' -- the engine's are %s; the module's own are %s", n.id, n.button,
           "jump, dash, grab, hover, fly, grapple, use, attack, alt_attack, crouch",
           #own_keys() > 0 and table.concat(own_keys(), ", ") or "none (module.txt `key` lines)")
+    end
+  end
+
+  -- A MARKER NODE NAMES ITS TEMPLATE as dnp.mark will take it, so a typo is
+  -- said at load rather than raised by the run that reaches it.
+  for _, n in ipairs(order) do
+    if n.type == "mark" and (type(n.template) ~= "string" or not n.template:match("^[a-z0-9_]+$") or #n.template > 24) then
+      bad("node '%s': marker template '%s' must be 1..24 of [a-z0-9_]", n.id, tostring(n.template))
     end
   end
 

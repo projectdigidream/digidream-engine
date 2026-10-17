@@ -787,6 +787,21 @@ export class WasmWorld {
              entity: u[c.sweepOut32 / 4 + 1] ? u[c.sweepOut32 / 4 + 2] : null }
   }
 
+  /**
+   * Whether the map leaves the straight line from a to b clear (fx raw BigInt
+   * {x,y,z}, engine space): walls, floors, ceilings and steps; not bodies.
+   */
+  lineClear (a, b) {
+    const c = this.core
+    const M = c.M
+    if (!M._dnp_world_line_clear) return true
+    if (!c.line64) c.line64 = M._malloc(6 * 8)
+    const i = c.views.i64
+    const o = c.line64 / 8
+    i[o] = a.x; i[o + 1] = a.y; i[o + 2] = a.z; i[o + 3] = b.x; i[o + 4] = b.y; i[o + 5] = b.z
+    return M._dnp_world_line_clear(this.ptr, c.line64) !== 0
+  }
+
   /** The weapon in display slot `n` (1-based, by the table's order), or 255. */
   weaponSlot (idx, n) { return this.core.M._dnp_world_weapon_slot(this.ptr, idx, n) }
 
