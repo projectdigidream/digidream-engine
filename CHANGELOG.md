@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.2 -- 2026-10-17
+
 ### Fixed
 
 - **A link out of the Android app trapped it.** Every address off the app's
