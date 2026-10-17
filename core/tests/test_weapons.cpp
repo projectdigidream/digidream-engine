@@ -423,7 +423,95 @@ static void test_table_round_trip() {
     CHECK(bad.hash() != doomish().hash());
 }
 
+// A `swing` step: the machine names it to the body, the last of a tick winning;
+// its own shape survives the wire through the table's pool; and the state that
+// names it is in the hash.
+static void test_swing_steps() {
+    std::printf("weapons: a swing step asks for a swing, and its shape travels with the table\n");
+    WeaponTable& t = doomish();
+    // fists' punch swings at 0 with no shape, then at 0 again with a reach of
+    // its own: two in one tick, and the later is the one.
+    WPhase& punch = t.weapons[0].phases[1];
+    step(punch, WAct::Swing, 0);
+    WStep& own = step(punch, WAct::Swing, 0);
+    WSwing& o = t.step_swings[t.step_swing_count];
+    o.present = true; o.set = swing_field::REACH | swing_field::HALF_ARC;
+    o.reach = fx::from_int(5); o.half_arc = fx::from_frac(1, 16);
+    own.swing = t.step_swing_count++;
+
+    Run r{t};
+    r.body = WeaponBody{};
+    r.step(0, 0);                                  // to the fists
+    CHECK(r.s.armed == 0 && !r.body.swing);        // CONTROL: resting, nothing asked
+    r.body = WeaponBody{};
+    r.step(1);                                     // pressed: into punch, both steps due
+    CHECK(r.body.swing && r.body.swing_weapon == 0 && r.body.swing_phase == 1 && r.body.swing_step == 1);
+    CHECK(t.step_swing(0, 1, 1) == &t.step_swings[own.swing]);
+    CHECK(t.step_swing(0, 1, 0) == nullptr);       // the step with no shape of its own
+    CHECK(t.step_swing(0, 1, 2) == nullptr && t.step_swing(9, 1, 1) == nullptr);   // out of range
+
+    // The wire: the pool is the decoder's, the shape comes back on its step.
+    static u8 buf[1 << 18];
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(encode_weapon_table(w, t));
+    static WeaponTable back;
+    ByteReader rd(buf, w.size());
+    CHECK(decode_weapon_table(rd, back));
+    const WSwing* b = back.step_swing(0, 1, 1);
+    CHECK(b != nullptr && b->set == o.set && b->reach == o.reach && b->half_arc == o.half_arc);
+    CHECK(back.step_swing_count == 1 && back.step_swing(0, 1, 0) == nullptr);
+    CHECK(back.hash() == t.hash());
+
+    // More step shapes than the pool holds are refused, not wrapped: one more
+    // than it holds, over every phase of the three weapons, each with a shape.
+    // (doomish() is one static table: `o` is about to be cleared with it.)
+    const WSwing shape = o;
+    WeaponTable& many = doomish();
+    many.step_swing_count = 1;
+    many.step_swings[0] = shape;
+    u32 swings = 0;
+    for (u8 k = 0; k < many.weapon_count && swings <= MAX_STEP_SWINGS; ++k) {
+        for (u8 p = 0; p < many.weapons[k].phase_count && swings <= MAX_STEP_SWINGS; ++p) {
+            WPhase& ph = many.weapons[k].phases[p];
+            while (ph.step_count < MAX_PHASE_STEPS && swings <= MAX_STEP_SWINGS) {
+                step(ph, WAct::Swing, 0).swing = 0;    // the encoder writes each inline
+                ++swings;
+            }
+        }
+    }
+    CHECK(swings == MAX_STEP_SWINGS + 1);
+    ByteWriter wm(buf, sizeof(buf));
+    CHECK(encode_weapon_table(wm, many));
+    ByteReader rm(buf, wm.size());
+    static WeaponTable m2;
+    CHECK(!decode_weapon_table(rm, m2));
+    // CONTROL: one fewer is a table.
+    WPhase& last = [&]() -> WPhase& {
+        for (int k = many.weapon_count - 1; k >= 0; --k)
+            for (int p = many.weapons[k].phase_count - 1; p >= 0; --p)
+                if (many.weapons[k].phases[p].step_count > 0 &&
+                    many.weapons[k].phases[p].steps[many.weapons[k].phases[p].step_count - 1].action == WAct::Swing)
+                    return many.weapons[k].phases[p];
+        return many.weapons[0].phases[0];
+    }();
+    --last.step_count;
+    ByteWriter wm2(buf, sizeof(buf));
+    CHECK(encode_weapon_table(wm2, many));
+    ByteReader rm2(buf, wm2.size());
+    CHECK(decode_weapon_table(rm2, m2) && m2.step_swing_count == MAX_STEP_SWINGS);
+
+    // The state that names the step is hashed: a client naming another step
+    // is a misprediction, not a silent difference.
+    WeaponState s1{}, s2{};
+    s2.swung_step = 1;
+    StateHasher h1, h2;
+    hash_weapon_state(h1, s1);
+    hash_weapon_state(h2, s2);
+    CHECK(h1.value() != h2.value());
+}
+
 int main() {
+    test_swing_steps();
     test_fresh_and_edges();
     test_held_refire_and_timing();
     test_dry_switches_to_usable();

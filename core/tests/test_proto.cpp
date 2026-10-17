@@ -301,6 +301,8 @@ TEST_FN void test_snapshot_roundtrip() {
             // Cooldowns up to a random last one, so every length is written.
             const u32 cools = rng.next_u32() % (sim::MAX_WEAPON_COOLDOWNS + 1);
             for (u32 c = 0; c < cools; ++c) k.cool[c] = static_cast<i32>(rng.next_u32());
+            k.swung_weapon = static_cast<u8>(rng.next_u32()); k.swung_phase = static_cast<u8>(rng.next_u32());
+            k.swung_step = static_cast<u8>(rng.next_u32());
         }
         self.anchor      = Handle::make(rng.next_below(1000), 3);
         self.jumps_used  = static_cast<u8>(rng.next_below(4));
@@ -345,6 +347,13 @@ TEST_FN void test_snapshot_roundtrip() {
             if (i % 4 == 1) {
                 sent[i].mask |= ent_field::ATTACK;
                 sent[i].attack_left = static_cast<u8>(1 + rng.next_below(255));
+            }
+            // And which weapon step it is: three bytes, its own bit.
+            if (i % 3 == 2) {
+                sent[i].mask |= ent_field::ATTACK_STEP;
+                sent[i].attack_weapon = static_cast<u8>(rng.next_u32());
+                sent[i].attack_phase = static_cast<u8>(rng.next_u32());
+                sent[i].attack_step = static_cast<u8>(rng.next_u32());
             }
             if (sw.try_entity(sent[i])) ++written;
         }
@@ -392,7 +401,9 @@ TEST_FN void test_snapshot_roundtrip() {
                         a.armed == b.armed && a.swing_phase == b.swing_phase &&
                         a.prev_buttons == b.prev_buttons && a.entered == b.entered &&
                         a.done == b.done && a.held_since[0] == b.held_since[0] &&
-                        a.held_since[1] == b.held_since[1];
+                        a.held_since[1] == b.held_since[1] &&
+                        a.swung_weapon == b.swung_weapon && a.swung_phase == b.swung_phase &&
+                        a.swung_step == b.swung_step;
             for (u32 v = 0; v < sim::MAX_WEAPON_VARS; ++v) same = same && a.vars[v] == b.vars[v];
             for (u32 p = 0; p < sim::MAX_AMMO_POOLS; ++p) same = same && a.ammo[p] == b.ammo[p];
             for (u32 c = 0; c < sim::MAX_WEAPON_COOLDOWNS; ++c) same = same && a.cool[c] == b.cool[c];
@@ -420,6 +431,13 @@ TEST_FN void test_snapshot_roundtrip() {
             }
             if (sent[i].mask & ent_field::ATTACK) CHECK(got.entities[i].attack_left == sent[i].attack_left);
             else CHECK(got.entities[i].attack_left == 0);   // CONTROL: absent means nothing was read
+            if (sent[i].mask & ent_field::ATTACK_STEP) {
+                CHECK(got.entities[i].attack_weapon == sent[i].attack_weapon &&
+                      got.entities[i].attack_phase == sent[i].attack_phase &&
+                      got.entities[i].attack_step == sent[i].attack_step);
+            } else {
+                CHECK(got.entities[i].attack_weapon == 0xFF);   // CONTROL: absent, none
+            }
         }
         CHECK(got.vfx_count == vwritten);
     }

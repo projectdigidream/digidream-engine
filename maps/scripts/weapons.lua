@@ -469,6 +469,15 @@ function W.check_weapon(name, def, deferred)
             -- written back. Missing this made every `range` a string at
             -- runtime, which dnp.hitscan accepted and read as zero.
             for k, v in pairs(args) do entry[k] = v end
+            -- A SWING HAS TO COST SOMETHING: its own `damage`, or the swing it
+            -- falls back on -- the weapon's, or this phase's. A swing that hit
+            -- for nothing would be a collider that connects and does nothing,
+            -- which looks configured and is not.
+            if entry.action == "swing" and entry.damage == nil and
+               def.swing == nil and psw == nil then
+              complain("%s: a `swing` needs a `damage` -- its own, or from the " ..
+                       "weapon's `swing` or this phase's", ewhere)
+            end
           end
         end
       end
@@ -704,18 +713,43 @@ local function forget_tagged(key)
   end
 end
 
-local function apply_weapon_params(e, def)
+-- Whether a weapon swings from its `swing` steps, by definition, worked out
+-- once: such a weapon's button runs its phases and never starts a swing itself.
+local steps_swing_of = setmetatable({}, { __mode = "k" })
+local function swings_in_steps(def)
+  if def == nil then return false end
+  local v = steps_swing_of[def]
+  if v == nil then
+    v = false
+    for _, ph in pairs(def.phases or {}) do
+      for _, entry in ipairs(type(ph) == "table" and ph.sequence or {}) do
+        if type(entry) == "table" and entry.action == "swing" then v = true end
+      end
+    end
+    steps_swing_of[def] = v
+  end
+  return v
+end
+W.swings_in_steps = swings_in_steps
+
+-- `sw`, when given, is the shape to write in place of the weapon's own: a
+-- phase's (phase_swing).
+local function apply_weapon_params(e, def, sw)
   if not GAME and (mobs == nil or mobs.tagged_effect == nil) then return end
   clear_tagged(e, "weapon")
-  local sw = def and def.swing
+  sw = sw or (def and def.swing)
 
   -- WHETHER THIS WEAPON SWINGS AT ALL, and it is the line that collapses the
   -- double-fire. Before `attack_enabled` existed, pressing fire with a shotgun
   -- ALSO started the engine's swept collider -- attack_reach of 0 still
   -- connects at the target's own radius and attack_ticks of 0 is re-read as 1
   -- -- so one press ran two independent damage paths.
+  --
+  -- And a weapon that swings from its `swing` steps does not swing on the
+  -- button at all: the button runs its phases and the steps say when, so a
+  -- press is one swing, the step's, and never the step's and the button's.
   tagged_effect(e, "weapon/enabled", "attack_enabled", "set",
-                sw and ONE or ZERO)
+                (sw and not swings_in_steps(def)) and ONE or ZERO)
   tagged_effect(e, "weapon/aim_snap", "aim_snap", "set",
                 fx.int(def and def.aim_snap or 0))
 
@@ -738,10 +772,62 @@ end
 -- the double-fire fix: even if `attack_enabled` were somehow 1, no damage
 -- lands. Two independent gates, because the parameter is replicated state that
 -- a script could overwrite and the damage is not.
+-- A `swing` step's arguments over the weapon's swing in force: what that one
+-- blow costs. Cached by step, since a hit is rare and a step's table is fixed.
+local merged_of = setmetatable({}, { __mode = "k" })
+local function merged_swing(entry, inforce)
+  local m = merged_of[entry]
+  if m ~= nil and m.inforce == inforce then return m.sw end
+  local sw = {}
+  if inforce ~= nil then for k, v in pairs(inforce) do sw[k] = v end end
+  for k, v in pairs(entry) do
+    if k ~= "at" and k ~= "action" then sw[k] = v end
+  end
+  merged_of[entry] = { inforce = inforce, sw = sw }
+  return sw
+end
+
+local core_index               -- below: the core machine's names, if it runs
+
+-- THE SWING STEP THAT STARTED THE ATTACKER'S LATEST SWING, if one did, and the
+-- weapon's swing in force: read from the core's state (it started it), or
+-- from what the Lua path's acts.swing recorded.
+local function swing_step_of(attacker, key)
+  local st = run[key]
+  if st == nil then return nil end
+  local X = st.core_for
+  if X ~= nil and X == core_index() then
+    -- READ NOW, not from the copy the tick took: the swing that connected may
+    -- have started in this tick's step, after the weapons ran.
+    local s = dnp.weapon_state(attacker)
+    if s == nil or s.swung_weapon < 0 then return nil end
+    local wname = X.weapon_names[s.swung_weapon + 1]
+    local wdef = wname and W.defs[wname]
+    local pname = wdef and X.phase_names[wname][s.swung_phase + 1]
+    local ph = pname and wdef.phases[pname]
+    local entry = ph and ph.sequence and ph.sequence[s.swung_step + 1]
+    if entry == nil or entry.action ~= "swing" then return nil end
+    local inforce = wdef.swing
+    if s.armed == s.swung_weapon and s.swing_phase >= 0 then
+      local fp = wdef.phases[X.phase_names[wname][s.swing_phase + 1]]
+      if fp ~= nil and fp.swing ~= nil then inforce = fp.swing end
+    end
+    return entry, inforce
+  end
+  local sw = st.swinging
+  if sw == nil then return nil end
+  return sw.entry, sw.inforce
+end
+
 function W.swing_damage(attacker)
   if attacker == nil or attacker.index == nil then return nil end
-  local inv = W.of[key_of(attacker)]
+  local key = key_of(attacker)
+  local inv = W.of[key]
   if inv == nil then return nil end
+  -- A SWING STEP's own numbers first: a swing is an attack like any other,
+  -- and its cost is in the step that made it, over the weapon's in force.
+  local entry, inforce = swing_step_of(attacker, key)
+  if entry ~= nil then return merged_swing(entry, inforce) end
   local def = W.defs[inv.current]
   if def == nil then return nil end
   -- THE PHASE'S OWN SWING FIRST, then the weapon's.
@@ -899,6 +985,28 @@ function acts.impulse(c, a)
   world(c.e, "impulse", a)
 end
 
+-- A SWING, on the Lua path: the step's own shape into the parameters, under
+-- its own tag so the next swing step replaces it and putting the weapon away
+-- clears it, then the World starts it by the swing step's rule (e:swing:
+-- replaces one still sweeping, nothing inside a cooldown). What it costs is
+-- read back by W.swing_damage from what is recorded here.
+--
+-- On the core path the machine starts the swing itself, predicted, and this
+-- never runs: `swing` is an action the core performs, not one it reports.
+function acts.swing(c, a)
+  clear_tagged(c.e, "weapon/step")
+  for field, param in pairs(SWING_PARAM) do
+    if a[field] ~= nil then tagged_effect(c.e, "weapon/step/" .. field, param, "set", a[field]) end
+  end
+  for field, param in pairs(SWING_U8) do
+    if a[field] ~= nil then tagged_effect(c.e, "weapon/step/" .. field, param, "set", fx.int(a[field])) end
+  end
+  c.e:swing()
+  local def = c.def
+  local fp = c.state.swing_from and def and def.phases[c.state.swing_from]
+  c.state.swinging = { entry = c.entry or a, inforce = (fp and fp.swing) or (def and def.swing) }
+end
+
 -- A CIRCLE OF DAMAGE, centred where the weapon says rather than on the player.
 --
 -- The mob runtime's own blast, which rockets have used since the cyberdemon:
@@ -1033,6 +1141,28 @@ function W.check_vocabulary()
                "list it", name)
     end
   end
+  -- THE SWING ACTION'S ARGUMENTS ARE THE SWING FIELDS, one for one and all
+  -- optional: a step says for one blow what the field says for every blow.
+  -- Two lists, because the vocabulary is data and cannot build one from the
+  -- other -- so they are held equal here, or a field added to one would be a
+  -- step argument nobody can write, or the other way round.
+  local sw = ACT.swing
+  if sw ~= nil then
+    local args = index_by_name(sw.args or {})
+    local fields = index_by_name(vocab.swing_fields)
+    for name, f in pairs(fields) do
+      local a = args[name]
+      if a == nil or a.type ~= f.type or not a.optional then
+        complain("the `swing` action's arguments must be the swing fields, " ..
+                 "each optional: '%s' is not", name)
+      end
+    end
+    for name in pairs(args) do
+      if fields[name] == nil then
+        complain("the `swing` action takes '%s', which is not a swing field", name)
+      end
+    end
+  end
   return load_errors - before
 end
 -- Run at LOAD, and public so a test can run it again after mutating either
@@ -1072,7 +1202,7 @@ end
 -- which is what every phase did before this line existed.
 local function phase_swing(e, def, ph)
   if ph == nil or ph.swing == nil then return end
-  apply_weapon_params(e, { swing = ph.swing, aim_snap = def.aim_snap })
+  apply_weapon_params(e, def, ph.swing)
 end
 
 --- Reset a player's weapon machine. For a weapon change, and for a fresh slot.
@@ -1090,6 +1220,7 @@ local function rearm(e, idx, inv, now)
   local kept = st.cool and st.cool[inv.current]
   if kept then for k, v in pairs(kept) do st.vars[k] = v end end
   enter(st, def and def.initial, now)
+  st.swing_from = nil
   apply_weapon_params(e, def)
 end
 
@@ -1097,6 +1228,7 @@ local function run_sequence(c, ph)
   for i, entry in ipairs(ph.sequence or {}) do
     if not c.state.done[i] and c.elapsed >= (entry.at or 0) then
       c.state.done[i] = true
+      c.entry = entry
       local fn = acts[entry.action]
       if fn then fn(c, entry) end
       -- `goto` abandons the rest of the sequence, which is the point: it is how
@@ -1260,6 +1392,9 @@ local function tick_player(e, idx, now)
       break
     end
     enter(state, to, now)
+    -- The phase whose swing is in force, by name (the core path keeps the
+    -- core's number in `swing_phase`).
+    if def.phases[to] ~= nil and def.phases[to].swing ~= nil then state.swing_from = to end
     phase_swing(e, def, def.phases[to])
   end
 end
@@ -1323,7 +1458,8 @@ local core_stale = true
 --- The table changed: compile it again before the next tick.
 function W.core_stale() core_stale = true end
 
-local function core_index()
+-- (Declared above, for W.swing_damage.)
+function core_index()
   if not core_stale then return W.core end
   core_stale = false
   W.core, W.core_why = nil, nil

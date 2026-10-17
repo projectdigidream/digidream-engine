@@ -14,6 +14,39 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- A swing is an attack like any other: the `swing` action takes the swing
+  fields as its own arguments (`damage`, `reach`, `half_arc`, `sweep_from`,
+  `sweep_to`, `ticks`, `knockback`, ...), for monsters and weapons alike.
+  Given, they are that swing's; left out, the monster's or the weapon's `swing`
+  applies, so existing modules swing as they did. A jab and a slam are now two
+  steps with their own numbers. docs/SWINGS.md.
+- Weapons can run `swing` in a phase's sequence, at its tick, like `hitscan`.
+  The player's own client predicts it, so it appears the moment it happens. A
+  weapon with a swing step does not swing on the attack button: the button
+  runs its phases and the steps say when.
+- Other players see a swing step's own shape, not the weapon's: the snapshot
+  names the step (`ATTACK_STEP`) and every client already holds the weapon
+  table.
+
+### Changed
+
+- A swing that starts while another is still sweeping replaces it: the first
+  stops where it is, and the second starts fresh and can hit the same target
+  again. A swing inside the last one's cooldown does not happen. (A monster's
+  second swing mid-sweep used to be dropped.)
+- A weapon whose swing step would cost nothing, with no `damage` of its own and
+  no `swing` to take one from, is refused at load. A monster's `swing` step is
+  refused the same way, and no longer needs a `swing` field when it gives its own
+  `damage`.
+
+### Fixed
+
+- A monster's `swing` field offered `pitch_from`, `pitch_to` and `half_pitch`,
+  and nothing wrote them: an overhead blow swung flat. They now shape the
+  swing as a weapon's do.
+
 ## 0.2.1 -- 2026-10-17
 
 ### Fixed

@@ -1833,9 +1833,7 @@ int main(int argc, char** argv) {
     // start. It would have worked for a chasing monster and failed for a
     // standing one.
     //
-    // Driven through the mob runtime's own on_tick, because that is what
-    // releases the press; calling acts.swing twice without it would prove
-    // nothing about the thing under test.
+    // Driven through the mob runtime's own on_tick, as a fight would be.
     if (!run("demon:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
              "demon:set_input(fx.int(0), fx.int(0), 0, 0)\n"
              "mobs.acts.sleep(mobs.live[demon:index()])\n"
@@ -1870,11 +1868,12 @@ int main(int argc, char** argv) {
     }
     std::printf("  a standing demon told to bite three times landed %d of them\n",
                 swings_landed);
-    // ALL THREE. Verified to be a real gate by disabling release_presses in
-    // mobs.lua and re-running: it lands 1 of 3, which is the bug exactly --
-    // the first press works and every one after it is swallowed. That control
-    // cannot live in this file, because it needs the runtime broken, so the
-    // number it produced is recorded here instead.
+    // ALL THREE. Verified to be a real gate, when a swing was a press, by
+    // disabling the release that followed it in mobs.lua: it landed 1 of 3,
+    // the bug exactly -- the first press worked and every one after it was
+    // swallowed. A swing step no longer presses at all (it calls e:swing, which
+    // starts the World's swing outright), so this now holds by construction;
+    // it stays as the regression it was.
     CHECK(swings_landed == 3);
     run("if twice_victim:valid() then twice_victim:despawn() end", "clearing");
 
@@ -2542,6 +2541,177 @@ int main(int argc, char** argv) {
         CHECK(run("gw_fired = graphs.var('arms', 'fired'); gw_dry = graphs.var('arms', 'dry')", "fired"));
         std::printf("  fired %g shots, ran dry %g time(s)\n", num("gw_fired"), num("gw_dry"));
         CHECK(num("gw_fired") == 2 && num("gw_dry") == 1);
+    }
+
+    // ================================================================
+    // A SWING IS AN ATTACK LIKE ANY OTHER (docs/SWINGS.md): a `swing` step with
+    // its own numbers -- for a weapon, on both machines, and for a monster --
+    // starting at its tick, in its shape, costing its damage.
+    std::printf("-- swing steps (docs/SWINGS.md) --\n");
+    {
+        CHECK(run(R"LUA(
+          local before = weapons.load_errors()
+          weapons.load {
+            weapons = {
+              -- Reaches three units, at tick 2 of `slash`; costs 9.
+              stepblade = {
+                label = "Step Blade", order = 40, initial = "ready",
+                phases = {
+                  ready = { transitions = { { when = "button_pressed", to = "slash" } } },
+                  slash = { ticks = 14, next = "ready", sequence = {
+                    { at = 2, action = "swing", damage = 9, reach = "3", ticks = 4,
+                      half_arc = "0.25", sweep_from = "0", sweep_to = "0" } } },
+                },
+              },
+              -- The same, reaching one unit.
+              shortblade = {
+                label = "Short Blade", order = 41, initial = "ready",
+                phases = {
+                  ready = { transitions = { { when = "button_pressed", to = "slash" } } },
+                  slash = { ticks = 14, next = "ready", sequence = {
+                    { at = 2, action = "swing", damage = 9, reach = "1", ticks = 4,
+                      half_arc = "0.25", sweep_from = "0", sweep_to = "0" } } },
+                },
+              },
+            },
+          }
+          step_errors = weapons.load_errors() - before
+          -- A swing that costs nothing is refused: no damage of its own, and no
+          -- `swing` on the weapon or the phase to take one from...
+          before = weapons.load_errors()
+          weapons.check_weapon("free", { label = "Free", order = 50, initial = "a",
+            phases = { a = { sequence = { { at = 0, action = "swing", reach = "2" } } } } })
+          free_errors = weapons.load_errors() - before
+          -- ...and is not, with one. (CONTROL: the check can pass.)
+          before = weapons.load_errors()
+          weapons.check_weapon("paid", { label = "Paid", order = 51, initial = "a",
+            phases = { a = { sequence = { { at = 0, action = "swing", reach = "2", damage = 1 } } } } })
+          paid_errors = weapons.load_errors() - before
+        )LUA", "loading the swing-step weapons"));
+        std::printf("  swing-step weapons loaded with %d complaints; a free swing %d, a paid one %d\n",
+                    (int)num("step_errors"), (int)num("free_errors"), (int)num("paid_errors"));
+        CHECK(num("step_errors") == 0);
+        CHECK(num("free_errors") == 1);
+        CHECK(num("paid_errors") == 0);
+
+        // The vocabulary's `swing` arguments are held to its swing fields: one
+        // taken away is a complaint. (CONTROL: none before.)
+        CHECK(run("sw_before = weapons.check_vocabulary()\n"
+                  "local args = nil\n"
+                  "for _, a in ipairs(weapon_vocab.actions) do if a.name == 'swing' then args = a.args end end\n"
+                  "sw_removed = table.remove(args)\n"
+                  "sw_after = weapons.check_vocabulary()\n"
+                  "args[#args + 1] = sw_removed\n", "the swing arguments' parity"));
+        CHECK(num("sw_before") == 0);
+        CHECK(num("sw_after") >= 1);
+
+        struct Blade { bool core = false; int start = -1, starts = 0, lost = 0, swung_step = -2; };
+        const auto blade = [&](const char* weapon, bool force_lua) {
+            Blade b;
+            const std::string setup =
+                std::string("weapons.force_lua = ") + (force_lua ? "true" : "false") + "\n"
+                "weapons.core_stale()\n"
+                "step_core = weapons.core_index() ~= nil\n"
+                "local p = dnp.players()[1]\n"
+                "for _, e in ipairs(dnp.entities()) do\n"
+                "  if e:index() ~= p:index() then e:despawn() end\n"
+                "end\n"
+                "mobs.reset()\n"
+                "p:teleport(vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
+                "local inv = weapons.get(p:index())\n"
+                "inv.have['" + std::string(weapon) + "'] = true\n"
+                "inv.current = '" + std::string(weapon) + "'\n"
+                "weapons.rearm_player(p:index())\n"
+                // Two and a half units in front: inside three, outside one.
+                "blade_victim = mobs.spawn('zombieman', vec3.new(fx.frac(5,2), fx.int(0), fx.int(0)))\n"
+                "blade_victim:set_solid(false)\n"
+                "mobs.acts.sleep(mobs.live[blade_victim:index()])\n"
+                "mobs.live[blade_victim:index()].hp = 200\n";
+            if (!run(setup.c_str(), "arming a blade")) return b;
+            lua_getglobal(L, "step_core");
+            b.core = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+            set_aim(0);
+            for (int i = 0; i < 8; ++i) server_tick(0);
+            u8 was = 0;
+            for (int i = 0; i < 40; ++i) {
+                // Pressed and HELD three ticks: the button runs the phases and
+                // never swings itself, so a held press is still one swing.
+                server_tick(i < 3 ? proto::button::ATTACK_PRIMARY : 0);
+                const u8 left = world.agent(player).mv.attack_left;
+                if (left > was) { ++b.starts; if (b.start < 0) b.start = i; }
+                was = left;
+                if (i == 3 && run("blade_ws = dnp.weapon_state(dnp.players()[1])\n"
+                                  "blade_step = blade_ws.swung_step\n"
+                                  "if blade_ws.swung_weapon < 0 then blade_step = -1 end", "reading the state")) {
+                    b.swung_step = static_cast<int>(num("blade_step"));
+                }
+            }
+            if (run("local r = mobs.live[blade_victim:index()]\n"
+                    "blade_hp = r and r.hp or -1", "reading the victim")) {
+                b.lost = 200 - static_cast<int>(num("blade_hp"));
+            }
+            return b;
+        };
+        for (int path = 0; path < 2; ++path) {
+            const bool force_lua = path == 0;
+            const Blade far = blade("stepblade", force_lua);
+            const Blade near = blade("shortblade", force_lua);
+            std::printf("  %s machine: a three-unit step swings from tick %d (%d swing(s)) and costs %d;"
+                        " a one-unit one from tick %d, costing %d\n",
+                        far.core ? "the core's" : "the Lua", far.start, far.starts, far.lost,
+                        near.start, near.lost);
+            CHECK(far.core == !force_lua);           // the table compiled, swing steps and all
+            CHECK(far.start == 2);                   // the step's tick, not the press's
+            CHECK(far.starts == 1);                  // the button did not swing as well
+            CHECK(far.lost == 9);                    // its own reach, and its own damage
+            CHECK(near.start == 2);                  // CONTROL: it swung, at the same tick...
+            CHECK(near.lost == 0);                   // ...and missed: the reach was the step's
+            if (far.core) CHECK(far.swung_step == 0);   // the core names the step that swung
+        }
+        CHECK(run("weapons.force_lua = false\nweapons.core_stale()", "back to the core"));
+
+        // A MONSTER: two swings from one body, each in its own shape and for its
+        // own damage, and a swing with no arguments back in the declared one.
+        CHECK(run("local p = dnp.players()[1]\n"
+                  "for _, e in ipairs(dnp.entities()) do\n"
+                  "  if e:index() ~= p:index() then e:despawn() end\n"
+                  "end\n"
+                  "mobs.reset()\n"
+                  "p:teleport(vec3.new(fx.int(30), fx.int(30), fx.int(0)))\n"
+                  "sd = mobs.spawn('demon', vec3.new(fx.int(0), fx.int(0), fx.int(0)))\n"
+                  "sd:set_input(fx.int(0), fx.int(0), 0, 0)\n"
+                  "mobs.acts.sleep(mobs.live[sd:index()])\n"
+                  "sd_reach0 = sd:base_param('attack_reach').raw\n"
+                  "sd_v = mobs.spawn('zombieman', vec3.new(fx.frac(5,2), fx.int(0), fx.int(0)))\n"
+                  "sd_v:set_solid(false)\n"
+                  "mobs.acts.sleep(mobs.live[sd_v:index()])\n"
+                  "mobs.live[sd_v:index()].hp = 200\n", "a demon and a victim out of its reach"));
+        recompute();
+        for (int i = 0; i < 4; ++i) server_tick(0);
+        const auto demon_swing = [&](const char* args) {
+            const std::string go =
+                std::string("sd_hp0 = mobs.live[sd_v:index()].hp\n"
+                            "mobs.acts.swing(mobs.live[sd:index()], ") + args + ")\n";
+            if (!run(go.c_str(), "a demon's swing")) return -1;
+            for (int i = 0; i < 40; ++i) server_tick(0);
+            if (!run("sd_hp1 = mobs.live[sd_v:index()].hp\n"
+                     "sd_reach = sd:base_param('attack_reach').raw\n", "reading")) return -1;
+            return static_cast<int>(num("sd_hp0") - num("sd_hp1"));
+        };
+        const int declared = demon_swing("nil");
+        const int long_jab = demon_swing("{ reach = fx.int(3), damage = 7, sweep_from = fx.int(0), sweep_to = fx.int(0) }");
+        const double long_reach = num("sd_reach");
+        const int back_again = demon_swing("nil");
+        std::printf("  a demon out of reach: its own bite costs %d, a three-unit jab costs %d, "
+                    "its bite again %d (reach %.2f -> %.2f -> %.2f)\n",
+                    declared, long_jab, back_again, num("sd_reach0") / 4294967296.0,
+                    long_reach / 4294967296.0, num("sd_reach") / 4294967296.0);
+        CHECK(declared == 0);                        // CONTROL: the declared reach misses
+        CHECK(long_jab == 7);                        // the step's reach, and the step's damage
+        CHECK(long_reach == 3.0 * 4294967296.0);     // written into the body for that swing
+        CHECK(back_again == 0);                      // and put back for the next
+        CHECK(num("sd_reach") == num("sd_reach0"));
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

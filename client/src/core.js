@@ -41,7 +41,7 @@ const WEAPON_VFX_MAX = 40
 // The weapon state's words (client/wasm/bindings.cpp dnp_world_read_weapon):
 // have, current, phase, armed, swing phase, previous buttons, entered, done,
 // two held-since ticks, four vars, eight pools, eight cooldown deadlines.
-const WEAPON_BUF32_LEN = 30
+const WEAPON_BUF32_LEN = 33
 
 // map.hpp's path_flag::LOOP.
 export const PATH_LOOP = 1
@@ -507,6 +507,39 @@ export class WasmWorld {
   }
 
   /**
+   * One attack_* parameter AS THE SWING SWEEPS IT: with the running swing's own
+   * step laid over it (a `swing` step with arguments, docs/SWINGS.md). What
+   * render/swing.js's readSwingShape reads for this client's own body; any
+   * other field is its parameter.
+   */
+  getSwingParamRaw (idx, fieldId) {
+    this.core.M._dnp_world_get_swing_param_raw(this.ptr, idx, fieldId, this.core.buf64)
+    return this.core.views.i64[this.core.buf64 / 8]
+  }
+
+  /**
+   * A `swing` step's own shape, from the weapon table this world predicts with,
+   * by (weapon, phase, step) as the entity stream names it: {set, reach, ...}
+   * with the fx fields raw (BigInt) and ticks/cooldown whole. Null when the
+   * step gives none, or this world holds no such step.
+   */
+  stepSwing (weapon, phase, step) {
+    const M = this.core.M
+    const ptr = M._malloc(11 * 8)
+    try {
+      if (!M._dnp_world_step_swing(this.ptr, weapon, phase, step, ptr)) return null
+      const v = new BigInt64Array(M.HEAPU8.buffer, ptr, 11)
+      return {
+        set: Number(v[0]), reach: v[1], halfArc: v[2], sweepFrom: v[3], sweepTo: v[4],
+        minReach: v[5], pitchFrom: v[6], pitchTo: v[7], halfPitch: v[8],
+        ticks: Number(v[9]), cooldown: Number(v[10])
+      }
+    } finally {
+      M._free(ptr)
+    }
+  }
+
+  /**
    * Mirror a replicated prop into this world, at the entity index the wire used.
    *
    * A solid prop is physics, and physics has to be predictable: without this
@@ -601,7 +634,9 @@ export class WasmWorld {
       prevButtons: u[b + 5], entered: u[b + 6], done: u[b + 7], heldSince: [u[b + 8], u[b + 9]],
       vars: [u[b + 10] | 0, u[b + 11] | 0, u[b + 12] | 0, u[b + 13] | 0],
       ammo: Array.from(u.subarray(b + 14, b + 22)),
-      cool: Array.from(u.subarray(b + 22, b + 30), (v) => v | 0)
+      cool: Array.from(u.subarray(b + 22, b + 30), (v) => v | 0),
+      // The step whose swing is its latest (255 / 255 / 0: none).
+      swungWeapon: u[b + 30], swungPhase: u[b + 31], swungStep: u[b + 32]
     }
   }
 
@@ -611,7 +646,7 @@ export class WasmWorld {
     const b = this.core.weaponbuf / 4
     if (!k) k = { have: 0, current: 255, phase: 255, armed: 255, swingPhase: 255, prevButtons: 0,
                   entered: 0, done: 0, heldSince: [0, 0], vars: [0, 0, 0, 0], ammo: [0, 0, 0, 0, 0, 0, 0, 0],
-                  cool: [0, 0, 0, 0, 0, 0, 0, 0] }
+                  cool: [0, 0, 0, 0, 0, 0, 0, 0], swungWeapon: 255, swungPhase: 255, swungStep: 0 }
     u[b] = k.have >>> 0
     u[b + 1] = k.current; u[b + 2] = k.phase; u[b + 3] = k.armed; u[b + 4] = k.swingPhase
     u[b + 5] = k.prevButtons; u[b + 6] = k.entered >>> 0; u[b + 7] = k.done >>> 0
@@ -619,6 +654,7 @@ export class WasmWorld {
     for (let i = 0; i < 4; i++) u[b + 10 + i] = k.vars[i] >>> 0
     for (let i = 0; i < 8; i++) u[b + 14 + i] = k.ammo[i] ?? 0
     for (let i = 0; i < 8; i++) u[b + 22 + i] = (k.cool?.[i] ?? 0) >>> 0
+    u[b + 30] = k.swungWeapon ?? 255; u[b + 31] = k.swungPhase ?? 255; u[b + 32] = k.swungStep ?? 0
     this.core.M._dnp_world_write_weapon(this.ptr, idx, this.core.weaponbuf)
   }
 

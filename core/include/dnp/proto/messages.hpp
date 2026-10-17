@@ -321,6 +321,13 @@ inline constexpr u32 ATTACK          = 1u << 10;
 // sliding it there across the interpolation window. No payload; it always
 // travels with POS.
 inline constexpr u32 TELEPORTED      = 1u << 11;
+// WHICH WEAPON STEP its swing is (u8 weapon, u8 phase, u8 step; weapon 0xFF:
+// none, the swing is its parameters' shape). A player's `swing` step gives a
+// shape of its own, which no parameter carries: with this, and the weapon
+// table every client already holds, another client draws that swing as it
+// is rather than as the weapon's. Sent when it changes; a monster's step
+// shape is in its body's parameters and never needs it.
+inline constexpr u32 ATTACK_STEP     = 1u << 12;
 }  // namespace ent_field
 
 namespace state_flag {
@@ -715,6 +722,9 @@ struct EntityBlock {
     u16    avatar          = 0;   // which avatar draws a player; 0 is the default
     u8     solid           = 1;
     u8     attack_left     = 0;   // ent_field::ATTACK
+    u8     attack_weapon   = 0xFF; // ent_field::ATTACK_STEP
+    u8     attack_phase    = 0xFF;
+    u8     attack_step     = 0;
 };
 
 // A scripted-discrete sector's current offset. Parametric movers are absent by

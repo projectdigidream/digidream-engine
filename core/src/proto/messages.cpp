@@ -91,6 +91,9 @@ void encode_entity(ByteWriter& w, const EntityBlock& e) noexcept {
     if (e.mask & ent_field::AVATAR) w.u16v(e.avatar);
     if (e.mask & ent_field::SOLID) w.u8v(e.solid);
     if (e.mask & ent_field::ATTACK) w.u8v(e.attack_left);
+    if (e.mask & ent_field::ATTACK_STEP) {
+        w.u8v(e.attack_weapon); w.u8v(e.attack_phase); w.u8v(e.attack_step);
+    }
     // DESTROYED carries no payload.
 }
 
@@ -118,6 +121,9 @@ bool decode_entity(ByteReader& r, EntityBlock& e) noexcept {
     if (e.mask & ent_field::AVATAR) e.avatar = r.u16v();
     if (e.mask & ent_field::SOLID) e.solid = r.u8v();
     if (e.mask & ent_field::ATTACK) e.attack_left = r.u8v();
+    if (e.mask & ent_field::ATTACK_STEP) {
+        e.attack_weapon = r.u8v(); e.attack_phase = r.u8v(); e.attack_step = r.u8v();
+    }
     return r.ok();
 }
 
@@ -170,6 +176,8 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         while (n > 0 && k.cool[n - 1] == 0) --n;
         w.u8v(n);
         for (u8 i = 0; i < n; ++i) w.i32v(k.cool[i]);
+        // The step whose swing is its latest (WeaponState::swung_*).
+        w.u8v(k.swung_weapon); w.u8v(k.swung_phase); w.u8v(k.swung_step);
     }
     w.u16v(s.avatar);
     // The observer's OWN animation state (design 4.1). Ungated: the local agent
@@ -220,6 +228,7 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
             const i32 v = r.i32v();
             if (i < sim::MAX_WEAPON_COOLDOWNS) k.cool[i] = v;
         }
+        k.swung_weapon = r.u8v(); k.swung_phase = r.u8v(); k.swung_step = r.u8v();
     }
     s.avatar          = r.u16v();
     s.animation_state = r.u16v();

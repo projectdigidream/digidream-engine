@@ -219,6 +219,98 @@
     {
       "args": [
         {
+          "doc": "What a connected swing costs. Every argument here is the swing field of the same name (see swing_fields), for this swing only.",
+          "name": "damage",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "reach",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "half_arc",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "sweep_from",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "sweep_to",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "min_reach",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "ticks",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "pitch_from",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "pitch_to",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "half_pitch",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "knockback",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "hit_vfx_radius",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "lift",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow_ticks",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "cooldown",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "START THE SWEPT COLLIDER, now, in this shape: a volume moving through an arc for `ticks`, hitting each thing in it at most once. Every argument is the swing field of the same name, all optional: given, it is this swing's; left out, the weapon's in force -- its `swing`, or that of the last phase entered that declares one; neither, the engine's default. It must end up with a `damage`, or the weapon is refused at load.\nPREDICTED: the player's own client starts it on the same tick.\nA swing still sweeping is REPLACED: it stops where it is, and this one starts from its own `sweep_from` with a fresh list of who it has hit -- two blows. Inside the last swing's `cooldown` (which starts when a swing ends; a replaced one never ends) it does not happen, and is not kept for later.\nA weapon with a `swing` step anywhere does not swing on the attack button: the steps say when.",
+      "name": "swing"
+    },
+    {
+      "args": [
+        {
           "name": "speed",
           "type": "fx"
         },
@@ -620,7 +712,7 @@
       "type": "actions"
     },
     {
-      "doc": "A swing shape for THIS PHASE, replacing the weapon's while it is in it. Same fields as the weapon's `swing`.\nTHIS IS WHAT MAKES A COMBO A COMBO. Three presses reaching `hit1`, `hit2`, `hit3` was already the shape the phase graph gave -- and all three swung the identical volume for the identical damage, because `swing` was a property of the weapon and there was one of it. A finisher that hits harder and sweeps wider is the whole reason anyone writes a combo.\nA phase without one leaves the weapon's in place.",
+      "doc": "A swing shape for THIS PHASE, replacing the weapon's while it is in it. Same fields as the weapon's `swing`.\nTHIS IS WHAT MAKES A COMBO A COMBO. Three presses reaching `hit1`, `hit2`, `hit3` was already the shape the phase graph gave -- and all three swung the identical volume for the identical damage, because `swing` was a property of the weapon and there was one of it. A finisher that hits harder and sweeps wider is the whole reason anyone writes a combo.\nA phase without one leaves the weapon's in place. A `swing` step with its own arguments says the same for one blow, and is what the studio writes; this is still read, as the shape that step's left-out fields take.",
       "name": "swing",
       "optional": true,
       "type": "table"
@@ -819,7 +911,7 @@
       "type": "phase"
     },
     {
-      "doc": "The swept melee collider, whose shape is written into the REPLICATED parameter table when this weapon is selected. Absent means this weapon does not swing -- and that is enforced through the parameter `attack_enabled`, so the client predicts the absence rather than predicting a swing the server then denies. See swing_fields.",
+      "doc": "The swept melee collider's shape, written into the REPLICATED parameter table when this weapon is selected. What a `swing` step's left-out fields are; and for a weapon with no `swing` steps, its whole swing, started by the attack button. Absent, with no swing steps, means this weapon does not swing -- enforced through the parameter `attack_enabled`, so the client predicts the absence rather than predicting a swing the server then denies. See swing_fields, and the `swing` action.",
       "name": "swing",
       "optional": true,
       "type": "table"

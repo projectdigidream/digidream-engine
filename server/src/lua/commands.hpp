@@ -52,6 +52,12 @@ enum class CmdKind : u8 {
     // and the observer has to be told its snapshot is not a misprediction.
     // Through the queue because that is the one place `touched` is recorded.
     Touch = 4,
+
+    // START A SWING (e:swing()): World::request_swing, taken by the next step
+    // by the swing step's rule. Through the queue so a player's swing a
+    // script started -- a weapon run in Lua -- is the observer's to be told
+    // about, like any other change to its own body it could not predict.
+    Swing = 5,
 };
 
 struct Command {
@@ -104,6 +110,7 @@ public:
                 case CmdKind::SetVelocity: world.set_velocity(c.subject, c.v); break;
                 case CmdKind::SetSectorOffset: break;   // handled above
                 case CmdKind::Touch: break;
+                case CmdKind::Swing:       world.request_swing(c.subject); break;
             }
             touched(c.subject);
             ++applied;

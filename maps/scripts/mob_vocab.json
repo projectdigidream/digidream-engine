@@ -121,8 +121,95 @@
       "name": "damage"
     },
     {
-      "args": [],
-      "doc": "Start the swept collider this mob declares in its `swing` field. ONE TICK is all this does: the engine's attack is edge-triggered, so the press starts a swing that then runs for `ticks` on its own and hits each target at most once however long it lasts.\nA mob with no `swing` field does nothing here and says so at load, rather than swinging with the engine's defaults -- which would be a two-unit reach nobody asked for.",
+      "args": [
+        {
+          "doc": "What a connected swing costs. Every argument here is the swing field of the same name (see swing_fields), for this swing only.",
+          "name": "damage",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "reach",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "half_arc",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "sweep_from",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "sweep_to",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "min_reach",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "ticks",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "cooldown",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "pitch_from",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "pitch_to",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "half_pitch",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "knockback",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "hit_vfx",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "name": "hit_vfx_radius",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "lift",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow",
+          "optional": true,
+          "type": "fx"
+        },
+        {
+          "name": "slow_ticks",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "doc": "START THE SWEPT COLLIDER, now, in this shape: a volume moving through an arc for `ticks`, hitting each thing in it at most once, which a target can step out of. Every argument is the swing field of the same name, all optional: given, it is this swing's; left out, the mob's `swing` field's; neither, the engine's default. So a jab and a slam in two states are two steps with their own numbers. It must end up with a `damage`, or the mob is refused at load.\nA swing still sweeping is REPLACED: it stops where it is, and this one starts from its own `sweep_from` with a fresh list of who it has hit -- two blows. Inside the last swing's `cooldown` (which starts when a swing ends; a replaced one never ends) it does not happen, and is not kept for later.",
       "name": "swing"
     },
     {
@@ -1264,7 +1351,7 @@
       "type": "bool"
     },
     {
-      "doc": "THE SWEPT COLLIDER this mob attacks with, if it does -- a volume that moves through an arc over several ticks, so a target that steps out of the way mid-swing is MISSED. The same engine facility a player's melee uses, with the same fields, because a monster's claw and a player's fist are the same thing and there is no reason the player should be the only one who can be dodged.\nDistinct from the `melee` action, which is an instant distance test: that hits whatever is in range on the tick it runs and nothing can be done about it. Declare this and put a `swing` action in the attack state's sequence. See swing_fields.",
+      "doc": "THE SWEPT COLLIDER this mob attacks with, if it does -- a volume that moves through an arc over several ticks, so a target that steps out of the way mid-swing is MISSED. The same engine facility a player's melee uses, with the same fields, because a monster's claw and a player's fist are the same thing and there is no reason the player should be the only one who can be dodged.\nDistinct from the `melee` action, which is an instant distance test: that hits whatever is in range on the tick it runs and nothing can be done about it. Declare this and put a `swing` action in the attack state's sequence -- or give a `swing` step its numbers itself, which is what this is then the default for. See swing_fields.",
       "name": "swing",
       "optional": true,
       "type": "table"

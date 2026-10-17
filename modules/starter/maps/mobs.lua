@@ -137,6 +137,25 @@ local function check_vocabulary_matches_implementation(conds, acts)
                "list it", name)
     end
   end
+  -- THE SWING ACTION'S ARGUMENTS ARE THE SWING FIELDS, one for one and all
+  -- optional (weapons.lua holds its vocabulary to the same): the vocabulary is
+  -- data, so the two lists are written out, and held equal here.
+  local sw = ACT.swing
+  if sw ~= nil then
+    local args = index_by_name(sw.args or {})
+    for name, f in pairs(SWING_FIELD) do
+      local a = args[name]
+      if a == nil or a.type ~= f.type or not a.optional then
+        complain("the `swing` action's arguments must be the swing fields, " ..
+                 "each optional: '%s' is not", name)
+      end
+    end
+    for name in pairs(args) do
+      if SWING_FIELD[name] == nil then
+        complain("the `swing` action takes '%s', which is not a swing field", name)
+      end
+    end
+  end
 end
 
 -- ---------------------------------------------------------------- arguments
@@ -296,15 +315,15 @@ local function check_action_list(list, where, mob)
         complain("%s: 'goto' names state '%s', which this mob does not have",
                  at, tostring(a.state))
       end
-      -- A SWING with nothing to swing. The action reads the mob's `swing`
-      -- declaration for its shape and on_attack reads it for the damage, so
-      -- without one the press would start a collider with the engine's
-      -- defaults -- a two-unit reach and a 90-degree arc no author wrote -- and
-      -- then do no damage with it. Silently.
-      if a.action == "swing" and mob and mob.swing == nil then
-        complain("%s: 'swing' needs a `swing` table on the mob, which declares " ..
-                 "the arc, the reach, how long the collider lives and what a " ..
-                 "hit costs", at)
+      -- A SWING THAT COSTS NOTHING. A swing's numbers are its own arguments,
+      -- over the mob's `swing` declaration; with neither saying what a hit
+      -- costs, the collider would sweep with the engine's defaults -- a
+      -- two-unit reach and a 90-degree arc no author wrote -- and then do no
+      -- damage with it. Silently.
+      if a.action == "swing" and mob and mob.swing == nil and a.damage == nil then
+        complain("%s: 'swing' needs a `damage` -- its own, or from a `swing` " ..
+                 "table on the mob, which declares the arc, the reach, how " ..
+                 "long the collider lives and what a hit costs", at)
       end
       if a.action == "missile" and a.kind and missiles[a.kind] == nil then
         complain("%s: 'missile' names '%s', which is not a defined missile",
@@ -1435,6 +1454,8 @@ local hurt                 -- forward: damage anything, defined below
 local hang_markers         -- forward: a mob's markers (docs/MARKERS.md), below
 local health_changed
 local drop_markers
+local swing_into_body      -- forward: a swing step's shape, beside apply_swing below
+local merged_swing
 local launch               -- forward: fire a missile
 
 -- A TURN IS 2^32, and that is exact in a double, which is why every angle in
@@ -1649,29 +1670,6 @@ function acts.damage(m, a)
   hurt(m.target, a.amount, m)
 end
 
--- Entities that pressed a button this tick, released at the start of the next.
--- See acts.swing for why this is not the engine's job.
-local pressing = {}
-
-local function release_presses()
-  if next(pressing) == nil then return end
-  local now = dnp.tick()
-  for idx, p in pairs(pressing) do
-    -- ONLY A PRESS FROM AN EARLIER TICK.
-    --
-    -- The tick is recorded rather than assumed, because a press can be made
-    -- from inside this hook (a state's sequence reaching `swing`) or from
-    -- outside it (a trigger, a test). Releasing everything at the top of the
-    -- hook would clear a press made moments earlier from outside before
-    -- World::step ever saw the button, and the swing would never start --
-    -- silently, and only for that caller.
-    if p.tick < now then
-      if p.e:valid() then p.e:release(dnp.button.ATTACK_PRIMARY) end
-      pressing[idx] = nil
-    end
-  end
-end
-
 -- ANNOUNCE AN INCOMING ATTACK, so a client can draw the warning.
 --
 -- The engine has no notion of a telegraph and should not: what a wind-up LOOKS
@@ -1695,33 +1693,32 @@ function acts.telegraph(m, a)
   M.telegraph(m.e, a, m.p or m.e:pos(), m.aim or m.e:facing())
 end
 
--- START THE SWEPT COLLIDER. One tick, and one tick is all it takes.
+-- START THE SWEPT COLLIDER, now, in this step's shape (docs/SWINGS.md).
 --
--- The engine's attack is edge-triggered, so a single tick with the button down
--- starts a swing that runs for `attack_ticks` on its own and hits each target at
--- most once however long it lasts. Nothing here holds the button, and nothing
--- here decides what a hit costs -- on_attack does, from the same declaration
--- these parameters came from.
+-- A swing is an attack like any other: its numbers are its own arguments, over
+-- the mob's `swing` declaration. The shape goes into the BODY for this swing --
+-- where the declared one already is (apply_swing), so it replicates to every
+-- client drawing the claw -- and the next swing puts back whatever this one
+-- changed and that one does not give. What a hit costs, on_attack reads from
+-- the same merge.
 --
--- `press` rather than `set_input`, because a monster's movement axes belong to
--- the native loop: writing a whole input frame here would mean passing movement
--- this action does not know, and stopping the monster dead for a tick to do it.
+-- Started by the World (e:swing), not by a press: a step is somebody saying
+-- "now". A swing still sweeping is REPLACED, and one asked for inside the last
+-- one's cooldown does not happen. The press this used to make needed a release
+-- the tick after, because the native loop never wrote the button back, and a
+-- standing monster's second swing never started -- none of that is left.
+local NO_ARGS = {}
 function acts.swing(m, a)
-  if m.def == nil or m.def.swing == nil then
-    -- Refused at LOAD as well, so this is the belt to that braces. Swinging
-    -- with the engine's defaults would be a two-unit reach and a 90-degree arc
-    -- that no author wrote down.
+  -- Called with no step (a test, a script) it swings the declared shape.
+  a = a or NO_ARGS
+  local declared = m.def and m.def.swing
+  if declared == nil and a.damage == nil then
+    -- Refused at LOAD as well, so this is the belt to that braces.
     return
   end
-  m.e:press(dnp.button.ATTACK_PRIMARY)
-  -- RELEASED NEXT TICK, by the loop below, because `press` is not
-  -- self-limiting. The native mob loop only writes an input frame when
-  -- something IT knows about changed, and an attack state usually sets
-  -- `move = "stop"` -- so a monster's axes are constant, nothing writes the
-  -- button back to zero, `attack_held` stays true, and the second swing never
-  -- starts. It would have worked for a chasing monster and failed for a
-  -- standing one, which is the worst way for it to fail.
-  pressing[m.idx] = { e = m.e, tick = dnp.tick() }
+  swing_into_body(m, a)
+  m.swinging = merged_swing(a, declared)
+  m.e:swing()
 end
 
 -- HEIGHT TOO, not only across the floor. A claw measured in plan alone
@@ -2324,6 +2321,10 @@ local SWING_PARAM = {
   reach = "attack_reach", half_arc = "attack_half_arc",
   sweep_from = "attack_sweep_from", sweep_to = "attack_sweep_to",
   min_reach = "attack_min_reach",
+  -- The vertical half, which a monster's `swing` always offered and nothing
+  -- wrote: an overhead hoof swung flat.
+  pitch_from = "attack_pitch_from", pitch_to = "attack_pitch_to",
+  half_pitch = "attack_half_pitch",
 }
 local SWING_U8 = { ticks = "attack_ticks", cooldown = "attack_cooldown" }
 
@@ -2357,6 +2358,71 @@ local function apply_swing(e, sw)
   end
 end
 M.apply_swing = apply_swing
+
+-- A SWING STEP'S OWN SHAPE, into the body for its swing (acts.swing).
+--
+-- The body holds the declared shape (apply_swing above). A step's fields are
+-- written over it, and `m.swing_back` keeps, field by field, what the body held
+-- before a step changed it -- so the next swing puts back exactly what this
+-- one changed and that one does not give, and a step with no arguments swings
+-- the declared shape again. A field written as the body already holds it is
+-- not written: each write is a parameter update to every client.
+local function body_value(e, field)
+  local param = SWING_PARAM[field] or SWING_U8[field]
+  local b = e:base_param(param)
+  -- An integral parameter comes back as its raw integer; set_body_param takes
+  -- the number it means.
+  if SWING_U8[field] ~= nil then return fx.int(b.raw) end
+  return b
+end
+
+swing_into_body = function(m, a)
+  local e = m.e
+  local back, now = m.swing_back, m.swing_now
+  if back ~= nil then
+    for field, v in pairs(back) do
+      if a[field] == nil then
+        e:set_body_param(SWING_PARAM[field] or SWING_U8[field], v)
+        back[field] = nil
+        now[field] = nil
+      end
+    end
+  end
+  for field, param in pairs(SWING_PARAM) do
+    local v = a[field]
+    if v ~= nil and (now == nil or now[field] ~= v) then
+      if back == nil then back, now = {}, {}; m.swing_back, m.swing_now = back, now end
+      if back[field] == nil then back[field] = body_value(e, field) end
+      e:set_body_param(param, v)
+      now[field] = v
+    end
+  end
+  for field, param in pairs(SWING_U8) do
+    local v = a[field]
+    if v ~= nil and (now == nil or now[field] ~= v) then
+      if back == nil then back, now = {}, {}; m.swing_back, m.swing_now = back, now end
+      if back[field] == nil then back[field] = body_value(e, field) end
+      e:set_body_param(param, fx.int(v))
+      now[field] = v
+    end
+  end
+end
+
+-- WHAT ONE SWING IS: a step's own arguments over the declared `swing`, for
+-- on_attack's damage, knockback and the rest. By step, since a step is fixed.
+local merged_of = setmetatable({}, { __mode = "k" })
+merged_swing = function(a, declared)
+  local hit = merged_of[a]
+  if hit ~= nil and hit.declared == declared then return hit.sw end
+  local sw = {}
+  if declared ~= nil then for k, v in pairs(declared) do sw[k] = v end end
+  for k, v in pairs(a) do
+    if k ~= "at" and k ~= "action" then sw[k] = v end
+  end
+  merged_of[a] = { declared = declared, sw = sw }
+  return sw
+end
+M.merged_swing = merged_swing
 
 function acts.effect(m, a)
   -- One op per effect, so a modifier that both scales and offsets is two.
@@ -2499,11 +2565,11 @@ function M.spawn(kind, pos, opts)
   --
   -- Written into the replicated parameter table exactly as a weapon writes a
   -- player's, through the same tag, so the shape of a monster's claw is
-  -- predicted by the same machinery and neither side learns anything new. The
-  -- monster then swings by pressing the attack button for one tick, which the
-  -- shared controller turns into a volume moving through an arc -- so a
-  -- monster's attack can be READ AND DODGED, which an instant distance check
-  -- can never be.
+  -- predicted by the same machinery and neither side learns anything new. A
+  -- `swing` step then starts it (e:swing, with that step's own shape laid
+  -- over this one), and the shared controller turns it into a volume moving
+  -- through an arc -- so a monster's attack can be READ AND DODGED, which an
+  -- instant distance check can never be.
   --
   -- `attack_enabled` is set BOTH WAYS on purpose. Its default is true, so a mob
   -- with no `swing` that somehow pressed the button would swing with the
@@ -3573,8 +3639,6 @@ end
 
 function on_tick()
   local tick = dnp.tick()
-  -- FIRST, before anything reads or writes input: last tick's presses end here.
-  release_presses()
   refresh_players()
 
   -- Owed rocket shoves whose input has come (see damage_area), before the
@@ -3711,11 +3775,13 @@ function on_attack(attacker, target)
   -- this one of ours".
   local mine = attacker ~= nil and attacker.index ~= nil and live[attacker:index()]
   if mine ~= nil then
-    local sw = mine.def and mine.def.swing
+    -- The swing it last swung -- a step's own numbers over the declared ones
+    -- -- or, for a swing no step started, the declaration itself.
+    local sw = mine.swinging or (mine.def and mine.def.swing)
     -- No declaration, no damage. The second of two gates, exactly as for a
     -- weapon: `attack_enabled` is replicated state a script could overwrite and
     -- this is not.
-    if sw == nil then return end
+    if sw == nil or sw.damage == nil then return end
     hurt(target, sw.damage, mine)
     M.apply_hit(target, attacker:pos(), sw)
     return

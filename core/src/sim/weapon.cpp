@@ -181,6 +181,17 @@ void perform(Ctx& c, u8 phase, u8 step, const WStep& a) noexcept {
             return;
         }
         case WAct::Goto:   c.jump = a.phase; return;
+        // Asked of the World, which starts it this tick ahead of the attack
+        // button -- or refuses it inside a cooldown -- by its own rule, so a
+        // monster's and a script's swing go the same way (World::step_agent).
+        // The last swing step of a tick is the one: a newer swing replaces an
+        // older, and two in one tick is that at its shortest.
+        case WAct::Swing:
+            c.body.swing = true;
+            c.body.swing_weapon = c.weapon;
+            c.body.swing_phase = phase;
+            c.body.swing_step = step;
+            return;
         case WAct::SetAnim: c.body.anim_set = true; c.body.anim = a.state; return;
         case WAct::SwitchIfEmpty:
             if (!has_ammo(c.t, c.s, c.weapon, 0)) switch_to_usable(c.t, c.s);
@@ -357,6 +368,7 @@ void hash_weapon_state(StateHasher& h, const WeaponState& s) noexcept {
     for (i32 v : s.vars) h.i32v(v);
     for (u16 a : s.ammo) h.u32v(a);
     for (i32 v : s.cool) h.i32v(v);
+    h.byte(s.swung_weapon); h.byte(s.swung_phase); h.byte(s.swung_step);
 }
 
 // --- the table on the wire --------------------------------------------------
@@ -458,6 +470,12 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                     }
                     w.fxraw(m.gravity);
                 }
+                // A swing step's own shape, inline: the pool is the
+                // decoder's business, so two tables that swing the same say
+                // the same bytes whatever order their pools were filled in.
+                if (s.action == WAct::Swing) {
+                    put_swing(w, s.swing < t.step_swing_count ? t.step_swings[s.swing] : WSwing{});
+                }
             }
             w.u8v(ph.transition_count);
             for (u32 k = 0; k < ph.transition_count; ++k) {
@@ -535,7 +553,7 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                 s.range = r.fxraw(); s.effect = r.u16v(); s.sound = r.u32v();
                 const u8 flags = r.u8v();
                 if (!r.ok()) return false;
-                const bool own = act <= static_cast<u8>(WAct::SetCooldown);
+                const bool own = act <= static_cast<u8>(WAct::Swing);
                 const bool rep = act >= static_cast<u8>(WAct::Hitscan) && act <= static_cast<u8>(WAct::Sound);
                 if (!own && !rep) return false;
                 if (tw > 2 || flags > 3 || s.var >= MAX_WEAPON_VARS || s.count > MAX_PELLETS) return false;
@@ -563,6 +581,15 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                     }
                     m.gravity = r.fxraw();
                     if (!r.ok()) return false;
+                }
+                if (s.action == WAct::Swing) {
+                    WSwing sw;
+                    if (!get_swing(r, sw)) return false;
+                    if (sw.present) {
+                        if (t.step_swing_count >= MAX_STEP_SWINGS) return false;
+                        s.swing = t.step_swing_count;
+                        t.step_swings[t.step_swing_count++] = sw;
+                    }
                 }
             }
             ph.transition_count = r.u8v();
@@ -607,6 +634,8 @@ void WeaponTable::clear() noexcept {
     autoaim_range = fx{};
     autoaim_cone = 0;
     mass_count = 0;
+    step_swing_count = 0;
+    for (WSwing& sw : step_swings) sw = WSwing{};
     for (AmmoPool& p : pools) p = AmmoPool{};
     for (WeaponDef& d : weapons) {
         for (char& ch : d.name) ch = 0;

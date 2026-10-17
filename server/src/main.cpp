@@ -4557,6 +4557,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     now.avatar          = a.kind == 0 ? L.avatar[i] : 0;
                     now.solid           = a.solid;
                     now.attack_left     = a.mv.attack_left;
+                    // A swing step's own shape, named while it sweeps.
+                    const sim::WeaponState& k = world.weapon(i);
+                    if (a.mv.attack_left != 0 && k.swung_weapon != sim::NO_WEAPON) {
+                        now.attack_weapon = k.swung_weapon;
+                        now.attack_phase  = k.swung_phase;
+                        now.attack_step   = k.swung_step;
+                    }
                     now.teleports       = world.teleports(i);
                 }
 
@@ -4596,6 +4603,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 e.avatar           = now.avatar;
                 e.solid            = now.solid ? 1 : 0;
                 e.attack_left      = now.attack_left;
+                e.attack_weapon    = now.attack_weapon;
+                e.attack_phase     = now.attack_phase;
+                e.attack_step      = now.attack_step;
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;

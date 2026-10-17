@@ -131,7 +131,10 @@ export const ENT_FIELD = {
   // Ticks left in another body's swing (u8; 0 not swinging).
   ATTACK: 1 << 10,
   // The position is a jump (a teleport), not a move: drawn there, not slid there.
-  TELEPORTED: 1 << 11
+  TELEPORTED: 1 << 11,
+  // Which weapon step that swing is (u8 weapon, phase, step; weapon 255 none):
+  // a player's `swing` step's own shape, looked up in the weapon table.
+  ATTACK_STEP: 1 << 12
 }
 
 // Snapshot header flags (docs/protocol.md §5).
@@ -859,6 +862,8 @@ export function decodeSnapshot (buf) {
     k.cool = [0, 0, 0, 0, 0, 0, 0, 0]
     const nCool = r.u8()
     for (let i = 0; i < nCool; i++) { const v = r.i32(); if (i < 8) k.cool[i] = v }
+    // The step whose swing is its latest (weapon 255: a swing no step started).
+    k.swungWeapon = r.u8(); k.swungPhase = r.u8(); k.swungStep = r.u8()
     snap.self.weapon = k
   }
   // Which generation of the movement parameters the server computed this state
@@ -914,6 +919,9 @@ export function decodeSnapshot (buf) {
     if (e.mask & ENT_FIELD.AVATAR) e.avatar = r.u16()
     if (e.mask & ENT_FIELD.SOLID) e.solid = r.u8()
     if (e.mask & ENT_FIELD.ATTACK) e.attackLeft = r.u8()
+    if (e.mask & ENT_FIELD.ATTACK_STEP) {
+      e.attackWeapon = r.u8(); e.attackPhase = r.u8(); e.attackStep = r.u8()
+    }
     if (!r.ok) return null
     snap.entities.push(e)
   }

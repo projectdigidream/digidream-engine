@@ -38,10 +38,12 @@ inline constexpr u32 MAX_WEAPON_EVENTS    = 96;   // per tick, the whole world
 inline constexpr u32 MAX_PELLETS          = 32;
 inline constexpr u32 WEAPON_NAME_LEN      = 23;
 inline constexpr u32 WEAPON_HOPS          = 5;    // weapons.lua's MAX_HOPS
+inline constexpr u32 MAX_STEP_SWINGS      = 64;   // `swing` steps with a shape of their own, the whole table's
 
 inline constexpr u8  NO_WEAPON = 0xFF;
 inline constexpr u8  NO_PHASE  = 0xFF;
 inline constexpr u8  NO_COOL   = 0xFF;
+inline constexpr u8  NO_SWING  = 0xFF;
 inline constexpr i8  NO_POOL   = -1;
 inline constexpr u16 PHASE_WAITS = 0xFFFF;        // a phase with no `ticks`
 
@@ -54,9 +56,12 @@ enum class WCond : u8 {
 };
 
 // And its actions. The first group the core performs itself; the second it
-// REPORTS, as a WeaponEvent, for the world to carry out.
+// REPORTS, as a WeaponEvent, for the world to carry out. `swing` is the
+// core's: the swept collider is the World's own, and starting it here is what
+// lets a client predict a swing step exactly (World::step_weapon).
 enum class WAct : u8 {
     Consume = 0, SetVar, AddVar, Goto, SetAnim, SwitchIfEmpty, Impulse, SetCooldown,
+    Swing,
     // reported:
     Hitscan = 16, Launch, DamageArea, Telegraph, Vfx, Sound,
 };
@@ -153,9 +158,16 @@ struct WStep {
     bool predicted = false;
     bool attach = false;   // vfx
     WMissile missile{};    // launch
+    // swing: the shape it gives of its own, an index into
+    // WeaponTable::step_swings; NO_SWING for a step that gives none and swings
+    // the shape the weapon has in force. In a pool rather than here because a
+    // step is one of six thousand and nearly none of them swing.
+    u8   swing = NO_SWING;
 };
 
-// What a swing replaces in the agent's attack parameters, field by field.
+// What a swing replaces in the agent's attack parameters, field by field: a
+// weapon's or a phase's (written into the parameters by weapons.lua), or a
+// `swing` step's own (laid over them by World::swing_shape).
 struct WSwing {
     bool present = false;
     u16  set = 0;          // a bit per field below that the table gave
@@ -233,6 +245,20 @@ struct WeaponTable {
     u8        mass_count = 0;
     u16       mass_kind[MAX_MASSES]{};
     u16       mass_value[MAX_MASSES]{};
+    // The `swing` steps' own shapes (WStep::swing indexes these).
+    u8        step_swing_count = 0;
+    WSwing    step_swings[MAX_STEP_SWINGS]{};
+    // A swing step's own shape, or null: for a step that gives none, and for
+    // any reference out of range -- which is what a client holding another
+    // table, or a state naming no step, gets.
+    const WSwing* step_swing(u8 weapon, u8 phase, u8 step) const noexcept {
+        if (weapon >= weapon_count) return nullptr;
+        const WeaponDef& d = weapons[weapon];
+        if (phase >= d.phase_count || step >= d.phases[phase].step_count) return nullptr;
+        const WStep& s = d.phases[phase].steps[step];
+        if (s.action != WAct::Swing || s.swing >= step_swing_count) return nullptr;
+        return &step_swings[s.swing];
+    }
     // The mass of a catalogue kind, or 0 for one nobody gave a mass.
     u16 mass_of(u16 kind) const noexcept {
         for (u32 i = 0; i < mass_count; ++i) if (mass_kind[i] == kind) return mass_value[i];
@@ -269,6 +295,15 @@ struct WeaponState {
     // Every weapon's cooldown deadlines, by WeaponDef::cool_slot: what a
     // re-arm puts back in its vars.
     i32 cool[MAX_WEAPON_COOLDOWNS]{};
+    // THE STEP WHOSE SWING IS THE BODY'S LATEST: written by the World when a
+    // `swing` step's swing starts, cleared (NO_WEAPON) when one starts any other
+    // way, and kept after it ends. It is what the server's on_attack reads a
+    // connected swing's damage from, and what a client adopting this state
+    // re-derives the running swing's own shape from (World::adopt_swing). The
+    // weapon is named because a switch does not stop a swing in flight.
+    u8  swung_weapon = NO_WEAPON;
+    u8  swung_phase = NO_PHASE;
+    u8  swung_step = 0;
 };
 
 // Something the world must do because a weapon said so.
@@ -314,10 +349,13 @@ struct WeaponBody {
     brad facing{};
     i16  pitch = 0;
     // Written by the machine: a velocity to add (impulse), an animation state
-    // to set (set_anim; `anim_set` says one was), and the swing to apply.
+    // to set (set_anim; `anim_set` says one was), and a swing to start (a
+    // `swing` step, the last one this tick: which step, for its shape).
     fx3  impulse{};
     bool anim_set = false;
     u16  anim = 0;
+    bool swing = false;
+    u8   swing_weapon = NO_WEAPON, swing_phase = NO_PHASE, swing_step = 0;
 };
 
 // The per-tick, per-player random stream (docs/WEAPON_PREDICTION.md 2): a

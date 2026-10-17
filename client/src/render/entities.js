@@ -115,6 +115,14 @@ export class EntityView {
         ent.attackLeft = left
         ent.attackAt = performance.now()
       }
+      // Which weapon step that swing is, when a player's `swing` step started
+      // it with a shape of its own (weapon 255: none). Same rule: it stands
+      // until it changes.
+      if (e.mask & ENT_FIELD.ATTACK_STEP) {
+        ent.attackWeapon = e.attackWeapon ?? 255
+        ent.attackPhase = e.attackPhase ?? 255
+        ent.attackStep = e.attackStep ?? 0
+      }
 
       // SOLIDITY, BEFORE THE POSITION EARLY-RETURN.
       //

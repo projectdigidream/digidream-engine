@@ -150,7 +150,9 @@ mob_vocab = {
             "Distinct from the `melee` action, which is an instant distance " ..
             "test: that hits whatever is in range on the tick it runs and " ..
             "nothing can be done about it. Declare this and put a `swing` " ..
-            "action in the attack state's sequence. See swing_fields." },
+            "action in the attack state's sequence -- or give a `swing` step " ..
+            "its numbers itself, which is what this is then the default " ..
+            "for. See swing_fields." },
     { name = "blood", type = "int", optional = true,
       doc = "The particle kind this mob sprays when it is hurt, by catalogue " ..
             "id. OVERRIDES whatever the attack named, because what bleeds is " ..
@@ -604,14 +606,42 @@ mob_vocab = {
             "player and did nothing, because the range was being tested from " ..
             "twelve units back where the imp was standing." },
 
-    { name = "swing", args = {},
-      doc = "Start the swept collider this mob declares in its `swing` field. " ..
-            "ONE TICK is all this does: the engine's attack is edge-triggered, " ..
-            "so the press starts a swing that then runs for `ticks` on its own " ..
-            "and hits each target at most once however long it lasts.\n" ..
-            "A mob with no `swing` field does nothing here and says so at " ..
-            "load, rather than swinging with the engine's defaults -- which " ..
-            "would be a two-unit reach nobody asked for." },
+    { name = "swing",
+      args = {
+        { name = "damage", type = "int", optional = true,
+          doc = "What a connected swing costs. Every argument here is the " ..
+                "swing field of the same name (see swing_fields), for this " ..
+                "swing only." },
+        { name = "reach", type = "fx", optional = true },
+        { name = "half_arc", type = "fx", optional = true },
+        { name = "sweep_from", type = "fx", optional = true },
+        { name = "sweep_to", type = "fx", optional = true },
+        { name = "min_reach", type = "fx", optional = true },
+        { name = "ticks", type = "int", optional = true },
+        { name = "cooldown", type = "int", optional = true },
+        { name = "pitch_from", type = "fx", optional = true },
+        { name = "pitch_to", type = "fx", optional = true },
+        { name = "half_pitch", type = "fx", optional = true },
+        { name = "knockback", type = "fx", optional = true },
+        { name = "hit_vfx", type = "int", optional = true },
+        { name = "hit_vfx_radius", type = "fx", optional = true },
+        { name = "lift", type = "fx", optional = true },
+        { name = "slow", type = "fx", optional = true },
+        { name = "slow_ticks", type = "int", optional = true },
+      },
+      doc = "START THE SWEPT COLLIDER, now, in this shape: a volume moving " ..
+            "through an arc for `ticks`, hitting each thing in it at most " ..
+            "once, which a target can step out of. Every argument is the " ..
+            "swing field of the same name, all optional: given, it is this " ..
+            "swing's; left out, the mob's `swing` field's; neither, the " ..
+            "engine's default. So a jab and a slam in two states are two " ..
+            "steps with their own numbers. It must end up with a `damage`, " ..
+            "or the mob is refused at load.\n" ..
+            "A swing still sweeping is REPLACED: it stops where it is, and " ..
+            "this one starts from its own `sweep_from` with a fresh list of " ..
+            "who it has hit -- two blows. Inside the last swing's `cooldown` " ..
+            "(which starts when a swing ends; a replaced one never ends) it " ..
+            "does not happen, and is not kept for later." },
 
     { name = "telegraph",
       args = {

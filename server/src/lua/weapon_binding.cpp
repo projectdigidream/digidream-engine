@@ -58,12 +58,12 @@ Compiled* compiled_of(lua_State* L) {
 // string, and an event goes back to it the same way.
 const char* const ACT_NAME[] = {
     "consume", "set_var", "add_var", "goto", "set_anim", "switch_if_empty", "impulse",
-    "set_cooldown",
+    "set_cooldown", "swing",
 };
 const char* const REPORTED_NAME[] = {
     "hitscan", "launch", "damage_area", "telegraph", "vfx", "sound",
 };
-static_assert(sizeof(ACT_NAME) / sizeof(ACT_NAME[0]) == static_cast<size_t>(WAct::SetCooldown) + 1,
+static_assert(sizeof(ACT_NAME) / sizeof(ACT_NAME[0]) == static_cast<size_t>(WAct::Swing) + 1,
               "ACT_NAME must name every action the core performs, in order");
 static_assert(sizeof(REPORTED_NAME) / sizeof(REPORTED_NAME[0]) ==
                   static_cast<size_t>(WAct::Sound) - static_cast<size_t>(WAct::Hitscan) + 1,
@@ -79,7 +79,7 @@ static_assert(sizeof(COND_NAME) / sizeof(COND_NAME[0]) == static_cast<size_t>(WC
 
 const char* act_name(WAct a) {
     const u8 v = static_cast<u8>(a);
-    if (v <= static_cast<u8>(WAct::SetCooldown)) return ACT_NAME[v];
+    if (v <= static_cast<u8>(WAct::Swing)) return ACT_NAME[v];
     return REPORTED_NAME[v - static_cast<u8>(WAct::Hitscan)];
 }
 
@@ -130,6 +130,9 @@ struct Reader {
     // none) and the catalogue that names their bodies.
     int missiles = 0;
     const PropCatalogueView* props = nullptr;
+    // The table being built, for what a step keeps in its pools (a `swing`
+    // step's own shape).
+    sim::WeaponTable* table = nullptr;
 
     bool fail(const std::string& where, const std::string& what) {
         if (err.empty()) err = where + ": " + what;
@@ -323,6 +326,23 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
             if (!r.int_at(e, "state", where, 0, 65535, v)) return false;
             s.state = static_cast<u16>(v);
             break;
+        case WAct::Swing: {
+            // Its own shape, the fields it gives; the rest are the weapon's in
+            // force, from the parameters. None given swings that alone. The
+            // rest of what it says (damage, knockback, ...) is the server's,
+            // read by weapons.lua from the step itself.
+            sim::WSwing own;
+            if (!compile_swing(r, e, where, own)) return false;
+            if (own.set == 0) break;
+            sim::WeaponTable& t = *r.table;
+            if (t.step_swing_count >= sim::MAX_STEP_SWINGS) {
+                return r.fail(where, "is one more `swing` step with a shape of its own than the core holds (" +
+                                     std::to_string(sim::MAX_STEP_SWINGS) + ")");
+            }
+            s.swing = t.step_swing_count;
+            t.step_swings[t.step_swing_count++] = own;
+            break;
+        }
         case WAct::Impulse: {
             if (!r.fx_at(e, "speed", where, s.speed)) return false;
             if (!r.fx_at(e, "vertical", where, s.vertical)) return false;
@@ -632,6 +652,7 @@ int l_weapons_compile(lua_State* L) {
     auto c = std::make_unique<Compiled>();
     sim::WeaponTable& t = c->table;
     Reader r{L, {}};
+    r.table = &t;
     if (lua_istable(L, 5)) r.missiles = 5;
     r.props = context_of(L).props;
 
@@ -828,7 +849,8 @@ int l_weapon_step(lua_State* L) {
 
 // dnp.weapon_state(e) -> the machine's state, for weapons.lua to read back:
 // have, current, armed, phase, swing_phase (0-based, -1 for none), entered,
-// vars and ammo (1-based arrays in slot and pool order).
+// swung_weapon / swung_phase / swung_step (the step whose swing is its
+// latest, -1 for none), vars and ammo (1-based arrays in slot and pool order).
 //
 // dnp.weapon_state(e, into) fills `into` instead, and its `vars` and `ammo`
 // arrays, and returns it: weapons.lua reads this every tick for every player,
@@ -846,6 +868,11 @@ int l_weapon_state(lua_State* L) {
     idx(s.phase, sim::NO_PHASE);               lua_setfield(L, -2, "phase");
     idx(s.swing_phase, sim::NO_PHASE);         lua_setfield(L, -2, "swing_phase");
     lua_pushnumber(L, s.entered);              lua_setfield(L, -2, "entered");
+    // The step whose swing is the body's latest: what a connected swing costs
+    // is read from it. -1 when a swing started any other way, or none has.
+    idx(s.swung_weapon, sim::NO_WEAPON);       lua_setfield(L, -2, "swung_weapon");
+    idx(s.swung_phase, sim::NO_PHASE);         lua_setfield(L, -2, "swung_phase");
+    lua_pushnumber(L, s.swung_step);           lua_setfield(L, -2, "swung_step");
     // The table's own array when it has one, a new one when not.
     const auto array = [&](const char* name, int n) {
         lua_getfield(L, -1, name);

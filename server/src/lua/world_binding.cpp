@@ -256,6 +256,28 @@ int l_entity_press(lua_State* L) {
     return 0;
 }
 
+// entity:swing()
+//
+// START A SWING NOW, in the shape its attack parameters hold: what a monster's
+// `swing` step does (mobs.lua writes that step's own shape into its body
+// first), and a weapon run in Lua. Not the button: a press is ignored while a
+// swing sweeps, and a step is somebody saying "now" -- this REPLACES a swing
+// still sweeping, and does nothing inside the last one's cooldown
+// (World::request_swing, docs/SWINGS.md).
+//
+// A player too, unlike `press`: this is the server deciding something about
+// the body, not an input forged in the player's name, so the snapshot says
+// so (LUA_APPLIED) and reconciliation takes it like a shove.
+int l_entity_swing(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) return 0;
+    if (ctx.commands->push(Command{CmdKind::Swing, static_cast<u32>(a), fx3{}})) {
+        ++ctx.stats.commands_queued;
+    }
+    return 0;
+}
+
 // entity:release(buttons)
 //
 // The other half of `press`: clear a mask from the input this agent already
@@ -269,8 +291,9 @@ int l_entity_press(lua_State* L) {
 // so nothing would ever write the button back to zero, `attack_held` would stay
 // true, and the SECOND swing would never start.
 //
-// So the mob runtime releases on the tick after it presses, and the press is
-// one tick by construction rather than by luck.
+// So a script that presses releases on a later tick, and the press is one tick
+// by construction rather than by luck. (A monster's `swing` no longer presses
+// at all: it calls entity:swing, which starts the swing outright.)
 int l_entity_release(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -664,6 +687,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"set_input", l_entity_set_input},
     {"press", l_entity_press},
     {"release", l_entity_release},
+    {"swing", l_entity_swing},
     {"set_solid", l_entity_set_solid},
     {"solid", l_entity_solid},
     {"hp", l_entity_hp},

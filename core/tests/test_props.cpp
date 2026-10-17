@@ -14,6 +14,7 @@
 //               leaving them pointed at whatever lands in the slot next.
 //
 #include <cstdio>
+#include <initializer_list>
 
 #include "dnp/sim/world.hpp"
 
@@ -910,7 +911,175 @@ static void test_a_crowd_is_reported_as_the_full_loop_would() {
     CHECK(wide > 100);
 }
 
+// --- a swing is an attack like any other (docs/SWINGS.md) -------------------
+//
+// A `swing` step starts a swing at its tick with the shape it gives, and the
+// weapon's button does not swing at all. The weapon here: `ready` --pressed-->
+// `slash` (12 ticks), whose sequence swings at 2. `reach` is the step's own
+// when `own` is set, else none: the parameters' shape.
+static WeaponTable& slashing(bool own) {
+    static WeaponTable t;
+    t.clear();
+    WeaponDef& d = t.weapons[t.weapon_count++];
+    std::snprintf(d.name, sizeof(d.name), "blade");
+    d.pool = NO_POOL; d.phase_count = 2; d.initial = 0;
+    std::snprintf(d.phases[0].name, sizeof(d.phases[0].name), "ready");
+    std::snprintf(d.phases[1].name, sizeof(d.phases[1].name), "slash");
+    d.phases[1].ticks = 12;
+    WTransition& tr = d.phases[0].transitions[d.phases[0].transition_count++];
+    tr.to = 1;
+    tr.conds[tr.count++].kind = WCond::Pressed;
+    WStep& s = d.phases[1].steps[d.phases[1].step_count++];
+    s.action = WAct::Swing;
+    s.at = 2;
+    if (own) {
+        WSwing& o = t.step_swings[t.step_swing_count];
+        o.present = true;
+        o.set = swing_field::REACH | swing_field::TICKS;
+        o.reach = F(8);
+        o.ticks = 4;
+        s.swing = t.step_swing_count++;
+    }
+    t.initial_have = 1;
+    return t;
+}
+
+static void test_a_swing_step_is_an_attack_with_its_own_shape() {
+    std::printf("swing: a weapon's swing step starts at its tick, with the shape it gives\n");
+
+    struct Seen { bool hit = false; u32 first = 0xFFFFFFFF; u8 left_at_start = 0; fx reach{}; u8 swung_step = 0xFF; };
+    auto run = [](bool own) {
+        static Room r;
+        static World w;
+        static WeaponEventLog log;
+        w.reset();
+        r.attach(w);
+        const WeaponTable& t = slashing(own);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        // What weapons.lua writes for a weapon that swings from its steps.
+        w.params_mut(a).attack_enabled = false;
+        weapon_fresh(t, w.weapon_mut(a));
+        // Five units off: out of the default two-unit reach, inside the step's eight.
+        const u32 p = w.spawn_prop(10, fx3{F(25), F(20), F(0)});
+        w.prop_mut(p).radius = fx::from_frac(1, 5);
+        Seen seen;
+        for (u32 tick = 0; tick < 20; ++tick) {
+            proto::InputFrame f;
+            if (tick == 0) f.buttons = proto::button::ATTACK_PRIMARY;
+            f.aim = brad(0u);
+            w.set_input(a, f);
+            log.clear();
+            w.step_weapon(a, t, NO_WEAPON, tick, 0, log);
+            w.step();
+            for (u32 i = 0; i < w.attacks().count(); ++i) if (w.attacks().at(i).target == p) seen.hit = true;
+            if (w.agent(a).mv.attack_left > 0 && seen.first == 0xFFFFFFFF) {
+                seen.first = tick;
+                seen.left_at_start = w.agent(a).mv.attack_left;
+                seen.reach = w.swing_shape(a).reach;
+                seen.swung_step = w.weapon(a).swung_step;
+            }
+        }
+        return seen;
+    };
+
+    const Seen own = run(true);
+    const Seen bare = run(false);
+    std::printf("  own shape: from tick %u, %u left, reach %lld, hit %d;  bare: from tick %u, hit %d\n",
+                own.first, own.left_at_start, static_cast<long long>(own.reach.raw >> 32), own.hit,
+                bare.first, bare.hit);
+    // At the step's tick, not the press's: the button only ran the phases.
+    CHECK(own.first == 2);
+    // Its own four ticks (three left after the first), its own reach, and so
+    // what is five units off is reached.
+    CHECK(own.left_at_start == 3);
+    CHECK(own.reach == F(8));
+    CHECK(own.hit);
+    CHECK(own.swung_step == 0);
+    // CONTROL: the same step with no shape of its own swings too -- at the same
+    // tick, so the step started it -- in the parameters' (sixteen ticks, two
+    // units), and misses. Without it, "hit" could be a reach that was always 8.
+    CHECK(bare.first == 2);
+    CHECK(!bare.hit);
+}
+
+// Asked for while one is sweeping: the newer replaces the older, with a fresh
+// list of who it has hit. Inside the cooldown: nothing, and nothing later.
+static void test_a_newer_swing_replaces_the_older() {
+    std::printf("swing: a newer swing replaces the older; one inside the cooldown does not happen\n");
+
+    auto hits = [](std::initializer_list<u32> asks, u8 cooldown, u32* starts) {
+        static Room r;
+        static World w;
+        w.reset();
+        r.attach(w);
+        const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+        // A ten-tick thrust, so the target is in it every tick it is live.
+        w.params_mut(a).attack_ticks = 10;
+        w.params_mut(a).attack_cooldown = cooldown;
+        w.params_mut(a).attack_sweep_from = fx::zero();
+        w.params_mut(a).attack_sweep_to = fx::zero();
+        const u32 p = w.spawn_prop(10, fx3{F(21), F(20), F(0)});
+        w.prop_mut(p).radius = fx::from_frac(1, 5);
+        u32 n = 0;
+        *starts = 0;
+        u8 was = 0;
+        for (u32 tick = 0; tick < 40; ++tick) {
+            for (u32 at : asks) if (at == tick) w.request_swing(a);
+            w.set_input(a, proto::InputFrame{});
+            w.step();
+            for (u32 i = 0; i < w.attacks().count(); ++i) if (w.attacks().at(i).target == p) ++n;
+            const u8 left = w.agent(a).mv.attack_left;
+            if (left > was) ++*starts;     // a countdown that went UP began a swing
+            was = left;
+        }
+        return n;
+    };
+
+    u32 starts = 0;
+    const u32 once = hits({0}, 0, &starts);
+    CHECK(once == 1 && starts == 1);              // CONTROL: one swing hits it once, however long
+    const u32 twice = hits({0, 4}, 0, &starts);
+    CHECK(twice == 2 && starts == 2);             // replaced at 4: a second blow, which lands again
+    std::printf("  one swing: %u hit;  a second asked for mid-sweep: %u hits\n", once, twice);
+    // A replaced swing never ended, so it started no cooldown: with a long one,
+    // the replacement at 4 still happens.
+    const u32 long_cool = hits({0, 4}, 200, &starts);
+    CHECK(long_cool == 2 && starts == 2);
+    // The first ends at 9 and its cooldown runs 20 ticks: one asked for at 15
+    // does not happen, and is not kept for when the cooldown is over -- and
+    // one asked for after it does.
+    hits({0, 15}, 20, &starts);
+    CHECK(starts == 1);
+    hits({0, 35}, 20, &starts);
+    CHECK(starts == 2);                           // CONTROL: the cooldown, not the request, said no
+}
+
+// A client adopting the server's weapon state gets the running swing's shape
+// back from the step it names.
+static void test_a_swing_steps_shape_is_adopted_with_the_state() {
+    std::printf("swing: the running swing's own shape comes back with the weapon state\n");
+    static World w;
+    w.reset();
+    const WeaponTable& t = slashing(true);
+    const u32 a = w.spawn(fx3{F(20), F(20), F(0)});
+    w.params_mut(a).attack_reach = F(2);
+    WeaponState& k = w.weapon_mut(a);
+    k.swung_weapon = 0; k.swung_phase = 1; k.swung_step = 0;
+    w.adopt_swing(a, t);
+    CHECK(w.swing_shape(a).reach == F(8));
+    CHECK(w.swing_shape(a).ticks == 4);
+    // Fields the step did not give are the parameters'.
+    CHECK(w.swing_shape(a).half_arc == w.params(a).attack_half_arc);
+    // CONTROL: a state naming no step is the parameters' shape.
+    k.swung_weapon = NO_WEAPON; k.swung_phase = NO_PHASE;
+    w.adopt_swing(a, t);
+    CHECK(w.swing_shape(a).reach == F(2));
+}
+
 int main() {
+    test_a_swing_step_is_an_attack_with_its_own_shape();
+    test_a_newer_swing_replaces_the_older();
+    test_a_swing_steps_shape_is_adopted_with_the_state();
     test_a_crowd_is_reported_as_the_full_loop_would();
     test_props_share_the_entity_index_space();
     test_a_weapon_can_decline_to_swing();

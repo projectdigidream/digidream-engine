@@ -627,7 +627,7 @@ unsigned dnp_world_animation_state(const sim::World* w, unsigned idx) {
 
 // The weapon state as 32-bit words, in this order; the length is asked for,
 // not assumed, as the agent buffers' are.
-constexpr unsigned WEAPON_BUF32_LEN = 6 + 4 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + sim::MAX_WEAPON_COOLDOWNS;
+constexpr unsigned WEAPON_BUF32_LEN = 6 + 4 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + sim::MAX_WEAPON_COOLDOWNS + 3;
 
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_weapon_buf32_len() { return WEAPON_BUF32_LEN; }
@@ -644,6 +644,9 @@ void dnp_world_read_weapon(const sim::World* w, unsigned idx, unsigned* out32) {
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) out32[10 + sim::MAX_WEAPON_VARS + i] = s.ammo[i];
     for (u32 i = 0; i < sim::MAX_WEAPON_COOLDOWNS; ++i)
         out32[10 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + i] = static_cast<unsigned>(s.cool[i]);
+    // The step whose swing is its latest (WeaponState::swung_*), last.
+    const unsigned sw = 10 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + sim::MAX_WEAPON_COOLDOWNS;
+    out32[sw] = s.swung_weapon; out32[sw + 1] = s.swung_phase; out32[sw + 2] = s.swung_step;
 }
 
 // Adopt the server's (reconciliation step 2, as dnp_world_write_agent).
@@ -660,6 +663,15 @@ void dnp_world_write_weapon(sim::World* w, unsigned idx, const unsigned* in32) {
     for (u32 i = 0; i < sim::MAX_AMMO_POOLS; ++i) s.ammo[i] = static_cast<u16>(in32[10 + sim::MAX_WEAPON_VARS + i]);
     for (u32 i = 0; i < sim::MAX_WEAPON_COOLDOWNS; ++i)
         s.cool[i] = static_cast<i32>(in32[10 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + i]);
+    const unsigned sw = 10 + sim::MAX_WEAPON_VARS + sim::MAX_AMMO_POOLS + sim::MAX_WEAPON_COOLDOWNS;
+    s.swung_weapon = static_cast<u8>(in32[sw]); s.swung_phase = static_cast<u8>(in32[sw + 1]);
+    s.swung_step = static_cast<u8>(in32[sw + 2]);
+    // AND THE RUNNING SWING's OWN SHAPE, which no state carries: derived again
+    // from the step this state names, with the table this world predicts with.
+    // Without it a swing the server started from a step this client had not
+    // predicted would sweep in the parameters' shape until the next one.
+    auto it = weapon_tables().find(w);
+    if (it != weapon_tables().end()) w->adopt_swing(idx, *it->second);
 }
 
 // The weapon held in display slot `n` (1-based: the n-th held weapon by the
@@ -930,6 +942,52 @@ void dnp_world_get_param_raw(const sim::World* w, unsigned idx, unsigned field_i
                  : physics::param_get_raw(w->params(idx), static_cast<u16>(field_id));
 }
 
+// THE SWING's shape, as the collider sweeps it: one attack_* parameter with
+// the running swing's own step laid over it (World::swing_shape) -- what this
+// client draws its own swing with. Any other field reads as the parameter.
+// The same representation as dnp_world_get_param_raw: fx raw, or the integer
+// for `attack_ticks` and `attack_cooldown`.
+EMSCRIPTEN_KEEPALIVE
+void dnp_world_get_swing_param_raw(const sim::World* w, unsigned idx, unsigned field_id,
+                                   long long* out) {
+    if (idx >= w->capacity()) { out[0] = 0; return; }
+    static const i32 ids[] = {
+        physics::param_id_by_name("attack_reach"), physics::param_id_by_name("attack_half_arc"),
+        physics::param_id_by_name("attack_sweep_from"), physics::param_id_by_name("attack_sweep_to"),
+        physics::param_id_by_name("attack_min_reach"), physics::param_id_by_name("attack_pitch_from"),
+        physics::param_id_by_name("attack_pitch_to"), physics::param_id_by_name("attack_half_pitch"),
+        physics::param_id_by_name("attack_ticks"), physics::param_id_by_name("attack_cooldown"),
+    };
+    const sim::World::SwingShape s = w->swing_shape(idx);
+    const i64 v[] = { s.reach.raw, s.half_arc.raw, s.sweep_from.raw, s.sweep_to.raw, s.min_reach.raw,
+                      s.pitch_from.raw, s.pitch_to.raw, s.half_pitch.raw, s.ticks, s.cooldown };
+    for (unsigned k = 0; k < sizeof(ids) / sizeof(ids[0]); ++k) {
+        if (ids[k] == static_cast<i32>(field_id)) { out[0] = v[k]; return; }
+    }
+    out[0] = physics::param_get_raw(w->params(idx), static_cast<u16>(field_id));
+}
+
+// A `swing` step's own shape, from the table this world predicts with: what
+// ANOTHER player's swing is drawn with while the entity stream names its step
+// (ent_field::ATTACK_STEP). out[0] is the set mask (sim::swing_field), then
+// reach, half_arc, sweep_from, sweep_to, min_reach, pitch_from, pitch_to,
+// half_pitch (fx raw), ticks and cooldown (integers). 0 when the step gives no
+// shape of its own, or names nothing this table has.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_step_swing(const sim::World* w, unsigned weapon, unsigned phase, unsigned step,
+                         long long* out) {
+    auto it = weapon_tables().find(w);
+    if (it == weapon_tables().end() || weapon > 255 || phase > 255 || step > 255) return 0;
+    const sim::WSwing* o = it->second->step_swing(static_cast<u8>(weapon), static_cast<u8>(phase),
+                                                  static_cast<u8>(step));
+    if (o == nullptr) return 0;
+    out[0] = o->set;
+    out[1] = o->reach.raw; out[2] = o->half_arc.raw; out[3] = o->sweep_from.raw; out[4] = o->sweep_to.raw;
+    out[5] = o->min_reach.raw; out[6] = o->pitch_from.raw; out[7] = o->pitch_to.raw; out[8] = o->half_pitch.raw;
+    out[9] = o->ticks; out[10] = o->cooldown;
+    return 1;
+}
+
 // Wire id for a parameter name, or -1. Lets the client name fields in tests
 // without hardcoding indices that are a wire contract.
 EMSCRIPTEN_KEEPALIVE
@@ -1151,6 +1209,38 @@ unsigned dnp_test_mark_frame(unsigned char* out, unsigned cap, unsigned point) {
     return static_cast<unsigned>(w.size());
 }
 
+// A WEAPON TABLE WITH A SWING STEP, as WEAPON_DEFS bytes, for a test of this
+// client's half of docs/SWINGS.md: one weapon, `ready` --pressed--> `slash` (12
+// ticks), whose sequence swings at tick 2 with a shape of its own -- reach 8,
+// four ticks. On the heap: a table is most of a megabyte.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_test_swing_table(unsigned char* out, unsigned cap) {
+    auto t = std::make_unique<sim::WeaponTable>();
+    t->clear();
+    sim::WeaponDef& d = t->weapons[t->weapon_count++];
+    std::strcpy(d.name, "blade");
+    d.pool = sim::NO_POOL; d.phase_count = 2; d.initial = 0;
+    std::strcpy(d.phases[0].name, "ready");
+    std::strcpy(d.phases[1].name, "slash");
+    d.phases[1].ticks = 12;
+    sim::WTransition& tr = d.phases[0].transitions[d.phases[0].transition_count++];
+    tr.to = 1;
+    tr.conds[tr.count++].kind = sim::WCond::Pressed;
+    sim::WStep& s = d.phases[1].steps[d.phases[1].step_count++];
+    s.action = sim::WAct::Swing;
+    s.at = 2;
+    sim::WSwing& o = t->step_swings[t->step_swing_count];
+    o.present = true;
+    o.set = sim::swing_field::REACH | sim::swing_field::TICKS;
+    o.reach = fx::from_int(8);
+    o.ticks = 4;
+    s.swing = t->step_swing_count++;
+    t->initial_have = 1;
+    proto::ByteWriter w(out, cap);
+    if (!sim::encode_weapon_table(w, *t)) return 0;
+    return static_cast<unsigned>(w.size());
+}
+
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_test_snapshot(unsigned char* out, unsigned cap, unsigned options) {
     const bool grappling = (options & 1u) != 0;
@@ -1175,6 +1265,7 @@ unsigned dnp_test_snapshot(unsigned char* out, unsigned cap, unsigned options) {
     // Five cooldowns and three unset, so the encoder's "up to the last one set"
     // is exercised rather than the full array.
     for (u32 i = 0; i < 5; ++i) s.weapon.cool[i] = 300 + static_cast<i32>(i);
+    s.weapon.swung_weapon = 4; s.weapon.swung_phase = 9; s.weapon.swung_step = 11;
     s.anchor.raw = 0x55;
     s.jumps_used = 1;
     s.attack_left = 2;

@@ -44,7 +44,7 @@ import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { parseAtlas, pivotDisagreement } from './render/atlas.js'
 import { sweepOffset, pitchOffset, makeSwingMesh, aimSwing, readSwingShape,
-         sameSwingShape, sweptSpan, SwingTrail } from './render/swing.js'
+         sameSwingShape, sweptSpan, SwingTrail, withStepSwing } from './render/swing.js'
 import { parseVfx, VfxView, tracerEnds } from './render/vfx.js'
 import { SectorFx } from './render/sectorfx.js'
 import { UiView } from './render/ui.js'
@@ -2753,6 +2753,19 @@ function ownMuzzle () {
   return { x: p.x, y: p.y, z: p.z }
 }
 
+// ANOTHER PLAYER's swing step's own shape, by (weapon, phase, step) as the
+// entity stream names it: asked of the table this world predicts with, once per
+// step and per table (a new table, or a new world, starts again).
+const stepSwings = new Map()
+let stepSwingsFor = null
+function stepSwingOf (weapon, phase, step) {
+  if (stepSwingsFor !== weaponDefsWorld) { stepSwings.clear(); stepSwingsFor = weaponDefsWorld }
+  if (weaponDefsWorld === null || weaponDefsWorld !== world) return null
+  const key = (weapon << 16) | (phase << 8) | step
+  if (!stepSwings.has(key)) stepSwings.set(key, world.stepSwing(weapon, phase, step))
+  return stepSwings.get(key)
+}
+
 // Predict our own weapon with the table the server sent, drawing the spread
 // from the stream of our body's index ON THE SERVER, which is not our local one.
 function applyWeaponDefs () {
@@ -3196,7 +3209,11 @@ function frame (now) {
     }
     for (const [index, ent] of others.entities) {
       if (!ent.attackLeft && !slash.swingers.has(index)) continue
-      const shape = readSwingShape(remoteParams.view(index), index)
+      // A player's swing step has a shape of its own, which its parameters do
+      // not carry: the entity stream names the step, the weapon table has it.
+      const step = ent.attackLeft && ent.attackWeapon !== undefined && ent.attackWeapon !== 255
+        ? stepSwingOf(ent.attackWeapon, ent.attackPhase, ent.attackStep) : null
+      const shape = readSwingShape(withStepSwing(remoteParams.view(index), step), index)
       const rec = ent.kind ? props?.kinds.get(ent.kind) : null
       const h = rec?.height ?? bodyHeight
       const p = ent.mesh.position

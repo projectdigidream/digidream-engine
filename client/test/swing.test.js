@@ -13,7 +13,7 @@
 //
 import { Core } from '../src/core.js'
 import { sweepOffset, swingYaw, sameSwingShape, makeSwingMesh, SwingTrail, fadeTrail,
-         sweptSpan } from '../src/render/swing.js'
+         sweptSpan, readSwingShape, withStepSwing } from '../src/render/swing.js'
 import { facingDirection } from '../src/camera.js'
 
 let checks = 0
@@ -446,6 +446,68 @@ console.log('\n--- the vertical arc is drawn, and only when the engine applies o
   aimSwing(m, 0.25, 0, 1 / 8)
   check(Math.abs(m.rotation.z - (1 / 8) * Math.PI * 2) < 1e-9,
         'CONTROL: aiming twice does not accumulate')
+}
+
+// A SWING IS AN ATTACK LIKE ANY OTHER (docs/SWINGS.md): a weapon's `swing`
+// step starts the swing at its tick, predicted, and this client draws it in
+// the step's own shape -- its own body's, and another player's by the step the
+// entity stream names.
+console.log('--- a swing step: predicted at its tick, drawn in its own shape ---')
+{
+  const M = core.M
+  const cap = 1 << 16
+  const buf = M._malloc(cap)
+  const n = M._dnp_test_swing_table(buf, cap)
+  const bytes = M.HEAPU8.slice(buf, buf + n)
+  M._free(buf)
+  const w = core.createWorld({})
+  const a = w.spawn({ x: 0n, y: 0n, z: 0n })
+  check(n > 0 && w.setWeapons(bytes, a, a), `the table, with its swing step, loads (${n} bytes)`)
+  const held = { have: 1, current: 0, phase: 255, armed: 255, swingPhase: 255, prevButtons: 0,
+                 entered: 0, done: 0, heldSince: [0, 0], vars: [0, 0, 0, 0],
+                 ammo: [0, 0, 0, 0, 0, 0, 0, 0], cool: [0, 0, 0, 0, 0, 0, 0, 0] }
+  w.writeWeapon(a, held)
+  // What weapons.lua writes for a weapon that swings from its steps.
+  w.setParamRaw(a, w.paramId('attack_enabled'), 0n)
+  const reachOf = (shape) => shape.reach
+  const lefts = []
+  for (let t = 0; t < 8; t++) {
+    w.setInput(a, { buttons: t < 3 ? 0x0080 : 0, moveX: 0, moveY: 0, aim: 0 })
+    w.step()
+    lefts.push(w.readAgent(a).attackLeft)
+    if (t === 2) {
+      const own = readSwingShape(w, a)
+      check(reachOf(own) === 8 && own.ticks === 4,
+            `mid-swing, its own body's shape is the step's: reach ${reachOf(own)}, ${own.ticks} ticks`)
+      // CONTROL: the parameters alone say otherwise, so the 8 is the step's.
+      const bare = readSwingShape({ getParamRaw: (i, id) => w.getParamRaw(i, id), paramId: (nm) => w.paramId(nm) }, a)
+      check(reachOf(bare) === 2 && bare.ticks === 16, `CONTROL: the parameters' reach is ${reachOf(bare)}`)
+    }
+  }
+  check(lefts.join() === '0,0,3,2,1,0,0,0',
+        `predicted from the step's tick, for its four ticks, the held button swinging nothing (${lefts.join()})`)
+  const k = w.readWeapon(a)
+  check(k.swungWeapon === 0 && k.swungPhase === 1 && k.swungStep === 0,
+        `the state names the step (${k.swungWeapon}/${k.swungPhase}/${k.swungStep})`)
+
+  // ADOPTED: the server's state names no step, then the step again -- and the
+  // shape follows, derived from the table rather than sent.
+  w.writeWeapon(a, { ...k, swungWeapon: 255, swungPhase: 255, swungStep: 0 })
+  check(readSwingShape(w, a).reach === 2, 'adopting a state that names no step: the parameters\' shape')
+  w.writeWeapon(a, k)
+  check(readSwingShape(w, a).reach === 8, 'adopting one that names the step: its shape again')
+
+  // ANOTHER PLAYER's: the step from the table, laid over its parameters.
+  const step = w.stepSwing(0, 1, 0)
+  check(step !== null && step.set === (1 | 256) && step.reach === 8n << 32n && step.ticks === 4,
+        `the table gives the step's own shape (${step && JSON.stringify({ set: step.set, ticks: step.ticks })})`)
+  check(w.stepSwing(0, 0, 0) === null && w.stepSwing(3, 1, 0) === null,
+        'CONTROL: a step that is not a swing, or no such weapon, has none')
+  const view = { getParamRaw: (i, id) => w.getParamRaw(i, id), paramId: (nm) => w.paramId(nm) }
+  const theirs = readSwingShape(withStepSwing(view, step), a)
+  check(theirs.reach === 8 && theirs.ticks === 4 && theirs.halfArc === readSwingShape(view, a).halfArc,
+        `another player's swing step: reach ${theirs.reach}, ${theirs.ticks} ticks, the rest its parameters'`)
+  check(withStepSwing(view, null) === view, 'CONTROL: no step, the view as it is')
 }
 
 console.log(`\nswing: ${checks} checks, ${fails} failures`)

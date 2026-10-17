@@ -28,6 +28,12 @@ inline constexpr u32 SNAPSHOT_RING = 32;
 struct EntitySample {
     bool present         = false;
     u8   generation      = 0;
+    // Which weapon step its running swing is (proto::ent_field::ATTACK_STEP);
+    // weapon 0xFF when none is, or the swing is its parameters'. Up here, in
+    // the padding before `pos`, so the ring a session holds does not grow.
+    u8   attack_weapon   = 0xFF;
+    u8   attack_phase    = 0xFF;
+    u8   attack_step     = 0;
     fx3  pos{};
     brad facing{};
     u16  animation_state = 0;
@@ -135,6 +141,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
         // it is not. A body that spawns already dead does not exist.
         if (!now.solid) full |= proto::ent_field::SOLID;
         if (now.attack_left != 0) full |= proto::ent_field::ATTACK;
+        if (now.attack_weapon != 0xFF) full |= proto::ent_field::ATTACK_STEP;
         return full;
     }
     u32 mask = 0;
@@ -148,6 +155,8 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     if (now.avatar != was.avatar) mask |= proto::ent_field::AVATAR;
     if (now.solid != was.solid) mask |= proto::ent_field::SOLID;
     if (now.attack_left != was.attack_left) mask |= proto::ent_field::ATTACK;
+    if (now.attack_weapon != was.attack_weapon || now.attack_phase != was.attack_phase ||
+        now.attack_step != was.attack_step) mask |= proto::ent_field::ATTACK_STEP;
     // Counted rather than flagged, so it holds against any baseline: every
     // snapshot whose baseline is older than the jump says so, until one is
     // acknowledged that is newer.

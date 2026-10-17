@@ -49,13 +49,18 @@
 --   alt-fire         a transition naming `secondary` rather than `primary`.
 --   recoil           the `impulse` action, in a sequence, like everything else.
 --
--- THE SWING IS NOT AN ACTION, and that is the one deliberate asymmetry here.
--- `swing` is a FIELD on the weapon, because the swept collider is the one
--- attack this engine PREDICTS: the start rule lives in the shared controller
--- (core/src/sim/world.cpp) so both sides run it, and selecting a weapon writes
--- its shape into the replicated parameter table. A `swing` action in a sequence
--- would move the decision to the server and the collider would arrive one
--- round trip late -- for the single attack that currently appears instantly.
+-- A SWING IS AN ATTACK LIKE ANY OTHER: the `swing` action, at its tick, with
+-- its numbers (damage, reach, arc, ...) as its own arguments -- as `hitscan`
+-- has a range. It is PREDICTED, unlike a script's: the weapon machine runs in
+-- the core on both sides (docs/WEAPON_PREDICTION.md), and the swing it starts
+-- is the World's own collider, so the player's swing appears the tick they
+-- press. A weapon that swings from its steps does not swing on the attack
+-- button; the button runs its phases.
+--
+-- The weapon's `swing` field, and a phase's, are still read: as the shape a
+-- swing step's left-out fields take, and as the whole swing of a weapon with
+-- no swing steps, which swings on the attack button as every weapon did before
+-- the action existed.
 --
 -- Types, matching mob_vocab.lua's so one checker serves both:
 --
@@ -106,12 +111,14 @@ weapon_vocab = {
             "declaration order, and the runtime returns here whenever a phase " ..
             "runs out with no `next`." },
     { name = "swing", type = "table", optional = true,
-      doc = "The swept melee collider, whose shape is written into the " ..
-            "REPLICATED parameter table when this weapon is selected. Absent " ..
-            "means this weapon does not swing -- and that is enforced through " ..
-            "the parameter `attack_enabled`, so the client predicts the " ..
-            "absence rather than predicting a swing the server then denies. " ..
-            "See swing_fields." },
+      doc = "The swept melee collider's shape, written into the REPLICATED " ..
+            "parameter table when this weapon is selected. What a `swing` " ..
+            "step's left-out fields are; and for a weapon with no `swing` " ..
+            "steps, its whole swing, started by the attack button. Absent, " ..
+            "with no swing steps, means this weapon does not swing -- enforced " ..
+            "through the parameter `attack_enabled`, so the client predicts " ..
+            "the absence rather than predicting a swing the server then " ..
+            "denies. See swing_fields, and the `swing` action." },
     { name = "icon", type = "string", optional = true,
       doc = "A picture for the HUD's current-weapon slot: a sprite frame key " ..
             "from the module's sheets, or a texture name. Published as " ..
@@ -244,7 +251,10 @@ weapon_vocab = {
             "identical damage, because `swing` was a property of the weapon " ..
             "and there was one of it. A finisher that hits harder and sweeps " ..
             "wider is the whole reason anyone writes a combo.\n" ..
-            "A phase without one leaves the weapon's in place." },
+            "A phase without one leaves the weapon's in place. A `swing` step " ..
+            "with its own arguments says the same for one blow, and is what " ..
+            "the studio writes; this is still read, as the shape that step's " ..
+            "left-out fields take." },
     { name = "transitions", type = "table", optional = true,
       doc = "A list of {when = <condition>, to = <phase>, ...args}, checked " ..
             "IN ORDER every tick, first match wins. Order is the whole " ..
@@ -493,6 +503,45 @@ weapon_vocab = {
             "`ammo`. AN ACTION RATHER THAN AUTOMATIC, because a charged shot " ..
             "costs more than a tapped one and a phase that fires twice pays " ..
             "twice -- neither of which a field on the weapon can say." },
+
+    { name = "swing",
+      args = {
+        { name = "damage", type = "int", optional = true,
+          doc = "What a connected swing costs. Every argument here is the " ..
+                "swing field of the same name (see swing_fields), for this " ..
+                "swing only." },
+        { name = "reach", type = "fx", optional = true },
+        { name = "half_arc", type = "fx", optional = true },
+        { name = "sweep_from", type = "fx", optional = true },
+        { name = "sweep_to", type = "fx", optional = true },
+        { name = "min_reach", type = "fx", optional = true },
+        { name = "ticks", type = "int", optional = true },
+        { name = "pitch_from", type = "fx", optional = true },
+        { name = "pitch_to", type = "fx", optional = true },
+        { name = "half_pitch", type = "fx", optional = true },
+        { name = "knockback", type = "fx", optional = true },
+        { name = "hit_vfx", type = "int", optional = true },
+        { name = "hit_vfx_radius", type = "fx", optional = true },
+        { name = "lift", type = "fx", optional = true },
+        { name = "slow", type = "fx", optional = true },
+        { name = "slow_ticks", type = "int", optional = true },
+        { name = "cooldown", type = "int", optional = true },
+      },
+      doc = "START THE SWEPT COLLIDER, now, in this shape: a volume moving " ..
+            "through an arc for `ticks`, hitting each thing in it at most " ..
+            "once. Every argument is the swing field of the same name, all " ..
+            "optional: given, it is this swing's; left out, the weapon's in " ..
+            "force -- its `swing`, or that of the last phase entered that " ..
+            "declares one; neither, the engine's default. It must end up with " ..
+            "a `damage`, or the weapon is refused at load.\n" ..
+            "PREDICTED: the player's own client starts it on the same tick.\n" ..
+            "A swing still sweeping is REPLACED: it stops where it is, and " ..
+            "this one starts from its own `sweep_from` with a fresh list of " ..
+            "who it has hit -- two blows. Inside the last swing's `cooldown` " ..
+            "(which starts when a swing ends; a replaced one never ends) it " ..
+            "does not happen, and is not kept for later.\n" ..
+            "A weapon with a `swing` step anywhere does not swing on the " ..
+            "attack button: the steps say when." },
 
     { name = "impulse",
       args = { { name = "speed", type = "fx" },

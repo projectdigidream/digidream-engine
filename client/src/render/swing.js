@@ -38,9 +38,17 @@
  * exists to do exactly that -- and a mesh built once at load shows the shape the
  * weapon had when the page opened. Which looks like the parameters doing
  * nothing, and was reported as exactly that.
+ *
+ * AS THE SWING SWEEPS IT when `world` can say (core.js getSwingParamRaw): a
+ * `swing` step's own shape laid over the parameters, which is what this
+ * client's own swing is. A view without it (another body's parameters, or one
+ * wrapped by withStepSwing) is read as it is.
  */
 export function readSwingShape (world, agent) {
-  const par = (n) => Number(world.getParamRaw(agent, world.paramId(n))) / 4294967296
+  const get = typeof world.getSwingParamRaw === 'function'
+    ? (id) => world.getSwingParamRaw(agent, id)
+    : (id) => world.getParamRaw(agent, id)
+  const par = (n) => Number(get(world.paramId(n))) / 4294967296
   return {
     reach: par('attack_reach'),
     inner: par('attack_min_reach'),
@@ -56,8 +64,38 @@ export function readSwingShape (world, agent) {
     pitchTo: par('attack_pitch_to'),
     halfPitch: par('attack_half_pitch'),
     // U8 parameters are stored as integers, not fixed-point fractions.
-    ticks: Number(world.getParamRaw(agent, world.paramId('attack_ticks'))),
-    cooldown: Number(world.getParamRaw(agent, world.paramId('attack_cooldown')))
+    ticks: Number(get(world.paramId('attack_ticks'))),
+    cooldown: Number(get(world.paramId('attack_cooldown')))
+  }
+}
+
+// A swing step's fields, as core.js stepSwing returns them, by the parameter
+// each lays over and its bit in the step's `set` mask (sim::swing_field).
+const STEP_FIELDS = [
+  ['attack_reach', 'reach', 1], ['attack_half_arc', 'halfArc', 2],
+  ['attack_sweep_from', 'sweepFrom', 4], ['attack_sweep_to', 'sweepTo', 8],
+  ['attack_min_reach', 'minReach', 16], ['attack_pitch_from', 'pitchFrom', 32],
+  ['attack_pitch_to', 'pitchTo', 64], ['attack_half_pitch', 'halfPitch', 128],
+  ['attack_ticks', 'ticks', 256], ['attack_cooldown', 'cooldown', 512]
+]
+
+/**
+ * ANOTHER BODY's swing as its step gave it: a parameter view (remoteparams.js)
+ * with a `swing` step's own shape (core.js stepSwing) laid over it, for
+ * readSwingShape. The entity stream names the step (ATTACK_STEP) and every
+ * client holds the weapon table, so another player's swing step is drawn in
+ * its own shape rather than the weapon's. Null `step` is the view itself.
+ */
+export function withStepSwing (view, step) {
+  if (!step) return view
+  return {
+    paramId: (name) => view.paramId(name),
+    getParamRaw: (agent, id) => {
+      for (const [name, key, bit] of STEP_FIELDS) {
+        if ((step.set & bit) !== 0 && view.paramId(name) === id) return BigInt(step[key])
+      }
+      return view.getParamRaw(agent, id)
+    }
   }
 }
 

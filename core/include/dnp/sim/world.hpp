@@ -586,6 +586,31 @@ public:
     u32 step_weapon(u32 i, const WeaponTable& table, u8 want, u32 tick, u64 seed,
                     WeaponEventLog& log, u32 stream = MAX_AGENTS) noexcept;
 
+    // THE SHAPE OF AGENT i's SWING, as its collider sweeps: the attack_*
+    // parameters, with the fields its running swing's own step gave laid over
+    // them (a `swing` step with arguments, docs/SWINGS.md). What the sweep
+    // reads every tick, and what a client draws its own swing with.
+    struct SwingShape {
+        fx reach{}, half_arc{}, sweep_from{}, sweep_to{}, min_reach{};
+        fx pitch_from{}, pitch_to{}, half_pitch{};
+        u8 ticks = 0, cooldown = 0;
+    };
+    SwingShape swing_shape(u32 i) const noexcept;
+
+    // START A SWING, in the parameters' shape: a monster's `swing`,
+    // a script's, a weapon's run in Lua. A weapon's own `swing` step comes the
+    // same way from step_weapon. Taken by the next step ahead of the attack
+    // button, by the swing step's rule (docs/SWINGS.md): a swing still
+    // sweeping is REPLACED -- it stops where it is and the new one starts
+    // from its own beginning, with a fresh list of who it has hit -- and one
+    // asked for while the last one's cooldown runs does not happen. False for
+    // an agent that is not there.
+    bool request_swing(u32 i) noexcept;
+
+    // FOR A PREDICTING CLIENT that has just adopted the server's weapon state:
+    // the running swing's own shape again, from the step the state names.
+    void adopt_swing(u32 i, const WeaponTable& table) noexcept;
+
     // A SHOT from agent i's middle, along `aim` (a heading) rising `slope` per
     // unit of run, out to `range`: the nearest body -- an agent other than i,
     // or a prop -- by the swing's cylinder test, unless the map stops it
@@ -860,6 +885,23 @@ private:
         pos = agents_[j].pos;
         return true;
     }
+    // The running swing's own shape, when a weapon's `swing` step gave one:
+    // what swing_shape lays over the parameters. A copy rather than a pointer
+    // into the table, because the table is a Lua VM's and a swing outlives
+    // the tick that started it.
+    WSwing               swing_over_[MAX_AGENTS]{};
+    // A swing asked for, which the next step_agent starts or refuses. Cleared
+    // at the end of every step, so a weapon step's `over` -- into the table
+    // step_weapon was given this tick, null for the parameters' shape -- is
+    // only read while that table is certainly there.
+    struct SwingRequest {
+        bool          want = false;
+        bool          from_step = false;    // a weapon's step, which it names
+        u8            weapon = NO_WEAPON, phase = NO_PHASE, step = 0;
+        const WSwing* over = nullptr;
+    };
+    SwingRequest         swing_req_[MAX_AGENTS]{};
+    void start_swing(u32 i) noexcept;
     const WeaponTable*   weapon_table_ = nullptr;
     u64                  weapon_seed_ = 0;
     u32                  weapon_agent_ = MAX_AGENTS;

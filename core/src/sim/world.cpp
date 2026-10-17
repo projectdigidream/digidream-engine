@@ -22,6 +22,8 @@ void World::reset() noexcept {
         params_[i] = MoveParams{};
         inputs_[i] = proto::InputFrame{};
         weapons_[i] = WeaponState{};
+        swing_over_[i] = WSwing{};
+        swing_req_[i] = SwingRequest{};
         teleports_[i] = 0;
         // Generations start at 1, not 0: handle raw 0 means "no entity", and a
         // slot-0 agent at generation 0 would encode to exactly that.
@@ -58,6 +60,8 @@ u32 World::spawn(fx3 pos) noexcept {
             params_[i] = MoveParams{};
             inputs_[i] = proto::InputFrame{};
             weapons_[i] = WeaponState{};
+            swing_over_[i] = WSwing{};
+            swing_req_[i] = SwingRequest{};
             teleports_[i] = 0;
 
             if (i + 1 > agent_high_water_) agent_high_water_ = i + 1;
@@ -91,6 +95,8 @@ void World::despawn(u32 index) noexcept {
     agents_[index] = AgentState{};
     inputs_[index] = proto::InputFrame{};
     weapons_[index] = WeaponState{};
+    swing_over_[index] = WSwing{};
+    swing_req_[index] = SwingRequest{};
     teleports_[index] = 0;
 }
 
@@ -315,11 +321,71 @@ u32 World::step_weapon(u32 i, const WeaponTable& table, u8 want, u32 tick, u64 s
             e.slope_set = slope_set;
         }
     }
+    // A `swing` step: started (or refused) by this tick's step_agent, with the
+    // step's own shape. The machine names the step; the table, which this
+    // tick holds, says what it gave.
+    if (body.swing) {
+        SwingRequest& rq = swing_req_[i];
+        rq.want = true;
+        rq.from_step = true;
+        rq.weapon = body.swing_weapon;
+        rq.phase = body.swing_phase;
+        rq.step = body.swing_step;
+        rq.over = table.step_swing(body.swing_weapon, body.swing_phase, body.swing_step);
+    }
     // add_impulse, which is what the Lua path's e:add_impulse lands in: a
     // vertical shove also leaves the ground.
     if (body.impulse.x.raw | body.impulse.y.raw | body.impulse.z.raw) add_impulse(i, body.impulse);
     if (body.anim_set) a.animation_state = body.anim;
     return hops;
+}
+
+World::SwingShape World::swing_shape(u32 i) const noexcept {
+    const MoveParams& p = params_[i];
+    SwingShape s;
+    s.reach = p.attack_reach;           s.half_arc = p.attack_half_arc;
+    s.sweep_from = p.attack_sweep_from; s.sweep_to = p.attack_sweep_to;
+    s.min_reach = p.attack_min_reach;
+    s.pitch_from = p.attack_pitch_from; s.pitch_to = p.attack_pitch_to;
+    s.half_pitch = p.attack_half_pitch;
+    s.ticks = p.attack_ticks;           s.cooldown = p.attack_cooldown;
+    const WSwing& o = swing_over_[i];
+    if (!o.present) return s;
+    namespace f = swing_field;
+    if (o.set & f::REACH)      s.reach = o.reach;
+    if (o.set & f::HALF_ARC)   s.half_arc = o.half_arc;
+    if (o.set & f::SWEEP_FROM) s.sweep_from = o.sweep_from;
+    if (o.set & f::SWEEP_TO)   s.sweep_to = o.sweep_to;
+    if (o.set & f::MIN_REACH)  s.min_reach = o.min_reach;
+    if (o.set & f::PITCH_FROM) s.pitch_from = o.pitch_from;
+    if (o.set & f::PITCH_TO)   s.pitch_to = o.pitch_to;
+    if (o.set & f::HALF_PITCH) s.half_pitch = o.half_pitch;
+    if (o.set & f::TICKS)      s.ticks = o.ticks;
+    if (o.set & f::COOLDOWN)   s.cooldown = o.cooldown;
+    return s;
+}
+
+bool World::request_swing(u32 i) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active) return false;
+    swing_req_[i] = SwingRequest{};
+    swing_req_[i].want = true;
+    return true;
+}
+
+void World::adopt_swing(u32 i, const WeaponTable& table) noexcept {
+    if (i >= MAX_AGENTS) return;
+    const WeaponState& k = weapons_[i];
+    const WSwing* over = table.step_swing(k.swung_weapon, k.swung_phase, k.swung_step);
+    swing_over_[i] = over != nullptr ? *over : WSwing{};
+}
+
+// A swing begins: as long as its shape says, touching nobody yet.
+void World::start_swing(u32 i) noexcept {
+    AgentState& a = agents_[i];
+    const u8 ticks = swing_shape(i).ticks;
+    a.mv.attack_left = ticks == 0 ? 1 : ticks;
+    for (u64& w : a.mv.attack_hit_agents) w = 0;
+    for (u64& w : a.mv.attack_hit_props) w = 0;
 }
 
 void World::set_input(u32 index, const proto::InputFrame& f) noexcept {
@@ -469,17 +535,45 @@ void World::step_agent(u32 i) noexcept {
         // it does not extend the wait and releasing it does not shorten one.
         if (a.mv.attack_cooldown_left > 0) --a.mv.attack_cooldown_left;
 
+        // A SWING ASKED FOR -- a weapon's `swing` step, a monster's, a script's
+        // -- before the button, and by its own rule: it is somebody saying
+        // "now", not a player mashing. A swing still sweeping is REPLACED: it
+        // stops where it is, starts no cooldown (it never ended), and the new
+        // one runs from its own beginning with a fresh list of who it has hit,
+        // so what the first one hit the second can hit again -- two blows.
+        // Inside the last swing's cooldown it does not happen, and is not
+        // kept for later: a step is a moment, and a swing late is a different
+        // attack. docs/SWINGS.md says the same for the studio's preview.
+        SwingRequest& rq = swing_req_[i];
+        if (rq.want) {
+            const bool from_step = rq.from_step;
+            const u8 weapon = rq.weapon, phase = rq.phase, step = rq.step;
+            const WSwing* over = rq.over;
+            rq = SwingRequest{};
+            if (a.mv.attack_cooldown_left == 0) {
+                swing_over_[i] = over != nullptr ? *over : WSwing{};
+                WeaponState& k = weapons_[i];
+                k.swung_weapon = from_step ? weapon : NO_WEAPON;
+                k.swung_phase = from_step ? phase : NO_PHASE;
+                k.swung_step = from_step ? step : 0;
+                start_swing(i);
+            }
         // attack_enabled is what a ranged weapon sets to zero, and it is checked
         // HERE rather than by refusing to report the hit later: a swing that
         // started and connected with nothing still spends a cooldown, still
         // holds the button's edge, and still animates. The press has to do
-        // nothing at all, and the client has to predict that it does.
-        if (swing && params_[i].attack_enabled &&
-            !a.mv.attack_held && a.mv.attack_left == 0 &&
-            a.mv.attack_cooldown_left == 0) {
-            a.mv.attack_left = params_[i].attack_ticks == 0 ? 1 : params_[i].attack_ticks;
-            for (u64& w : a.mv.attack_hit_agents) w = 0;
-            for (u64& w : a.mv.attack_hit_props) w = 0;
+        // nothing at all, and the client has to predict that it does. A weapon
+        // that swings from its steps sets it to zero too: its button runs its
+        // phases, and the steps say when.
+        } else if (swing && params_[i].attack_enabled &&
+                   !a.mv.attack_held && a.mv.attack_left == 0 &&
+                   a.mv.attack_cooldown_left == 0) {
+            swing_over_[i] = WSwing{};
+            WeaponState& k = weapons_[i];
+            k.swung_weapon = NO_WEAPON;
+            k.swung_phase = NO_PHASE;
+            k.swung_step = 0;
+            start_swing(i);
         }
         a.mv.attack_held = swing;
 
@@ -491,7 +585,7 @@ void World::step_agent(u32 i) noexcept {
             // Started when the swing ENDS, not when it begins, so the two are
             // additive: a weapon's rate is how long it swings plus how long it
             // takes to recover, which is how a player experiences it.
-            if (a.mv.attack_left == 0) a.mv.attack_cooldown_left = params_[i].attack_cooldown;
+            if (a.mv.attack_left == 0) a.mv.attack_cooldown_left = swing_shape(i).cooldown;
         }
     }
 
@@ -755,6 +849,10 @@ void World::step_idle() noexcept {
     // to keep counting even when nothing else happens.
     if (store_) motions_.apply(*store_, tick_);
 
+    // A swing asked for goes with the tick, as in step(): no agent ran to take
+    // it, and a weapon step's points into a table only this tick promised.
+    for (u32 i = 0; i < agent_high_water_; ++i) swing_req_[i] = SwingRequest{};
+
     ++tick_;
 }
 
@@ -806,6 +904,9 @@ void World::step() noexcept {
     for (u32 i = 0; i < agent_high_water_; ++i) {
         if (agents_[i].active && !agents_[i].asleep) step_agent(i);
     }
+    // A swing asked for and not taken -- an agent asleep this tick -- goes
+    // with the tick: its `over` points into a table only this tick promised.
+    for (u32 i = 0; i < agent_high_water_; ++i) swing_req_[i] = SwingRequest{};
 
     phase(5);
     resolve_agent_collisions();
@@ -1460,6 +1561,8 @@ void World::resolve_attack(u32 agent) noexcept {
     AgentState& a = agents_[agent];
     const MoveParams& mp = params_[agent];
     if (a.mv.attack_left == 0) return;
+    // The shape this swing sweeps: the parameters, and its step's own over them.
+    const SwingShape sh = swing_shape(agent);
 
     // Where the collider is THIS tick.
     //
@@ -1483,17 +1586,17 @@ void World::resolve_attack(u32 agent) noexcept {
     // N ticks visit N positions, and to have the first at `from` and the last
     // at `to` the step is 1/(N-1). A one-tick swing has no step at all, so it
     // takes the middle of the range rather than an arbitrary end.
-    const u8 total = mp.attack_ticks == 0 ? 1 : mp.attack_ticks;
+    const u8 total = sh.ticks == 0 ? 1 : sh.ticks;
     const u8 elapsed = static_cast<u8>(total - a.mv.attack_left);
     const fx phase = total > 1 ? fx::from_frac(elapsed, total - 1)
                                : fx::from_frac(1, 2);
-    const fx offset = fx_lerp(mp.attack_sweep_from, mp.attack_sweep_to, phase);
+    const fx offset = fx_lerp(sh.sweep_from, sh.sweep_to, phase);
 
     // Turn fractions to brad. A turn is 2^32, so a fraction of a turn is the
     // fraction scaled by 2^32 -- and fx is already Q32.32, so the raw value IS
     // the answer once the integer part is discarded by the wrap.
     const brad centre = brad(a.facing.raw + static_cast<u32>(offset.raw));
-    const u32  half   = static_cast<u32>(mp.attack_half_arc.raw);
+    const u32  half   = static_cast<u32>(sh.half_arc.raw);
 
     const fx2 from{a.pos.x, a.pos.y};
     const fx  a_top = a.pos.z + mp.height;
@@ -1515,8 +1618,8 @@ void World::resolve_attack(u32 agent) noexcept {
     // Measured from the attacker's MIDDLE to the target's middle, not foot to
     // foot: a downward swing aimed at a body should connect with its chest, and
     // feet are where the floor is.
-    const u32  half_pitch = static_cast<u32>(mp.attack_half_pitch.raw);
-    const fx   pitch = fx_lerp(mp.attack_pitch_from, mp.attack_pitch_to, phase);
+    const u32  half_pitch = static_cast<u32>(sh.half_pitch.raw);
+    const fx   pitch = fx_lerp(sh.pitch_from, sh.pitch_to, phase);
     const brad pitch_centre = brad(static_cast<u32>(pitch.raw));
     const fx   a_mid = a.pos.z + mp.height / fx::from_int(2);
 
@@ -1575,14 +1678,14 @@ void World::resolve_attack(u32 agent) noexcept {
 
     const auto reaches = [&](fx2 toward, fx surface_radius) {
         const u128 d_sq = len_sq_raw(toward);
-        const fx limit = mp.attack_reach + surface_radius;
+        const fx limit = sh.reach + surface_radius;
         if (d_sq > static_cast<u128>(static_cast<i128>(limit.raw) * limit.raw)) return false;
         // And the INNER edge, which is what makes a spear a spear: too close
         // and the weapon misses. Measured to the target's surface like the
         // outer edge, so a wide target is reachable from further in than a
         // narrow one -- the alternative is a halberd that cannot hit a wall.
-        if (mp.attack_min_reach > fx::zero()) {
-            const fx inner = mp.attack_min_reach + surface_radius;
+        if (sh.min_reach > fx::zero()) {
+            const fx inner = sh.min_reach + surface_radius;
             if (d_sq < static_cast<u128>(static_cast<i128>(inner.raw) * inner.raw)) return false;
         }
         return true;
@@ -1591,8 +1694,8 @@ void World::resolve_attack(u32 agent) noexcept {
     for (u32 t = 0; t < agent_high_water_; ++t) {
         if (t == agent || !agents_[t].active) continue;
         if ((a.mv.attack_hit_agents[t / 64] >> (t % 64)) & 1u) continue;   // already hit
-        if (a_top + mp.attack_reach < agents_[t].pos.z) continue;
-        if (a.pos.z > agents_[t].pos.z + params_[t].height + mp.attack_reach) continue;
+        if (a_top + sh.reach < agents_[t].pos.z) continue;
+        if (a.pos.z > agents_[t].pos.z + params_[t].height + sh.reach) continue;
         const fx2 toward = fx2{agents_[t].pos.x, agents_[t].pos.y} - from;
         if (!reaches(toward, params_[t].radius)) continue;
         if (!in_arc(toward)) continue;
@@ -1611,8 +1714,8 @@ void World::resolve_attack(u32 agent) noexcept {
                                          : a.mv.attack_hit_agents[(pi - SPAWNABLE_PROPS) / 64];
         const u64 bit = static_cast<u64>(1) << ((pi < SPAWNABLE_PROPS ? pi : pi - SPAWNABLE_PROPS) % 64);
         if (word & bit) continue;
-        if (a_top + mp.attack_reach < p.pos.z) continue;
-        if (a.pos.z > p.pos.z + p.height + mp.attack_reach) continue;
+        if (a_top + sh.reach < p.pos.z) continue;
+        if (a.pos.z > p.pos.z + p.height + sh.reach) continue;
         const fx2 toward = fx2{p.pos.x, p.pos.y} - from;
         if (!reaches(toward, p.radius)) continue;
         if (!in_arc(toward)) continue;
