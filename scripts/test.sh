@@ -637,6 +637,9 @@ suite_studio () {
   # The placeholder pictures a recipe's missile and weapon are drawn with until
   # they have art (a missile with no prop is never fired), decoded back.
   node ../studio/test/placeholders.test.js | tail -1
+  # Markers (docs/MARKERS.md): the module's templates, who hangs each, what
+  # hangs one nobody made, a rename followed; a map's signs run under LuaJIT.
+  node ../studio/test/markers.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2
