@@ -2750,7 +2750,14 @@ M.check_drops = function(d, where) return check_drops(d, where) end
 -- Told to the graph runtime when it is loaded (graphs.lua's when_hurt and
 -- when_dies): who, by whom, how much, and what kind of monster.
 local function tell_graphs(what, target, by, amount, kind)
-  if graphs ~= nil and graphs.notify ~= nil then graphs.notify(what, target, by and by.e or nil, amount, kind) end
+  local who = by and by.e or nil
+  if graphs ~= nil and graphs.notify ~= nil then graphs.notify(what, target, who, amount, kind) end
+  -- And the GAME's graphs (a module's game-wide ones, docs/GRAPHS.md), which
+  -- have no level of their own to hear it in: so one graph of the module's can
+  -- answer a player's death on every map, a map drawn later included.
+  if dnp.game_has ~= nil and not (dnp.is_game ~= nil and dnp.is_game()) and dnp.game_has("graph_notify") then
+    pcall(dnp.call_game, "graph_notify", what, target, who, amount, kind)
+  end
 end
 
 

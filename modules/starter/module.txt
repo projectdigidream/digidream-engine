@@ -2,3 +2,10 @@ name    Starter
 id      starter
 about   A room, a door, a pit, a platform and a spirit: the module the studio starts from.
 about   MIT -- the textures and the spirit sheet are our own; see LICENSE.
+debug off
+game trigger_vocab.lua shared
+game triggers.lua shared
+game graph_vocab.lua shared
+game graphs.lua shared
+game module.welcome.graph.json
+game module.death.graph.json

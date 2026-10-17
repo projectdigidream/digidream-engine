@@ -1,0 +1,72 @@
+{
+ "graph": 1,
+ "name": "death",
+ "nodes": [
+  {
+   "id": "dies",
+   "type": "when_dies",
+   "what": "players",
+   "meta": {
+    "x": 40,
+    "y": 40
+   }
+  },
+  {
+   "id": "dark",
+   "type": "fade",
+   "to": "black",
+   "seconds": 0.4,
+   "meta": {
+    "x": 320,
+    "y": 40
+   }
+  },
+  {
+   "id": "said",
+   "type": "subtitle",
+   "text": "You died. Back to the start!",
+   "seconds": 2.5,
+   "meta": {
+    "x": 600,
+    "y": 40
+   }
+  },
+  {
+   "id": "back",
+   "type": "fade",
+   "to": "clear",
+   "seconds": 1,
+   "meta": {
+    "x": 880,
+    "y": 40
+   }
+  }
+ ],
+ "links": [
+  [
+   "dies.then",
+   "dark.in"
+  ],
+  [
+   "dark.done",
+   "said.in"
+  ],
+  [
+   "said.then",
+   "back.in"
+  ]
+ ],
+ "meta": {
+  "editor": "studio",
+  "notes": [
+   {
+    "id": "note1",
+    "x": 10,
+    "y": -60,
+    "w": 1160,
+    "h": 220,
+    "text": "The player's death, on every map: the screen goes dark, a line is said, and it clears on the start (the player is already back there). Change the words, add a sound, or make it a screen of its own."
+   }
+  ]
+ }
+}

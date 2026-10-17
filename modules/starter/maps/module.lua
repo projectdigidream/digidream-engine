@@ -84,8 +84,8 @@ mobs.load{
           interruptible = true,
           sequence = {
             { at = 0, action = "face" },
-            { at = 10, action = "melee", damage = 9, range = "1.6667" },
-            { at = 10, action = "set_cooldown", var = "ready", ticks = 60 },
+            { at = 10, action = "melee", damage = 6, range = "1.6667" },
+            { at = 10, action = "set_cooldown", var = "ready", ticks = 90 },
           },
         },
       },

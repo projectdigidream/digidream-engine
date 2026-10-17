@@ -1,7 +1,13 @@
 # props.txt -- written by the studio for module starter.
 # Ids 1000.. are this module's; the studio hands them out.
 
-prop 1000 spirit radius 0.35 height 1 speed 5.2 solid
+# Transient visuals: bursts of particles and tracers. Drawn entirely by
+# the client -- none of this crosses the wire or enters a hash.
+vfx 20 particles count 14 life 0.09 life_var 0.03 speed 6 speed_var 3 cone 0.12 gravity 0 drag 6 size 0.22 size_end 0.05 colour ffe08a colour_end 552200
+vfx 21 tracer colour fff2a8 width 0.1 life 0.22
+vfx 22 particles count 18 life 0.35 life_var 0.15 speed 6 speed_var 3 cone 0.35 gravity 14 drag 2 size 0.12 size_end 0.02 colour ffd27a colour_end 3a1a00
+
+prop 1000 spirit radius 0.45 height 1.4 speed 5.2 scale 2 solid
 atlas 1000 sheet SPIR anim idle
 atlas 1000 state 1 sheet SPIR anim walk
 atlas 1000 state 2 sheet SPIR anim Attack

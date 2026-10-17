@@ -8,8 +8,8 @@
     {
       "id": 1000,
       "name": "spirit",
-      "radius": 0.35,
-      "height": 1,
+      "radius": 0.45,
+      "height": 1.4,
       "speed": 5.2,
       "solid": true,
       "art": {
@@ -22,7 +22,8 @@
           "3": "idle",
           "4": "death"
         }
-      }
+      },
+      "scale": "2"
     }
   ],
   "mobs": {
@@ -123,14 +124,14 @@
               {
                 "at": 10,
                 "action": "melee",
-                "damage": 9,
+                "damage": 6,
                 "range": "1.6667"
               },
               {
                 "at": 10,
                 "action": "set_cooldown",
                 "var": "ready",
-                "ticks": 60
+                "ticks": 90
               }
             ]
           }
@@ -167,6 +168,171 @@
     "moves": {},
     "start": {
       "weapons": null
+    }
+  },
+  "debug": false,
+  "vfx": [
+    {
+      "id": 20,
+      "type": "particles",
+      "count": 14,
+      "life": 0.09,
+      "lifeVar": 0.03,
+      "speed": 6,
+      "speedVar": 3,
+      "cone": 0.12,
+      "gravity": 0,
+      "drag": 6,
+      "size": 0.22,
+      "sizeEnd": 0.05,
+      "colour": 16769162,
+      "colourEnd": 5579264,
+      "blend": "additive"
+    },
+    {
+      "id": 21,
+      "type": "tracer",
+      "colour": 16773800,
+      "width": 0.1,
+      "life": 0.22
+    },
+    {
+      "id": 22,
+      "type": "particles",
+      "count": 18,
+      "life": 0.35,
+      "lifeVar": 0.15,
+      "speed": 6,
+      "speedVar": 3,
+      "cone": 0.35,
+      "gravity": 14,
+      "drag": 2,
+      "size": 0.12,
+      "sizeEnd": 0.02,
+      "colour": 16765562,
+      "colourEnd": 3807744,
+      "blend": "additive"
+    }
+  ],
+  "graphs": {
+    "welcome": {
+      "vars": {},
+      "nodes": [
+        {
+          "id": "arrives",
+          "type": "when_player_arrives",
+          "pos": {
+            "x": 40,
+            "y": 40
+          }
+        },
+        {
+          "id": "first",
+          "type": "once",
+          "pos": {
+            "x": 320,
+            "y": 40
+          }
+        },
+        {
+          "id": "keys",
+          "type": "subtitle",
+          "pos": {
+            "x": 560,
+            "y": 40
+          },
+          "text": "WASD walk   SPACE jump   SHIFT dash   E use   F attack   Q/R turn the camera",
+          "seconds": 8
+        }
+      ],
+      "links": [
+        [
+          "arrives.then",
+          "first.in"
+        ],
+        [
+          "first.then",
+          "keys.in"
+        ]
+      ],
+      "notes": [
+        {
+          "id": "note1",
+          "x": 10,
+          "y": -60,
+          "w": 900,
+          "h": 220,
+          "text": "The keys, said once as the game starts. Change the words, or delete this graph when the game says them its own way."
+        }
+      ]
+    },
+    "death": {
+      "vars": {},
+      "nodes": [
+        {
+          "id": "dies",
+          "type": "when_dies",
+          "pos": {
+            "x": 40,
+            "y": 40
+          },
+          "what": "players"
+        },
+        {
+          "id": "dark",
+          "type": "fade",
+          "pos": {
+            "x": 320,
+            "y": 40
+          },
+          "to": "black",
+          "seconds": 0.4
+        },
+        {
+          "id": "said",
+          "type": "subtitle",
+          "pos": {
+            "x": 600,
+            "y": 40
+          },
+          "text": "You died. Back to the start!",
+          "seconds": 2.5
+        },
+        {
+          "id": "back",
+          "type": "fade",
+          "pos": {
+            "x": 880,
+            "y": 40
+          },
+          "to": "clear",
+          "seconds": 1
+        }
+      ],
+      "links": [
+        [
+          "dies.then",
+          "dark.in"
+        ],
+        [
+          "dark.done",
+          "said.in"
+        ],
+        [
+          "said.then",
+          "back.in"
+        ]
+      ],
+      "notes": [
+        {
+          "id": "note1",
+          "x": 10,
+          "y": -60,
+          "w": 1160,
+          "h": 220,
+          "text": "The player's death, on every map: the screen goes dark, a line is said, and it clears on the start (the player is already back there). Change the words, add a sound, or make it a screen of its own."
+        }
+      ]
     }
   }
 }

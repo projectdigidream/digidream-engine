@@ -613,43 +613,7 @@
             "trigger": "t58"
           },
           "after": "behind",
-          "ticks": 90
-        }
-      ]
-    },
-    {
-      "id": "t60",
-      "name": "door: close from s19",
-      "event": "on_interact",
-      "once": false,
-      "enabled": true,
-      "conditions": [
-        {
-          "c": "side_is",
-          "side": {
-            "edgeTwin": "e14"
-          }
-        },
-        {
-          "c": "sector_at_rest",
-          "sector": "behind"
-        },
-        {
-          "c": "sector_offset_at_least",
-          "sector": "behind",
-          "z": "0.25"
-        }
-      ],
-      "actions": [
-        {
-          "a": "sector_move",
-          "sector": "behind",
-          "surface": "ceiling",
-          "to": "base_ceiling",
-          "speed": [
-            1,
-            4
-          ]
+          "ticks": 240
         }
       ]
     },
@@ -698,43 +662,7 @@
             "trigger": "t58"
           },
           "after": "behind",
-          "ticks": 90
-        }
-      ]
-    },
-    {
-      "id": "t62",
-      "name": "door: close from s1",
-      "event": "on_interact",
-      "once": false,
-      "enabled": true,
-      "conditions": [
-        {
-          "c": "side_is",
-          "side": {
-            "edgeTwin": "e18"
-          }
-        },
-        {
-          "c": "sector_at_rest",
-          "sector": "behind"
-        },
-        {
-          "c": "sector_offset_at_least",
-          "sector": "behind",
-          "z": "0.25"
-        }
-      ],
-      "actions": [
-        {
-          "a": "sector_move",
-          "sector": "behind",
-          "surface": "ceiling",
-          "to": "base_ceiling",
-          "speed": [
-            1,
-            4
-          ]
+          "ticks": 240
         }
       ]
     },

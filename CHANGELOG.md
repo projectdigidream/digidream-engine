@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Changed
+
+- **The starter module** shows the player's death on every map (a game graph:
+  the screen goes dark, a line is said, it clears), says its keys once as the
+  game starts, has its debug overlay off, draws its spirit twice the size with a
+  body to match and a gentler bite, carries a muzzle flash, a tracer and hit
+  sparks (particle kinds 20-22), and its door opens on E and stays open four
+  seconds (E no longer shuts it).
+
 ## 0.2.2 -- 2026-10-17
 
 ### Fixed

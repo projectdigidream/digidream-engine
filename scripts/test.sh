@@ -643,6 +643,9 @@ suite_studio () {
   # What a particle is drawn as (a hard shape, a picture): written only when
   # it says something, and read back by the client's own parser.
   node ../studio/test/particles.test.js | tail -1
+  # Modules from earlier studios brought up to date as they open: the
+  # starter's old script (every swing charged twice) replaced, a changed one kept.
+  node ../studio/test/migrate.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2

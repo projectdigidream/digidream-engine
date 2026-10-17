@@ -1,0 +1,55 @@
+{
+ "graph": 1,
+ "name": "welcome",
+ "nodes": [
+  {
+   "id": "arrives",
+   "type": "when_player_arrives",
+   "meta": {
+    "x": 40,
+    "y": 40
+   }
+  },
+  {
+   "id": "first",
+   "type": "once",
+   "meta": {
+    "x": 320,
+    "y": 40
+   }
+  },
+  {
+   "id": "keys",
+   "type": "subtitle",
+   "text": "WASD walk   SPACE jump   SHIFT dash   E use   F attack   Q/R turn the camera",
+   "seconds": 8,
+   "meta": {
+    "x": 560,
+    "y": 40
+   }
+  }
+ ],
+ "links": [
+  [
+   "arrives.then",
+   "first.in"
+  ],
+  [
+   "first.then",
+   "keys.in"
+  ]
+ ],
+ "meta": {
+  "editor": "studio",
+  "notes": [
+   {
+    "id": "note1",
+    "x": 10,
+    "y": -60,
+    "w": 900,
+    "h": 220,
+    "text": "The keys, said once as the game starts. Change the words, or delete this graph when the game says them its own way."
+   }
+  ]
+ }
+}

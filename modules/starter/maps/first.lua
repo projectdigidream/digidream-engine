@@ -67,25 +67,7 @@ triggers.load{
           offset = { -1, 8 },
           speed = { 1, 4 },
         },
-        { a = "run_after", trigger = "door: shut", after = "behind", ticks = 90 },
-      },
-    },
-    {
-      name = "door: close from s19",
-      event = "on_interact",
-      conditions = {
-        { c = "side_is", side = 18, expect_neighbour = 1 },
-        { c = "sector_at_rest", sector = "behind" },
-        { c = "sector_offset_at_least", sector = "behind", z = "0.25" },
-      },
-      actions = {
-        {
-          a = "sector_move",
-          sector = "behind",
-          surface = "ceiling",
-          to = "base_ceiling",
-          speed = { 1, 4 },
-        },
+        { a = "run_after", trigger = "door: shut", after = "behind", ticks = 240 },
       },
     },
     {
@@ -105,25 +87,7 @@ triggers.load{
           offset = { -1, 8 },
           speed = { 1, 4 },
         },
-        { a = "run_after", trigger = "door: shut", after = "behind", ticks = 90 },
-      },
-    },
-    {
-      name = "door: close from s1",
-      event = "on_interact",
-      conditions = {
-        { c = "side_is", side = 2, expect_neighbour = 1 },
-        { c = "sector_at_rest", sector = "behind" },
-        { c = "sector_offset_at_least", sector = "behind", z = "0.25" },
-      },
-      actions = {
-        {
-          a = "sector_move",
-          sector = "behind",
-          surface = "ceiling",
-          to = "base_ceiling",
-          speed = { 1, 4 },
-        },
+        { a = "run_after", trigger = "door: shut", after = "behind", ticks = 240 },
       },
     },
     {
