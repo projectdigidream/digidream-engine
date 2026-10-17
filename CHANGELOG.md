@@ -47,6 +47,10 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- `when_dies` and `when_hurt` work in a module's game graph, for a death on
+  any map: one graph of the module's can answer a player's death everywhere --
+  a death screen -- a map drawn later included. `by` is empty there when the
+  killer is out of reach.
 - A time scale, for automated testing: `--time-scale 0.25` on the server, or
   `DNP_TIME_SCALE=0.25` in the environment of whatever starts it (the desktop
   app, `run_stack.sh`), runs the game at a quarter speed in real time -- or up

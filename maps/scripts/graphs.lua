@@ -1494,6 +1494,10 @@ M.call = function(name, entity, value) fire_call(name, entity, value) end
 if dnp ~= nil and dnp.export ~= nil then
   if dnp.is_game ~= nil and dnp.is_game() then
     dnp.export("graph_call", function(name, value, entity) fire_call(name, entity, value) end)
+    -- A hurt or a death in any level, told by its mob runtime (mobs.lua's
+    -- tell_graphs), for this game's when_hurt and when_dies. `by` is nil when
+    -- whoever dealt it is out of reach.
+    dnp.export("graph_notify", function(what, target, by, amount, kind) M.notify(what, target, by, amount, kind) end)
   else
     dnp.export("graph_call", function(e, name, value) fire_call(name, e, value) end)
   end

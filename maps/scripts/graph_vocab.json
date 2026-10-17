@@ -667,12 +667,11 @@
         "entity",
         "by"
       ],
-      "doc": "Something died. `by` is whoever killed it, when anybody did.",
+      "doc": "Something died. `by` is whoever killed it, when anybody did. In a game graph, a death on any map -- so one graph of the module's can answer a player's death everywhere; `by` is nil there when the killer is out of reach.",
       "exec_in": [],
       "exec_out": [
         "then"
       ],
-      "level_only": true,
       "name": "when_dies",
       "starts": true
     },
@@ -702,12 +701,11 @@
         "by",
         "amount"
       ],
-      "doc": "Something was hurt, and by how much.",
+      "doc": "Something was hurt, and by how much. In a game graph, on any map.",
       "exec_in": [],
       "exec_out": [
         "then"
       ],
-      "level_only": true,
       "name": "when_hurt",
       "starts": true
     },

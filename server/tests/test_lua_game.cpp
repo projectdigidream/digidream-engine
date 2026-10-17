@@ -118,6 +118,14 @@ static double num(lua_State* L, const char* global) {
     lua_pop(L, 1);
     return v;
 }
+static std::string str(lua_State* L, const char* global) {
+    lua_getglobal(L, global);
+    const char* v = lua_tostring(L, -1);
+    std::string out = v ? v : "";
+    lua_pop(L, 1);
+    return out;
+}
+
 static bool truthy(lua_State* L, const char* global) {
     lua_getglobal(L, global);
     const bool v = lua_toboolean(L, -1) != 0;
@@ -548,6 +556,41 @@ int main(int argc, char** argv) {
     )LUA", "game graphs with world nodes"));
     CHECK(!truthy(GV, "g_doorw"));         // a door is a level's
     CHECK(truthy(GV, "g_pushw"));          // CONTROL: a push is anybody's
+
+    // ================================================================
+    // A DEATH ON ANY MAP, HEARD BY THE GAME: when_dies and when_hurt in a game
+    // graph, told by the level's mob runtime -- so one graph of the module's
+    // answers a player's death everywhere (a death screen), a map drawn later
+    // included.
+    std::printf("-- the game hears a player die in a level --\n");
+    CHECK(run(GV, R"LUA(
+      gd_ok, gd_err = graphs.load({ graph = 1, name = "gdeath", vars = { died = 0, hurt = 0 },
+        nodes = {
+          { id = "d", type = "when_dies", what = "players" },
+          { id = "dc", type = "add_var", var = "died", value = 1 },
+          { id = "h", type = "when_hurt", what = "players" },
+          { id = "hc", type = "add_var", var = "hurt", value = 1 } },
+        links = { { "d.then", "dc.in" }, { "h.then", "hc.in" } } }, "gdeath")
+      gd_err = gd_err and table.concat(gd_err, "; ") or ""
+    )LUA", "a game graph listening for deaths"));
+    std::printf("  a game graph with when_dies/when_hurt players: %s %s\n",
+                truthy(GV, "gd_ok") ? "loaded" : "refused", str(GV, "gd_err").c_str());
+    CHECK(truthy(GV, "gd_ok"));
+    // A monster killed in the level: not a player, so not heard (CONTROL that
+    // the filter is the graph's and not "every death").
+    CHECK(run(LV, R"LUA(
+      local p = dnp.players()[1]
+      local pp = p:pos()
+      local z = mobs.spawn('zombieman', vec3.new(pp.x + fx.int(9), pp.y, pp.z))
+      mobs.hurt(z, 1000, nil)
+      p:set_hp(100)
+      mobs.hurt(p, 30, nil)
+      mobs.hurt(p, 1000, nil)
+    )LUA", "a player hurt, then killed, in the level"));
+    CHECK(run(GV, "gd_died = graphs.var('gdeath', 'died'); gd_hurt = graphs.var('gdeath', 'hurt')", "reading the game"));
+    std::printf("  the game heard %g death(s) and %g hurt(s)\n", num(GV, "gd_died"), num(GV, "gd_hurt"));
+    CHECK(num(GV, "gd_died") == 1);        // the player's, not the zombieman's
+    CHECK(num(GV, "gd_hurt") == 2);        // the 30, and the killing blow
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails ? 1 : 0;

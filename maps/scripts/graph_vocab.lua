@@ -359,20 +359,23 @@ graph_vocab = {
       data_in = {}, data_out = { "entity" },
       doc = "A player went out of the level (or the game). `entity` may already " ..
             "be gone." },
-    { name = "when_dies", category = "events", starts = true, level_only = true,
+    { name = "when_dies", category = "events", starts = true,
       args = { { name = "what", type = "enum", values = { "players", "monsters", "anyone" }, optional = true,
                  doc = "Defaults to monsters." },
                { name = "kind", type = "string", optional = true, doc = "Only this monster, by name." } },
       exec_in = {}, exec_out = { "then" },
       data_in = {}, data_out = { "entity", "by" },
-      doc = "Something died. `by` is whoever killed it, when anybody did." },
-    { name = "when_hurt", category = "events", starts = true, level_only = true,
+      doc = "Something died. `by` is whoever killed it, when anybody did. In a " ..
+            "game graph, a death on any map -- so one graph of the module's " ..
+            "can answer a player's death everywhere; `by` is nil there when " ..
+            "the killer is out of reach." },
+    { name = "when_hurt", category = "events", starts = true,
       args = { { name = "what", type = "enum", values = { "players", "monsters", "anyone" }, optional = true,
                  doc = "Defaults to anyone." },
                { name = "kind", type = "string", optional = true } },
       exec_in = {}, exec_out = { "then" },
       data_in = {}, data_out = { "entity", "by", "amount" },
-      doc = "Something was hurt, and by how much." },
+      doc = "Something was hurt, and by how much. In a game graph, on any map." },
 
     -- -------------------------------------------------------- THE WORLD
     -- Plain verbs on things: what happens to THIS monster, THAT door, in units,
