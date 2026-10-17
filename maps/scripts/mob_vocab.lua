@@ -1032,6 +1032,18 @@ mob_vocab = {
     { name = "anim_fly", type = "int", optional = true },
     { name = "anim_burst", type = "int", optional = true },
     { name = "burst_ticks", type = "int", optional = true },
+    { name = "trail", type = "int", optional = true,
+      doc = "A particle kind (a `vfx <kind> particles` line in assets/props.txt) " ..
+            "that follows this missile for its whole flight: from launch until " ..
+            "it bursts or expires, through every bounce, on a split's children " ..
+            "if their own missile says so too. It comes out at the kind's own " ..
+            "`rate`, its cone opening BEHIND the missile; specks already out " ..
+            "live their own life, and none come after the burst. Drawn by each " ..
+            "client from one field on the missile, not an event a tick -- and " ..
+            "by the shooter's own client on the rocket it predicts. The kind " ..
+            "need not say `attach 1`. With `carry 1` on its line the specks " ..
+            "move with the missile, a flame around a fireball, rather than " ..
+            "being left behind, a smoke trail." },
     { name = "on_hit", type = "actions", optional = true,
       doc = "Runs when it reaches something, with the thing it reached as the " ..
             "target. This is where the damage and the splash go -- there is " ..

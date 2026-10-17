@@ -115,6 +115,7 @@ struct WMissile {
     u16 life = 0;                 // ticks before it expires
     u16 burst_anim = NO_ANIM;     // the state it bursts in
     u16 burst_ticks = 0;
+    u16 trail = 0;                // the particle kind that follows it (mob_vocab `trail`), 0 none
     u8  vfx_count = 0;            // on_hit's impact effects
     u16 vfx_kind[MAX_MISSILE_VFX]{};
     fx  vfx_radius[MAX_MISSILE_VFX]{};

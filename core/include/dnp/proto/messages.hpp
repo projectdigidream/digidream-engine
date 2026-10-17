@@ -328,6 +328,11 @@ inline constexpr u32 TELEPORTED      = 1u << 11;
 // is rather than as the weapon's. Sent when it changes; a monster's step
 // shape is in its body's parameters and never needs it.
 inline constexpr u32 ATTACK_STEP     = 1u << 12;
+// WHICH PARTICLE KIND FOLLOWS IT (u16; 0 none): a missile's smoke, a
+// fireball's flame, an aura (e:set_trail). The client keeps an emitter of that
+// kind on the body while it draws it, so a trail is this field, sent when it
+// changes, and not an event a tick. Not physics: not hashed, not predicted.
+inline constexpr u32 TRAIL           = 1u << 13;
 }  // namespace ent_field
 
 namespace state_flag {
@@ -725,6 +730,7 @@ struct EntityBlock {
     u8     attack_weapon   = 0xFF; // ent_field::ATTACK_STEP
     u8     attack_phase    = 0xFF;
     u8     attack_step     = 0;
+    u16    trail           = 0;    // ent_field::TRAIL
 };
 
 // A scripted-discrete sector's current offset. Parametric movers are absent by

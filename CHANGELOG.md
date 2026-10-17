@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- A missile can trail particles for its whole flight: `trail = <particle kind>`
+  on the missile. It comes out from launch until the missile bursts or expires,
+  through bounces, and on the shooter's own predicted rocket too, at the
+  kind's own rate and look. `carry 1` on a particles line moves the specks with
+  the body that let them out, a flame around a fireball, instead of leaving them
+  behind as smoke. Scripts can hang a trail on any body: `e:set_trail(kind)`.
+
 ## 0.2.1.2 -- 2026-10-17
 
 ### Added

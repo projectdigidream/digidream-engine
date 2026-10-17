@@ -94,6 +94,7 @@ void encode_entity(ByteWriter& w, const EntityBlock& e) noexcept {
     if (e.mask & ent_field::ATTACK_STEP) {
         w.u8v(e.attack_weapon); w.u8v(e.attack_phase); w.u8v(e.attack_step);
     }
+    if (e.mask & ent_field::TRAIL) w.u16v(e.trail);
     // DESTROYED carries no payload.
 }
 
@@ -124,6 +125,7 @@ bool decode_entity(ByteReader& r, EntityBlock& e) noexcept {
     if (e.mask & ent_field::ATTACK_STEP) {
         e.attack_weapon = r.u8v(); e.attack_phase = r.u8v(); e.attack_step = r.u8v();
     }
+    if (e.mask & ent_field::TRAIL) e.trail = r.u16v();
     return r.ok();
 }
 

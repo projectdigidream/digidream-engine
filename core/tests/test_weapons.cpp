@@ -354,7 +354,7 @@ static void test_cooldown() {
 }
 
 static void test_missile_spec_on_the_wire() {
-    std::printf("weapons: a launch's gravity and homing survive the wire\n");
+    std::printf("weapons: a launch's gravity, homing and trail survive the wire\n");
     static WeaponTable t;
     t.clear();
     WeaponDef& w = t.weapons[t.weapon_count++];
@@ -367,6 +367,7 @@ static void test_missile_spec_on_the_wire() {
     l.missile.homes = true;
     l.missile.bounces = true;
     l.missile.throws = true;
+    l.missile.trail = 13;
     static u8 buf[1 << 16];
     ByteWriter bw(buf, sizeof(buf));
     CHECK(encode_weapon_table(bw, t));
@@ -375,6 +376,7 @@ static void test_missile_spec_on_the_wire() {
     CHECK(decode_weapon_table(br, back));
     const WMissile& m = back.weapons[0].phases[0].steps[0].missile;
     CHECK(m.gravity == fx::from_frac(98, 10) && m.homes && m.bounces && m.throws);
+    CHECK(m.trail == 13);   // what the shooter's client keeps on its ghost
     // CONTROL: the hash moves with each, so a client running a table that
     // flies its missiles differently is a detected mismatch.
     static WeaponTable other;
@@ -389,6 +391,9 @@ static void test_missile_spec_on_the_wire() {
     CHECK(other.hash() != t.hash());
     other = t;
     other.weapons[0].phases[0].steps[0].missile.throws = false;
+    CHECK(other.hash() != t.hash());
+    other = t;
+    other.weapons[0].phases[0].steps[0].missile.trail = 0;
     CHECK(other.hash() != t.hash());
 }
 

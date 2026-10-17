@@ -408,6 +408,10 @@ bool compile_step(Reader& r, int e, const std::string& where, const WeaponNames&
                     n = 20;
                     ok = ok && r.int_at(d, "burst_ticks", mw, 0, 65535, n);
                     m.burst_ticks = static_cast<u16>(n);
+                    // Its trail, which the shooter's client keeps on its ghost.
+                    n = 0;
+                    ok = ok && r.int_at(d, "trail", mw, 0, 65535, n);
+                    m.trail = static_cast<u16>(n);
                     // Its impact effects: on_hit's `vfx` entries drawn at the impact.
                     lua_getfield(L, d, "on_hit");
                     if (ok && lua_istable(L, -1)) {

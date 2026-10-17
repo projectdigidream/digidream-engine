@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { softDisc } from '../src/render/vfx.js'
 import { parseVfx, tracerEnds, fade, VfxView, emitBurst, stepParticles,
-         rampColour, particleShape, PARTICLE_SHAPES, defaultImageUrls } from '../src/render/vfx.js'
+         rampColour, particleShape, PARTICLE_SHAPES, defaultImageUrls, FOLLOW_GRACE } from '../src/render/vfx.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..')
@@ -533,6 +533,59 @@ console.log('vfx: a particle is drawn as a shape or a picture, tinted by its ram
   const tv = new VfxView({ THREE: T, scene, catalogue: { kinds }, poolSize: 1, loader })
   tv.spawn(35, { x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, 0)
   check(tv.live.length === 1 && tv.parts.length === 0, 'a tracer that named a shape is still a line')
+}
+
+// --- a trail: a kind kept coming out of a body while it has one -------------------
+console.log('vfx: a trail follows its body, stops when it is not followed, and can be carried')
+{
+  // No `attach 1` on either: following is what attaches them.
+  const { kinds } = parseVfx([
+    'vfx 40 particles rate 60 life 1 life_var 0 speed 0 speed_var 0 gravity 0 drag 0',
+    'vfx 41 particles rate 60 life 1 life_var 0 speed 0 speed_var 0 gravity 0 drag 0 carry 1'
+  ].join('\n'))
+  check(kinds.get(40).carry === 0 && kinds.get(41).carry === 1, '`carry` is read back, 0 by default')
+  const scene = { add () {}, remove () {} }
+  const run = (kind, frames, stopAt) => {
+    const view = new VfxView({ THREE: fakeTHREE(), scene, catalogue: { kinds }, poolSize: 1 })
+    // A missile flying +x at 6 units a second.
+    const body = { x: 0, y: 1, z: 0 }
+    const out = []
+    for (let f = 0; f <= frames; f++) {
+      const now = f / 60
+      body.x = 6 * now
+      if (f < stopAt) view.follow(kind, 'm', 0.5, now, 'm/1')
+      view.update(now, (who) => (who === 'm' ? body : null))
+      const em = view.emitters.get(`${kind}:m/1`)
+      out.push({ n: em ? em.parts.length : 0, em, xs: em ? em.parts.map((p) => p.x) : [] })
+    }
+    return { out, view }
+  }
+  const { out } = run(40, 90, 30)
+  // Emitting while followed: about rate * time.
+  check(out[29].n >= 25 && out[29].n <= 32, `followed for half a second, ${out[29].n} specks out (rate 60)`)
+  // Then not followed: within FOLLOW_GRACE nothing more comes out, and what is
+  // out stays out -- they live their own second.
+  const after = Math.ceil(FOLLOW_GRACE * 60) + 30
+  check(out[after + 5].n === out[after].n && out[after].n >= out[29].n,
+        `not followed, no more come out (${out[after].n} then ${out[after + 5].n}) and none are taken away`)
+  // LEFT BEHIND: a speck stays where it came out while the body flies on.
+  const firstX = out[10].xs[0]
+  check(Math.abs(out[40].xs[0] - firstX) < 1e-9, 'left behind: a speck stays where it came out')
+  // CARRIED: a speck moves with the body, so its distance from it holds.
+  const c = run(41, 40, 40).out
+  const gap0 = 6 * (10 / 60) - c[10].xs[0]
+  const gap1 = 6 * (40 / 60) - c[40].xs[0]
+  check(Math.abs(gap1 - gap0) < 1e-6, `carried: its place on the body holds (${gap0.toFixed(4)} -> ${gap1.toFixed(4)})`)
+  // CONTROL: carried specks moved at all, so the line above is not two zeros.
+  check(c[40].xs[0] - c[10].xs[0] > 2.9, 'CONTROL: and they travelled with it')
+  // A slot taken over by another body keeps the trails apart: a new key.
+  const view = new VfxView({ THREE: fakeTHREE(), scene, catalogue: { kinds }, poolSize: 1 })
+  view.follow(40, 7, 0, 0, '7/1')
+  view.follow(40, 7, 0, 0, '7/2')
+  check(view.emitterCount === 2, 'the next body in a slot gets its own trail')
+  // And a kind that is not particles does not trail.
+  view.follow(1, 7, 0, 0, '7/3')
+  check(view.emitterCount === 2, 'CONTROL: a tracer kind does not trail')
 }
 
 console.log(`\nvfx: ${checks} checks, ${fails} failures`)

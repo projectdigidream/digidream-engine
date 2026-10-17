@@ -407,6 +407,44 @@ int l_entity_set_avatar(lua_State* L) {
     return 0;
 }
 
+// entity:set_trail(kind) and entity:trail(), and the same on a prop
+//
+// A PARTICLE KIND THAT FOLLOWS THIS BODY for as long as it is here: a missile's
+// smoke, a fireball's flame, a monster's aura. The client keeps an emitter of
+// that `vfx` kind on the body every frame it draws it, and lets it stop when
+// the trail is set back to 0 or the body goes -- so it costs one field, sent
+// when it changes, and no event a tick. The kind is drawn by the client's
+// catalogue (assets/props.txt); a number nobody describes draws nothing.
+//
+// Server state, as the avatar is: not physics, not hashed, not predicted. The
+// slot's generation is kept with it, so a body that takes the slot over later
+// starts with none.
+int trail_get(lua_State* L, WorldContext& ctx, i32 e) {
+    if (e < 0 || ctx.trail == nullptr || ctx.world == nullptr) { lua_pushnil(L); return 1; }
+    const u32 i = static_cast<u32>(e);
+    lua_pushnumber(L, ctx.trail_gen[i] == ctx.world->generation(i) ? ctx.trail[i] : 0);
+    return 1;
+}
+int trail_set(lua_State* L, WorldContext& ctx, i32 e) {
+    if (e < 0 || ctx.trail == nullptr || ctx.world == nullptr) return 0;
+    const double n = luaL_checknumber(L, 2);
+    if (!(n >= 0 && n <= 65535) || n != static_cast<double>(static_cast<u32>(n))) {
+        return luaL_error(L, "set_trail: %f is not a particle kind (0..65535; 0 is none)", n);
+    }
+    const u32 i = static_cast<u32>(e);
+    ctx.trail[i] = static_cast<u16>(n);
+    ctx.trail_gen[i] = ctx.world->generation(i);
+    return 0;
+}
+int l_entity_trail(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    return trail_get(L, ctx, resolve(L, ctx, check_handle(L, 1)));
+}
+int l_entity_set_trail(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    return trail_set(L, ctx, resolve(L, ctx, check_handle(L, 1)));
+}
+
 int l_entity_set_hp(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -694,6 +732,8 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"set_hp", l_entity_set_hp},
     {"avatar", l_entity_avatar},
     {"set_avatar", l_entity_set_avatar},
+    {"trail", l_entity_trail},
+    {"set_trail", l_entity_set_trail},
     {"set_animation", l_entity_set_animation},
     {"kind", l_entity_kind},
     {"name", l_entity_name},
@@ -856,6 +896,15 @@ int l_prop_set_pos(lua_State* L) {
 // every rocket in flight reported a heading of zero, and an eight-view sprite
 // with eight rotations extracted showed rotation 1 from every angle. It read as
 // the sprite lacking its rotations, which it does not.
+int l_prop_trail(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    return trail_get(L, ctx, resolve_prop(L, ctx, check_prop_handle(L, 1)));
+}
+int l_prop_set_trail(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    return trail_set(L, ctx, resolve_prop(L, ctx, check_prop_handle(L, 1)));
+}
+
 int l_prop_set_facing(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
@@ -887,6 +936,9 @@ int l_prop_despawn(lua_State* L) {
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
     if (e < 0) { lua_pushboolean(L, 0); return 1; }
     ctx.world->despawn_prop(static_cast<u32>(e));
+    // Its trail goes with it (the generation stamp already says so; this is for
+    // a slot reused often enough for the stamp to come round again).
+    if (ctx.trail != nullptr) ctx.trail[e] = 0;
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -911,6 +963,8 @@ const luaL_Reg PROP_METHODS[] = {
     {"pos", l_prop_pos},
     {"set_animation", l_prop_set_animation},
     {"set_facing", l_prop_set_facing},
+    {"trail", l_prop_trail},
+    {"set_trail", l_prop_set_trail},
     {"set_pos", l_prop_set_pos},
     {"despawn", l_prop_despawn},
     {nullptr, nullptr},

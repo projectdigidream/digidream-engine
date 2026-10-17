@@ -143,6 +143,12 @@ struct Host {
     // state -- like hp: not hashed, not in the determinism gate, not predicted.
     // A costume is not physics.
     u16  avatar[sim::MAX_AGENTS]{};
+    // WHICH PARTICLE KIND FOLLOWS EACH ENTITY (e:set_trail, a missile's
+    // `trail`): server state as an avatar is, over every slot, agents and
+    // props alike. Stamped with the slot's generation when it is set, so a body
+    // that takes a slot over does not inherit the last one's trail.
+    u16  trail[sim::MAX_ENTITIES]{};
+    u8   trail_gen[sim::MAX_ENTITIES]{};
     // Which player each body is: its session's id plus one, or 0 for a body
     // nobody plays. What e:player() answers, so the game VM can key a player's
     // state by something that survives walking into another world.
@@ -204,6 +210,7 @@ struct Level {
           lua_touched_tick(host->lua_touched_tick),
           crush_reported_tick(host->crush_reported_tick), crush_seen(host->crush_seen),
           param_epoch(host->param_epoch), avatar(host->avatar),
+          trail(host->trail), trail_gen(host->trail_gen),
           sent_motions(host->sent_motions), sent_motion_count(host->sent_motion_count),
           motion_changed_tick(host->motion_changed_tick),
           prop_epoch_seen(host->prop_epoch_seen), props_changed_tick(host->props_changed_tick),
@@ -273,6 +280,8 @@ struct Level {
     bool (&crush_seen)[sim::MAX_AGENTS];
     u8   (&param_epoch)[sim::MAX_AGENTS];
     u16  (&avatar)[sim::MAX_AGENTS];
+    u16  (&trail)[sim::MAX_ENTITIES];
+    u8   (&trail_gen)[sim::MAX_ENTITIES];
     sim::SectorMotion (&sent_motions)[sim::MAX_MOVING_SECTORS];
     u32& sent_motion_count;
     u32& motion_changed_tick;
@@ -960,6 +969,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.nav       = &H.nav_graph;
         game_ctx.hp        = H.hp;
         game_ctx.avatar    = H.avatar;
+        game_ctx.trail     = H.trail;
+        game_ctx.trail_gen = H.trail_gen;
         game_ctx.effects   = &H.effects;
         game_ctx.player    = H.player;
         game_ctx.input_tick = H.input_tick;
@@ -2350,6 +2361,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.debug_overlay = debug_overlay != 0;
         L.ctx.hp = L.hp;
         L.ctx.avatar = L.avatar;
+        L.ctx.trail = L.trail;
+        L.ctx.trail_gen = L.trail_gen;
         L.ctx.levels = this;
         L.ctx.player = L.host->player;
         L.ctx.input_tick = L.host->input_tick;
@@ -4566,6 +4579,9 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     }
                     now.teleports       = world.teleports(i);
                 }
+                // The particle kind following it, if it was set for this
+                // body and not for one that had the slot before.
+                if (L.trail_gen[i] == now.generation) now.trail = L.trail[i];
 
                 if (!now.present) {
                     // Only tell the client about a destruction it has not
@@ -4606,6 +4622,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 e.attack_weapon    = now.attack_weapon;
                 e.attack_phase     = now.attack_phase;
                 e.attack_step      = now.attack_step;
+                e.trail            = now.trail;
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;

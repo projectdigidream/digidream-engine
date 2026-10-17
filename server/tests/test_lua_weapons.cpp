@@ -187,6 +187,11 @@ int main(int argc, char** argv) {
     ctx.map_store = &room.store;
     ctx.props = &props;
     ctx.hp = hp;
+    // Which particle kind follows each entity (e:set_trail), as the server keeps it.
+    static u16 trail[sim::MAX_ENTITIES];
+    static u8 trail_gen[sim::MAX_ENTITIES];
+    ctx.trail = trail;
+    ctx.trail_gen = trail_gen;
     ctx.commands = &commands;
     ctx.effects = &effects;
     ctx.rng = Rng(20260927u, 7);
@@ -2712,6 +2717,50 @@ int main(int argc, char** argv) {
         CHECK(long_reach == 3.0 * 4294967296.0);     // written into the body for that swing
         CHECK(back_again == 0);                      // and put back for the next
         CHECK(num("sd_reach") == num("sd_reach0"));
+    }
+
+    // ================================================================
+    // A MISSILE'S TRAIL: the particle kind its `trail` names is on its prop from
+    // launch, through the flight, and gone when it bursts -- while the burst
+    // still plays -- so every client follows it from one field.
+    std::printf("-- a missile's trail --\n");
+    {
+        CHECK(run("local p = dnp.players()[1]\n"
+                  "for _, e in ipairs(dnp.entities()) do\n"
+                  "  if e:index() ~= p:index() then e:despawn() end\n"
+                  "end\n"
+                  "mobs.reset()\n"
+                  "mobs.add_missiles({\n"
+                  "  smoky = { prop = 'rocket', speed = fx.int(8), life = 200, trail = 13,\n"
+                  "            anim_burst = 1, burst_ticks = 15,\n"
+                  "            on_hit = { { action = 'damage', amount = 1 } } },\n"
+                  "  plain = { prop = 'rocket', speed = fx.int(8), life = 200 },\n"
+                  "})\n"
+                  "local pp = p:pos()\n"
+                  "tr_target = mobs.spawn('zombieman', vec3.new(pp.x + fx.int(4), pp.y, pp.z))\n"
+                  "mobs.acts.sleep(mobs.live[tr_target:index()])\n"
+                  "mobs.launch_from(p, 'smoky', 0)\n"
+                  "mobs.launch_from(p, 'plain', 2147483648)\n"
+                  "function tr_read()\n"
+                  "  tr_smoky, tr_plain, tr_bursting = -1, -1, false\n"
+                  "  for _, s in pairs(mobs.flying) do\n"
+                  "    if s.def.trail ~= nil then tr_smoky = s.p:trail(); tr_bursting = s.burst_at ~= nil\n"
+                  "    else tr_plain = s.p:trail() end\n"
+                  "  end\n"
+                  "end\n", "launching a trailed missile and a plain one"));
+        server_tick(0);
+        CHECK(run("tr_read()", "reading the trails"));
+        std::printf("  in flight: the trailed missile's prop says %d, the plain one's %d\n",
+                    (int)num("tr_smoky"), (int)num("tr_plain"));
+        CHECK(num("tr_smoky") == 13);
+        CHECK(num("tr_plain") == 0);                 // CONTROL: a missile with no trail has none
+        int bursting_trail = -2;
+        for (int i = 0; i < 60 && bursting_trail == -2; ++i) {
+            server_tick(0);
+            if (run("tr_read()", "reading") && truthy("tr_bursting")) bursting_trail = static_cast<int>(num("tr_smoky"));
+        }
+        std::printf("  bursting on the zombieman, still there, its prop says %d\n", bursting_trail);
+        CHECK(bursting_trail == 0);                  // nothing more comes out of a burst
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

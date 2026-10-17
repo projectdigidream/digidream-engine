@@ -104,6 +104,10 @@ export class EntityView {
       // a remove-and-respawn the caller can do rather than a surprise this loop
       // performs mid-interpolation.
       if (e.mask & ENT_FIELD.AVATAR) ent.avatar = e.avatar ?? 0
+      // The particle kind following it (a missile's trail): stands until it
+      // changes, like the rest, and BEFORE the position early-return below --
+      // a burst clears it on a tick that may carry nothing else.
+      if (e.mask & ENT_FIELD.TRAIL) ent.trail = e.trail ?? 0
       // How far into its swing (ticks left; 0 none), delta-encoded like the
       // rest, so the last value stands until it changes -- and BEFORE the
       // position early-return, because a monster swinging on the spot sends

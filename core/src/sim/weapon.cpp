@@ -469,6 +469,7 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
                         w.fxraw(m.blast_radius); w.fxraw(m.blast_knockback); w.fxraw(m.blast_lift);
                     }
                     w.fxraw(m.gravity);
+                    w.u16v(m.trail);
                 }
                 // A swing step's own shape, inline: the pool is the
                 // decoder's business, so two tables that swing the same say
@@ -580,6 +581,7 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
                         m.blast_radius = r.fxraw(); m.blast_knockback = r.fxraw(); m.blast_lift = r.fxraw();
                     }
                     m.gravity = r.fxraw();
+                    m.trail = r.u16v();
                     if (!r.ok()) return false;
                 }
                 if (s.action == WAct::Swing) {

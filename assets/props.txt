@@ -138,6 +138,11 @@ vfx 2 tracer colour ff8844 width 0.12 life 0.45
 # are tinted by the colour ramp, so one white picture gives a burst of any
 # colour.
 #
+# A TRAIL is a kind kept coming out of a body -- a missile's `trail`, any
+# body's e:set_trail -- at its own `rate`, its cone opening behind it. Specks
+# are left behind where they came out (smoke); `carry 1` moves them with the
+# body instead (a flame on a fireball).
+#
 # ONE LINE EACH. There is no continuation character: a line not starting with a
 # record keyword is skipped in silence, so a wrapped entry keeps the attributes
 # before the break and loses every one after it. Which is a kind that looks

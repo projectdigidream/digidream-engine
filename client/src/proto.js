@@ -134,7 +134,9 @@ export const ENT_FIELD = {
   TELEPORTED: 1 << 11,
   // Which weapon step that swing is (u8 weapon, phase, step; weapon 255 none):
   // a player's `swing` step's own shape, looked up in the weapon table.
-  ATTACK_STEP: 1 << 12
+  ATTACK_STEP: 1 << 12,
+  // Which particle kind follows it (u16; 0 none): a missile's trail, an aura.
+  TRAIL: 1 << 13
 }
 
 // Snapshot header flags (docs/protocol.md §5).
@@ -922,6 +924,7 @@ export function decodeSnapshot (buf) {
     if (e.mask & ENT_FIELD.ATTACK_STEP) {
       e.attackWeapon = r.u8(); e.attackPhase = r.u8(); e.attackStep = r.u8()
     }
+    if (e.mask & ENT_FIELD.TRAIL) e.trail = r.u16()
     if (!r.ok) return null
     snap.entities.push(e)
   }

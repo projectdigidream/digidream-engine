@@ -16,6 +16,7 @@
 //                        [drag <per second>] [size <u>] [size_end <u>]
 //                        [colour <hex>] [colour_end <hex>] [blend additive|alpha]
 //                        [shape soft|disc|square|hexagon|star] [sprite <name>]
+//                        [carry 0|1]
 //
 // WHAT A PARTICLE IS DRAWN AS: `shape` -- `soft`, the soft round dot every
 // particle was before there was a choice, and the default, so a line that
@@ -26,6 +27,12 @@
 // shape is what draws while the picture loads, or if it is not there. Either is
 // tinted by the colour ramp, and its own alpha cuts its outline under either
 // blend. Neither applies to a tracer.
+//
+// A TRAIL is a kind kept coming out of a body for as long as it has one -- a
+// missile's `trail` field, any entity's e:set_trail -- at the kind's own `rate`
+// (VfxView.follow). `carry 1` makes the specks move with the body that let them
+// out, a flame around a fireball, rather than being left behind where they
+// came out, a trail of smoke; it applies to any emitter on a body.
 //
 // The engine attaches no meaning to the number at all. It reports "effect 1
 // happened here, pointing that way, with this parameter"; the file says what a
@@ -50,6 +57,13 @@
 // thing attached to an ENTITY with a lifetime, which is a different feature and
 // is not this one.
 //
+
+/**
+ * How long a trail goes on after the last frame that asked for it (follow):
+ * long enough to ride out a slow frame, short enough that a missile that has
+ * burst lets out nothing more anybody sees.
+ */
+export const FOLLOW_GRACE = 0.06
 
 /** What a particle can be drawn as, `soft` first: the default. */
 export const PARTICLE_SHAPES = ['soft', 'disc', 'square', 'hexagon', 'star']
@@ -116,6 +130,8 @@ export function parseVfx (text) {
           attach: 0,
           rate: 40,
           linger: 0.2,
+          // The specks move with the body they came out of (see the top).
+          carry: 0,
           // What each particle is drawn as (see the top of this file).
           shape: 'soft',
           sprite: null
@@ -125,7 +141,7 @@ export function parseVfx (text) {
       width: 'width', life: 'life', life_var: 'lifeVar', count: 'count',
       speed: 'speed', speed_var: 'speedVar', cone: 'cone', gravity: 'gravity',
       drag: 'drag', size: 'size', size_end: 'sizeEnd',
-      attach: 'attach', rate: 'rate', linger: 'linger'
+      attach: 'attach', rate: 'rate', linger: 'linger', carry: 'carry'
     }
     for (let k = 3; k < tok.length; k += 2) {
       const key = tok[k]
@@ -630,13 +646,14 @@ export class VfxView {
    * here -- an emitter with no located entity emits nothing and quietly lapses,
    * which is what happens when whatever it was following dies.
    */
-  attach (kind, entity, dirTurns, now) {
+  attach (kind, entity, dirTurns, now, { key: who = entity, linger = null } = {}) {
     const def = this.kinds.get(kind)
     if (!def || def.type !== 'particles') return
-    const key = `${kind}:${entity}`
+    const key = `${kind}:${who}`
+    const keep = linger ?? (def.linger ?? 0.2)
     const live = this.emitters.get(key)
     if (live) {
-      live.until = now + (def.linger ?? 0.2)
+      live.until = now + keep
       live.dir = dirTurns
       return
     }
@@ -664,8 +681,22 @@ export class VfxView {
     this.scene.add(points)
     this.emitters.set(key, {
       def, entity, dir: dirTurns, points, parts: [], cap, carry: 0,
-      until: now + (def.linger ?? 0.2)
+      until: now + keep, lastAt: null
     })
+  }
+
+  /**
+   * A TRAIL: keep `kind` coming out of `entity` -- a missile's `trail`, any
+   * body's set_trail -- for THIS frame. Called every frame for as long as it
+   * should; the first frame it is not, nothing new comes out (within
+   * FOLLOW_GRACE) and the specks already out live their own life. So a
+   * missile that bursts or goes simply stops being followed. The kind need not
+   * say `attach 1`: this is what attaches it. `key` tells one body in a slot
+   * from the next one there (index/generation), so a slot reused by another
+   * missile does not carry the last one's specks along.
+   */
+  follow (kind, entity, dirTurns, now, key = entity) {
+    this.attach(kind, entity, dirTurns, now, { key, linger: FOLLOW_GRACE })
   }
 
   /**
@@ -733,6 +764,16 @@ export class VfxView {
       // under it, leaving the sparks behind in a line. Emitting from the
       // located position each frame keeps them on the saw.
       const at = locate ? locate(em.entity) : null
+      // CARRIED: every speck out takes the body's movement since the last
+      // frame, so they stay where they are relative to it -- a flame on a
+      // fireball -- rather than where they came out.
+      if (at && em.def.carry) {
+        if (em.lastAt) {
+          const dx = at.x - em.lastAt.x; const dy = at.y - em.lastAt.y; const dz = at.z - em.lastAt.z
+          for (const p of em.parts) { p.x += dx; p.y += dy; p.z += dz }
+        }
+        em.lastAt = { x: at.x, y: at.y, z: at.z }
+      }
       if (at && now < em.until) {
         em.carry += (em.def.rate ?? 40) * dt
         const want = Math.floor(em.carry)

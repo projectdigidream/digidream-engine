@@ -748,7 +748,7 @@ unsigned dnp_world_weapon_launches(const sim::World* w, long long* out64, unsign
 // blast: three more i64 (radius, knockback, lift) and a seventh word, bit 0
 // "it shoves its owner", bit 1 "it falls off", bit 2 "it has a blast", bit 3
 // "it homes", bit 4 "it bounces", bit 5 "its speed is a launch speed". Then a
-// tenth i64, its gravity.
+// tenth i64, its gravity, and an eighth word, the particle kind that trails it.
 EMSCRIPTEN_KEEPALIVE
 unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned phase, unsigned step,
                                   long long* out64, unsigned* out32) {
@@ -766,6 +766,7 @@ unsigned dnp_world_weapon_missile(const sim::World* w, unsigned weapon, unsigned
     out32[6] = (m.self_shove ? 1u : 0u) | (m.blast_falloff ? 2u : 0u) | (m.has_blast ? 4u : 0u) |
                (m.homes ? 8u : 0u) | (m.bounces ? 16u : 0u) | (m.throws ? 32u : 0u);
     out64[9] = m.gravity.raw;
+    out32[7] = m.trail;
     return m.kind;
 }
 

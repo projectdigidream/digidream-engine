@@ -711,7 +711,7 @@ export class WasmWorld {
   missileSpec (weapon, phase, step) {
     const c = this.core
     const M = c.M
-    if (!c.wmis64) { c.wmis64 = M._malloc(10 * 8); c.wmis32 = M._malloc(7 * 4) }
+    if (!c.wmis64) { c.wmis64 = M._malloc(10 * 8); c.wmis32 = M._malloc(8 * 4) }
     const kind = M._dnp_world_weapon_missile(this.ptr, weapon, phase, step, c.wmis64, c.wmis32)
     if (!kind) return null
     const i = c.views.i64
@@ -731,7 +731,9 @@ export class WasmWorld {
     return { kind, speed: i[b64], radius: i[b64 + 1], zOffset: i[b64 + 2], offset: i[b64 + 3],
              life: u[b32], burstAnim: u[b32 + 1], burstTicks: u[b32 + 2], vfx, blast,
              gravity: i[b64 + 9], homes: (flags & 8) !== 0, bounces: (flags & 16) !== 0,
-             throws: (flags & 32) !== 0 }
+             throws: (flags & 32) !== 0,
+             // The particle kind that follows it (mob_vocab `trail`), 0 none.
+             trail: u[b32 + 7] }
   }
 
   /**

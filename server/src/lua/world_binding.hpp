@@ -419,6 +419,10 @@ struct WorldContext {
     // state for the same reason: a costume is not physics, so it is not hashed,
     // not in the determinism gate and not predicted.
     u16*              avatar = nullptr;
+    // Which particle kind follows each entity (e:set_trail), over every slot,
+    // and the slot generation it was set for. Server state, as the avatar is.
+    u16*              trail = nullptr;
+    u8*               trail_gen = nullptr;
     const PropCatalogueView* props = nullptr;
 
     // Deterministic, seeded from the map hash and the script name -- never from

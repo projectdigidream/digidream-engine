@@ -3056,6 +3056,10 @@ function launch(m, kind, ang, offset, slope, origin)
   -- angle, which reads as the art missing its rotations.
   p:set_facing(wrap_brad(ang))
   if def.anim_fly then p:set_animation(def.anim_fly) end
+  -- ITS TRAIL: a particle kind each client keeps on it while it flies (the
+  -- `trail` missile field). One field on the prop, not an event a tick; cleared
+  -- when it bursts, and gone with it when it expires.
+  if def.trail ~= nil and def.trail > 0 and p.set_trail ~= nil then p:set_trail(def.trail) end
   local s = {
     p = p, def = def, dir = d, ang = ang, slope = slope,
     -- What it homes on: a monster's target, or what a player's auto-aim
@@ -3489,6 +3493,9 @@ local function update_missiles(tick)
           missile_acts(s, def.on_hit, at or s.p:pos(), hit)
         end
         if def.anim_burst then
+          -- Nothing more comes out of a missile that has burst, though it is
+          -- still here playing its burst.
+          if def.trail ~= nil and s.p.set_trail ~= nil then s.p:set_trail(0) end
           s.p:set_animation(def.anim_burst)
           s.burst_at = tick + (def.burst_ticks or 20)
         else

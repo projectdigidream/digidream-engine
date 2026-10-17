@@ -73,12 +73,13 @@ export class GhostMissiles {
     this.blasts = []        // { x, y, z, kinds:Set, at }
     this.claims = new Map() // server entity -> { ghost, strayTicks }
     this.seen = new Set()   // server entities already judged
+    this.ids = 0            // each ghost's own number, for what follows it (its trail)
   }
 
   /** A predicted launch (WasmWorld.weaponFrame().launches). */
   launch (l) {
     const m = l.missile
-    const g = { pos: quant3(l.pos), dir: l.dir, slope: l.slope, aim: l.aim, m, age: 0,
+    const g = { id: ++this.ids, pos: quant3(l.pos), dir: l.dir, slope: l.slope, aim: l.aim, m, age: 0,
                 mesh: this.draw.make(m.kind), burstLeft: -1, impact: null, start: { ...l.pos } }
     // A FALLING MISSILE starts along the aim, its vertical speed the slope
     // times its speed, as mobs.lua's throw_vz does for a player's launch.
@@ -169,6 +170,17 @@ export class GhostMissiles {
     }
     this.blasts.push({ x: toF(g.impact.x), y: toF(g.impact.y), z: toF(g.impact.z),
                        kinds: new Set(g.m.vfx.map((v) => v.kind)), at: this.now() })
+  }
+
+  /**
+   * Where ghost `id` is, in world units ({x, y, z} numbers), while it flies;
+   * null once it has burst, or for no such ghost. What its trail comes out of.
+   */
+  positionOf (id) {
+    for (const g of this.flying) {
+      if (g.id === id) return g.burstLeft >= 0 || g.done ? null : { x: toF(g.pos.x), y: toF(g.pos.y), z: toF(g.pos.z) }
+    }
+    return null
   }
 
   #place (g) {

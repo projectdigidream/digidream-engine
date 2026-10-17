@@ -355,6 +355,11 @@ TEST_FN void test_snapshot_roundtrip() {
                 sent[i].attack_phase = static_cast<u8>(rng.next_u32());
                 sent[i].attack_step = static_cast<u8>(rng.next_u32());
             }
+            // And the particle kind that follows it.
+            if (i % 7 == 3) {
+                sent[i].mask |= ent_field::TRAIL;
+                sent[i].trail = static_cast<u16>(1 + rng.next_below(65535));
+            }
             if (sw.try_entity(sent[i])) ++written;
         }
 
@@ -438,6 +443,8 @@ TEST_FN void test_snapshot_roundtrip() {
             } else {
                 CHECK(got.entities[i].attack_weapon == 0xFF);   // CONTROL: absent, none
             }
+            if (sent[i].mask & ent_field::TRAIL) CHECK(got.entities[i].trail == sent[i].trail);
+            else CHECK(got.entities[i].trail == 0);             // CONTROL: absent, none
         }
         CHECK(got.vfx_count == vwritten);
     }

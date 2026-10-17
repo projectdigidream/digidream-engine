@@ -3336,6 +3336,23 @@ function frame (now) {
       ent.mesh.visible = !ghosts.hides(`${index}/${ent.generation}`, ent.kind,
                                        { x: ent.mesh.position.x, y: -ent.mesh.position.z })
     }
+    // TRAILS (a missile's `trail`, any body's set_trail): the particle kind kept
+    // coming out of each body that has one, the frames it is drawn -- so not the
+    // server's copy of a rocket we fly ourselves, hidden just above -- and out
+    // of each of our own rockets in the air, until it bursts. The cone opens
+    // behind the way it faces.
+    if (vfx) {
+      const tnow = performance.now() / 1000
+      for (const [index, ent] of others.entities) {
+        if (!ent.trail || !ent.mesh?.visible) continue
+        vfx.follow(ent.trail, index, ((ent.facing ?? 0) >>> 0) / 4294967296 + 0.5, tnow,
+                   `${index}/${ent.generation}`)
+      }
+      for (const g of ghosts.flying) {
+        if (!g.m?.trail || g.burstLeft >= 0 || g.done) continue
+        vfx.follow(g.m.trail, `ghost:${g.id}`, ((g.aim ?? 0) >>> 0) / 4294967296 + 0.5, tnow)
+      }
+    }
     // performance.now(), NOT the frame's `now`. They are the same clock but not
     // the same instant: `now` is when the frame began, and the tracers being
     // faded here were spawned later in this same frame, from drainSnapshots.
@@ -3347,6 +3364,14 @@ function frame (now) {
     // come from different places, and vfx.js is not told the difference.
     if (vfx) {
       vfx.update(performance.now() / 1000, (index) => {
+        // One of our own rockets, which no entity stands for: where it flies.
+        if (typeof index === 'string' && index.startsWith('ghost:')) {
+          const id = Number(index.slice(6))
+          const g = ghosts.flying.find((x) => x.id === id)
+          if (g?.mesh && !(g.burstLeft >= 0)) return g.mesh.position
+          const p = ghosts.positionOf(id)
+          return p ? { x: toThreeX(p.x), y: toThreeY(p.z), z: toThreeZ(p.y) } : null
+        }
         if (myAgentIndex !== null && index === myAgentIndex) {
           return { x: subject.x, y: subject.y + bodyHeight / 2, z: subject.z }
         }

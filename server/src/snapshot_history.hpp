@@ -34,6 +34,9 @@ struct EntitySample {
     u8   attack_weapon   = 0xFF;
     u8   attack_phase    = 0xFF;
     u8   attack_step     = 0;
+    // The particle kind following it (proto::ent_field::TRAIL), 0 none. In
+    // the same padding.
+    u16  trail           = 0;
     fx3  pos{};
     brad facing{};
     u16  animation_state = 0;
@@ -142,6 +145,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
         if (!now.solid) full |= proto::ent_field::SOLID;
         if (now.attack_left != 0) full |= proto::ent_field::ATTACK;
         if (now.attack_weapon != 0xFF) full |= proto::ent_field::ATTACK_STEP;
+        if (now.trail != 0) full |= proto::ent_field::TRAIL;
         return full;
     }
     u32 mask = 0;
@@ -157,6 +161,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     if (now.attack_left != was.attack_left) mask |= proto::ent_field::ATTACK;
     if (now.attack_weapon != was.attack_weapon || now.attack_phase != was.attack_phase ||
         now.attack_step != was.attack_step) mask |= proto::ent_field::ATTACK_STEP;
+    if (now.trail != was.trail) mask |= proto::ent_field::TRAIL;
     // Counted rather than flagged, so it holds against any baseline: every
     // snapshot whose baseline is older than the jump says so, until one is
     // acknowledged that is newer.
