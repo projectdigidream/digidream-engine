@@ -640,6 +640,9 @@ suite_studio () {
   # Markers (docs/MARKERS.md): the module's templates, who hangs each, what
   # hangs one nobody made, a rename followed; a map's signs run under LuaJIT.
   node ../studio/test/markers.test.js | tail -1
+  # What a particle is drawn as (a hard shape, a picture): written only when
+  # it says something, and read back by the client's own parser.
+  node ../studio/test/particles.test.js | tail -1
   # A prop's body and picture through the client's catalogue parser; deleting
   # or renaming one follows it into every map's placements.
   node ../studio/test/props.test.js | tail -2
