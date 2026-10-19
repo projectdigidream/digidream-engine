@@ -14,6 +14,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **A dev studio APK updates itself** (studio versions with four parts only):
+  `dnp.studio.selfUpdate(url)` downloads the newer APK and installs it through
+  Android's installer. Only a dev studio's manifest asks for
+  REQUEST_INSTALL_PACKAGES. Every studio APK now carries its version as
+  versionCode (0.4.1.1 is 40101), so a later one installs over an earlier one.
+
 ### Changed
 
 - **The starter module** shows the player's death on every map (a game graph:

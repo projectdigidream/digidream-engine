@@ -2,6 +2,11 @@ package com.digidream.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
+import android.content.pm.PackageInstaller;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -34,6 +39,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -70,6 +77,7 @@ import java.util.Map;
  * {@code studio=1}) may reach, over https, the hosts its bundled plugins declare
  * ({@code "net:<host>"} in plugin.json: the GitHub sync's api.github.com) and its
  * own update check's. A game build has none. test/studio_net.test.js holds it.
+ * A dev studio build also downloads its own update, natively ({@link #selfUpdate}).
  */
 public final class MainActivity extends Activity {
   private static final String TAG = "digidream";
@@ -347,6 +355,53 @@ public final class MainActivity extends Activity {
     return bo.toByteArray();
   }
 
+  /**
+   * Download an APK and hand it to PackageInstaller. On Android 12+ an app
+   * updating itself needs no prompt; older ones (or a refusal) show the
+   * system's own "Update?" dialog, through STATUS_PENDING_USER_ACTION.
+   */
+  private void selfUpdate(String url) throws IOException {
+    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+    c.setInstanceFollowRedirects(true); // GitHub sends assets on to its storage, https to https
+    PackageInstaller pi = getPackageManager().getPackageInstaller();
+    PackageInstaller.SessionParams sp = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+    if (Build.VERSION.SDK_INT >= 31) sp.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
+    int sid = pi.createSession(sp);
+    try (PackageInstaller.Session s = pi.openSession(sid)) {
+      try (InputStream in = c.getInputStream(); OutputStream os = s.openWrite("update.apk", 0, c.getContentLengthLong())) {
+        byte[] buf = new byte[64 * 1024];
+        int n;
+        while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+        s.fsync(os);
+      }
+      String action = getPackageName() + ".SELF_UPDATE";
+      BroadcastReceiver r = new BroadcastReceiver() {
+        @Override public void onReceive(Context ctx, Intent i) {
+          int st = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+          if (st == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            Intent confirm = i.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirm != null) startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            return;
+          }
+          // Success never arrives: the app is replaced and this process ends.
+          unregisterReceiver(this);
+          String msg = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+          Log.w("dnp", "self update: status " + st + " " + msg);
+          final String js = "window.__dnpSelfUpdateFailed && window.__dnpSelfUpdateFailed(" + JSONObject.quote(String.valueOf(msg)) + ")";
+          ui.post(() -> web.evaluateJavascript(js, null));
+        }
+      };
+      if (Build.VERSION.SDK_INT >= 33) registerReceiver(r, new IntentFilter(action), Context.RECEIVER_NOT_EXPORTED);
+      else registerReceiver(r, new IntentFilter(action));
+      int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+      PendingIntent done = PendingIntent.getBroadcast(this, sid, new Intent(action).setPackage(getPackageName()), flags);
+      s.commit(done.getIntentSender());
+    } catch (IOException | RuntimeException e) {
+      pi.abandonSession(sid);
+      throw e;
+    }
+  }
+
   /** Answer a studio call on the page: window.__dnpStudioReply(id, ok, result). */
   private void reply(String id, boolean ok, String resultJson) {
     final String js = "window.__dnpStudioReply && window.__dnpStudioReply("
@@ -403,9 +458,27 @@ public final class MainActivity extends Activity {
         // https only, so this is no way to open anything else.
         case "openUrl": {
           String url = a.getString("url");
-          if (!url.startsWith("https://")) { reply(id, false, "only https addresses"); return; }
+          if (!url.startsWith("https://")) { reply(id, false, JSONObject.quote("only https addresses")); return; }
           ui.post(() -> startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))));
           reply(id, true, "true");
+          return;
+        }
+        // A newer studio APK, installed over this one (dev builds only: only
+        // their manifest asks for REQUEST_INSTALL_PACKAGES, build_apk.sh).
+        // Answers "settings" when installs from this app are not allowed yet
+        // (it opens the switch; the user comes back and asks again), else
+        // "installing" once the system installer has it.
+        case "selfUpdate": {
+          String url = a.getString("url");
+          if (!url.startsWith("https://")) { reply(id, false, JSONObject.quote("only https addresses")); return; }
+          if (!getPackageManager().canRequestPackageInstalls()) {
+            ui.post(() -> startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + getPackageName()))));
+            reply(id, true, JSONObject.quote("settings"));
+            return;
+          }
+          selfUpdate(url);
+          reply(id, true, JSONObject.quote("installing"));
           return;
         }
         case "launch": {

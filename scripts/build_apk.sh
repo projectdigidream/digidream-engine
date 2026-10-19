@@ -377,11 +377,28 @@ fi
 echo "[apk] res      compiling"
 "$BT/aapt2" compile --dir "$RES" -o "$OUT/res.zip" >/dev/null
 
+# A STUDIO carries its version (0.4.1 -> 40100, 0.4.1.1 -> 40101), so a later
+# APK installs over an earlier one. A DEV studio (four parts) may also install
+# its own update (MainActivity selfUpdate): only its manifest asks for that.
+MANIFEST="$OUT/AndroidManifest.xml"
+cp "$ROOT/shells/android/AndroidManifest.xml" "$MANIFEST"
+VER_ARGS=()
+if [[ $STUDIO -eq 1 ]]; then
+  SV=$(tr -d ' \n' < "$REPO/studio/VERSION")
+  IFS=. read -r v1 v2 v3 v4 <<< "$SV"
+  VER_ARGS=(--version-name "$SV" --version-code $(( v1 * 1000000 + v2 * 10000 + v3 * 100 + ${v4:-0} )))
+  if [[ -n "$v4" ]]; then
+    sed -i '' 's|<uses-permission android:name="android.permission.INTERNET" />|&\
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />|' "$MANIFEST"
+    echo "[apk] studio   $SV is a dev build: it updates itself"
+  fi
+fi
+
 "$BT/aapt2" link \
   -I "$PLATFORM_JAR" \
-  --manifest "$ROOT/shells/android/AndroidManifest.xml" \
+  --manifest "$MANIFEST" \
   --java "$OUT/gen" \
-  --min-sdk-version 26 --target-sdk-version 34 \
+  --min-sdk-version 26 --target-sdk-version 34 "${VER_ARGS[@]}" \
   -o "$OUT/base.apk" \
   "$OUT/res.zip" >/dev/null
 mkdir -p "$OUT/gen"

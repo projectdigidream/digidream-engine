@@ -188,7 +188,10 @@
         .then((r) => (r ? { name: r.name, bytes: b64decode(r.data) } : null)),
       // A web page (the studio's "a new version is out"), in the system's
       // browser: the WebView would replace the studio with it.
-      openUrl: (url) => call('openUrl', { url })
+      openUrl: (url) => call('openUrl', { url }),
+      // A newer studio APK installed over this one (dev builds): 'settings'
+      // when installs from this app must be allowed first, else 'installing'.
+      selfUpdate: (url) => call('selfUpdate', { url })
     }
   }
 })()
