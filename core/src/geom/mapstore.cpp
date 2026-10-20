@@ -986,6 +986,9 @@ u64 MapStorage::hash() const noexcept {
         // A wall's texture angle and scale, folded in only when it has one: the
         // flats' rule above, for their reason.
         if (r.styled()) { h.u32v(r.angle); h.fxv(r.scale); }
+        // And its scale up the wall, only when it differs: a uniform scale
+        // hashes as it did before there were two.
+        if (r.stretched()) h.fxv(r.scale_y);
     }
 
     h.u32v(spawn_count_);

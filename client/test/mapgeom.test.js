@@ -220,6 +220,19 @@ console.log('\n--- u runs along the wall ---')
   const shifted = find(buildSectorSurfaces(m, 0), SURFACE.MIDDLE, 0)
   const us2 = [0, 2, 4, 6].map((i) => shifted.uvs[i])
   check(Math.min(...us2) === 2.5 && Math.max(...us2) === 12.5, 'xOffset shifts it')
+
+  // Scaled each way on its own: twice as large along, half as tall up.
+  const s = fixture()
+  s.sides[0].scale = 2
+  s.sides[0].scaleY = 0.5
+  const st = find(buildSectorSurfaces(s, 0), SURFACE.MIDDLE, 0)
+  const su = [0, 2, 4, 6].map((i) => st.uvs[i])
+  const sv = [1, 3, 5, 7].map((i) => st.uvs[i])
+  check(Math.max(...su) === 5 && Math.max(...sv) === 16, `xscale 2 halves u, yscale 0.5 doubles v (u ${Math.max(...su)}, v ${Math.max(...sv)})`)
+  // CONTROL: no scaleY given is the old uniform scale, both ways.
+  delete s.sides[0].scaleY
+  const un = find(buildSectorSurfaces(s, 0), SURFACE.MIDDLE, 0)
+  check(Math.max(...[1, 3, 5, 7].map((i) => un.uvs[i])) === 4, 'CONTROL: without scaleY, scale is both ways')
 }
 
 console.log('\n--- two-sided middle (a grate) ---')

@@ -16,6 +16,10 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- A wall's texture can be scaled differently along it and up it: `xscale` and
+  `yscale` on its `vertex` line, beside `xoff` and `yoff` (`scale` still sets
+  both). A map that uses it is `.dnpm` version 16; every other map is written
+  and loaded exactly as before.
 - **A dev studio APK updates itself** (studio versions with four parts only):
   `dnp.studio.selfUpdate(url)` downloads the newer APK and installs it through
   Android's installer. Only a dev studio's manifest asks for

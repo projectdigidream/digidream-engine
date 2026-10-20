@@ -26,8 +26,16 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     // the same reason.
     const bool has_effects = store.effect_count() > 0;
     u32 styled_sides = 0;
-    for (u32 i = 0; i < m.side_count; ++i) if (rd.side(i).styled()) ++styled_sides;
-    const u16 version = styled_sides > 0 ? MAP_VERSION : has_effects ? static_cast<u16>(14) : static_cast<u16>(13);
+    bool stretched = false;
+    for (u32 i = 0; i < m.side_count; ++i) {
+        if (rd.side(i).styled()) ++styled_sides;
+        if (rd.side(i).stretched()) stretched = true;
+    }
+    // 16 only for a wall scaled differently along and up it; one scaled alike
+    // both ways is a 15, as it always was.
+    const u16 version = stretched ? MAP_VERSION
+                      : styled_sides > 0 ? static_cast<u16>(15)
+                      : has_effects ? static_cast<u16>(14) : static_cast<u16>(13);
     w.u32v(MAP_MAGIC);
     w.u16v(version);
     w.u16v(0);   // flags, reserved
@@ -219,6 +227,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
             w.u32v(i);
             w.u32v(r.angle);
             w.fxraw(r.scale);
+            if (version >= 16) w.fxraw(r.scale_y);   // 16
         }
     }
 
@@ -826,11 +835,16 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             const u32 i = r.u32v();
             const u32 angle = r.u32v();
             const fx scale = r.fxraw();
+            // Before 16 one scale is both ways.
+            const fx scale_y = version >= 16 ? r.fxraw() : scale;
             if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
-            if (i >= side_count || i < next || scale.raw <= 0) { store.clear(); return MapLoadStatus::BadIndex; }
+            if (i >= side_count || i < next || scale.raw <= 0 || scale_y.raw <= 0) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
             SideRender& sr = store.side_render_mut(i);
             sr.angle = angle;
             sr.scale = scale;
+            sr.scale_y = scale_y;
             if (!sr.styled()) { store.clear(); return MapLoadStatus::BadIndex; }
             next = i + 1;
         }

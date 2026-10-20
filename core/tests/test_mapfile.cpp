@@ -849,7 +849,8 @@ static void test_wall_styles() {
     build_reference(src);
     const u64 bare = src.hash();
     src.side_render_mut(1).angle = 0x40000000u;            // a quarter turn
-    src.side_render_mut(3).scale = fx::from_int(2);         // twice the size
+    src.side_render_mut(3).scale = fx::from_int(2);         // twice the size,
+    src.side_render_mut(3).scale_y = fx::from_int(2);       // both ways: still a 15
     CHECK(src.hash() != bare);      // CONTROL for what follows: the styles ARE hashed
 
     ByteWriter w(buf, sizeof(buf));
@@ -866,6 +867,26 @@ static void test_wall_styles() {
         u32 others = 0;
         for (u32 i = 0; i < dst.view().side_count; ++i) if (i != 1 && i != 3 && !rd.side(i).styled()) ++others;
         CHECK(others == dst.view().side_count - 2);
+    }
+
+    // STRETCHED: a different scale up the wall is 16, and survives; the
+    // uniform map above stayed 15 (CONTROL: the byte checked above).
+    {
+        static MapStorage st, back;
+        static u8 sb[16384];
+        st.clear();
+        build_reference(st);
+        st.side_render_mut(3).scale = fx::from_int(2);
+        const u64 uniform = st.hash();
+        st.side_render_mut(3).scale_y = fx::from_frac(1, 2);
+        CHECK(st.hash() != uniform);      // the y scale is hashed
+        ByteWriter sw(sb, sizeof(sb));
+        CHECK(save_map(st, sw));
+        CHECK(sb[4] == 16);
+        ByteReader sr(sb, sw.size());
+        CHECK(load_map(sr, back) == MapLoadStatus::Ok && back.hash() == st.hash());
+        CHECK(back.render_view().side(3).scale == fx::from_int(2) &&
+              back.render_view().side(3).scale_y == fx::from_frac(1, 2));
     }
 
     // Unstyled, unchanged: written as 13 (no effects either) and hashed as before.

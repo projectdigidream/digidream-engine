@@ -118,16 +118,18 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
   //
   // AND STYLED AS A FLAT IS (flatUV), in the same order an author says it:
   // turned about the texture origin -- u = 0 at b, v = 0 at the anchor line --
-  // then shifted by the offsets, then drawn `scale` times larger. With no turn
-  // and a scale of one this is exactly the u and v walls always had.
+  // then shifted by the offsets, then drawn `scale` times larger along the
+  // wall and `scaleY` times up it. With no turn and scales of one this is
+  // exactly the u and v walls always had.
   const turns = side.turns ?? 0
   const k = side.scale > 0 ? side.scale : 1
+  const kv = side.scaleY > 0 ? side.scaleY : k
   const c = turns !== 0 ? Math.cos(turns * Math.PI * 2) : 1
   const sn = turns !== 0 ? Math.sin(turns * Math.PI * 2) : 0
   const uvAt = (d, z) => {
     const u0 = d
     const v0 = anchorZ - z
-    return [(u0 * c - v0 * sn + side.xOffset) / k, (u0 * sn + v0 * c + side.yOffset) / k]
+    return [(u0 * c - v0 * sn + side.xOffset) / k, (u0 * sn + v0 * c + side.yOffset) / kv]
   }
   const uvs = [
     ...uvAt(len, zBot),

@@ -377,6 +377,7 @@ void dnp_map_side(const geom::MapStorage* m, unsigned i, long long* out64, unsig
     // The wall's texture angle and scale (map version 15).
     out32[9] = r.angle;
     out64[2] = r.scale.raw;
+    out64[3] = r.scale_y.raw;   // up the wall (16)
 }
 
 // Bulk, because a per-index call for twelve thousand indices is the one place

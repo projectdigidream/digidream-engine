@@ -20,6 +20,7 @@
 //     vertex 0  0   wall           tex BRICK1
 //     vertex 40 0   neighbor 1     upper STEP2 lower STEP1 unpeg-lower
 //     vertex 40 40  wall           tex BRICK1 xoff 8
+//     vertex 40 40  wall           tex BRICK1 xoff 8 yoff 4 xscale 2 yscale 0.5 angle 15
 //     vertex 0  40  wall climbable tex VINE1
 //     vertex 0  40  neighbor 3 trigger        -- crossing it is reported to Lua
 //     vertex 0  40  wall usable                -- reaching for it is reported to Lua
@@ -573,16 +574,19 @@ int main(int argc, char** argv) {
                     const int a = std::atoi(tok[++i].c_str());
                     if (a < 0 || a > 255) err(lineno, "alpha must be 0..255, got '%s'", tok[i].c_str());
                     else v.render.alpha = static_cast<u8>(a);
-                } else if (tok[i] == "angle" || tok[i] == "scale") {
+                } else if (tok[i] == "angle" || tok[i] == "scale" || tok[i] == "xscale" || tok[i] == "yscale") {
                     // As a flat's `floorangle` and `floorscale`, on the wall's
                     // own plane: through the same parser, so a turn in degrees
                     // and a size refused at zero mean exactly what they mean
-                    // on a floor (flat_attr).
+                    // on a floor (flat_attr). `scale` is both ways; `xscale`
+                    // along the wall and `yscale` up it, one each.
                     if (i + 1 >= tok.size()) { err(lineno, "%s needs a number", tok[i].c_str()); break; }
                     SurfaceStyle st;
-                    flat_attr(lineno, tok[i], tok[i + 1], st);
+                    flat_attr(lineno, tok[i] == "angle" ? "angle" : "scale", tok[i + 1], st);
                     if (tok[i] == "angle") v.render.angle = st.angle;
-                    else v.render.scale = st.scale;
+                    else if (tok[i] == "xscale") v.render.scale = st.scale;
+                    else if (tok[i] == "yscale") v.render.scale_y = st.scale;
+                    else v.render.scale = v.render.scale_y = st.scale;
                     ++i;
                 } else if (tok[i] == "unpeg-upper") v.render.peg_flags |= peg_flag::UPPER_UNPEGGED;
                 else if (tok[i] == "unpeg-lower") v.render.peg_flags |= peg_flag::LOWER_UNPEGGED;

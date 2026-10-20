@@ -117,7 +117,9 @@ export function readMap (map) {
       // The texture's turn and size on the wall's plane, as a flat's style
       // (mapgeom.js wallQuad). Turns, as everywhere this side.
       turns: u32[b32 + 9] / 4294967296,
-      scale: fxToFloat(i64[b64 + 2])
+      scale: fxToFloat(i64[b64 + 2]),
+      // Up the wall; the same as `scale` unless the map stretches it (16).
+      scaleY: fxToFloat(i64[b64 + 3])
     }
   }
 

@@ -332,11 +332,16 @@ struct SideRender {
     // drawn exactly as before. Every field of the side (upper, middle, lower)
     // takes the same style, as they share the offsets.
     u32 angle = 0;
-    fx  scale = fx::one();
+    fx  scale = fx::one();     // along the wall (u); and up it (v) unless scale_y says otherwise
+    fx  scale_y = fx::one();   // up the wall (v): a stretch when it differs from `scale`
 
     // Whether the side rotates or scales its texture at all: what the file
     // writes in its version-15 block and the hash folds in, and nothing else.
-    bool styled() const noexcept { return angle != 0 || scale.raw != fx::one().raw; }
+    bool styled() const noexcept {
+        return angle != 0 || scale.raw != fx::one().raw || scale_y.raw != fx::one().raw;
+    }
+    // Whether its two scales differ: the version-16 field, and nothing else.
+    bool stretched() const noexcept { return scale_y.raw != scale.raw; }
 };
 
 struct SectorRender {
