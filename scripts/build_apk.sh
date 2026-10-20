@@ -378,8 +378,10 @@ echo "[apk] res      compiling"
 "$BT/aapt2" compile --dir "$RES" -o "$OUT/res.zip" >/dev/null
 
 # A STUDIO carries its version (0.4.1 -> 40100, 0.4.1.1 -> 40101), so a later
-# APK installs over an earlier one. A DEV studio (four parts) may also install
-# its own update (MainActivity selfUpdate): only its manifest asks for that.
+# APK installs over an earlier one. A studio may also install its own update
+# (MainActivity selfUpdate): its manifest asks for that; a game's never does.
+# Which update it takes is the studio's (updates.js: a stable build only a
+# stable one, a dev build the newest of either).
 MANIFEST="$OUT/AndroidManifest.xml"
 cp "$ROOT/shells/android/AndroidManifest.xml" "$MANIFEST"
 VER_ARGS=()
@@ -387,11 +389,10 @@ if [[ $STUDIO -eq 1 ]]; then
   SV=$(tr -d ' \n' < "$REPO/studio/VERSION")
   IFS=. read -r v1 v2 v3 v4 <<< "$SV"
   VER_ARGS=(--version-name "$SV" --version-code $(( v1 * 1000000 + v2 * 10000 + v3 * 100 + ${v4:-0} )))
-  if [[ -n "$v4" ]]; then
-    sed -i '' 's|<uses-permission android:name="android.permission.INTERNET" />|&\
+  sed -i '' 's|<uses-permission android:name="android.permission.INTERNET" />|&\
   <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />|' "$MANIFEST"
-    echo "[apk] studio   $SV is a dev build: it updates itself"
-  fi
+  echo "[apk] studio   $SV ($([[ -n "$v4" ]] && echo dev || echo stable)): it updates itself"
+
 fi
 
 "$BT/aapt2" link \

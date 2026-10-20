@@ -12,7 +12,7 @@
   promised: MainActivity.shouldInterceptRequest answers EVERY request, and
   answers anything that is not our own asset origin with a 404 rather than
   letting WebView go and fetch it. There is no other network code in the app,
-  but for a dev studio build's self update (MainActivity selfUpdate), which
+  but for a studio build's self update (MainActivity selfUpdate), which
   fetches one https APK the page names and only in a build that asks for
   REQUEST_INSTALL_PACKAGES.
 
@@ -46,7 +46,7 @@
 
   <!-- See the note above: this is what lets the app open a socket to itself. -->
   <uses-permission android:name="android.permission.INTERNET" />
-  <!-- A dev studio build also gets REQUEST_INSTALL_PACKAGES here, from
+  <!-- A studio build also gets REQUEST_INSTALL_PACKAGES here, from
        build_apk.sh, to install its own updates. No other build asks for it. -->
 
   <uses-feature android:glEsVersion="0x00020000" android:required="true" />

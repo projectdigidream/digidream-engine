@@ -77,7 +77,7 @@ import java.util.Map;
  * {@code studio=1}) may reach, over https, the hosts its bundled plugins declare
  * ({@code "net:<host>"} in plugin.json: the GitHub sync's api.github.com) and its
  * own update check's. A game build has none. test/studio_net.test.js holds it.
- * A dev studio build also downloads its own update, natively ({@link #selfUpdate}).
+ * A studio build also downloads its own update, natively ({@link #selfUpdate}).
  */
 public final class MainActivity extends Activity {
   private static final String TAG = "digidream";
@@ -463,7 +463,7 @@ public final class MainActivity extends Activity {
           reply(id, true, "true");
           return;
         }
-        // A newer studio APK, installed over this one (dev builds only: only
+        // A newer studio APK, installed over this one (studio builds only: only
         // their manifest asks for REQUEST_INSTALL_PACKAGES, build_apk.sh).
         // Answers "settings" when installs from this app are not allowed yet
         // (it opens the switch; the user comes back and asks again), else

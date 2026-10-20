@@ -14,6 +14,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Changed
+
+- **Every studio APK can update itself**, not only a dev one: its manifest asks
+  for REQUEST_INSTALL_PACKAGES. Which release it takes is the studio's to
+  decide (a stable build only another stable one). A game APK never asks.
+
 ## 0.2.2.2 -- 2026-10-20
 
 ### Added
