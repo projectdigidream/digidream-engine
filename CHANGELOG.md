@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.2.1 -- 2026-10-20
+
 ### Added
 
 - A wall's texture can be scaled differently along it and up it: `xscale` and
