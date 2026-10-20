@@ -14,11 +14,35 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3 -- 2026-10-20
+
+Everything since 0.2.2. (The development releases 0.2.2.1 and 0.2.2.2 below
+had it piece by piece.)
+
+### Added
+
+- **Aim assist chosen per weapon**: `autoaim = true` turns it on even in first
+  person (the shot turns to the nearest body in the cone and climbs or drops
+  to its exact middle; with the cone empty it goes where the view looks),
+  `autoaim = false` turns it off, and `autoaim_cone` (degrees) gives the weapon
+  its own cone. Without either the rule is unchanged. Decided in the core, so
+  the shooter's client predicts it.
+- **A wall's texture scaled along it and up it on its own**: `xscale` and
+  `yscale` on its `vertex` line, beside `xoff` and `yoff` (`scale` still sets
+  both). A map that uses it is `.dnpm` version 16; every other map is written
+  and loaded exactly as before.
+- **A studio APK updates itself**: `dnp.studio.selfUpdate(url)` downloads the
+  newer APK and installs it through Android's installer. A studio's manifest
+  asks for REQUEST_INSTALL_PACKAGES; a game's never does. Every studio APK
+  carries its version as versionCode (0.4.2 is 40200), so a later one installs
+  over an earlier one.
+
 ### Changed
 
-- **Every studio APK can update itself**, not only a dev one: its manifest asks
-  for REQUEST_INSTALL_PACKAGES. Which release it takes is the studio's to
-  decide (a stable build only another stable one). A game APK never asks.
+- **The starter module** shows the player's death on every map, says its keys
+  once as the game starts, has its debug overlay off, draws its spirit twice
+  the size with a gentler bite, carries a muzzle flash, a tracer and hit sparks
+  (particle kinds 20-22), and its door opens on E and stays open four seconds.
 
 ## 0.2.2.2 -- 2026-10-20
 
