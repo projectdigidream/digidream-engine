@@ -1076,7 +1076,85 @@ static void test_a_swing_steps_shape_is_adopted_with_the_state() {
     CHECK(w.swing_shape(a).reach == F(2));
 }
 
+// --- a weapon's own aim assist (weapon_vocab.lua `autoaim`, `autoaim_cone`) --
+//
+// A gun that fires on the press: `ready` --pressed--> `fire`, whose hitscan
+// is at 0. The target is a body five units ahead (or `off` degrees off the
+// nose) and two up, on a ledge. What the core decided is the event's aim.
+static void test_a_weapon_chooses_its_aim_assist() {
+    std::printf("aim: a weapon turns aim assist on or off, with its own cone\n");
+    struct Aimed { bool set = false; fx slope{}; brad aim{}; brad face{}; fx want{}; };
+    auto shoot = [](u8 mode, u32 cone_deg, bool view, i32 off_deg) {
+        static Room r;
+        static World w;
+        static WeaponTable t;
+        static WeaponEventLog log;
+        w.reset();
+        r.attach(w);
+        t.clear();
+        t.autoaim_range = F(20);
+        t.autoaim_cone = static_cast<u32>((u64{5625} << 32) / 360000);   // 5.625 degrees
+        WeaponDef& d = t.weapons[t.weapon_count++];
+        std::snprintf(d.name, sizeof(d.name), "gun");
+        d.pool = NO_POOL; d.phase_count = 2; d.initial = 0;
+        d.autoaim = mode;
+        d.autoaim_cone = static_cast<u32>((static_cast<u64>(cone_deg) << 32) / 360);
+        d.phases[1].ticks = 5;
+        WTransition& tr = d.phases[0].transitions[d.phases[0].transition_count++];
+        tr.to = 1;
+        tr.conds[tr.count++].kind = WCond::Pressed;
+        WStep& st = d.phases[1].steps[d.phases[1].step_count++];
+        st.action = WAct::Hitscan;
+        st.range = F(20);
+        t.initial_have = 1;
+        const u32 a = w.spawn(fx3{F(10), F(20), F(0)});
+        w.params_mut(a).move_relative = view;
+        weapon_fresh(t, w.weapon_mut(a));
+        const brad ang = brad(static_cast<u32>((static_cast<i64>(off_deg) << 32) / 360));
+        const fx2 dir = fx_dir(ang);
+        const u32 b = w.spawn(fx3{F(10) + dir.x * 5, F(20) + dir.y * 5, F(2)});
+        Aimed out;
+        out.face = w.agent(a).facing;
+        out.want = ((F(2) + w.params(b).height / 2) - w.params(a).height / 2) / F(5);
+        proto::InputFrame f;
+        f.buttons = proto::button::ATTACK_PRIMARY;
+        f.aim = brad(0u);
+        w.set_input(a, f);
+        log.clear();
+        w.step_weapon(a, t, NO_WEAPON, 0, 0, log);
+        for (u32 i = 0; i < log.count(); ++i) {
+            if (log.at(i).action != WAct::Hitscan) continue;
+            out.set = log.at(i).slope_set;
+            out.slope = log.at(i).slope;
+            out.aim = log.at(i).aim;
+        }
+        return out;
+    };
+    const Aimed side  = shoot(WAIM_DEFAULT, 0, false, 0);
+    const Aimed off   = shoot(WAIM_OFF, 0, false, 0);
+    const Aimed fps   = shoot(WAIM_DEFAULT, 0, true, 0);
+    const Aimed fpsOn = shoot(WAIM_ON, 0, true, 0);
+    const Aimed wide  = shoot(WAIM_DEFAULT, 0, false, 10);
+    const Aimed wider = shoot(WAIM_DEFAULT, 15, false, 10);
+    std::printf("  slope wanted %lld; default %d/%lld, off %d, first person %d, on in first person %d/%lld;"
+                " 10 deg off: game cone %d, weapon's 15 %d\n",
+                static_cast<long long>(side.want.raw), side.set, static_cast<long long>(side.slope.raw),
+                off.set, fps.set, fpsOn.set, static_cast<long long>(fpsOn.slope.raw), wide.set, wider.set);
+    // The body's rule: a side-on body is aimed, and to the ledge's exact middle.
+    CHECK(side.set && side.slope == side.want);
+    // Off: the shot goes along the facing, flat.
+    CHECK(!off.set && off.aim == off.face);
+    // CONTROL: a first-person body is not aimed by default...
+    CHECK(!fps.set);
+    // ...and a weapon that turns it on aims it, exactly.
+    CHECK(fpsOn.set && fpsOn.slope == fpsOn.want);
+    // The cone: ten degrees off is outside the game's 5.625, inside the weapon's 15.
+    CHECK(!wide.set);
+    CHECK(wider.set && wider.aim != wider.face);
+}
+
 int main() {
+    test_a_weapon_chooses_its_aim_assist();
     test_a_swing_step_is_an_attack_with_its_own_shape();
     test_a_newer_swing_replaces_the_older();
     test_a_swing_steps_shape_is_adopted_with_the_state();

@@ -1541,16 +1541,17 @@ function acts.hitscan(m, a)
     aim_off, slope = a.aim_off or 0, a.slope
   elseif m.target ~= nil and not m.target_prop and m.target:valid() then
     slope = slope_to(m.e, m.target)
-  elseif m.player and M.free_aim() then
-    -- FIRST PERSON: where they look is where it goes, up and down included,
-    -- and nothing corrects it -- the view is the aim.
-    slope = M.pitch_slope(m.e)
   elseif m.player then
-    local t, ang = M.autoaim(m.e, a.range)
+    -- The cone, unless the weapon says otherwise (M.assists); then FIRST
+    -- PERSON: where they look is where it goes, up and down included.
+    local t, ang
+    if M.assists(m.aim_mode) then t, ang = M.autoaim(m.e, a.range, m.aim_cone) end
     if t ~= nil then
       local d = (ang - m.e:facing()) % 4294967296
       if d > 2147483648 then d = d - 4294967296 end
       aim_off, slope = d, slope_to(m.e, t)
+    elseif M.free_aim() then
+      slope = M.pitch_slope(m.e)
     end
   end
   for pellet = 1, (a.count or 1) do
@@ -3164,6 +3165,13 @@ end
 function M.free_aim()
   return dnp.controls ~= nil and dnp.controls() == "fps"
 end
+-- Whether a player's shot is corrected by the cone: the weapon's `autoaim`
+-- (mode 1 on, 2 off), or by default everyone but a first-person body.
+function M.assists(mode)
+  if mode == 1 then return true end
+  if mode == 2 then return false end
+  return not M.free_aim()
+end
 function M.pitch_slope(e)
   local p = e.pitch and e:pitch()
   if p == nil or p == ZERO then return nil end
@@ -3188,10 +3196,15 @@ end
 function M.weapon_runtime(e, op, a, b, c, d, f)
   if e == nil or not e:valid() then return nil end
   -- First person aims by the view: no target, the facing as it is, and the
-  -- slope it looks at.
+  -- slope it looks at -- unless the weapon turns auto-aim on (a = 1), and
+  -- then only when the cone (b degrees, or ours) is empty. a = 2 is off.
   if op == "autoaim" then
+    if M.assists(a) then
+      local t, ang, sl = M.autoaim(e, nil, b)
+      if t ~= nil then return t, ang, sl end
+    end
     if M.free_aim() then return nil, nil, M.pitch_slope(e) end
-    return M.autoaim(e)
+    return nil
   end
   if op == "launch" then
     -- kind, the declaration (when the game owns it), heading, offset, slope.
@@ -3204,6 +3217,7 @@ function M.weapon_runtime(e, op, a, b, c, d, f)
     return nil
   end
   local m = synthetic_owner(e, e:facing())
+  m.aim_mode, m.aim_cone = b, c
   if op == "hitscan" then acts.hitscan(m, a)
   elseif op == "impulse" then acts.impulse(m, a)
   elseif op == "damage_area" then

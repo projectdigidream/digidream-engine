@@ -503,6 +503,13 @@ bool compile_weapon(Reader& r, int d, const std::string& name, const std::vector
     v = 0;
     if (!r.int_at(d, "aim_snap", where, 0, 255, v)) return false;
     w.aim_snap = static_cast<u8>(v);
+    lua_getfield(L, d, "autoaim");
+    if (lua_isboolean(L, -1)) w.autoaim = lua_toboolean(L, -1) ? sim::WAIM_ON : sim::WAIM_OFF;
+    lua_pop(L, 1);
+    v = 0;
+    if (!r.int_at(d, "autoaim_cone", where, 0, 180, v)) return false;
+    // floor(deg * 2^32 / 360), as the table's cone.
+    w.autoaim_cone = static_cast<u32>((static_cast<u64>(v) << 32) / 360);
 
     if (r.push(d, "swing") && lua_istable(L, -1)) {
         if (!compile_swing(r, lua_gettop(L), where + " swing", w.swing)) { lua_pop(L, 1); return false; }

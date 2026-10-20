@@ -935,6 +935,18 @@
       "type": "int"
     },
     {
+      "doc": "Aim assist while this is held. Absent: on for every body but a first-person one, which aims with its view. true: on for everyone -- the shot turns to the nearest body in the cone and climbs or drops to its exact middle, and with nothing in the cone a first-person shot goes where the view looks. false: never; the shot goes along the facing (and the view's pitch in first person). Decided in the core, so a predicting client aims the same.",
+      "name": "autoaim",
+      "optional": true,
+      "type": "bool"
+    },
+    {
+      "doc": "Degrees either side of the nose that aim assist looks in, for this weapon (1 to 180). Absent or 0: the game's own (mobs.autoaim_h, Doom's 5.625).",
+      "name": "autoaim_cone",
+      "optional": true,
+      "type": "int"
+    },
+    {
       "doc": "Per-weapon counters, by name, with their starting values. Each player gets their own copy. A refire count, a combo step, a heat level.",
       "name": "vars",
       "optional": true,

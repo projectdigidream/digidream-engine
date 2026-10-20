@@ -293,35 +293,41 @@ u32 World::step_weapon(u32 i, const WeaponTable& table, u8 want, u32 tick, u64 s
     // (docs/WEAPON_PREDICTION.md): mobs.lua's for a player, rule for rule.
     // A first-person body (move_relative, which the fps scheme sets) shoots
     // where it looks, up and down included; any other is corrected towards
-    // the nearest body in the cone. A missile names no range, so its search
-    // uses the table's.
+    // the nearest body in the cone. A weapon may say otherwise (its
+    // `autoaim`): on even for a first-person body, whose shot then climbs to
+    // the target's exact middle and keeps its view when the cone is empty, or
+    // off for anyone. Its own `autoaim_cone` replaces the table's. A missile
+    // names no range, so its search uses the table's.
     for (u32 k = first; k < log.count(); ++k) {
         WeaponEvent& e = log.at_mut(k);
         if (e.action != WAct::Hitscan && e.action != WAct::Launch) continue;
         e.aim = a.facing;
         e.slope = fx{};
         e.slope_set = false;
-        if (params_[i].move_relative) {
-            if (a.pitch != 0) {
-                const fx2 d = fx_dir(brad(static_cast<u32>(static_cast<u16>(a.pitch)) << 16));
-                e.slope = d.y / d.x;
-                e.slope_set = true;
+        const WeaponDef* wd = e.weapon < table.weapon_count ? &table.weapons[e.weapon] : nullptr;
+        const u8 mode = wd != nullptr ? wd->autoaim : WAIM_DEFAULT;
+        const bool view = params_[i].move_relative;
+        if (mode == WAIM_ON || (mode == WAIM_DEFAULT && !view)) {
+            fx range = table.autoaim_range;
+            if (e.action == WAct::Hitscan && wd != nullptr && e.phase < wd->phase_count &&
+                e.step < wd->phases[e.phase].step_count) {
+                range = wd->phases[e.phase].steps[e.step].range;
             }
-            continue;
+            const u32 cone = wd != nullptr && wd->autoaim_cone != 0 ? wd->autoaim_cone : table.autoaim_cone;
+            brad heading{};
+            fx slope{};
+            bool slope_set = false;
+            if (autoaim(i, range, cone, heading, slope, slope_set)) {
+                e.aim = heading;
+                e.slope = slope;
+                e.slope_set = slope_set;
+                continue;
+            }
         }
-        fx range = table.autoaim_range;
-        if (e.action == WAct::Hitscan && e.weapon < table.weapon_count &&
-            e.phase < table.weapons[e.weapon].phase_count &&
-            e.step < table.weapons[e.weapon].phases[e.phase].step_count) {
-            range = table.weapons[e.weapon].phases[e.phase].steps[e.step].range;
-        }
-        brad heading{};
-        fx slope{};
-        bool slope_set = false;
-        if (autoaim(i, range, table.autoaim_cone, heading, slope, slope_set)) {
-            e.aim = heading;
-            e.slope = slope;
-            e.slope_set = slope_set;
+        if (view && a.pitch != 0) {
+            const fx2 d = fx_dir(brad(static_cast<u32>(static_cast<u16>(a.pitch)) << 16));
+            e.slope = d.y / d.x;
+            e.slope_set = true;
         }
     }
     // A `swing` step: started (or refused) by this tick's step_agent, with the

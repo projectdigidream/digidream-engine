@@ -436,6 +436,8 @@ bool encode_weapon_table(ByteWriter& w, const WeaponTable& t) noexcept {
         w.u16v(d.per);
         w.u8v(d.initial);
         w.u8v(d.aim_snap);
+        w.u8v(d.autoaim);
+        w.u32v(d.autoaim_cone);
         put_swing(w, d.swing);
         w.u8v(d.var_count);
         for (u32 v = 0; v < d.var_count; ++v) w.i32v(d.vars[v]);
@@ -526,6 +528,9 @@ bool decode_into(ByteReader& r, WeaponTable& t) noexcept {
         d.per = r.u16v();
         d.initial = r.u8v();
         d.aim_snap = r.u8v();
+        d.autoaim = r.u8v();
+        d.autoaim_cone = r.u32v();
+        if (d.autoaim > WAIM_OFF) return false;
         if (!get_swing(r, d.swing)) return false;
         d.var_count = r.u8v();
         if (!r.ok() || d.var_count > MAX_WEAPON_VARS) return false;
@@ -641,7 +646,7 @@ void WeaponTable::clear() noexcept {
     for (AmmoPool& p : pools) p = AmmoPool{};
     for (WeaponDef& d : weapons) {
         for (char& ch : d.name) ch = 0;
-        d.order = 0; d.pool = NO_POOL; d.per = 1; d.initial = 0; d.aim_snap = 0;
+        d.order = 0; d.pool = NO_POOL; d.per = 1; d.initial = 0; d.aim_snap = 0; d.autoaim = 0; d.autoaim_cone = 0;
         d.swing = WSwing{};
         d.var_count = 0;
         for (i32& v : d.vars) v = 0;

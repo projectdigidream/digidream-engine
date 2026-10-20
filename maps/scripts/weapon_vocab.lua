@@ -139,6 +139,19 @@ weapon_vocab = {
             "is predicted -- which matters, because an aim the client and the " ..
             "server round differently is a mispredict on every tick the stick " ..
             "is near a boundary." },
+    { name = "autoaim", type = "bool", optional = true,
+      doc = "Aim assist while this is held. Absent: on for every body but a " ..
+            "first-person one, which aims with its view. true: on for " ..
+            "everyone -- the shot turns to the nearest body in the cone and " ..
+            "climbs or drops to its exact middle, and with nothing in the " ..
+            "cone a first-person shot goes where the view looks. false: " ..
+            "never; the shot goes along the facing (and the view's pitch in " ..
+            "first person). Decided in the core, so a predicting client " ..
+            "aims the same." },
+    { name = "autoaim_cone", type = "int", optional = true,
+      doc = "Degrees either side of the nose that aim assist looks in, for " ..
+            "this weapon (1 to 180). Absent or 0: the game's own " ..
+            "(mobs.autoaim_h, Doom's 5.625)." },
     { name = "vars", type = "table", optional = true,
       doc = "Per-weapon counters, by name, with their starting values. Each " ..
             "player gets their own copy. A refire count, a combo step, a heat " ..

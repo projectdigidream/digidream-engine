@@ -14,6 +14,16 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **Aim assist chosen per weapon**: `autoaim = true` turns it on even in
+  first person. The shot turns to the nearest body in the cone and climbs or
+  drops to that body's exact middle; when the cone is empty, it goes where
+  the view looks. `autoaim = false` turns it off. `autoaim_cone` (degrees)
+  gives the weapon its own cone in place of the game's 5.625. Without either
+  field the rule is unchanged. The core decides it, so the shooter's client
+  predicts it.
+
 ## 0.2.2.1 -- 2026-10-20
 
 ### Added

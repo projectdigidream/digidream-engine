@@ -201,6 +201,8 @@ struct WPhase {
     WTransition transitions[MAX_PHASE_TRANSITIONS]{};
 };
 
+inline constexpr u8 WAIM_DEFAULT = 0, WAIM_ON = 1, WAIM_OFF = 2;
+
 struct WeaponDef {
     char name[WEAPON_NAME_LEN + 1]{};
     i16  order = 0;
@@ -208,6 +210,11 @@ struct WeaponDef {
     u16  per = 1;
     u8   initial = 0;
     u8   aim_snap = 0;
+    // AUTO-AIM while this is held (weapon_vocab.lua `autoaim`): the body's rule
+    // (WAIM_DEFAULT: on, unless it aims with its view), always, or never; and
+    // its own cone in brad, 0 for the table's.
+    u8   autoaim = 0;
+    u32  autoaim_cone = 0;
     WSwing swing{};
     u8   var_count = 0;
     i32  vars[MAX_WEAPON_VARS]{};    // starting values

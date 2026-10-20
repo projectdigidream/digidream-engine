@@ -930,13 +930,22 @@ end
 
 local acts = {}
 
+-- The weapon's own word on auto-aim (its `autoaim` and `autoaim_cone`), as
+-- two plain numbers so they cross into a level's VM unchanged: 0 the body's
+-- rule, 1 on, 2 off; and the cone in degrees, nil for the runtime's.
+local function aim_choice(def)
+  if def == nil then return 0, nil end
+  local mode = def.autoaim == true and 1 or (def.autoaim == false and 2 or 0)
+  return mode, def.autoaim_cone
+end
+
 function acts.hitscan(c, a)
   -- Straight into the mob runtime's own implementation. One arithmetic for a
   -- monster's shotgun and a player's, rather than two that agree today: the
   -- spread roll, the tracer geometry and the "a shot that reached nothing is
   -- still a shot" report are all decisions this file should not be making
   -- again differently.
-  world(c.e, "hitscan", a)
+  world(c.e, "hitscan", a, aim_choice(c.def))
 end
 
 function acts.launch(c, a)
@@ -960,7 +969,7 @@ function acts.launch(c, a)
     base, slope = c.ev.aim, c.ev.slope
   else
     local t, aimed
-    t, aimed, slope = world(c.e, "autoaim")
+    t, aimed, slope = world(c.e, "autoaim", aim_choice(c.def))
     if t ~= nil then base = aimed end
   end
   local n = a.count or 1

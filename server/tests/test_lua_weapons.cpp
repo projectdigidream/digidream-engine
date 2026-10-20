@@ -2072,6 +2072,46 @@ int main(int argc, char** argv) {
     CHECK(num("aim_hp1") < num("aim_hp0"));
     CHECK(num("aim_hp2") == num("aim_hp1"));
 
+    // A WEAPON'S OWN CHOICE (its `autoaim`), on the Lua path: off is the flat
+    // shot that passes underneath; the cone a weapon names replaces the game's.
+    if (!run("local p = dnp.players()[1]\n"
+             "local shot = { range = fx.int(8), damage = 10, count = 1 }\n"
+             "local function fire(mode, cone)\n"
+             "  local m = mobs.synthetic_owner(p, p:facing())\n"
+             "  m.aim_mode, m.aim_cone = mode, cone\n"
+             "  local was = mobs.live[aim_up:index()].hp\n"
+             "  mobs.acts.hitscan(m, shot)\n"
+             "  return was - mobs.live[aim_up:index()].hp\n"
+             "end\n"
+             "own_off = fire(2)\n"
+             "own_on = fire(1)\n"
+             "mobs.autoaim_h = 0\n"
+             "own_cone = fire(0, 10)\n"
+             "own_shut = fire(0)\n"
+             "mobs.autoaim_h = 5.625\n"
+             "own_op_off = (mobs.weapon_runtime(p, 'autoaim', 2) == nil) and 1 or 0\n"
+             "own_op_on = (mobs.weapon_runtime(p, 'autoaim', 1) ~= nil) and 1 or 0\n",
+             "a weapon's own aim assist")) return 1;
+    std::printf("  the weapon's choice: off %d, on %d, its own cone with the game's shut %d, shut %d\n",
+                (int)num("own_off"), (int)num("own_on"), (int)num("own_cone"), (int)num("own_shut"));
+    CHECK(num("own_off") == 0);
+    CHECK(num("own_on") > 0);            // CONTROL: the same shot, assisted, lands
+    CHECK(num("own_cone") > 0);
+    CHECK(num("own_shut") == 0);         // CONTROL: without the weapon's cone, nothing
+    CHECK(num("own_op_off") == 1);
+    CHECK(num("own_op_on") == 1);
+    // The compiler: a cone past a half turn is refused, naming the field.
+    if (!run("local ok, why = dnp.weapons_compile({ gun = { label = 'Gun', order = 1, autoaim = false, autoaim_cone = 500, initial = 'ready',\n"
+             "  phases = { ready = { } } } }, {})\n"
+             "own_refused = (ok == nil and tostring(why):find('autoaim_cone')) and 1 or 0\n"
+             "local ok2, why2 = dnp.weapons_compile({ gun = { label = 'Gun', order = 1, autoaim = false, autoaim_cone = 15, initial = 'ready',\n"
+             "  phases = { ready = { } } } }, {})\n"
+             "own_taken = ok2 ~= nil and 1 or 0\n"
+             "own_why = tostring(why) .. ' / ' .. tostring(why2)\n", "compiling a weapon's aim")) return 1;
+    std::printf("  compiling: %s\n", str("own_why").c_str());
+    CHECK(num("own_refused") == 1);
+    CHECK(num("own_taken") == 1);        // CONTROL: the same weapon, a legal cone
+
     // THE HORIZONTAL HALF, and that it is SLIGHT.
     //
     // A candidate four degrees off the nose at five units, and one fifteen
