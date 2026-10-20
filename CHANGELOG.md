@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.2.2 -- 2026-10-20
+
 ### Added
 
 - **Aim assist chosen per weapon**: `autoaim = true` turns it on even in
