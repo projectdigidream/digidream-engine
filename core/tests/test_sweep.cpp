@@ -23,6 +23,7 @@
 //   pure         it changes nothing -- the world hash before equals after.
 //
 #include <cstdio>
+#include <utility>
 
 #include "dnp/sim/world.hpp"
 
@@ -544,8 +545,68 @@ static void test_it_is_deterministic() {
     }
 }
 
+// A PLATFORM ACROSS THE BORDER between two rooms (mapc takes it since a raised
+// platform may straddle a shared wall): rooms 0 (x 0..20) and 1 (20..40) open
+// at x = 20, and platform 2 (x 15..25, y 5..10, floor 2, a slab 2 thick, its
+// edges open) over both.
+struct Straddle {
+    MapStorage store;
+    MapData    view{};
+    Straddle() {
+        const fx2 a[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(16)}, {F(0), F(16)}};
+        const fx2 b[] = {{F(20), F(0)}, {F(40), F(0)}, {F(40), F(16)}, {F(20), F(16)}};
+        const fx2 p[] = {{F(15), F(5)}, {F(25), F(5)}, {F(25), F(10)}, {F(15), F(10)}};
+        store.add_sector(a, 4, F(0), F(20), 1);
+        store.add_sector(b, 4, F(0), F(20), 1);
+        store.add_sector(p, 4, F(2), F(20), 1);
+        store.sector_mut(2).thickness = F(2);
+        for (u16 i = 0; i < 4; ++i) store.add_side(0, i, static_cast<u16>((i + 1) % 4), i == 1 ? 1 : NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), i == 3 ? 0 : NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(2, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, side_flag::LEDGE);
+    }
+    void attach(World& w) {
+        view = store.view();
+        w.set_map(&view);
+        w.set_map_storage(&store);
+    }
+};
+
+static void test_a_platform_across_two_rooms() {
+    std::printf("sweep: a platform across the border of two rooms is stood on over both\n");
+    static Straddle st;
+    static World w;
+    w.reset();
+    st.attach(w);
+    auto settle = [&](fx3 at) {
+        const u32 a = w.spawn(at);
+        for (u32 t = 0; t < 90; ++t) { w.set_input(a, proto::InputFrame{}); w.step(); }
+        const auto& g = w.agent(a);
+        const auto out = std::make_pair(g.mv.sector, g.pos.z);
+        w.despawn(a);
+        return out;
+    };
+    const auto overA = settle(fx3{F(17), Ff(15, 2), F(3)});
+    const auto overB = settle(fx3{F(23), Ff(15, 2), F(3)});
+    const auto inB = settle(fx3{F(32), Ff(15, 2), F(0)});
+    std::printf("  over room 0: sector %d at %.2f; over room 1: sector %d at %.2f; room 1: sector %d at %.2f\n",
+                overA.first, overA.second.raw / 4294967296.0, overB.first, overB.second.raw / 4294967296.0,
+                inB.first, inB.second.raw / 4294967296.0);
+    CHECK(overA.first == 2 && overA.second == F(2));   // on the platform, over the west room
+    CHECK(overB.first == 2 && overB.second == F(2));   // and over the east one
+    CHECK(inB.first == 1 && inB.second == F(0));       // CONTROL: beside it, the room's floor
+    // And from the east room the platform's side is a wall to walk into: two
+    // units is no step.
+    const u32 a = w.spawn(fx3{F(32), Ff(15, 2), F(0)});
+    proto::InputFrame f;
+    f.move_x = -32767;
+    for (u32 t = 0; t < 240; ++t) { w.set_input(a, f); w.step(); }
+    std::printf("  walking west from x 32: stopped at x %.2f\n", w.agent(a).pos.x.raw / 4294967296.0);
+    CHECK(w.agent(a).pos.x > F(25) && w.agent(a).mv.sector == 1);
+}
+
 int main() {
     std::printf("== core/sweep test suite ==\n");
+    test_a_platform_across_two_rooms();
     test_it_finds_the_nearest();
     test_a_wall_stops_it();
     test_a_miss_to_the_side_is_a_miss();

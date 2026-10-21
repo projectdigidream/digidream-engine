@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **A platform could not cross the border between two rooms.** mapc refused
+  a sector that only partly overlapped another unless the two were separated
+  in height. A raised platform is now taken across any number of rooms, as a
+  nested one already was: a body stands on it over either room, and from the
+  rooms its side is a wall. Two level floors sharing space, or a sunk floor
+  across a border (a pit is a hole cut from one room), are still refused.
+
 ## 0.2.3.2 -- 2026-10-21
 
 ### Fixed

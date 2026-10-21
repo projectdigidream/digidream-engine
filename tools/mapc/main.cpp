@@ -1026,6 +1026,18 @@ int main(int argc, char** argv) {
             const Sector& hi = sa.floor_z <= sb.floor_z ? sb : sa;
             if (lo.ceil_z <= hi.floor_z - hi.thickness) continue;
 
+            // And when one STANDS ON the other: a platform raised above the
+            // floor it overlaps, across the border between two rooms. It is
+            // the nested pillar's case with the pillar not wholly in one hall,
+            // and every query answers it the same way -- find_sector_at by the
+            // feet (on the platform's floor or on the room's), the mover by the
+            // slabs it meets, find_sector by the smaller footprint. What stays
+            // refused is two floors at one height sharing space, where nothing
+            // says which is underfoot -- and a LOWER floor reaching into a room
+            // (a pit across a border), whose floor the room's would cover: a
+            // pit is a hole, cut from the one room it is in.
+            if (sa.floor_z > sb.floor_z) continue;
+
             // Otherwise the two share space a body could occupy, and which
             // sector it is in has no answer that geometry can give. Every
             // consequence follows from that one: which floor it stands on,
@@ -1034,10 +1046,11 @@ int main(int argc, char** argv) {
                 "sector %u partially overlaps sector %u: %u of its %u corners are inside,\n"
                 "starting at corner %u (%.3f, %.3f), and the two share space vertically.\n"
                 "\n"
-                "Footprints may overlap in two cases: NESTED (a pillar inside a hall), or\n"
+                "Footprints may overlap when NESTED (a pillar inside a hall), when one STANDS\n"
+                "ON the other (a platform with a higher floor, even across two rooms), or when\n"
                 "SEPARATED IN HEIGHT (a bridge over a path, where the lower sector's ceiling\n"
-                "is at or below the upper one's underside). This is neither: the lower\n"
-                "ceiling is %.3f and the upper underside is %.3f.\n",
+                "is at or below the upper one's underside). This is none of them: the floors\n"
+                "are level (or it is the lower one), the lower ceiling is %.3f and the upper underside is %.3f.\n",
                 a, b, inside, sa.point_count, first_inside,
                 static_cast<double>(witness.x.raw) / 4294967296.0,
                 static_cast<double>(witness.y.raw) / 4294967296.0,

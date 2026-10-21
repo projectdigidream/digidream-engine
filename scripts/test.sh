@@ -191,6 +191,7 @@ suite_core () {
   "./build/$HOST_ARCH/test_input_ring"
 
   ./scripts/check_map_scripts.sh
+  ./scripts/check_mapc_overlap.sh
   # The generated reference sections of docs/MOBS.md and docs/WEAPONS.md, diffed
   # against the vocabularies they come from. A heading check catches a MISSING
   # entry and nothing else -- a name documented with last month's arguments passes
