@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.1 -- 2026-10-21
+
 ### Fixed
 
 - **A fade to black hid the subtitles.** The subtitle line is now drawn over
