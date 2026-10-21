@@ -287,7 +287,7 @@
           "y": -60,
           "w": 1400,
           "h": 200,
-          "text": "The controls, shown for ten seconds as the game starts: the panel 'controls' (Panels), a line for a keyboard and one for a touch screen. A player can close it with its x. Change its words and look on the Panels page, or delete this graph (or the panel) to show nothing."
+          "text": "The controls, shown for ten seconds as the game starts: the panel 'controls' (Panels), one text for a computer and one for a touch screen, each shown only there. A player can close it with its x. Change its words and look on the Panels page, or delete this graph (or the panel) to show nothing."
         }
       ]
     },
@@ -366,9 +366,9 @@
       "look": {
         "anchor": "t",
         "x": 0,
-        "y": 12,
-        "w": 600,
-        "h": 52,
+        "y": 80,
+        "w": 660,
+        "h": 40,
         "modal": false,
         "closeable": true,
         "showTitle": false
@@ -380,24 +380,26 @@
           "type": "text",
           "anchor": "c",
           "x": 0,
-          "y": -10,
-          "text": "Keyboard: WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
+          "y": 0,
+          "text": "WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
           "style": {
             "size": 13,
             "align": "center"
-          }
+          },
+          "show": "desktop"
         },
         {
           "id": "keys_touch",
           "type": "text",
           "anchor": "c",
           "x": 0,
-          "y": 10,
-          "text": "Touch: left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
+          "y": 0,
+          "text": "left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
           "style": {
             "size": 13,
             "align": "center"
-          }
+          },
+          "show": "touch"
         }
       ]
     }

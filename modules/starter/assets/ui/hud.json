@@ -4,9 +4,9 @@
   "controls": {
    "anchor": "t",
    "x": 0,
-   "y": 12,
-   "w": 600,
-   "h": 52,
+   "y": 80,
+   "w": 660,
+   "h": 40,
    "modal": false,
    "title": {
     "show": false
@@ -18,24 +18,26 @@
      "type": "text",
      "anchor": "c",
      "x": 0,
-     "y": -10,
-     "text": "Keyboard: WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
+     "y": 0,
+     "text": "WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
      "style": {
       "size": 13,
       "align": "center"
-     }
+     },
+     "show": "desktop"
     },
     {
      "id": "keys_touch",
      "type": "text",
      "anchor": "c",
      "x": 0,
-     "y": 10,
-     "text": "Touch: left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
+     "y": 0,
+     "text": "left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
      "style": {
       "size": 13,
       "align": "center"
-     }
+     },
+     "show": "touch"
     }
    ]
   }

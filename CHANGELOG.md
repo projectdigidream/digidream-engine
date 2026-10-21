@@ -29,9 +29,10 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 ### Changed
 
 - **The starter's controls are a panel**: its `welcome` game graph opens the
-  panel `controls` at the top of the screen for ten seconds (a line for a
-  keyboard, one for a touch screen; closeable), instead of saying the keys on
-  the subtitle line, which stays free for the game's own words.
+  panel `controls` near the top of the screen for ten seconds (the keys on a
+  computer, the on-screen controls on a touch screen; closeable), instead of
+  saying the keys on the subtitle line, which stays free for the game's own
+  words.
 
 ## 0.2.3.1 -- 2026-10-21
 

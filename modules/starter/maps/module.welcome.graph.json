@@ -80,7 +80,7 @@
     "y": -60,
     "w": 1400,
     "h": 200,
-    "text": "The controls, shown for ten seconds as the game starts: the panel 'controls' (Panels), a line for a keyboard and one for a touch screen. A player can close it with its x. Change its words and look on the Panels page, or delete this graph (or the panel) to show nothing."
+    "text": "The controls, shown for ten seconds as the game starts: the panel 'controls' (Panels), one text for a computer and one for a touch screen, each shown only there. A player can close it with its x. Change its words and look on the Panels page, or delete this graph (or the panel) to show nothing."
    }
   ]
  }
