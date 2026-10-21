@@ -14,6 +14,16 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **On a phone, the subtitle covered the touch buttons.** It now narrows to
+  the room between the stick and the buttons on a phone held sideways, and
+  rises above the buttons on one held upright. This applies to a module's own
+  subtitle line too, when it is placed at the bottom.
+- **A panel's decor ignored `show: touch | desktop`**, showing the keyboard
+  line on a phone and never the touch one. It now follows the game's screen,
+  as the HUD does.
+
 ### Changed
 
 - **The starter's controls are a panel**: its `welcome` game graph opens the

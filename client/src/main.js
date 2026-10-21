@@ -947,6 +947,7 @@ if (LIVE) {
   // is a player pressing a button that does nothing.
   ui = new UiView({
     layout: uiLayout,
+    touch: wantsTouch(params),
     onChange: () => panelsChanged(),
     onEvent: (uiId, widgetId, value) => {
       uiSound('ui.select')

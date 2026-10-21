@@ -72,6 +72,23 @@ function hasElement (els, id) {
   }
   return false
 }
+// ON A TOUCH SCREEN the subtitle keeps out of the buttons' corner (bottom
+// right, about this many units in from the edge in either touch layout): it
+// narrows to the room between the two corners when the screen is wide -- a
+// phone held sideways -- and otherwise rises above the buttons.
+const TOUCH_CORNER = 220
+const TOUCH_RISE = 250
+export function clearOfButtons (el, layout, width, height) {
+  if (!(el.anchor ?? 'tl').startsWith('b')) return el      // a line placed up top is clear already
+  const s = uiScale(layout, width, height)
+  const room = width - 2 * TOUCH_CORNER * s
+  if (room >= 300 * s) {
+    const full = sizeOf(el.w ?? el.size, s, width, height) ?? width
+    return full <= room ? el : { ...el, w: room / s }
+  }
+  return { ...el, y: Math.min(el.y ?? 0, -TOUCH_RISE) }
+}
+
 /** A layout with the subtitle line in it, unless it places its own. */
 export function withSubtitles (layout) {
   if (hasElement(layout.hud, 'subtitle')) return layout
@@ -714,9 +731,13 @@ export class HudView {
     const area = this.#area()
     for (const n of this.nodes) {
       this.#fill(n)
-      const r = place(n.el, this.layout, area.width, area.height, this.insets ?? {}, { w: n.dom.offsetWidth || 0, h: n.dom.offsetHeight || 0 })
+      const el = this.touch && n.el.id === 'subtitle' ? clearOfButtons(n.el, this.layout, area.width, area.height) : n.el
+      // The width FIRST, then the height is measured: a line that wraps is
+      // as tall as it is at the width it will have, not the one it had.
+      const w = place(el, this.layout, area.width, area.height, this.insets ?? {}).width
+      if (w) n.dom.style.width = `${w}px`
+      const r = place(el, this.layout, area.width, area.height, this.insets ?? {}, { w: n.dom.offsetWidth || 0, h: n.dom.offsetHeight || 0 })
       Object.assign(n.dom.style, { left: `${r.left}px`, top: `${r.top}px` })
-      if (r.width) n.dom.style.width = `${r.width}px`
     }
   }
 

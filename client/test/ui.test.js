@@ -251,6 +251,20 @@ const rootOf = (doc) => all(doc.body).filter((e) => /(^| )dnp-ui( |$)/.test(e.cl
         `CONTROL: a bad name, anchor or slot is an error and the template is dropped (${bad.errors.length})`)
 }
 
+// --- a panel's decor reads `show: touch | desktop` against the game's screen ---
+{
+  const T = parseLayout({ panels: { keys: { anchor: 'c', w: 200, h: 80, decor: [
+    { id: 'kb', type: 'text', text: 'WASD walk', show: 'desktop' },
+    { id: 'tp', type: 'text', text: 'stick walks', show: 'touch' }] } } })
+  const shown = (touch) => {
+    const doc = makeDom()
+    new UiView({ onEvent: () => {}, doc, layout: T.layout, size: { width: 800, height: 600 }, touch }).open({ ...msg, template: 'keys' })
+    return all(rootOf(doc)).map((e) => e.textContent).filter((t) => t === 'WASD walk' || t === 'stick walks').join()
+  }
+  check(shown(true) === 'stick walks', `on a touch screen, the touch line only (${shown(true)})`)
+  check(shown(false) === 'WASD walk', `CONTROL: with a keyboard, the keyboard line only (${shown(false)})`)
+}
+
 // --- a panel's decor shows the HUD's values (docs/PANEL_DECOR_VALUES.md) ---
 {
   const DECOR = parseLayout({

@@ -126,7 +126,9 @@ export class UiView {
    * them and the scale, `host` and `size` let the studio draw a panel inside a
    * device frame rather than the window.
    */
-  constructor ({ onEvent, onChange = null, doc = globalThis.document, host = null, layout = null, size = null, insets = null, assetUrl = UI_URL }) {
+  constructor ({ onEvent, onChange = null, doc = globalThis.document, host = null, layout = null, size = null, insets = null, assetUrl = UI_URL, touch = false }) {
+    // A touch screen's game: a decor element's `show: touch | desktop` is read against it.
+    this.touch = touch
     this.onEvent = onEvent
     this.assetUrl = assetUrl
     // Called after any panel opens or closes, however it closed (the script,
@@ -344,7 +346,7 @@ export class UiView {
     let decor = null
     if ((tpl.decor ?? []).length) {
       // Decor is HUD elements, drawn by the HUD's own code, behind the widgets.
-      decor = new HudView({ host: stage, doc, size: { width: pw, height: sh }, assetUrl: this.assetUrl })
+      decor = new HudView({ host: stage, doc, touch: this.touch, size: { width: pw, height: sh }, assetUrl: this.assetUrl })
       decor.root.style.zIndex = '0'
       decor.setLayout({ ...this.layout, hud: tpl.decor })
       decor.setHidden(msg.hiddenDecor ?? [])

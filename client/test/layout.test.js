@@ -9,7 +9,7 @@
 //
 import {
   parseLayout, place, uiScale, sizeOf, isVisible, layoutFileFor, HudView, DEFAULT_LAYOUT, ANCHORS,
-  UiAssets, UI_STYLES, layoutImages
+  UiAssets, UI_STYLES, layoutImages, SUBTITLES, clearOfButtons
 } from '../src/render/layout.js'
 import { touchLayout } from '../src/render/touchui.js'
 
@@ -380,6 +380,24 @@ export const PARCHMENT = {
   check(Number(layerOf(health)?.style.zIndex) < 40, 'CONTROL: the rest of the HUD is under it')
   const plain = new HudView({ host: doc.createElement('body'), doc, size: { width: 800, height: 600 } })
   check(plain.over === plain.root, 'CONTROL: a marker\'s or a panel\'s HUD keeps one layer')
+}
+
+// ON A TOUCH SCREEN the subtitle keeps out of the buttons' corner.
+{
+  const wide = clearOfButtons(SUBTITLES, DEFAULT_LAYOUT, 844, 390)
+  const tall = clearOfButtons(SUBTITLES, DEFAULT_LAYOUT, 390, 844)
+  const free = place(SUBTITLES, DEFAULT_LAYOUT, 844, 390)
+  const narrowed = place(wide, DEFAULT_LAYOUT, 844, 390)
+  check(free.left + free.width > 844 - 180, `CONTROL: as it was, a sideways phone's subtitle reaches under the ATK button (right edge ${free.left + free.width})`)
+  check(narrowed.left + narrowed.width <= 844 - 200 && narrowed.left >= 200, `narrowed between the corners (${narrowed.left}..${narrowed.left + narrowed.width})`)
+  check(tall.y <= -250 && tall.w === SUBTITLES.w, `held upright, it rises above the buttons instead (y ${tall.y})`)
+  const top = { ...SUBTITLES, anchor: 't', y: 20 }
+  check(clearOfButtons(top, DEFAULT_LAYOUT, 390, 844) === top, 'one a module put at the top is left where it is')
+  const doc = fakeDoc()
+  const hud = new HudView({ host: doc.createElement('body'), doc, touch: true, size: { width: 844, height: 390 } })
+  hud.update({ 'hud.subtitle': 'Where is everybody?' })
+  const d = hud.nodes.find((n) => n.el.id === 'subtitle').dom
+  check(parseFloat(d.style.width) <= 844 - 400, `a touch HUD draws it so (${d.style.width})`)
 }
 
 console.log(`\nlayout: ${checks} checks, ${fails} failures`)
