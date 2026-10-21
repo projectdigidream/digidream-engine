@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.2 -- 2026-10-21
+
 ### Fixed
 
 - **On a phone, the subtitle covered the touch buttons.** It now narrows to
