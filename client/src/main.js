@@ -476,7 +476,7 @@ let lastSelfAnim = null
 // THE LAYOUT (docs/UI_LAYOUT.md): the module's HUD and touch controls as data,
 // or the built-in default, which is what index.html and touchui.js drew before.
 // The health box that used to be hard-coded is drawn by the HUD now.
-const hudView = new HudView({ host: document.body, touch: wantsTouch(params) })
+const hudView = new HudView({ host: document.body, touch: wantsTouch(params), subtitlesOver: true })
 // MARKERS (docs/MARKERS.md): small UIs scripts hang on things in the world,
 // drawn from the layout's `markers` templates over where those things are.
 const markers = new MarkerView({ host: document.body })
@@ -2520,9 +2520,10 @@ function fpsInput () {
     forward: held.has('KeyW') || held.has('ArrowUp'), back: held.has('KeyS') || held.has('ArrowDown'),
     right: held.has('KeyD'), left: held.has('KeyA'), stick
   })
-  // Arrow keys turn, for a player with no mouse.
-  if (held.has('ArrowLeft')) fpsLook.move(-6, 0)
-  if (held.has('ArrowRight')) fpsLook.move(6, 0)
+  // Arrow keys turn, for a player with no mouse -- and Q and R, which turn
+  // the camera in the other schemes and which the Controls page names.
+  if (held.has('ArrowLeft') || held.has('KeyQ')) fpsLook.move(-6, 0)
+  if (held.has('ArrowRight') || held.has('KeyR')) fpsLook.move(6, 0)
   let buttons = 0
   if (held.has('Space')) buttons |= BUTTON.JUMP
   if (held.has('ShiftLeft') || held.has('ShiftRight')) buttons |= BUTTON.DASH

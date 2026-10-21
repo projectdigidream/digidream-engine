@@ -366,5 +366,21 @@ export const PARCHMENT = {
         `the default fetch is the browser's, called as itself (${warned.join('; ')})`)
 }
 
+// SUBTITLES OVER THE CURTAIN: in the game's HUD the subtitle line is in a
+// layer above the fade's curtain (z-index 40) and the letterbox (41); the
+// rest of the HUD stays under them.
+{
+  const doc = fakeDoc()
+  const host = doc.createElement('body')
+  const hud = new HudView({ host, doc, size: { width: 800, height: 600 }, subtitlesOver: true })
+  const sub = hud.nodes.find((n) => n.el.id === 'subtitle').dom
+  const health = hud.nodes.find((n) => n.el.id === 'health').dom
+  const layerOf = (dom) => host.children.find((l) => l.children.includes(dom))
+  check(Number(layerOf(sub)?.style.zIndex) > 41, `the subtitle's layer is over the curtain (${layerOf(sub)?.style.zIndex})`)
+  check(Number(layerOf(health)?.style.zIndex) < 40, 'CONTROL: the rest of the HUD is under it')
+  const plain = new HudView({ host: doc.createElement('body'), doc, size: { width: 800, height: 600 } })
+  check(plain.over === plain.root, 'CONTROL: a marker\'s or a panel\'s HUD keeps one layer')
+}
+
 console.log(`\nlayout: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

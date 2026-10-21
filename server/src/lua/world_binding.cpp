@@ -2322,7 +2322,10 @@ int l_dnp_hud(lua_State* L) {
             size_t sn = 0;
             const char* s = lua_tolstring(L, -1, &sn);
             h.kind = proto::HUD_STR;
-            h.s.assign(s, std::min<size_t>(sn, proto::HUD_STR_MAX));
+            // Cut at a whole character: half a UTF-8 letter is not text.
+            size_t n = std::min<size_t>(sn, proto::HUD_STR_MAX);
+            if (n < sn) while (n > 0 && (static_cast<u8>(s[n]) & 0xC0) == 0x80) --n;
+            h.s.assign(s, n);
         } else if (is_fx(L, -1)) {
             return luaL_error(L, "dnp.hud: '%s' is an fx; a HUD shows whole numbers -- "
                               "convert it (.int) first", name);

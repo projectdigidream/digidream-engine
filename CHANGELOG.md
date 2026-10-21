@@ -14,6 +14,21 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **A fade to black hid the subtitles.** The subtitle line is now drawn over
+  the fade and the letterbox bars, as the studio's scene preview shows it.
+- **A long subtitle lost its last lines.** HUD text was cut to 128 bytes,
+  about three lines at a large size. The limit is now 1024 bytes, and a line
+  is cut at a whole letter.
+- **Q and R did not turn the view in first person**, though they turn the
+  camera in the other control schemes. They now turn it, as the arrow keys do.
+- **Walls dithered before they hid the player**, from some camera angles. The
+  window that fades what stands in front of the player was as wide near the
+  camera as at the player, so near the camera it covered much more of the
+  screen than the player. It is now a cone: on screen, the player's outline
+  and a margin, at any depth and zoom.
+
 ## 0.2.3 -- 2026-10-20
 
 Everything since 0.2.2. (The development releases 0.2.2.1 and 0.2.2.2 below

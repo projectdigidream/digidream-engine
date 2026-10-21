@@ -575,7 +575,7 @@ export function layoutFileFor (index, levelName) {
  * is not in the world (render/ui.js makes the same choice).
  */
 export class HudView {
-  constructor ({ host, doc = globalThis.document, touch = false, insets = null, size = null, assetUrl = (f) => `/ui/${f}` } = {}) {
+  constructor ({ host, doc = globalThis.document, touch = false, insets = null, size = null, assetUrl = (f) => `/ui/${f}`, subtitlesOver = false } = {}) {
     this.host = host
     // Where a file the layout names is fetched from (docs/UI_STYLES.md 6.1).
     // No HUD element draws a /ui/ file yet; kept for when one does.
@@ -591,6 +591,17 @@ export class HudView {
     this.root.className = 'dnp-hud'
     Object.assign(this.root.style, { position: 'absolute', inset: '0', pointerEvents: 'none', zIndex: '20' })
     host.appendChild(this.root)
+    // SUBTITLES ARE OVER THE CURTAIN (z-index 40) and the letterbox (41), in
+    // the game's own HUD (`subtitlesOver`): a line spoken in the dark is read,
+    // as the studio's scene preview shows it. Their own layer, the same size
+    // as the HUD's, so they place alike.
+    this.over = this.root
+    if (subtitlesOver) {
+      this.over = doc.createElement('div')
+      this.over.className = 'dnp-hud-over'
+      Object.assign(this.over.style, { position: 'absolute', inset: '0', pointerEvents: 'none', zIndex: '42' })
+      host.appendChild(this.over)
+    }
     this.nodes = []
     this.#build()
   }
@@ -627,7 +638,7 @@ export class HudView {
    *  natural size can first be read (a panel's decor is built before it is). */
   refresh () { this.#paint() }
 
-  destroy () { this.root.remove() }
+  destroy () { this.root.remove(); this.over.remove() }
 
   #area () {
     if (this.size) return this.size
@@ -637,6 +648,7 @@ export class HudView {
 
   #build () {
     this.root.textContent = ''
+    this.over.textContent = ''
     this.nodes = []
     const theme = this.layout.theme ?? DEFAULT_LAYOUT.theme
     for (const el of this.layout.hud ?? []) {
@@ -644,7 +656,7 @@ export class HudView {
       if (el.show === 'desktop' && this.touch) continue
       const node = this.#make(el, theme)
       node.dom.style.position = 'absolute'
-      this.root.appendChild(node.dom)
+      ;(el.id === 'subtitle' ? this.over : this.root).appendChild(node.dom)
       this.nodes.push(node)
     }
     this.#paint()

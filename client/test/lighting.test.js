@@ -137,15 +137,15 @@ console.log('\n--- wall occlusion (§4) ---')
   check(blocking < 0.25, `something square in the way is faded hard (${blocking.toFixed(3)})`)
 
   // The fade is soft, not a hole with a rim.
-  const edge = on({ x: 3, y: 10, z: 15 })
-  const outside = on({ x: 8, y: 10, z: 15 })
+  const edge = on({ x: 0.5, y: 10, z: 15 })
+  const outside = on({ x: 2, y: 10, z: 15 })
   check(blocking < edge && edge < outside, `soft-edged (${blocking.toFixed(2)} < ${edge.toFixed(2)} < ${outside.toFixed(2)})`)
   check(outside === 1, 'and fully opaque outside the window')
 
   // Monotonic across the window, so the edge has no ring in it.
   let mono = true
   let prev = -1
-  for (let d = 0; d <= 6; d += 0.2) {
+  for (let d = 0; d <= 2; d += 0.05) {
     const a = on({ x: d, y: 10, z: 15 })
     if (a < prev - 1e-12) mono = false
     prev = a
@@ -173,12 +173,16 @@ console.log('\n--- wall occlusion (§4) ---')
   check(occlusionAlpha({ x: 0, y: 10, z: 15 }, cam, subj, { strength: 0 }) === 1,
         'strength 0 disables it')
 
-  // The window is a WORLD distance from the ray, not a screen-space radius, so
-  // it does not swallow the room as you zoom in. Same geometry, camera twice as
-  // far: the same world point is still just inside.
-  const far = { x: 0, y: 40, z: 60 }
-  check(occlusionAlpha({ x: 3, y: 10, z: 15 }, far, subj) < 1,
-        'the window keeps its world size as the camera pulls back')
+  // A CONE, the body's size on screen at every depth. Halfway to the camera a
+  // wall 1.5 units off the line of sight is clear of the body on screen: it
+  // stays whole (the old 3.5-wide cylinder dithered it before it reached the
+  // player). CONTROL: the same offset right in front of the player fades.
+  check(on({ x: 1.5, y: 10, z: 15 }) === 1, 'a wall beside the line of sight, halfway, is not faded early')
+  check(on({ x: 1.0, y: 3.4, z: 5.1 }) < 1, 'CONTROL: the same kind of offset just in front of the player fades')
+  // The same angle off the ray fades alike at any depth: the window follows
+  // the body on screen, whatever the zoom.
+  const at = (k) => on({ x: 0.4 * k, y: 20 - 20 * k, z: 30 - 30 * k })
+  check(Math.abs(at(0.3) - at(0.6)) < 1e-9, `one angle, one fade, near or far (${at(0.3).toFixed(3)} / ${at(0.6).toFixed(3)})`)
 }
 
 console.log('\n--- the shader is the twin of the tested function ---')
@@ -193,8 +197,8 @@ console.log('\n--- the shader is the twin of the tested function ---')
         'and its loop bound matches the uniform array size')
   check(FRAGMENT_SHADER.includes('dFrag < dSubj - occludeGap'),
         'and its occlusion test keeps the same gap in front of the player')
-  check(FRAGMENT_SHADER.includes('smoothstep(0.0, occludeRadius'),
-        'and the same soft edge')
+  check(FRAGMENT_SHADER.includes('float r = occludeRadius * t') && FRAGMENT_SHADER.includes('smoothstep(0.0, r, d)'),
+        'and the same cone, with the same soft edge')
 }
 
 console.log('\n--- the shader and the material it is used with agree ---')

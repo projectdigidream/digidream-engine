@@ -746,6 +746,15 @@ int main(int argc, char** argv) {
     CHECK(g_ui.cams[11] == 0);                 // the camera back to following
     CHECK(g_ui.huds["subtitle"] == "<cleared>");
     CHECK(num("cs_done") == 1);
+    // A LONG LINE reaches the HUD whole: five lines at a big size is ~200
+    // letters, and the old cap of 128 bytes kept three. One past the cap is
+    // cut at a whole letter (a two-byte "é" across the edge goes entirely).
+    CHECK(run("dnp.hud(nil, { long_line = string.rep('word ', 60) })\n"
+              "dnp.hud(nil, { cut_line = string.rep('a', 1023) .. '\\195\\169' })", "a long line"));
+    std::printf("  a 300-byte line arrives as %zu bytes; one with a letter across the cap as %zu\n",
+                g_ui.huds["long_line"].size(), g_ui.huds["cut_line"].size());
+    CHECK(g_ui.huds["long_line"].size() == 300);
+    CHECK(g_ui.huds["cut_line"].size() == 1023);
     // A path the map does not have is refused, by tag.
     CHECK(!load_graph(R"({ "graph": 1, "name": "fly",
       "nodes": [ { "id": "go", "type": "when_level_starts" }, { "id": "f", "type": "camera_flythrough", "path": 7 } ],
@@ -905,6 +914,27 @@ int main(int argc, char** argv) {
             CHECK(g_ui.sectors[2].fx.kind == 2 && g_ui.sectors[2].on && g_ui.sectors[2].fx.params[0].raw == F(2).raw);
             CHECK(g_ui.sectors[3].fx.kind == 5 && !g_ui.sectors[3].on);
         }
+        // A CHAIN OUTLIVES ITS EVENT'S PROP: removing the prop the event names
+        // (despawn, who: target) and carrying on into a light loop with
+        // delays -- the prop gone by the time the delays fire -- keeps looping.
+        g_ui.sectors.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "relicprobe",
+          "nodes": [ { "id": "u", "type": "when_prop_touched", "prop": "relic" },
+                     { "id": "d", "type": "action", "a": "despawn", "who": "target" },
+                     { "id": "l2", "type": "set_sector_light", "tag": 1, "light": 20 },
+                     { "id": "w", "type": "delay", "ticks": 8 },
+                     { "id": "l3", "type": "set_sector_light", "tag": 1, "light": 110 },
+                     { "id": "w2", "type": "delay", "ticks": 15 } ],
+          "links": [ ["u.then", "d.in"], ["d.then", "l2.in"], ["l2.then", "w.in"], ["w.then", "l3.in"], ["l3.then", "w2.in"], ["w2.then", "l2.in"] ] })"));
+        CHECK(run("local alive = true\n"
+                  "relic = { index = function() return 777 end, name = function() return 'relic' end,\n"
+                  "  valid = function() return alive end, despawn = function() alive = false; return true end }\n"
+                  "probe_ok = pcall(graphs.touched, dnp.players()[1], relic)\n"
+                  "probe_gone = relic:valid() and 0 or 1", "touch the relic"));
+        ticks(60);
+        std::printf("  a light loop after its prop was removed: %zu changes in 60 ticks\n", g_ui.sectors.size());
+        CHECK(truthy("probe_ok") && num("probe_gone") == 1);   // CONTROL: the prop really went
+        CHECK(g_ui.sectors.size() >= 4);                       // 20, 110, 20, 110...
         // CONTROL: a tag no sector carries changes nothing.
         g_ui.sectors.clear();
         CHECK(load_graph(R"({ "graph": 1, "name": "nowhere",

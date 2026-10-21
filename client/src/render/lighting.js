@@ -76,9 +76,12 @@ export function lightAt (point, normal, lights) {
 // map is merged into one mesh per texture: fading "the object in the way" would
 // fade every wall in the map that happened to share a texture with it.
 //
-// The window is a distance from the camera-to-subject RAY, not a screen-space
-// radius, so it stays the same size in the world as you zoom -- a screen-space
-// window would swallow the whole room when zoomed in.
+// The window is a CONE around the camera-to-subject ray: `radius` at the
+// subject, narrowing to nothing at the camera. So on screen it is the subject's
+// own outline and a margin, at any zoom and any depth -- a wall starts to fade
+// when it reaches the body, not before. (It was a cylinder, as wide at the
+// camera as at the player; near the camera that covers much more of the
+// screen than the body, so a wall the line of sight grazed faded early.)
 
 /**
  * How opaque a fragment should be, given what it stands in front of.
@@ -88,8 +91,12 @@ export function lightAt (point, normal, lights) {
  * goes wrong in ways that look like a rendering glitch rather than like a
  * predicate error.
  */
+// The window's radius at the subject: a player's body (about 1.2 tall, its
+// middle the target) and a margin around it.
+export const OCCLUDE_RADIUS = 1.6
+
 export function occlusionAlpha (fragment, camera, subject, {
-  radius = 3.5, gap = 2.5, strength = 0.82
+  radius = OCCLUDE_RADIUS, gap = 2.5, strength = 0.82
 } = {}) {
   const bx = subject.x - camera.x
   const by = subject.y - camera.y
@@ -114,10 +121,11 @@ export function occlusionAlpha (fragment, camera, subject, {
   const cy = ay - by * t
   const cz = az - bz * t
   const d = Math.sqrt(cx * cx + cy * cy + cz * cz)
-  if (d >= radius) return 1
+  const r = radius * t
+  if (d >= r) return 1
 
   // Soft-edged, so the window is a fade rather than a hole with a rim.
-  const e = d / radius
+  const e = d / r
   const smooth = e * e * (3 - 2 * e)
   return 1 - strength * (1 - smooth)
 }
@@ -217,8 +225,9 @@ export const FRAGMENT_SHADER = /* glsl */`
       float t = dot(a, b) / bb;
       if (dFrag < dSubj - occludeGap && t > 0.0) {
         float d = length(a - b * t);
-        if (d < occludeRadius) {
-          alpha = 1.0 - occludeStrength * (1.0 - smoothstep(0.0, occludeRadius, d));
+        float r = occludeRadius * t;
+        if (d < r) {
+          alpha = 1.0 - occludeStrength * (1.0 - smoothstep(0.0, r, d));
         }
       }
     }
@@ -287,7 +296,7 @@ export function lightUniforms (THREE, lights) {
     // viewer, an editor preview -- should not have a hole following the origin
     // around.
     occludeTarget: { value: new THREE.Vector3() },
-    occludeRadius: { value: 3.5 },
+    occludeRadius: { value: OCCLUDE_RADIUS },
     occludeGap: { value: 2.5 },
     occludeStrength: { value: 0 },
     numLights: { value: Math.min(lights.length, MAX_ACTIVE_LIGHTS) },

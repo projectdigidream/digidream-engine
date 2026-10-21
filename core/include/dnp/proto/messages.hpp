@@ -146,7 +146,7 @@ inline constexpr u32 MAX_KEY_ACTIONS = 8;
 inline constexpr u32 HUD_MAX_FIELDS  = 32;    // per message
 inline constexpr u32 HUD_MAX_NAMES   = 64;    // per session
 inline constexpr u32 HUD_NAME_MAX    = 24;
-inline constexpr u32 HUD_STR_MAX     = 128;
+inline constexpr u32 HUD_STR_MAX     = 1024;   // a subtitle of several lines
 inline constexpr u8  HUD_INT = 0, HUD_STR = 1, HUD_CLEAR = 2;
 
 // Decoder-side caps. These bound work and memory on hostile input; they are not

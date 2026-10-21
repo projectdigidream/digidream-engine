@@ -1104,9 +1104,12 @@ fi
 
 WANT=()
 if [[ "${1:-}" == "all" ]]; then WANT=("${ALL[@]}")
-elif [[ $# -eq 0 || "$1" == "quick" ]]; then WANT=("${QUICK[@]}")
+elif [[ $# -eq 0 ]]; then WANT=("${QUICK[@]}")
 else
+  # `quick` among other names is its suites, in place: `quick stack` runs
+  # them and then the stack (it used to run quick alone and drop the rest).
   for s in "$@"; do
+    if [[ "$s" == "quick" ]]; then WANT+=("${QUICK[@]}"); continue; fi
     if ! declare -F "suite_$s" >/dev/null; then
       echo "no suite '$s' -- scripts/test.sh --list" >&2; exit 2
     fi

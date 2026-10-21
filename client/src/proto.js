@@ -955,7 +955,7 @@ export const MAX_SOUNDS = 32
 // HUD_SET's limits, as core/include/dnp/proto/messages.hpp sets them.
 export const HUD_MAX_FIELDS = 32
 export const HUD_NAME_MAX = 24
-export const HUD_STR_MAX = 128
+export const HUD_STR_MAX = 1024
 export const MARK_MAX_VALUES = 16
 // MARK_SET flags (docs/MARKERS.md).
 export const MARK_FLAG = { DEBUG: 1, THROUGH: 2 }
