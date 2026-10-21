@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.3 -- 2026-10-22
+
 ### Fixed
 
 - **A platform could not cross the border between two rooms.** mapc refused
