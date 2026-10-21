@@ -19,12 +19,29 @@
    }
   },
   {
-   "id": "keys",
-   "type": "subtitle",
-   "text": "WASD walk   SPACE jump   SHIFT dash   E use   F attack   Q/R turn the camera",
-   "seconds": 8,
+   "id": "show",
+   "type": "open_panel",
+   "panel": "controls",
    "meta": {
     "x": 560,
+    "y": 40
+   }
+  },
+  {
+   "id": "wait",
+   "type": "delay",
+   "ticks": 600,
+   "meta": {
+    "x": 840,
+    "y": 40
+   }
+  },
+  {
+   "id": "hide",
+   "type": "close_panel",
+   "panel": "controls",
+   "meta": {
+    "x": 1120,
     "y": 40
    }
   }
@@ -36,9 +53,24 @@
   ],
   [
    "first.then",
-   "keys.in"
+   "show.in"
+  ],
+  [
+   "show.then",
+   "wait.in"
+  ],
+  [
+   "wait.then",
+   "hide.in"
   ]
  ],
+ "panels": {
+  "controls": {
+   "title": "Controls",
+   "template": "controls",
+   "widgets": []
+  }
+ },
  "meta": {
   "editor": "studio",
   "notes": [
@@ -46,9 +78,9 @@
     "id": "note1",
     "x": 10,
     "y": -60,
-    "w": 900,
-    "h": 220,
-    "text": "The keys, said once as the game starts. Change the words, or delete this graph when the game says them its own way."
+    "w": 1400,
+    "h": 200,
+    "text": "The controls, shown for ten seconds as the game starts: the panel 'controls' (Panels), a line for a keyboard and one for a touch screen. A player can close it with its x. Change its words and look on the Panels page, or delete this graph (or the panel) to show nothing."
    }
   ]
  }

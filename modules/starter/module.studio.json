@@ -235,14 +235,31 @@
           }
         },
         {
-          "id": "keys",
-          "type": "subtitle",
+          "id": "show",
+          "type": "open_panel",
           "pos": {
             "x": 560,
             "y": 40
           },
-          "text": "WASD walk   SPACE jump   SHIFT dash   E use   F attack   Q/R turn the camera",
-          "seconds": 8
+          "panel": "controls"
+        },
+        {
+          "id": "wait",
+          "type": "delay",
+          "pos": {
+            "x": 840,
+            "y": 40
+          },
+          "ticks": 600
+        },
+        {
+          "id": "hide",
+          "type": "close_panel",
+          "pos": {
+            "x": 1120,
+            "y": 40
+          },
+          "panel": "controls"
         }
       ],
       "links": [
@@ -252,7 +269,15 @@
         ],
         [
           "first.then",
-          "keys.in"
+          "show.in"
+        ],
+        [
+          "show.then",
+          "wait.in"
+        ],
+        [
+          "wait.then",
+          "hide.in"
         ]
       ],
       "notes": [
@@ -260,9 +285,9 @@
           "id": "note1",
           "x": 10,
           "y": -60,
-          "w": 900,
-          "h": 220,
-          "text": "The keys, said once as the game starts. Change the words, or delete this graph when the game says them its own way."
+          "w": 1400,
+          "h": 200,
+          "text": "The controls, shown for ten seconds as the game starts: the panel 'controls' (Panels), a line for a keyboard and one for a touch screen. A player can close it with its x. Change its words and look on the Panels page, or delete this graph (or the panel) to show nothing."
         }
       ]
     },
@@ -331,6 +356,48 @@
           "w": 1160,
           "h": 220,
           "text": "The player's death, on every map: the screen goes dark, a line is said, and it clears on the start (the player is already back there). Change the words, add a sound, or make it a screen of its own."
+        }
+      ]
+    }
+  },
+  "panels": {
+    "controls": {
+      "title": "Controls",
+      "look": {
+        "anchor": "t",
+        "x": 0,
+        "y": 12,
+        "w": 600,
+        "h": 52,
+        "modal": false,
+        "closeable": true,
+        "showTitle": false
+      },
+      "widgets": [],
+      "decor": [
+        {
+          "id": "keys",
+          "type": "text",
+          "anchor": "c",
+          "x": 0,
+          "y": -10,
+          "text": "Keyboard: WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
+          "style": {
+            "size": 13,
+            "align": "center"
+          }
+        },
+        {
+          "id": "keys_touch",
+          "type": "text",
+          "anchor": "c",
+          "x": 0,
+          "y": 10,
+          "text": "Touch: left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
+          "style": {
+            "size": 13,
+            "align": "center"
+          }
         }
       ]
     }

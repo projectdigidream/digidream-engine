@@ -1,0 +1,43 @@
+{
+ "version": 1,
+ "panels": {
+  "controls": {
+   "anchor": "t",
+   "x": 0,
+   "y": 12,
+   "w": 600,
+   "h": 52,
+   "modal": false,
+   "title": {
+    "show": false
+   },
+   "slots": [],
+   "decor": [
+    {
+     "id": "keys",
+     "type": "text",
+     "anchor": "c",
+     "x": 0,
+     "y": -10,
+     "text": "Keyboard: WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
+     "style": {
+      "size": 13,
+      "align": "center"
+     }
+    },
+    {
+     "id": "keys_touch",
+     "type": "text",
+     "anchor": "c",
+     "x": 0,
+     "y": 10,
+     "text": "Touch: left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
+     "style": {
+      "size": 13,
+      "align": "center"
+     }
+    }
+   ]
+  }
+ }
+}
