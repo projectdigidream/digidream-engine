@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.4 -- 2026-10-22
+
 ### Fixed
 
 - **A desktop studio's self-update could replace a folder that was not its
