@@ -14,13 +14,7 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
-## 0.2.3.5 -- 2026-10-22
-
-### Fixed
-
-- **0.2.3.4's desktop kits could not start**: the shell's new `selfupdate.js` was
-  not copied into the app, which main.js imports. It is, and a test now fails
-  for any module the shell imports that the app would not have.
+## 0.2.3.6 -- 2026-10-22
 
 ### Added
 
@@ -40,6 +34,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 - **A climbing body faces the wall it is on**, whichever way it moves along
   it. A dash or grapple from the wall still goes where the stick points, and
   a first-person body is left alone.
+
+## 0.2.3.5 -- 2026-10-22
+
+### Fixed
+
+- **0.2.3.4's desktop kits could not start**: the shell's new `selfupdate.js` was
+  not copied into the app, which main.js imports. It is, and a test now fails
+  for any module the shell imports that the app would not have.
 
 ## 0.2.3.4 -- 2026-10-22 (withdrawn: its desktop kits could not start; see 0.2.3.5)
 
