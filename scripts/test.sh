@@ -806,6 +806,7 @@ suite_app () {
   node shells/app/test/filelog.test.js | tail -1
   node shells/app/test/open_url.test.js | tail -1
   node shells/app/test/selfupdate.test.js | tail -1
+  node shells/app/test/copied.test.js | tail -1
   node shells/app/test/shell_files.test.js | tail -1
   node shells/app/test/studio_net.test.js | tail -1
   # A play-test serves its own module first: another module's hud.json no longer wins it.

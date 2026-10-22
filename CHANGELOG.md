@@ -14,6 +14,31 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **0.2.3.4's desktop kits could not start**: the shell's new `selfupdate.js` was
+  not copied into the app, which main.js imports. It is, and a test now fails
+  for any module the shell imports that the app would not have.
+
+### Added
+
+- **Layers on a player**: up to eight sprites drawn on the body together, for
+  armour or a weapon in hand, in the body's own animation, clock and facing.
+  Use `e:set_layer(slot, prop)` (a kind or a name; nil takes it off) and
+  `e:layer(slot)`.
+- **Animations redefined per player**: `e:set_anim(from, to)` plays state
+  `to` wherever the player would play `from`, its layers too, so an attack
+  can look different with each weapon. Up to eight at once; `nil` puts the
+  state back.
+- **Graph nodes for how a player looks**: `set_avatar`, `set_layer` and
+  `set_animation_for`.
+
+### Changed
+
+- **A climbing body faces the wall it is on**, whichever way it moves along
+  it. A dash or grapple from the wall still goes where the stick points, and
+  a first-person body is left alone.
+
 ## 0.2.3.4 -- 2026-10-22
 
 ### Fixed

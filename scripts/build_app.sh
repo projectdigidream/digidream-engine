@@ -150,7 +150,7 @@ fi
 
 # The shell.
 cp shells/app/main.js shells/app/preload.cjs shells/app/static.js shells/app/relay.js shells/app/studio_files.js shells/app/said.js shells/app/serverexit.js shells/app/links.js shells/app/filelog.js \
-   shells/app/ensure-electron.cjs "$OUT/app/"
+   shells/app/selfupdate.js shells/app/ensure-electron.cjs "$OUT/app/"
 
 # THE LINK FRAMING, COPIED rather than reimplemented or imported across a
 # package boundary. A second implementation of this framing is precisely the
