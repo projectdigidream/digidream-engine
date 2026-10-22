@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **The desktop studio updates itself** (macOS, Windows, Linux), as the Android
+  one does: `dnp.studio.selfUpdate(url)` downloads the release's archive,
+  unpacks it beside the app, and a script started on its own waits for the app
+  to quit, puts the new one in its place and starts it. An app folder it cannot
+  write is left alone, saying so. `dnp.studio.platform` says the system and
+  processor, so the studio picks the right archive.
+
 ## 0.2.3.3 -- 2026-10-22
 
 ### Fixed

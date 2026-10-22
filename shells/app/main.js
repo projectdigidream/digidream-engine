@@ -51,6 +51,7 @@ import { fileURLToPath } from 'node:url'
 import { startStatic } from './static.js'
 import { Relay } from './relay.js'
 import { studioFiles } from './studio_files.js'
+import { update as selfUpdate } from './selfupdate.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 // The staged game tree sits beside the shell. scripts/build_app.sh lays it out.
@@ -381,6 +382,15 @@ async function start () {
         if (!url) throw new Error('only https addresses')
         await desktop.openExternal(url)
         return true
+      }
+      // A newer studio, installed over this one (selfupdate.js): the archive
+      // is fetched and unpacked, a script waits for this app to go, swaps it
+      // and starts the new one. 'installing' and the app quits a moment later.
+      case 'selfUpdate': {
+        if (!manifest.studio) throw new Error('only the studio updates itself')
+        await selfUpdate(a, { fetchFn: (u) => fetch(u), log: (m) => log(`[update] ${m}`) })
+        setTimeout(() => app.quit(), 800)
+        return 'installing'
       }
       default: throw new Error(`unknown studio call: ${op}`)
     }

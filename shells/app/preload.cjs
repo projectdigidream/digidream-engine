@@ -54,6 +54,11 @@ contextBridge.exposeInMainWorld('dnp', {
     share: (name, bytes) => ipcRenderer.invoke('dnp:studio', 'share', name, bytes),
     importFile: (accept) => ipcRenderer.invoke('dnp:studio', 'importFile', accept),
     // A web page in the system's browser (the studio's update notice).
-    openUrl: (url) => ipcRenderer.invoke('dnp:studio', 'openUrl', url)
+    openUrl: (url) => ipcRenderer.invoke('dnp:studio', 'openUrl', url),
+    // A newer studio installed over this one (app/selfupdate.js): 'installing',
+    // then the app quits and comes back as the new one. Which archive is the
+    // page's to pick, by this computer's system and processor:
+    selfUpdate: (url) => ipcRenderer.invoke('dnp:studio', 'selfUpdate', url),
+    platform: `${process.platform}-${process.arch}`
   }
 })
