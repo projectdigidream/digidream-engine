@@ -41,7 +41,7 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   it. A dash or grapple from the wall still goes where the stick points, and
   a first-person body is left alone.
 
-## 0.2.3.4 -- 2026-10-22
+## 0.2.3.4 -- 2026-10-22 (withdrawn: its desktop kits could not start; see 0.2.3.5)
 
 ### Fixed
 
