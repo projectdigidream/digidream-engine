@@ -104,6 +104,8 @@ export class EntityView {
       // a remove-and-respawn the caller can do rather than a surprise this loop
       // performs mid-interpolation.
       if (e.mask & ENT_FIELD.AVATAR) ent.avatar = e.avatar ?? 0
+      // What else a player wears (proto::Look); main.js puts it on the mesh.
+      if (e.mask & ENT_FIELD.LOOK) ent.look = e.look
       // The particle kind following it (a missile's trail): stands until it
       // changes, like the rest, and BEFORE the position early-return below --
       // a burst clears it on a tick that may carry nothing else.

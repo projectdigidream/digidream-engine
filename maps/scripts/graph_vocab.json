@@ -1065,6 +1065,88 @@
     {
       "args": [
         {
+          "doc": "The avatar number: the catalogue's `avatar <id> as <n>` lines say what each draws. 0 is the default.",
+          "name": "avatar",
+          "type": "int"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "avatar"
+      ],
+      "data_out": [],
+      "doc": "Change how a player looks: draw them with another avatar. A player only.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_avatar"
+    },
+    {
+      "args": [
+        {
+          "doc": "1 to 8; 1 is drawn nearest the body.",
+          "name": "slot",
+          "type": "int"
+        },
+        {
+          "doc": "A catalogue prop's name, drawn on the player. Empty takes the slot's off.",
+          "name": "prop",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "slot"
+      ],
+      "data_out": [],
+      "doc": "Draw a sprite on a player -- armour, a weapon in hand -- in the player's own animation and facing. Eight slots, drawn together. A player only.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_layer"
+    },
+    {
+      "args": [
+        {
+          "doc": "The animation state to redefine (2 is the attack).",
+          "name": "state",
+          "type": "int"
+        },
+        {
+          "doc": "The state played in its place. Empty puts the state back as it was.",
+          "name": "to",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "state",
+        "to"
+      ],
+      "data_out": [],
+      "doc": "Redefine one of a player's animations: wherever it would play `state`, it plays `to` -- its layers too. An attack that looks different with each weapon. Eight at once. A player only.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_animation_for"
+    },
+    {
+      "args": [
+        {
           "doc": "Picked on the map.",
           "name": "sector",
           "optional": true,

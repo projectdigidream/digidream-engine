@@ -479,6 +479,30 @@ graph_vocab = {
       exec_in = { "in" }, exec_out = { "then" },
       data_in = { "entity" }, data_out = {},
       doc = "A sound, from an entity -- the event's when nothing is linked." },
+    -- how a player looks
+    { name = "set_avatar", category = "entity",
+      args = { { name = "avatar", type = "int",
+                 doc = "The avatar number: the catalogue's `avatar <id> as <n>` lines say what each draws. 0 is the default." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "avatar" }, data_out = {},
+      doc = "Change how a player looks: draw them with another avatar. A player only." },
+    { name = "set_layer", category = "entity",
+      args = { { name = "slot", type = "int", doc = "1 to 8; 1 is drawn nearest the body." },
+               { name = "prop", type = "string", optional = true,
+                 doc = "A catalogue prop's name, drawn on the player. Empty takes the slot's off." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "slot" }, data_out = {},
+      doc = "Draw a sprite on a player -- armour, a weapon in hand -- in the player's own " ..
+            "animation and facing. Eight slots, drawn together. A player only." },
+    { name = "set_animation_for", category = "entity",
+      args = { { name = "state", type = "int", doc = "The animation state to redefine (2 is the attack)." },
+               { name = "to", type = "int", optional = true,
+                 doc = "The state played in its place. Empty puts the state back as it was." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "state", "to" }, data_out = {},
+      doc = "Redefine one of a player's animations: wherever it would play `state`, " ..
+            "it plays `to` -- its layers too. An attack that looks different with each " ..
+            "weapon. Eight at once. A player only." },
 
     -- sectors
     { name = "open_door", category = "sector", level_only = true,

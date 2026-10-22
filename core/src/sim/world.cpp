@@ -470,6 +470,17 @@ void World::step_agent(u32 i) noexcept {
     // the type wraps. No branch on "which way is shorter", no comparison
     // against pi, and no case at the 359-to-1 boundary -- the arithmetic that
     // makes a turn wrap is the same arithmetic that makes it short.
+    // CLIMBING, A BODY FACES THE WALL it is on, whichever way the stick
+    // points: up, down and sideways along a wall are all done looking at it.
+    // climb_normal points from the wall to the body, so the wall is behind it.
+    // Not a first-person body, whose facing is the view. Only where it TURNS:
+    // cmd.aim stays the stick's, which a dash or a grapple from the wall uses.
+    brad face_to = cmd.aim;
+    if (a.mv.climbing && !params_[i].move_relative &&
+        (a.mv.climb_normal.x.raw | a.mv.climb_normal.y.raw) != 0) {
+        face_to = fx_atan2(-a.mv.climb_normal.y, -a.mv.climb_normal.x);
+    }
+
     {
         const fx step_turns = params_[i].turn_speed * DT;
         // A turn fraction and a brad are the same number: brad is a turn in
@@ -478,9 +489,9 @@ void World::step_agent(u32 i) noexcept {
         // is what a script asks for by setting it high.
         const u64 step = static_cast<u64>(step_turns.raw < 0 ? 0 : step_turns.raw);
         if (step >= 0x100000000ull) {
-            a.facing = cmd.aim;
+            a.facing = face_to;
         } else {
-            const i32 delta = static_cast<i32>(cmd.aim.raw - a.facing.raw);
+            const i32 delta = static_cast<i32>(face_to.raw - a.facing.raw);
             const i32 limit = static_cast<i32>(static_cast<u32>(step));
             const i32 move = delta > limit ? limit : (delta < -limit ? -limit : delta);
             a.facing = brad(a.facing.raw + static_cast<u32>(move));

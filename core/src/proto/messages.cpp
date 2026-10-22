@@ -63,6 +63,30 @@ bool decode_input_bundle(ByteReader& r, InputBundle& out) noexcept {
 
 // -------------------------------------------------------------- entity blocks
 
+void encode_look(ByteWriter& w, const Look& l) noexcept {
+    u8 present = 0;
+    for (u32 i = 0; i < LOOK_LAYERS; ++i) if (l.layer[i] != 0) present |= static_cast<u8>(1u << i);
+    w.u8v(present);
+    for (u32 i = 0; i < LOOK_LAYERS; ++i) if (l.layer[i] != 0) w.u16v(l.layer[i]);
+    const u8 n = l.remaps > LOOK_REMAPS ? static_cast<u8>(LOOK_REMAPS) : l.remaps;
+    w.u8v(n);
+    for (u8 i = 0; i < n; ++i) { w.u16v(l.from[i]); w.u16v(l.to[i]); }
+}
+
+bool decode_look(ByteReader& r, Look& l) noexcept {
+    l = Look{};
+    const u8 present = r.u8v();
+    for (u32 i = 0; i < LOOK_LAYERS; ++i) if (present & (1u << i)) l.layer[i] = r.u16v();
+    // Every pair is read, the first LOOK_REMAPS kept: the stream stays in step
+    // whatever a sender says.
+    const u8 n = r.u8v();
+    for (u8 i = 0; i < n; ++i) {
+        const u16 f = r.u16v(), t = r.u16v();
+        if (i < LOOK_REMAPS) { l.from[i] = f; l.to[i] = t; l.remaps = static_cast<u8>(i + 1); }
+    }
+    return r.ok();
+}
+
 namespace {
 
 void encode_entity(ByteWriter& w, const EntityBlock& e) noexcept {
@@ -95,6 +119,7 @@ void encode_entity(ByteWriter& w, const EntityBlock& e) noexcept {
         w.u8v(e.attack_weapon); w.u8v(e.attack_phase); w.u8v(e.attack_step);
     }
     if (e.mask & ent_field::TRAIL) w.u16v(e.trail);
+    if (e.mask & ent_field::LOOK) encode_look(w, e.look);
     // DESTROYED carries no payload.
 }
 
@@ -126,6 +151,7 @@ bool decode_entity(ByteReader& r, EntityBlock& e) noexcept {
         e.attack_weapon = r.u8v(); e.attack_phase = r.u8v(); e.attack_step = r.u8v();
     }
     if (e.mask & ent_field::TRAIL) e.trail = r.u16v();
+    if ((e.mask & ent_field::LOOK) && !decode_look(r, e.look)) return false;
     return r.ok();
 }
 
@@ -182,6 +208,7 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.u8v(k.swung_weapon); w.u8v(k.swung_phase); w.u8v(k.swung_step);
     }
     w.u16v(s.avatar);
+    encode_look(w, s.look);
     // The observer's OWN animation state (design 4.1). Ungated: the local agent
     // is the one body that never appears in its own entity stream, so without
     // this it is the only thing on the map whose scripted animation nobody can
@@ -233,6 +260,7 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         k.swung_weapon = r.u8v(); k.swung_phase = r.u8v(); k.swung_step = r.u8v();
     }
     s.avatar          = r.u16v();
+    decode_look(r, s.look);
     s.animation_state = r.u16v();
     s.param_epoch     = r.u8v();
     s.state_hash      = r.u64v();

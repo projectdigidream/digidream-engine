@@ -14,6 +14,7 @@
 //               leaving them pointed at whatever lands in the slot next.
 //
 #include <cstdio>
+#include <utility>
 #include <initializer_list>
 
 #include "dnp/sim/world.hpp"
@@ -1153,7 +1154,56 @@ static void test_a_weapon_chooses_its_aim_assist() {
     CHECK(wider.set && wider.aim != wider.face);
 }
 
+// --- climbing, a body faces the wall it is on --------------------------------
+//
+// A room whose west wall (x = 0) is climbable. The body holds CLIMB against it,
+// its stick and its aim pointing along the wall (north), and must end up
+// facing the wall (west) -- while the aim, which a dash from the wall uses, is
+// untouched. CONTROL: the same body off the wall faces where it aims.
+static void test_a_climber_faces_the_wall() {
+    std::printf("climb: a climbing body faces the wall, whichever way it moves\n");
+    struct ClimbRoom {
+        MapStorage store; MapData view{};
+        ClimbRoom() {
+            const fx2 p[] = {{F(0), F(0)}, {F(40), F(0)}, {F(40), F(40)}, {F(0), F(40)}};
+            store.add_sector(p, 4, F(0), F(40), 1);
+            for (u16 i = 0; i < 4; ++i)
+                store.add_side(0, i, static_cast<u16>((i + 1) % 4), NO_SECTOR, i == 3 ? side_flag::CLIMBABLE : 0);
+        }
+    };
+    auto run = [](fx x) {
+        static ClimbRoom r;
+        static World w;
+        w.reset();
+        r.view = r.store.view();
+        w.set_map(&r.view);
+        w.set_map_storage(&r.store);
+        const u32 a = w.spawn(fx3{x, F(20), F(10)});
+        w.params_mut(a).turn_speed = F(4);
+        bool climbed = false;
+        for (u32 t = 0; t < 60; ++t) {
+            proto::InputFrame f;
+            f.buttons = proto::button::CLIMB;
+            f.move_x = t < 5 ? -32767 : 0;        // onto the wall first
+            f.move_y = t < 5 ? 0 : 32767;         // then along it
+            f.aim = brad(0x40000000u);            // north
+            w.set_input(a, f);
+            w.step();
+            climbed = climbed || w.agent(a).mv.climbing;
+        }
+        return std::make_pair(climbed, w.agent(a).facing.raw);
+    };
+    const auto on = run(fx::from_frac(6, 10));
+    const auto off = run(F(20));
+    std::printf("  on the wall: climbing %d, facing %08x; in the middle of the room: climbing %d, facing %08x\n",
+                on.first, on.second, off.first, off.second);
+    const auto near = [](u32 f, u32 want) { const i32 d = static_cast<i32>(f - want); return d > -0x01000000 && d < 0x01000000; };
+    CHECK(on.first && near(on.second, 0x80000000u));    // west: at the wall
+    CHECK(!off.first && near(off.second, 0x40000000u)); // CONTROL: north, where it aims
+}
+
 int main() {
+    test_a_climber_faces_the_wall();
     test_a_weapon_chooses_its_aim_assist();
     test_a_swing_step_is_an_attack_with_its_own_shape();
     test_a_newer_swing_replaces_the_older();

@@ -611,6 +611,56 @@ export class PropRegistry {
    * introduced.
    */
   setState (mesh, stateId, seconds = null) {
+    // A PLAYER'S LOOK first (setLook): the state it asked for, played as its
+    // remap says, by the body and by every layer it wears.
+    const look = mesh.userData?.look
+    mesh.userData.wantState = stateId
+    const played = look?.remap?.get(stateId) ?? stateId
+    for (const layer of mesh.userData?.layers ?? []) this.#setOne(layer, played, seconds)
+    this.#setOne(mesh, played, seconds)
+  }
+
+  /**
+   * WHAT ELSE A PLAYER WEARS (proto::Look): { layers: [8 kinds, 0 none],
+   * remap: Map(state -> state) }. Each layer is an ordinary record, made as any
+   * prop is and drawn as a child of the body -- a hair in front of it, slot 1
+   * nearest -- so it moves, turns and billboards with it, takes its views from
+   * the body's facing and plays the body's state on the body's clock. Built
+   * again only when the look itself changes.
+   */
+  setLook (mesh, look) {
+    if (!mesh) return
+    // By what it says, not which object: a snapshot decodes a fresh one each time.
+    const key = look ? `${look.layers.join(',')}|${[...look.remap].join(';')}` : ''
+    if (mesh.userData.lookKey === key) return
+    mesh.userData.lookKey = key
+    mesh.userData.look = look
+    for (const old of mesh.userData.layers ?? []) {
+      mesh.remove(old)
+      this.animated.delete(old)
+      old.geometry?.dispose?.()
+      // An atlas layer's material is its sheet's, shared with every sprite on
+      // it; a picture's is its own.
+      if (this.kinds.get(old.userData.propKind)?.type !== 'atlas') old.material?.dispose?.()
+    }
+    mesh.userData.layers = []
+    const base = this.animated.get(mesh)
+    for (const kind of look?.layers ?? []) {
+      if (!kind) continue
+      const m = this.make(kind)
+      if (!m) continue
+      m.userData.layerOf = mesh
+      m.position.set(0, (m.userData.yOffset ?? 0) - (mesh.userData.yOffset ?? 0), 0.01 * (mesh.userData.layers.length + 1))
+      mesh.add(m)
+      mesh.userData.layers.push(m)
+      const a = this.animated.get(m)
+      if (a && base) { a.stateId = base.stateId; a.startedAt = base.startedAt }
+    }
+    // The remap applies from now, to what was last asked for.
+    if (base) this.setState(mesh, mesh.userData.wantState ?? base.stateId)
+  }
+
+  #setOne (mesh, stateId, seconds) {
     const a = this.animated.get(mesh)
     if (!a || a.stateId === stateId) return
 
@@ -688,7 +738,9 @@ export class PropRegistry {
       // always turned to face the viewer and so carries no information about
       // which way the thing is pointing.
       let rot = 1
-      if (a.def.rot8 && cameraPos) rot = viewFor(mesh, cameraPos)
+      // A layer takes its view from the body it is on: its own position is an
+      // offset from the body, and its facing is the body's.
+      if (a.def.rot8 && cameraPos) rot = viewFor(mesh.userData.layerOf ?? mesh, cameraPos)
       const idx = frameAt(state, seconds - a.startedAt)
       const tex = this.textures.get(frameName(a.def, state, idx, rot))
       if (tex && mesh.material.map !== tex) {
@@ -821,7 +873,7 @@ export class PropRegistry {
 
     let view = 1
     if (entry.atlas.views.count > 1 && cameraPos) {
-      view = viewFor(mesh, cameraPos, entry.atlas.views.count)
+      view = viewFor(mesh.userData.layerOf ?? mesh, cameraPos, entry.atlas.views.count)
     }
 
     // frameAt wants { frames, fps, once }. `loop` and `once` are the same fact
@@ -859,7 +911,8 @@ export class PropRegistry {
   /** Forget meshes that have left the scene, so a long session does not grow. */
   prune () {
     for (const mesh of [...this.animated.keys()]) {
-      if (!mesh.parent) this.animated.delete(mesh)
+      // A layer is gone when the body it is on is.
+      if (!(mesh.userData.layerOf ?? mesh).parent) this.animated.delete(mesh)
     }
   }
 }

@@ -333,6 +333,10 @@ inline constexpr u32 ATTACK_STEP     = 1u << 12;
 // kind on the body while it draws it, so a trail is this field, sent when it
 // changes, and not an event a tick. Not physics: not hashed, not predicted.
 inline constexpr u32 TRAIL           = 1u << 13;
+// WHAT ELSE A PLAYER WEARS, and how its animations are redefined (proto::Look):
+// sprite layers drawn on the body, and states played in place of others. Server
+// state as the avatar is, and delta-masked the same way.
+inline constexpr u32 LOOK            = 1u << 14;
 }  // namespace ent_field
 
 namespace state_flag {
@@ -364,6 +368,28 @@ struct SnapshotHeader {
 
 // Full precision, no quantisation: this is what reconciliation compares against
 // the client's own arithmetic (protocol R2).
+// A PLAYER'S LOOK beyond its avatar (design 4.1; docs/protocol.md 5.2):
+//
+//   layer[i]   a catalogue record drawn ON the body, in the body's own state,
+//              clock and facing -- armour, a weapon in hand. 0 is none. Drawn
+//              in slot order, 0 nearest the body.
+//   from/to    a state played in place of another: where the body (and every
+//              layer) would play `from`, it plays `to`. An attack that looks
+//              different with each weapon is one pair.
+//
+// On the wire: u8 mask of the layers present, a u16 kind per one present (low
+// bit first), then u8 n (<= LOOK_REMAPS) and n x (u16 from, u16 to).
+inline constexpr u32 LOOK_LAYERS = 8;
+inline constexpr u32 LOOK_REMAPS = 8;
+struct Look {
+    u16 layer[LOOK_LAYERS]{};
+    u8  remaps = 0;
+    u16 from[LOOK_REMAPS]{};
+    u16 to[LOOK_REMAPS]{};
+};
+void encode_look(ByteWriter& w, const Look& l) noexcept;
+bool decode_look(ByteReader& r, Look& l) noexcept;
+
 struct SelfBlock {
     fx3    pos{};
     fx3    vel{};
@@ -417,6 +443,8 @@ struct SelfBlock {
     // stream, so without it a player would be the one body on the map that could
     // not see its own costume.
     u16    avatar          = 0;
+    // And what else it wears (proto::Look), for the same reason.
+    Look   look{};
     // The weapon machine (docs/WEAPON_PREDICTION.md): only when state_flags
     // has ARMED. Simulation state the client predicts and the hash covers, so
     // reconciliation has to be able to restore all of it.
@@ -731,6 +759,7 @@ struct EntityBlock {
     u8     attack_phase    = 0xFF;
     u8     attack_step     = 0;
     u16    trail           = 0;    // ent_field::TRAIL
+    Look   look{};                 // ent_field::LOOK
 };
 
 // A scripted-discrete sector's current offset. Parametric movers are absent by

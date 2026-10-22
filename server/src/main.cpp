@@ -144,6 +144,10 @@ struct Host {
     // state -- like hp: not hashed, not in the determinism gate, not predicted.
     // A costume is not physics.
     u16  avatar[sim::MAX_AGENTS]{};
+    // And what else each player wears (proto::Look), with its change count
+    // (world_binding's set_layer / set_anim); server state as the avatar is.
+    proto::Look look[sim::MAX_AGENTS]{};
+    u16  look_rev[sim::MAX_AGENTS]{};
     // WHICH PARTICLE KIND FOLLOWS EACH ENTITY (e:set_trail, a missile's
     // `trail`): server state as an avatar is, over every slot, agents and
     // props alike. Stamped with the slot's generation when it is set, so a body
@@ -210,7 +214,7 @@ struct Level {
           nav_built_tick(host->nav_built_tick),
           lua_touched_tick(host->lua_touched_tick),
           crush_reported_tick(host->crush_reported_tick), crush_seen(host->crush_seen),
-          param_epoch(host->param_epoch), avatar(host->avatar),
+          param_epoch(host->param_epoch), avatar(host->avatar), look(host->look), look_rev(host->look_rev),
           trail(host->trail), trail_gen(host->trail_gen),
           sent_motions(host->sent_motions), sent_motion_count(host->sent_motion_count),
           motion_changed_tick(host->motion_changed_tick),
@@ -281,6 +285,8 @@ struct Level {
     bool (&crush_seen)[sim::MAX_AGENTS];
     u8   (&param_epoch)[sim::MAX_AGENTS];
     u16  (&avatar)[sim::MAX_AGENTS];
+    proto::Look (&look)[sim::MAX_AGENTS];
+    u16  (&look_rev)[sim::MAX_AGENTS];
     u16  (&trail)[sim::MAX_ENTITIES];
     u8   (&trail_gen)[sim::MAX_ENTITIES];
     sim::SectorMotion (&sent_motions)[sim::MAX_MOVING_SECTORS];
@@ -978,6 +984,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         game_ctx.nav       = &H.nav_graph;
         game_ctx.hp        = H.hp;
         game_ctx.avatar    = H.avatar;
+        game_ctx.look      = H.look;
+        game_ctx.look_rev  = H.look_rev;
         game_ctx.trail     = H.trail;
         game_ctx.trail_gen = H.trail_gen;
         game_ctx.effects   = &H.effects;
@@ -2372,6 +2380,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         L.ctx.debug_overlay = debug_overlay != 0;
         L.ctx.hp = L.hp;
         L.ctx.avatar = L.avatar;
+        L.ctx.look = L.look;
+        L.ctx.look_rev = L.look_rev;
         L.ctx.trail = L.trail;
         L.ctx.trail_gen = L.trail_gen;
         L.ctx.levels = this;
@@ -4360,6 +4370,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             // its own stream (see the `i == s.agent` skip below), so without
             // this line a script animating a player animates nobody's screen.
             sb.avatar          = L.avatar[s.agent];
+            sb.look            = L.look[s.agent];
             // The weapon machine, which the client predicts (sent when ARMED).
             sb.weapon          = world.weapon(s.agent);
             sb.animation_state = world.agent(s.agent).animation_state;
@@ -4579,6 +4590,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                     // kind. Reading it for both would be harmless and would also
                     // suggest a monster could wear one.
                     now.avatar          = a.kind == 0 ? L.avatar[i] : 0;
+                    now.look_rev        = a.kind == 0 ? L.look_rev[i] : 0;
                     now.solid           = a.solid;
                     now.attack_left     = a.mv.attack_left;
                     // A swing step's own shape, named while it sweeps.
@@ -4634,6 +4646,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 e.attack_phase     = now.attack_phase;
                 e.attack_step      = now.attack_step;
                 e.trail            = now.trail;
+                if (mask & proto::ent_field::LOOK) e.look = L.look[i];
 
                 if (w.try_entity(e)) {
                     record.entities[i] = now;

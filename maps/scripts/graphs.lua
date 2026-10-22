@@ -499,6 +499,35 @@ function EXEC.speed_up(g, n, ev, pull)
   elseif e.add_effect ~= nil then e:add_effect("move_speed", "mul", factor, ticks) end
   return "then"
 end
+-- How a player looks (world_binding: set_avatar, set_layer, set_anim). On a
+-- body that has none of them -- a monster, a prop -- nothing.
+function EXEC.set_avatar(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  if e ~= nil and e.set_avatar ~= nil then e:set_avatar(math.max(0, math.floor(tonumber(pull("avatar")) or 0))) end
+  return "then"
+end
+function EXEC.set_layer(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  local slot = math.floor(tonumber(pull("slot")) or 0)
+  if e ~= nil and e.set_layer ~= nil and slot >= 1 and slot <= 8 then
+    local prop = n.prop
+    if prop == "" then prop = nil end
+    local ok, why = pcall(e.set_layer, e, slot, prop)
+    if not ok then say("%s: node '%s': %s", g.name, n.id, tostring(why)) end
+  end
+  return "then"
+end
+function EXEC.set_animation_for(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  local state = tonumber(pull("state"))
+  if e ~= nil and e.set_anim ~= nil and state ~= nil then
+    local to = tonumber(pull("to"))
+    local ok, why = pcall(e.set_anim, e, math.floor(state), to and math.floor(to) or nil)
+    if not ok then say("%s: node '%s': %s", g.name, n.id, tostring(why)) end
+  end
+  return "then"
+end
+
 function EXEC.play_sound(g, n, ev, pull)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   if e ~= nil and dnp.sound ~= nil then dnp.sound(n.sound, e) end

@@ -1281,11 +1281,22 @@ unsigned dnp_test_snapshot(unsigned char* out, unsigned cap, unsigned options) {
     s.grapple_anchor = fx3{fx::from_int(41), fx::from_int(42), fx::from_int(43)};
     s.grapple_dist = fx::from_int(44);
     s.avatar = 77;
+    // A look with gaps in it (layers 0 and 7) and two remaps, so a reader that
+    // packs the layers or drops a pair reads the fields after it wrong.
+    s.look.layer[0] = 101; s.look.layer[7] = 108;
+    s.look.remaps = 2; s.look.from[0] = 2; s.look.to[0] = 12; s.look.from[1] = 3; s.look.to[1] = 13;
     s.animation_state = 88;
     s.param_epoch = 99;
     s.state_hash = 0x0123456789ABCDEFull;
     proto::SnapshotWriter w(out, cap);
     w.begin(h, s, 123);
+    // And another player wearing one: a layer in slot 2, one remap.
+    proto::EntityBlock e;
+    e.handle = proto::Handle::make(5, 1);
+    e.mask = proto::ent_field::LOOK | proto::ent_field::AVATAR;
+    e.avatar = 6;
+    e.look.layer[2] = 203; e.look.remaps = 1; e.look.from[0] = 1; e.look.to[0] = 21;
+    w.try_entity(e);
     return static_cast<unsigned>(w.finish());
 }
 

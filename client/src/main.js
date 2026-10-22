@@ -2661,6 +2661,8 @@ let selfAnimation = 0
 // Which avatar draws THIS player, from SelfBlock. Server state like hp, not
 // simulation state: a costume is not physics.
 let selfAvatar = 0
+// And what else it wears (proto::Look: layers, animation remaps).
+let selfLook = null
 
 function drainSnapshots () {
   while (pendingSnapshots.length) {
@@ -2668,6 +2670,7 @@ function drainSnapshots () {
     if (s.hp !== undefined) latestHp = s.hp
     if (s.self?.animationState !== undefined) selfAnimation = s.self.animationState
     if (s.self?.avatar !== undefined) selfAvatar = s.self.avatar
+    if (s.self?.look !== undefined) selfLook = s.self.look
     newestServerTick = Math.max(newestServerTick, s.serverTick)
     renderClock.heard(s.serverTick)
     // The newest input the SERVER says it has applied, AS IT LAST SAID IT --
@@ -3273,6 +3276,7 @@ function frame (now) {
   // returns immediately unless the answer has actually changed.
   buildBody()
   if (props && bodyAvatar >= 0) {
+    props.setLook(body, selfLook)
     props.setState(body, resolveState(selfAnimation, a, props.avatarFor(selfAvatar)), now / 1000)
     // A sprite quad has to face the camera, and keep its own heading somewhere
     // the billboard has not overwritten -- the same two lines every remote body
@@ -3439,6 +3443,7 @@ function frame (now) {
         // Zero is "nothing declared", so a remote player animates from the
         // motion its two newest samples imply. Any non-zero value is the
         // server's, and wins.
+        props.setLook(ent.mesh, ent.look ?? null)
         props.setState(ent.mesh,
                        declared || stateFor(props.avatarFor(ent.avatar ?? 0), remoteCondition(ent)),
                        now / 1000)

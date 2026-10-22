@@ -419,6 +419,11 @@ struct WorldContext {
     // state for the same reason: a costume is not physics, so it is not hashed,
     // not in the determinism gate and not predicted.
     u16*              avatar = nullptr;
+    // And what else each player wears (proto::Look: layers, animation remaps),
+    // with a count bumped on every change -- the snapshot's delta compares the
+    // count, so a session's history holds two bytes per entity, not a look.
+    proto::Look*      look = nullptr;
+    u16*              look_rev = nullptr;
     // Which particle kind follows each entity (e:set_trail), over every slot,
     // and the slot generation it was set for. Server state, as the avatar is.
     u16*              trail = nullptr;

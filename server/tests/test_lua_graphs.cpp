@@ -232,6 +232,12 @@ int main(int argc, char** argv) {
     ctx.commands = &commands;
     ctx.effects = &effects;
     ctx.hp = hp;
+    static u16 avatar[sim::MAX_AGENTS];
+    static proto::Look look[sim::MAX_AGENTS];
+    static u16 look_rev[sim::MAX_AGENTS];
+    ctx.avatar = avatar;
+    ctx.look = look;
+    ctx.look_rev = look_rev;
     ctx.rng = Rng(20261003u, 5);
     ctx.ui = &g_ui;
 
@@ -1561,6 +1567,59 @@ int main(int argc, char** argv) {
         rmdir((state_dir + "/store").c_str());
         rmdir(state_dir.c_str());
         ctx.state_dir = nullptr;
+    }
+
+    // ================================================================
+    // HOW A PLAYER LOOKS: layers, animation remaps, and the graph nodes.
+    std::printf("-- a player's look --\n");
+    {
+        const u32 pl = player;
+        const u16 rev0 = look_rev[pl];
+        CHECK(run("local p = dnp.players()[1]\n"
+                  "p:set_layer(1, 91); p:set_layer(8, 97)\n"
+                  "lk_1, lk_8, lk_2 = p:layer(1), p:layer(8), p:layer(2)\n"
+                  "p:set_anim(2, 12); p:set_anim(3, 13); p:set_anim(2, 22)\n"
+                  "lk_bad = pcall(function() p:set_layer(9, 1) end) and 1 or 0\n"
+                  "lk_name = pcall(function() p:set_layer(2, 'no_such_prop') end) and 1 or 0", "layers and remaps"));
+        CHECK(num("lk_1") == 91 && num("lk_8") == 97 && !truthy("lk_2"));
+        CHECK(look[pl].layer[0] == 91 && look[pl].layer[7] == 97);
+        // Two remaps, the second set of 2 replacing the first.
+        CHECK(look[pl].remaps == 2 && look[pl].from[0] == 2 && look[pl].to[0] == 22 && look[pl].from[1] == 3);
+        CHECK(look_rev[pl] != rev0);
+        CHECK(num("lk_bad") == 0);       // slot 9 is refused
+        CHECK(num("lk_name") == 0);      // and a name the catalogue does not have
+        // Taking one back; and a change that changes nothing bumps nothing.
+        CHECK(run("dnp.players()[1]:set_anim(2, nil)", "a remap taken back"));
+        CHECK(look[pl].remaps == 1 && look[pl].from[0] == 3);
+        const u16 rev1 = look_rev[pl];
+        CHECK(run("dnp.players()[1]:set_layer(1, 91)", "the same layer again"));
+        CHECK(look_rev[pl] == rev1);
+        // Eight remaps at most.
+        CHECK(run("local p = dnp.players()[1]\n"
+                  "for s = 20, 26 do p:set_anim(s, s + 100) end\n"
+                  "lk_ninth = pcall(function() p:set_anim(40, 41) end) and 1 or 0", "eight remaps"));
+        CHECK(look[pl].remaps == 8 && num("lk_ninth") == 0);
+        // CONTROL: a monster has no look -- an agent with a kind.
+        const u32 mon = world.spawn(fx3{F(5), F(0), F(0)});
+        world.agent_mut(mon).kind = 33;
+        CHECK(run("for _, e in ipairs(dnp.entities()) do if e:index() ~= dnp.players()[1]:index() then e:set_layer(1, 91) end end", "a monster"));
+        CHECK(look[mon].layer[0] == 0);
+        world.despawn(mon);
+        // The graph nodes, on the event's player.
+        look[pl] = proto::Look{};
+        CHECK(load_graph(R"({ "graph": 1, "name": "dress",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "dress" },
+                     { "id": "a", "type": "set_avatar", "avatar": 3 },
+                     { "id": "l", "type": "set_layer", "slot": 2, "prop": "" },
+                     { "id": "k", "type": "set_animation_for", "state": 2, "to": 14 } ],
+          "links": [ ["go.then", "a.in"], ["a.then", "l.in"], ["l.then", "k.in"] ] })"));
+        look[pl].layer[1] = 55;
+        CHECK(run("graphs.call('dress', dnp.players()[1], nil)", "dressing"));
+        std::printf("  graph: avatar %u, layer 2 %u, remap %u -> %u\n", avatar[pl], look[pl].layer[1],
+                    look[pl].remaps ? look[pl].from[0] : 0, look[pl].remaps ? look[pl].to[0] : 0);
+        CHECK(avatar[pl] == 3);
+        CHECK(look[pl].layer[1] == 0);                 // an empty prop takes the slot's off
+        CHECK(look[pl].remaps == 1 && look[pl].from[0] == 2 && look[pl].to[0] == 14);
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

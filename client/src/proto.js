@@ -136,7 +136,23 @@ export const ENT_FIELD = {
   // a player's `swing` step's own shape, looked up in the weapon table.
   ATTACK_STEP: 1 << 12,
   // Which particle kind follows it (u16; 0 none): a missile's trail, an aura.
-  TRAIL: 1 << 13
+  TRAIL: 1 << 13,
+  // What else a player wears and which states it plays instead (decodeLook).
+  LOOK: 1 << 14
+}
+
+// A PLAYER'S LOOK (messages.hpp proto::Look): { layers: [8 kinds, 0 none],
+// remap: Map(from state -> to state) }. u8 mask of the layers present, a u16
+// per one, then u8 n and n x (u16 from, u16 to); the first 8 pairs are kept.
+export const LOOK_LAYERS = 8
+export function decodeLook (r) {
+  const present = r.u8()
+  const layers = []
+  for (let i = 0; i < LOOK_LAYERS; i++) layers.push(present & (1 << i) ? r.u16() : 0)
+  const n = r.u8()
+  const remap = new Map()
+  for (let i = 0; i < n; i++) { const from = r.u16(); const to = r.u16(); if (i < 8) remap.set(from, to) }
+  return { layers, remap }
 }
 
 // Snapshot header flags (docs/protocol.md §5).
@@ -879,6 +895,7 @@ export function decodeSnapshot (buf) {
   // appears in its own entity stream, so this is the only way a script's choice
   // of animation for the player reaches the player's own screen.
   snap.self.avatar = r.u16()
+  snap.self.look = decodeLook(r)
   snap.self.animationState = r.u16()
   snap.self.paramEpoch = r.u8()
   snap.self.stateHash = r.u64()
@@ -928,6 +945,7 @@ export function decodeSnapshot (buf) {
       e.attackWeapon = r.u8(); e.attackPhase = r.u8(); e.attackStep = r.u8()
     }
     if (e.mask & ENT_FIELD.TRAIL) e.trail = r.u16()
+    if (e.mask & ENT_FIELD.LOOK) e.look = decodeLook(r)
     if (!r.ok) return null
     snap.entities.push(e)
   }

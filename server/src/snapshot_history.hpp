@@ -46,6 +46,9 @@ struct EntitySample {
     // nothing to draw at it.
     u32  display_id      = 0;
     u16  avatar          = 0;
+    // The player's look's change count (proto::ent_field::LOOK): the look
+    // itself is the level's, read when the field is sent.
+    u16  look_rev        = 0;
     // Whether other bodies collide with this one. Replicated because the client
     // predicts against it -- see proto::ent_field::SOLID.
     bool solid           = true;
@@ -140,6 +143,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
         // Same again: avatar 0 is the default a client already assumes, so it is
         // only worth two bytes when a script has actually chosen something.
         if (now.avatar != 0) full |= proto::ent_field::AVATAR;
+        if (now.look_rev != 0) full |= proto::ent_field::LOOK;
         // Same reasoning: solid is the default, so it is only worth a byte when
         // it is not. A body that spawns already dead does not exist.
         if (!now.solid) full |= proto::ent_field::SOLID;
@@ -157,6 +161,7 @@ inline u32 delta_mask(const EntitySample& was, const EntitySample& now) noexcept
     // swap, a costume -- and a field sent only on appearance would leave everyone
     // else looking at the old one forever.
     if (now.avatar != was.avatar) mask |= proto::ent_field::AVATAR;
+    if (now.look_rev != was.look_rev) mask |= proto::ent_field::LOOK;
     if (now.solid != was.solid) mask |= proto::ent_field::SOLID;
     if (now.attack_left != was.attack_left) mask |= proto::ent_field::ATTACK;
     if (now.attack_weapon != was.attack_weapon || now.attack_phase != was.attack_phase ||

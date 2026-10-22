@@ -78,6 +78,14 @@ for (const grappling of [false, true]) {
   // And everything after it still lands: the block's length is right.
   check(s?.self.avatar === 77 && s?.self.stateHash === 0x0123456789ABCDEFn && s?.hp === 123,
         'armed: the avatar, the hash and hp after it')
+  // THE LOOK: layers by slot, gaps kept; remaps as pairs; and the fields after
+  // it still right (the avatar above, the hash and hp after).
+  const L = s?.self.look
+  check(L?.layers.length === 8 && L.layers[0] === 101 && L.layers[7] === 108 && L.layers.slice(1, 7).every((k) => k === 0),
+        `the self look's layers, by slot (${L?.layers})`)
+  check(L?.remap.get(2) === 12 && L.remap.get(3) === 13 && L.remap.size === 2, 'and its remaps')
+  const other = s?.entities.find((x) => x.avatar === 6)
+  check(other?.look?.layers[2] === 203 && other.look.remap.get(1) === 21, 'another player\'s look, in its entity block')
   check(snapshot(false, false)?.self.weapon === undefined, 'CONTROL: not armed, no weapon block')
 }
 

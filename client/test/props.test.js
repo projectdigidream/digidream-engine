@@ -708,5 +708,69 @@ console.log('\n--- one state lookup, whatever kind of thing it is ---')
   check(reg.make(60) !== null, 'CONTROL: the sprite beside it does build')
 }
 
+// A PLAYER'S LOOK (setLook): layers drawn on the body in its state, clock and
+// facing, and states played in place of others -- by the body and every layer.
+{
+  let disposed = 0
+  const THREE = {
+    PlaneGeometry: class { constructor (w, h) { this.w = w; this.h = h } dispose () { disposed++ } },
+    MeshBasicMaterial: class { constructor (o) { Object.assign(this, o); this.color = { setHex () {} } } dispose () { disposed++ } },
+    Mesh: class {
+      constructor (geometry, material) {
+        this.geometry = geometry; this.material = material; this.userData = {}; this.children = []
+        this.parent = {}
+        this.position = { x: 0, y: 0, z: 0, set (x, y, z) { this.x = x; this.y = y; this.z = z } }
+      }
+      add (c) { this.children.push(c); c.parent = this }
+      remove (c) { this.children = this.children.filter((x) => x !== c); c.parent = null }
+    },
+    DoubleSide: 2
+  }
+  const catalogue = parseProps(`
+prop 91 hero radius 0.3 height 1.2
+sprite 91 size 1.2 billboard state 0 fps 0 frames HERO
+sprite 91 state 2 fps 0 frames HERO_SWING
+sprite 91 state 12 fps 0 frames HERO_BOW
+prop 95 armour radius 0.3 height 1.2
+sprite 95 size 1.2 billboard state 0 fps 0 frames MAIL
+sprite 95 state 2 fps 0 frames MAIL_SWING
+sprite 95 state 12 fps 0 frames MAIL_BOW
+prop 96 bow radius 0.1 height 0.6
+sprite 96 size 0.6 billboard state 0 fps 0 frames BOW
+sprite 96 state 12 fps 0 frames BOW_DRAWN
+avatar 91
+`)
+  const names = ['HERO', 'HERO_SWING', 'HERO_BOW', 'MAIL', 'MAIL_SWING', 'MAIL_BOW', 'BOW', 'BOW_DRAWN']
+  const textures = new Map(names.map((n) => [n, `tex:${n}`]))
+  const reg = new PropRegistry({ THREE, textures, catalogue })
+  const body = reg.makeAvatar(0)
+  const look = (layers, remap = []) => ({ layers: [...layers, ...Array(8 - layers.length).fill(0)], remap: new Map(remap) })
+  reg.setLook(body, look([95, 96]))
+  const [mail, bow] = body.userData.layers
+  check(body.children.length === 2 && mail?.userData.layerOf === body && bow?.userData.layerOf === body,
+        `two layers drawn on the body (${body.children.length})`)
+  check(mail.position.z > 0 && bow.position.z > mail.position.z, 'in front of it, slot 1 nearest')
+  check(bow.position.y === 0.3 - 0.6, `each standing on the body's feet (${bow.position.y})`)
+  reg.setState(body, 2); reg.update(1)
+  check(body.material.map === 'tex:HERO_SWING' && mail.material.map === 'tex:MAIL_SWING', 'the layers play the body\'s state')
+  // REDEFINED: the attack (2) played as the bow's (12), by everything worn.
+  reg.setLook(body, look([95, 96], [[2, 12]]))
+  reg.update(2)
+  check(body.material.map === 'tex:HERO_BOW' && body.userData.layers[0].material.map === 'tex:MAIL_BOW' &&
+        body.userData.layers[1].material.map === 'tex:BOW_DRAWN', `a remap plays state 12 where 2 is asked (${body.material.map})`)
+  reg.setState(body, 0); reg.update(3)
+  check(body.material.map === 'tex:HERO', 'CONTROL: a state it does not remap plays as itself')
+  // The same look again, as a fresh object (every snapshot decodes one):
+  // nothing is rebuilt.
+  const before = body.userData.layers[0]
+  reg.setLook(body, look([95, 96], [[2, 12]]))
+  check(body.userData.layers[0] === before, 'the same look in a new object rebuilds nothing')
+  // Taken off: the layers go, their pictures' materials and geometry freed.
+  disposed = 0
+  reg.setLook(body, look([]))
+  check(body.children.length === 0 && disposed === 4, `the layers taken off, and freed (${disposed})`)
+  check(![...reg.animated.keys()].some((m) => m.userData.layerOf === body), 'and no longer animated')
+}
+
 console.log(`\nprops: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

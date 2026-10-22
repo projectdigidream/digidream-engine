@@ -407,6 +407,86 @@ int l_entity_set_avatar(lua_State* L) {
     return 0;
 }
 
+// entity:set_layer(slot, kind), entity:layer(slot), entity:set_anim(from, to)
+//
+// WHAT ELSE A PLAYER WEARS, drawn on its avatar (proto::Look). A LAYER is a
+// catalogue record -- armour, a weapon in hand -- drawn on the body in its own
+// state, clock and facing; eight slots, 1 to 8, 1 nearest the body. A kind
+// number or a record's name; nil or 0 takes it off. An ANIMATION REMAP plays
+// state `to` wherever the body would play `from`, the layers too: an attack
+// that looks different with each weapon. nil takes it back. Eight of them.
+//
+// Players only, as the avatar is, and server state as it is.
+static i32 look_slot(lua_State* L, WorldContext& ctx) {
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0 || ctx.look == nullptr) return -1;
+    if (ctx.world != nullptr && ctx.world->agent(static_cast<u32>(a)).kind != 0) return -1;
+    return a;
+}
+static void look_changed(WorldContext& ctx, i32 a) {
+    u16& r = ctx.look_rev[a];
+    r = static_cast<u16>(r == 0xFFFF ? 1 : r + 1);   // never back to 0, "never set"
+}
+int l_entity_layer(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = look_slot(L, ctx);
+    const lua_Integer slot = luaL_checkinteger(L, 2);
+    if (a < 0 || slot < 1 || slot > static_cast<lua_Integer>(proto::LOOK_LAYERS)) { lua_pushnil(L); return 1; }
+    const u16 k = ctx.look[a].layer[slot - 1];
+    if (k == 0) lua_pushnil(L); else lua_pushnumber(L, k);
+    return 1;
+}
+int l_entity_set_layer(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const lua_Integer slot = luaL_checkinteger(L, 2);
+    if (slot < 1 || slot > static_cast<lua_Integer>(proto::LOOK_LAYERS)) {
+        return luaL_error(L, "set_layer: slot %d is not 1..%d", static_cast<int>(slot), static_cast<int>(proto::LOOK_LAYERS));
+    }
+    u16 kind = 0;
+    if (lua_type(L, 3) == LUA_TSTRING) {
+        size_t len = 0;
+        const char* name = lua_tolstring(L, 3, &len);
+        kind = (ctx.props == nullptr || ctx.props->empty()) ? 0 : ctx.props->kind_by_name(name, len);
+        if (kind == 0) return luaL_error(L, "set_layer: no prop called '%s' in the catalogue", name);
+    } else if (!lua_isnoneornil(L, 3)) {
+        const double n = luaL_checknumber(L, 3);
+        if (n < 0 || n > 65535) return luaL_error(L, "set_layer: %f is not a prop kind (0..65535)", n);
+        kind = static_cast<u16>(n);
+    }
+    const i32 a = look_slot(L, ctx);
+    if (a < 0) return 0;
+    if (ctx.look[a].layer[slot - 1] == kind) return 0;
+    ctx.look[a].layer[slot - 1] = kind;
+    look_changed(ctx, a);
+    return 0;
+}
+int l_entity_set_anim(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const double from = luaL_checknumber(L, 2);
+    const bool clear = lua_isnoneornil(L, 3);
+    const double to = clear ? 0 : luaL_checknumber(L, 3);
+    if (from < 0 || from > 65535 || to < 0 || to > 65535) return luaL_error(L, "set_anim: states are 0..65535");
+    const i32 a = look_slot(L, ctx);
+    if (a < 0) return 0;
+    proto::Look& l = ctx.look[a];
+    u32 at = 0;
+    while (at < l.remaps && l.from[at] != static_cast<u16>(from)) ++at;
+    if (clear) {
+        if (at == l.remaps) return 0;
+        for (u32 j = at + 1; j < l.remaps; ++j) { l.from[j - 1] = l.from[j]; l.to[j - 1] = l.to[j]; }
+        --l.remaps;
+    } else {
+        if (at < l.remaps && l.to[at] == static_cast<u16>(to)) return 0;
+        if (at == l.remaps) {
+            if (l.remaps >= proto::LOOK_REMAPS) return luaL_error(L, "set_anim: a player holds %d remaps at most", static_cast<int>(proto::LOOK_REMAPS));
+            l.from[l.remaps++] = static_cast<u16>(from);
+        }
+        l.to[at] = static_cast<u16>(to);
+    }
+    look_changed(ctx, a);
+    return 0;
+}
+
 // entity:set_trail(kind) and entity:trail(), and the same on a prop
 //
 // A PARTICLE KIND THAT FOLLOWS THIS BODY for as long as it is here: a missile's
@@ -732,6 +812,9 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"set_hp", l_entity_set_hp},
     {"avatar", l_entity_avatar},
     {"set_avatar", l_entity_set_avatar},
+    {"layer", l_entity_layer},
+    {"set_layer", l_entity_set_layer},
+    {"set_anim", l_entity_set_anim},
     {"trail", l_entity_trail},
     {"set_trail", l_entity_set_trail},
     {"set_animation", l_entity_set_animation},
