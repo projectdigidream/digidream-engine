@@ -388,6 +388,8 @@ async function start () {
       // and starts the new one. 'installing' and the app quits a moment later.
       case 'selfUpdate': {
         if (!manifest.studio) throw new Error('only the studio updates itself')
+        // Only a studio release: whatever this installs runs as the studio.
+        if (!/^https:\/\/github\.com\/projectdigidream\/digidream-studio\/releases\/download\//.test(String(a))) throw new Error('only a studio release installs itself')
         await selfUpdate(a, { fetchFn: (u) => fetch(u), log: (m) => log(`[update] ${m}`) })
         setTimeout(() => app.quit(), 800)
         return 'installing'

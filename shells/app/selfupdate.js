@@ -96,6 +96,16 @@ export async function update (url, { fetchFn, platform = process.platform, execP
   else if (plan.kind === 'windows') await run('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${out}' -Force`])
   else { await run('mkdir', ['-p', out]); await run('tar', ['-xzf', archive, '-C', out]) }
   const fresh = freshIn(out, plan.kind)
+  // THE FOLDER MUST BE THE APP'S OWN. On Windows and Linux the swap replaces
+  // the whole folder the program sits in (robocopy /MIR, or mv and rm -rf),
+  // so a studio unzipped loose into Downloads would take everything else in
+  // Downloads with it. Anything there the new release does not have is a
+  // file that is not ours: nothing is touched, and the studio says why.
+  if (plan.kind !== 'mac') {
+    const ours = new Set(readdirSync(fresh))
+    const other = readdirSync(plan.target).filter((n) => !ours.has(n))
+    if (other.length) throw new Error(`the studio's folder holds other files too (${other.slice(0, 3).join(', ')}${other.length > 3 ? ', ...' : ''}): unpack the studio into a folder of its own to update it`)
+  }
   const script = join(work, plan.kind === 'windows' ? 'swap.cmd' : 'swap.sh')
   writeFileSync(script, swapScript(plan, fresh, pid), { mode: 0o755 })
   const child = plan.kind === 'windows'

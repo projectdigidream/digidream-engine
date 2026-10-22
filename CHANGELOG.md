@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **A desktop studio's self-update could replace a folder that was not its
+  own.** On Windows and Linux it replaces the whole folder the program sits
+  in, so a studio unzipped loose into Downloads would have taken everything
+  else there with it. It now updates only a folder that holds nothing but the
+  studio, and otherwise says to unpack it into a folder of its own. It also
+  installs only a studio release from the project's GitHub releases.
+
 ### Added
 
 - **The desktop studio updates itself** (macOS, Windows, Linux), as the Android

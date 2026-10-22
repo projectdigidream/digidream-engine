@@ -56,6 +56,19 @@ check(readFileSync(join(app, 'version'), 'utf8') === 'new\n', 'the app folder no
 check(!existsSync(app + '.old'), 'and the old one is gone, not left beside it')
 check(existsSync(join(app, 'started')), 'and the new one was started')
 
+// A STUDIO UNZIPPED LOOSE (its files among a user's own, in Downloads): the
+// swap would replace the whole folder, so nothing is done, and the user's
+// file is still there.
+const loose = join(root, 'Downloads'); mkdirSync(loose)
+writeFileSync(join(loose, 'version'), 'old\n')
+const looseExe = join(loose, 'studio'); writeFileSync(looseExe, '#!/bin/sh\n'); chmodSync(looseExe, 0o755)
+writeFileSync(join(loose, 'taxes.pdf'), 'mine')
+let kept = null
+try { await update('https://example.com/studio-linux-x64.tar.gz', { fetchFn, platform: 'linux', execPath: looseExe, pid: gone }) } catch (e) { kept = e.message }
+await wait(300)
+check(/other files too \(taxes\.pdf\)/.test(kept ?? '') && readFileSync(join(loose, 'taxes.pdf'), 'utf8') === 'mine' && readFileSync(join(loose, 'version'), 'utf8') === 'old\n',
+      `a folder holding someone else's files is not replaced (${kept})`)
+
 // CONTROL: a folder this user cannot write is left alone, with a reason
 const locked = join(root, 'locked'); mkdirSync(join(locked, 'app'), { recursive: true })
 writeFileSync(join(locked, 'app', 'studio'), 'x'); chmodSync(locked, 0o555)
