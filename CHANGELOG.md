@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.5 -- 2026-10-22
+
 ### Fixed
 
 - **0.2.3.4's desktop kits could not start**: the shell's new `selfupdate.js` was
