@@ -482,7 +482,7 @@ public final class MainActivity extends Activity {
           return;
         }
         case "launch": {
-          launch(a.getString("module"), a.getString("map"));
+          launch(a.getString("module"), a.getString("map"), a.optBoolean("colliders", false));
           reply(id, true, "true");
           return;
         }
@@ -536,7 +536,8 @@ public final class MainActivity extends Activity {
   /** The module the studio last pressed Play on: served first (serveFromTree). */
   private volatile File playModule = null;
 
-  private void launch(String module, String map) throws IOException {
+  // `colliders`: the game drawn with its colliders over the frame (?colliders=1), the studio's debug switch.
+  private void launch(String module, String map, boolean colliders) throws IOException {
     File modDir = rwFile(module);
     playModule = modDir;
     File mapFile = new File(modDir, "maps/" + map);
@@ -572,7 +573,7 @@ public final class MainActivity extends Activity {
       playLog("[shell] the game did not start: " + e.getMessage());
       throw e;
     }
-    ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1&studio=1"));
+    ui.post(() -> web.loadUrl(ORIGIN + "/index.html?touch=1&studio=1" + (colliders ? "&colliders=1" : "")));
   }
 
   /** The game page's log for the studio, while a play-test runs. */

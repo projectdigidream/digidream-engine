@@ -14,6 +14,11 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **The studio's Play can show the colliders**: a launch with `colliders` opens
+  the game with `?colliders=1`, in the desktop and Android shells.
+
 ## 0.2.3.7 -- 2026-10-23
 
 ### Fixed

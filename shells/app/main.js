@@ -240,7 +240,8 @@ function playLog (line) {
 }
 
 /** The studio's Play: serve the module it wrote, then show the game. */
-async function launch ({ module, map }) {
+// `colliders`: the game drawn with its colliders over the frame (?colliders=1), the studio's debug switch.
+async function launch ({ module, map, colliders = false }) {
   if (!(await files.exists(`${module}/maps/${map}`))) throw new Error(`no such level: ${module}/maps/${map}`)
   const modDir = join(GAME_RW, module)
   // The Play log, started afresh: the server's output and the game page's console.
@@ -256,7 +257,7 @@ async function launch ({ module, map }) {
   } catch (e) { playLog(`[shell] the game did not start: ${e.message ?? e}`); throw e }
   // Its files first, ahead of every other module in the tree (static.js).
   statics.setFirst?.(modDir)
-  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1`)
+  await win.loadURL(`http://127.0.0.1:${statics.port}/index.html?studio=1${colliders ? '&colliders=1' : ''}`)
   announceWhenUp()
   return true
 }
