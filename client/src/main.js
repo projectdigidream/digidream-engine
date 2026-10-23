@@ -30,7 +30,7 @@ import { Sky, skyFromMessage } from './render/sky.js'
 import { ColliderView } from './render/colliders.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  viewYaw, between, autoTurnYaw, clearFraction,
+  viewYaw, between, autoTurnYaw, clearFraction, byHeight,
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
@@ -2310,6 +2310,9 @@ const camera = new Camera()
 // without a script asking for it (a module turns it on with CAMERA_SET).
 // &camcollide=0 leaves the walls out of it.
 if (params.get('autocam') === '1') { camera.cfg.autoTurn = 1; camera.cfg.collide = params.get('camcollide') === '0' ? 0 : 1 }
+// &camheight=3&aimheight=1.5: where it sits and what it looks at, by height.
+if (params.get('camheight') !== null) camera.cfg.cameraHeight = Number(params.get('camheight'))
+if (params.get('aimheight') !== null) camera.cfg.aimHeight = Number(params.get('aimheight'))
 // Settings that arrived before the camera existed (see camCfgPending).
 Object.assign(camera.cfg, camCfgPending)
 cameraReady = true
@@ -3512,15 +3515,23 @@ function frame (now) {
       now - camTurnedAt > camCfg.autoDelay * 1000) {
     yaw = autoTurnYaw(yaw, (a.facing >>> 0) / 4294967296, dt, camCfg.autoRate)
   }
-  const camPitch = camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2
+  let camPitch = camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2
   let camDist = camDistance()
+  // By height over the player (camera_height, aim_height): the camera that high,
+  // `distance` behind, looking at a point aim_height above the feet.
+  const aimH = camCfg.aimHeight || 0
+  if (!isFps() && camCfg.cameraHeight >= 0) {
+    const h = byHeight(camDist, camCfg.cameraHeight, aimH)
+    camDist = h.distance
+    camPitch = h.elevation
+  }
   if (!isFps() && camCfg.collide >= 0.5) {
     // From the head to where the camera wants to be, in the engine's frame;
     // a wall in the way pulls the camera in front of it, at once, and it eases
     // back out to its distance when the way is clear.
     const want = cameraOffset(yaw, camDist, camPitch)
     const FX = (v) => BigInt(Math.round(v * 4294967296))
-    const head = { x: px, y: py, z: pz + bodyHeight * 0.9 }
+    const head = { x: px, y: py, z: pz + (aimH > 0 ? aimH : bodyHeight * 0.9) }
     const at = (t) => ({ x: FX(head.x + want.x * t), y: FX(head.y - want.z * t), z: FX(head.z + want.y * t) })
     const from = at(0)
     const t = clearFraction((f) => world.lineClear(from, at(f)))
@@ -3593,7 +3604,9 @@ function frame (now) {
   // debug arrow is drawn along -- so converting again would negate z twice.
   // Its velocity too, in three-space, for a lead that grows with speed
   // (Camera leadVelocity). Units a second, like the engine's.
-  const eye = camera.update(subject, dt, facingDirection(a.facing), camPathSpline,
+  // Aimed aim_height above the feet (0: at them, as always).
+  const aimed = aimH && !isFps() ? { x: subject.x, y: subject.y + aimH, z: subject.z } : subject
+  const eye = camera.update(aimed, dt, facingDirection(a.facing), camPathSpline,
                             { x: fxToFloat(a.vel.x), z: -fxToFloat(a.vel.y) })
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)

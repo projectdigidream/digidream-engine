@@ -92,7 +92,10 @@ export const CAMERA_FIELD = [
   'leadVelocity',
   // 19..22: the automatic camera -- swings behind the player unless they turn
   // it, and walls pull it in (camera.js autoTurn, autoDelay, autoRate, collide).
-  'autoTurn', 'autoDelay', 'autoRate', 'collide'
+  'autoTurn', 'autoDelay', 'autoRate', 'collide',
+  // 23, 24: where the camera sits and looks, by height over the player
+  // (camera.js cameraHeight, aimHeight).
+  'cameraHeight', 'aimHeight'
 ]
 
 // The cap on fields in ONE CameraSet, mirroring proto/messages.hpp. Not the

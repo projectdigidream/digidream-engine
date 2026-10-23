@@ -1928,7 +1928,11 @@ static const char* const CAMERA_FIELD_NAMES[] = {
     // The automatic camera (fields 19..22): it swings round behind the player
     // unless they turned it in the last auto_delay seconds, at auto_rate; and
     // with collide, walls pull it in.
-    "auto_turn", "auto_delay", "auto_rate", "collide"
+    "auto_turn", "auto_delay", "auto_rate", "collide",
+    // Where the camera sits and looks, by height over the player's feet
+    // (fields 23, 24): camera_height (negative: the pitch decides, as before) and
+    // aim_height, the point it looks at.
+    "camera_height", "aim_height"
 };
 
 // The fields a Lua table names, in thousandths. Shared by dnp.camera and

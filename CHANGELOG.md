@@ -21,6 +21,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **The camera's height, over the player**: `camera_height` sets how high
+  above the player's feet the camera sits; `distance` is then how far behind,
+  and the vertical angle follows from the two. `aim_height` sets how high
+  above the feet it looks and swings round, the head rather than the feet.
+  They are CAMERA_SET fields 23 and 24, Lua `dnp.camera`, and the
+  `camera_follow` node's `camera_height` and `aim_height`. A negative
+  `camera_height` goes back to the angle. Try them with
+  `?camheight=3&aimheight=1.5`.
 - **A `hop` animation off a ledge**: JUMP while hanging plays `hop`
   (`avatar <id> when hop state <n>`) instead of `jump`, for the small hop
   that catches the ledge again and for the pull-up onto it. It falls back to

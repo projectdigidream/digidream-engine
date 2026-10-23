@@ -114,6 +114,14 @@ export const DEFAULTS = {
   // player (clearFraction); it eases back out to its distance after.
   collide: 0,
 
+  // WHERE THE CAMERA SITS AND LOOKS, by height over the player's feet
+  // (CAMERA_SET camera_height, aim_height). `aimHeight`: the point it looks at
+  // and swings round -- the head rather than the feet. `cameraHeight`, when not
+  // negative: the camera that high, `distance` behind, the vertical angle
+  // following from the two (byHeight) rather than being set as an angle.
+  cameraHeight: -1,
+  aimHeight: 0,
+
   // Ceiling on how fast the camera may SLIDE ALONG a path it is tracking, in
   // units of arc per second. Without one, a subject that teleports -- or simply
   // rounds a corner into view of a far part of the path -- moves the camera the
@@ -667,6 +675,16 @@ export function autoTurnYaw (yaw, facingTurns, dt, rate) {
   const want = -(facingTurns * TAU + Math.PI)
   const d = ((((want - yaw) % TAU) + TAU * 1.5) % TAU) - Math.PI
   return yaw + d * (1 - Math.exp(-rate * dt))
+}
+
+/**
+ * The camera `cameraHeight` above the feet and `distance` behind, looking at
+ * a point `aimHeight` above them: as the distance from that point and the
+ * angle up from it, which is what cameraOffset takes.
+ */
+export function byHeight (distance, cameraHeight, aimHeight = 0) {
+  const rise = cameraHeight - aimHeight
+  return { distance: Math.hypot(rise, distance), elevation: Math.atan2(rise, distance) }
 }
 
 /**

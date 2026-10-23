@@ -1139,6 +1139,8 @@ function EXEC.camera_follow(g, n, ev, pull)
   if n.auto_delay ~= nil then f.auto_delay = n.auto_delay end
   if n.auto_rate ~= nil then f.auto_rate = n.auto_rate end
   if n.collide ~= nil then f.collide = n.collide and 1 or 0 end
+  if n.camera_height ~= nil then f.camera_height = n.camera_height end
+  if n.aim_height ~= nil then f.aim_height = n.aim_height end
   for _, p in ipairs(audience(n, g, ev, pull)) do dnp.camera(p, f) end
   return "then"
 end

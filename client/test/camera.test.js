@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, clearFraction
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, clearFraction, byHeight
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -1004,6 +1004,17 @@ console.log('camera: a lead that grows with forward speed')
   check(clearFraction(() => true) === 1, 'a clear line is all clear')
   const t = clearFraction((f) => f <= 0.4)
   check(t <= 0.4 && t > 0.39, `a wall 40% of the way along is found there (${t.toFixed(3)})`)
+}
+
+// BY HEIGHT: the camera 3 above the feet and 4 behind, looking at a point 1
+// above them, is 2 up and 4 back from that point -- and the offset puts it
+// exactly there.
+{
+  const h = byHeight(4, 3, 1)
+  const o = cameraOffset(0, h.distance, h.elevation)
+  check(near(o.y, 2, 1e-9) && near(Math.hypot(o.x, o.z), 4, 1e-9), `3 up and 4 behind, aimed 1 up: ${o.y.toFixed(3)} above the aim, ${Math.hypot(o.x, o.z).toFixed(3)} behind`)
+  const below = byHeight(4, 0.5, 1)
+  check(below.elevation < 0, 'CONTROL: a camera below the aim point looks up at it')
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

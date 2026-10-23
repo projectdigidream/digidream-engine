@@ -930,6 +930,12 @@ graph_vocab = {
                  doc = "How fast it swings round, per second. Defaults to 1.5." },
                { name = "collide", type = "bool", optional = true,
                  doc = "Walls pull the camera in rather than standing between it and the player." },
+               { name = "camera_height", type = "number", optional = true,
+                 doc = "Units above the player's feet the camera sits; `distance` is then how far behind, " ..
+                       "and `height` (the angle) follows from the two. Negative goes back to the angle." },
+               { name = "aim_height", type = "number", optional = true,
+                 doc = "Units above the player's feet the camera looks at and swings round -- " ..
+                       "their head rather than their feet. Defaults to 0." },
                { name = "everyone", type = "bool", optional = true } },
       exec_in = { "in" }, exec_out = { "then" },
       data_in = { "entity", "distance", "height", "angle", "lead", "lead_velocity" }, data_out = {},

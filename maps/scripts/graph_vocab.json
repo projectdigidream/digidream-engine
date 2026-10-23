@@ -2820,6 +2820,18 @@
           "type": "bool"
         },
         {
+          "doc": "Units above the player's feet the camera sits; `distance` is then how far behind, and `height` (the angle) follows from the two. Negative goes back to the angle.",
+          "name": "camera_height",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Units above the player's feet the camera looks at and swings round -- their head rather than their feet. Defaults to 0.",
+          "name": "aim_height",
+          "optional": true,
+          "type": "number"
+        },
+        {
           "name": "everyone",
           "optional": true,
           "type": "bool"
