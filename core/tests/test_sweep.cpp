@@ -627,7 +627,8 @@ struct Ledge {
 static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
     std::printf("ledge: a jump that just misses a ledge catches it and hangs; JUMP hops, at it pulls up\n");
     struct Seen { bool hung = false; fx hang_z{}; bool still = true; fx peak{}; bool hung_after = false;
-                  fx z_after{}; i32 sector = -1; fx z{}; bool hopped = false; bool hop_after = true; };
+                  fx z_after{}; i32 sector = -1; fx z{}; bool hopped = false; bool hop_after = true;
+                  bool caught = false; fx caught_vz{}; };
     // `toward`: the stick at the ledge as JUMP is pressed while hanging.
     auto run = [](fx h, bool grab, bool toward) {
         static World w;
@@ -639,6 +640,7 @@ static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
         const u32 a = w.spawn(fx3{F(18), F(10), F(0)});
         w.params_mut(a).ledge_grab = grab;
         Seen seen;
+        fx vz_before{};
         for (u32 t = 0; t < 240; ++t) {
             proto::InputFrame f;
             f.move_x = (t < 60 || (toward && t >= 120)) ? 32767 : 0;   // at the ledge; hands off; then (maybe) at it again
@@ -646,6 +648,9 @@ static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
             w.set_input(a, f);
             w.step();
             const auto& g = w.agent(a);
+            // The tick it first catches the ledge, and how it was moving up to it.
+            if (!seen.caught && g.mv.hanging) { seen.caught = true; seen.caught_vz = vz_before; }
+            vz_before = g.vel.z;
             if (t == 70) { seen.hung = g.mv.hanging; seen.hang_z = g.pos.z; }
             if (t > 70 && t < 120 && g.pos.z != seen.hang_z) seen.still = false;
             if (t > 120 && g.pos.z > seen.peak) seen.peak = g.pos.z;
@@ -667,6 +672,9 @@ static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
                 hop.hung, hop.hang_z.raw / 4294967296.0, hop.still, hop.peak.raw / 4294967296.0,
                 hop.hung_after, hop.z_after.raw / 4294967296.0, up.sector, up.z.raw / 4294967296.0,
                 off.sector, far.hung);
+    // Caught on the way DOWN: going up, a body passes a ledge by.
+    std::printf("  caught while moving %.2f units/s vertically\n", hop.caught_vz.raw / 4294967296.0);
+    CHECK(hop.caught && hop.caught_vz <= fx::zero());
     // Caught, and hanging still with the stick let go: head level with the top.
     const fx off_by = hop.hang_z - (F(3) - w_height());
     CHECK(hop.hung && hop.still && off_by < Ff(1, 64) && off_by > -Ff(1, 64));

@@ -250,10 +250,12 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         // the body walks up anyway.
         const bool face = side >= 0 &&
             climb_top(map, static_cast<u32>(side), st.sector) - pos.z > sim::STEP_HEIGHT;
-        // THE LEDGE GRAB: in the air, pushing into the side of a higher floor
-        // whose top is above the waist and within reach above the head.
+        // THE LEDGE GRAB: in the air and FALLING, pushing into the side of a
+        // higher floor whose top is above the waist and within reach above the
+        // head. Going up, a body passes a ledge by: a jump is not caught on its
+        // way past one, only on its way back down.
         fx2 ln{};
-        const i32 ls = (!face && p.ledge_grab && !st.grounded)
+        const i32 ls = (!face && p.ledge_grab && !st.grounded && vel.z <= fx::zero())
             ? find_ledge(map, st.sector, fx2{pos.x, pos.y}, reach,
                          pos.z + p.height / fx::from_int(2), hands, p.height, ln)
             : -1;

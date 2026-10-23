@@ -14,6 +14,11 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Changed
+
+- **A ledge is caught only on the way down.** Rising past one, a jump goes
+  on by; the ledge is caught as the body falls back past it.
+
 ### Added
 
 - **A `hop` animation off a ledge**: JUMP while hanging plays `hop`
