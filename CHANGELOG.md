@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.7 -- 2026-10-23
+
 ### Fixed
 
 - **A crowded level could stop sending snapshots altogether.** When the
