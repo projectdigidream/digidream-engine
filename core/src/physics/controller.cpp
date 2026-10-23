@@ -32,6 +32,32 @@ fx climb_top(const MapData& map, u32 side, i32 sector) noexcept {
     return back.floor_z > s.floor_z ? back.floor_z : s.floor_z;
 }
 
+// THE LEDGE NEAREST `p` within `radius` (MoveParams::ledge_grab): a side of
+// `sector` whose far side is a floor higher than this one, with headroom for
+// the body on it, and whose top lies in [lo, hi]. Any side -- a ledge needs no
+// CLIMBABLE flag; what makes it one is that there is somewhere to stand.
+i32 find_ledge(const MapData& map, i32 sector, fx2 p, fx radius, fx lo, fx hi,
+               fx body_height, fx2& out_normal) noexcept {
+    if (sector < 0 || static_cast<u32>(sector) >= map.sector_count) return -1;
+    const Sector& sec = map.sector(static_cast<u32>(sector));
+    const u128 r_sq = static_cast<u128>(static_cast<i128>(radius.raw) * radius.raw);
+    i32  best = -1;
+    u128 best_d = r_sq;
+    for (u32 k = 0; k < sec.side_count; ++k) {
+        const u32 si = sec.first_side + k;
+        const Side& sd = map.side(si);
+        if (sd.neighbor == NO_SECTOR || (sd.flags & side_flag::BLOCKING) != 0) continue;
+        const Sector& back = map.sector(static_cast<u32>(sd.neighbor));
+        if (back.floor_z <= sec.floor_z || back.floor_z < lo || back.floor_z > hi) continue;
+        if (back.ceil_z - back.floor_z < body_height) continue;
+        const u128 d_sq = distance_sq_to_segment(map.point(sd.a), map.point(sd.b), p);
+        if (d_sq < best_d) { best_d = d_sq; best = static_cast<i32>(si); }
+    }
+    if (best < 0) return -1;
+    out_normal = -side_normal(map, static_cast<u32>(best), static_cast<u32>(sector));
+    return best;
+}
+
 // Tick a timer down without letting it go negative.
 fx decay(fx t, fx dt) noexcept {
     const fx n = t - dt;
@@ -43,6 +69,7 @@ fx decay(fx t, fx dt) noexcept {
 void handoff_to_standard(MoveState& st, fx3& vel, fx3 carried_velocity) noexcept {
     st.mode = ControllerMode::Standard;
     st.climbing = false;
+    st.hanging = false;
     st.grappling = false;
     st.grapple_pulling = false;
     st.hovering = false;
@@ -134,20 +161,60 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     const fx push_grab = fx::from_frac(3, 10);   // a deliberate push, not a graze
     const fx reach = p.radius + fx::from_frac(1, 8);
 
+    // A LEDGE, when the module allows grabbing one (ledge_grab): held while the
+    // hands are still on it -- its top no more than ledge_reach above the head.
+    const fx hands = pos.z + p.height + p.ledge_reach;
+    // PULLING UP onto a ledge (JUMP while hanging): still climbing, no longer
+    // hanging. The movement below rises until the feet clear `ledge_top`, then
+    // moves in over it; once the body's centre is over the ledge's floor the
+    // ledge is behind it, and letting go stands it there.
+    bool ledge_pull = false;
+    fx   ledge_top{};
     if (st.climbing) {
         fx2 n{};
-        const i32 side = find_side_with_flag(map, st.sector, fx2{pos.x, pos.y}, reach,
-                                             side_flag::CLIMBABLE, n);
+        i32 side = find_side_with_flag(map, st.sector, fx2{pos.x, pos.y}, reach,
+                                       side_flag::CLIMBABLE, n);
+        bool on_ledge = false;
+        if (side < 0 && p.ledge_grab) {
+            // Held while the hands can still reach it; below, anything down to
+            // the feet -- a hop, or pulling up, takes them above it.
+            side = find_ledge(map, st.sector, fx2{pos.x, pos.y}, reach, pos.z - p.height, hands, p.height, n);
+            on_ledge = side >= 0;
+        }
         const fx top = side >= 0 ? climb_top(map, static_cast<u32>(side), st.sector) : fx::zero();
         if (side >= 0) st.climb_normal = n;
-        const bool holding = p.climb_auto || climb_down;
+        if (!on_ledge) st.hanging = false;
+        // A ledge is held without CLIMB: it was caught, not chosen.
+        const bool holding = p.climb_auto || climb_down || on_ledge;
         const bool let_go = cmd.up < fx::zero();
         const fx v = into(st.climb_normal);
         // Climbed down onto the floor: back on your feet. (The mover never
         // calls a climber grounded, so the feet are asked directly.)
         const bool landed = v <= fx::zero() &&
             pos.z <= map.sector(static_cast<u32>(st.sector)).floor_z + fx::from_frac(1, 64);
-        if (side >= 0 && holding && !let_go && !jump_pressed && !landed && v > fx::zero() &&
+        if (on_ledge) {
+            // HANGING ON A LEDGE. JUMP with the stick at it pulls up onto it;
+            // away from it, leaps off as from a wall; still, a small hop that
+            // falls back and catches it again. A push away, or CROUCH, lets go.
+            if (st.hanging && jump_pressed) {
+                if (v > push_grab) {
+                    st.hanging = false;
+                    st.jumps_used = 1;
+                } else if (v < -push_grab) {
+                    st.climbing = false;
+                    st.jumps_used = 1;
+                    handoff_to_standard(st, vel, fx3{st.climb_normal.x * p.move_speed,
+                                                     st.climb_normal.y * p.move_speed, p.jump_impulse});
+                } else {
+                    vel.z = p.jump_impulse / fx::from_int(2);
+                }
+            } else if (st.hanging && (let_go || v < -push_grab)) {
+                st.climbing = false;
+                handoff_to_standard(st, vel, fx3::zero());
+            }
+            ledge_pull = st.climbing && !st.hanging;
+            ledge_top = top;
+        } else if (side >= 0 && holding && !let_go && !jump_pressed && !landed && v > fx::zero() &&
             pos.z + v * p.climb_speed * dt >= top && top < map.sector(static_cast<u32>(st.sector)).ceil_z) {
             // THE MANTLE: over the top of a step, onto its ledge. Still rising at
             // climb speed (16 units/s^2 of gravity takes that 4/s to a further
@@ -171,16 +238,27 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
             st.climbing = false;
             handoff_to_standard(st, vel, carried);
         }
-    } else if (p.climb_enabled && !st.grappling && cmd.up >= fx::zero() && !jump_pressed) {
+    } else if ((p.climb_enabled || p.ledge_grab) && !st.grappling && cmd.up >= fx::zero() && !jump_pressed) {
         fx2 n{};
-        const i32 side = find_side_with_flag(map, st.sector, fx2{pos.x, pos.y}, reach,
-                                             side_flag::CLIMBABLE, n);
+        const i32 side = p.climb_enabled
+            ? find_side_with_flag(map, st.sector, fx2{pos.x, pos.y}, reach, side_flag::CLIMBABLE, n)
+            : -1;
         // Something to climb: more of it above the feet than a step, which
         // the body walks up anyway.
         const bool face = side >= 0 &&
             climb_top(map, static_cast<u32>(side), st.sector) - pos.z > sim::STEP_HEIGHT;
-        if (face && (climb_down || (p.climb_auto && into(n) > push_grab))) {
+        // THE LEDGE GRAB: in the air, pushing into the side of a higher floor
+        // whose top is above the waist and within reach above the head.
+        fx2 ln{};
+        const i32 ls = (!face && p.ledge_grab && !st.grounded)
+            ? find_ledge(map, st.sector, fx2{pos.x, pos.y}, reach,
+                         pos.z + p.height / fx::from_int(2), hands, p.height, ln)
+            : -1;
+        const bool ledge = ls >= 0 && into(ln) > push_grab;
+        if (ledge) { n = ln; ledge_top = climb_top(map, static_cast<u32>(ls), st.sector); }
+        if (ledge || (face && (climb_down || (p.climb_auto && into(n) > push_grab)))) {
             st.climbing = true;
+            st.hanging = ledge;
             st.climb_normal = n;
             vel = fx3::zero();   // grabbing the surface kills momentum
             st.jumps_used = 0;   // a wall you hold is ground enough to jump from
@@ -229,6 +307,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         // Gravity suspended, movement locked to the surface plane, climb speed
         // rather than ground speed.
         effective_gravity_scale = fx::zero();
+        const fx was_vz = vel.z;   // a hop from a ledge, rising or falling
         // Along the wall slides; toward it climbs, away from it descends. The
         // stick's own direction, so it is the same on any camera and in first
         // person: push at the wall to go up it.
@@ -237,6 +316,26 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         vel.x = lateral.x * p.climb_speed;
         vel.y = lateral.y * p.climb_speed;
         vel.z = fx_clamp(-dot(wish, st.climb_normal), -fx::one(), fx::one()) * p.climb_speed;
+        // Hanging from a ledge is hanging: no climbing it, only the pull-up --
+        // up at twice climb speed, a hop's quickness, until the feet clear the
+        // top; then in over it.
+        if (st.hanging) {
+            // THE HANG: head level with the ledge's top. Above it -- caught
+            // high, or in a hop -- gravity brings the body down to it and the
+            // hands catch; below it, it pulls itself up to it.
+            const fx want = ledge_top - p.height;
+            vel = fx3::zero();
+            if (was_vz > fx::zero() || pos.z > want) {
+                vel.z = was_vz + sim::GRAVITY * dt;
+                if (vel.z <= fx::zero() && pos.z + vel.z * dt <= want) vel.z = (want - pos.z) / dt;
+            } else {
+                vel.z = fx_clamp((want - pos.z) / dt, fx::zero(), p.climb_speed);
+            }
+        } else if (ledge_pull) {
+            vel = pos.z < ledge_top
+                ? fx3{fx::zero(), fx::zero(), p.climb_speed * fx::from_int(2)}
+                : fx3{-st.climb_normal.x * p.climb_speed, -st.climb_normal.y * p.climb_speed, fx::zero()};
+        }
     } else if (st.flying) {
         // Gravity off; input maps to full 3D velocity rather than lateral only.
         effective_gravity_scale = fx::zero();
@@ -263,9 +362,15 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
 
         // Multi-jump. `max_jumps` generalises to any count, so "double jump" is
         // a parameter value and not a code branch.
-        if (jump_pressed && st.jumps_used < p.max_jumps && !st.grappling) {
+        // COYOTE TIME over: a body that fell rather than jumped has spent its
+        // ground jump, and keeps only the air jumps max_jumps leaves. Counted
+        // here, not written into jumps_used: what watches that counter (a
+        // jump's sound) must not hear a fall as a jump.
+        const u8 used = (!st.grounded && st.jumps_used == 0 && st.coyote_timer <= fx::zero())
+            ? u8{1} : st.jumps_used;
+        if (jump_pressed && used < p.max_jumps && !st.grappling) {
             vel.z = p.jump_impulse;
-            ++st.jumps_used;
+            st.jumps_used = static_cast<u8>(used + 1);
             st.grounded = false;
         }
 
@@ -341,6 +446,9 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         }
     }
     st.grounded = now_grounded;
+    // Coyote time: full on the ground and on a wall (both are ground enough to
+    // jump from), running down in the air.
+    st.coyote_timer = (now_grounded || st.climbing) ? p.coyote_time : decay(st.coyote_timer, dt);
 }
 
 }  // namespace dnp::physics

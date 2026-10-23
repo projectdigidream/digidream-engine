@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, clearFraction
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -981,6 +981,29 @@ console.log('camera: a lead that grows with forward speed')
   check(Math.abs(side) < 0.05, `and moving sideways adds nothing: it is FORWARD speed (${side.toFixed(3)})`)
   const still = settle({ lead: 0, leadVelocity: 0.5 }, null)
   check(Math.abs(still) < 1e-6, `no velocity given, no lead (${still})`)
+}
+
+// THE AUTOMATIC CAMERA: it swings behind the body's facing, the short way
+// round, and settles there; walls are found by bisecting the line to it.
+{
+  // Behind a body facing east (0 turns) the camera is due WEST of it.
+  let yaw = 0
+  for (let i = 0; i < 600; i++) yaw = autoTurnYaw(yaw, 0, 1 / 60, 2)
+  const o = cameraOffsetEngine(yaw, 10)
+  check(o.x < -6.2 && Math.abs(o.y) < 0.01, `behind a body facing east, the camera stands west of it (${o.x.toFixed(2)}, ${o.y.toFixed(2)})`)
+  // Facing north (a quarter turn), it goes south of it -- and the short way.
+  const start = yaw
+  const next = autoTurnYaw(start, 0.25, 1 / 60, 2)
+  let settled = start
+  for (let i = 0; i < 600; i++) settled = autoTurnYaw(settled, 0.25, 1 / 60, 2)
+  const s = cameraOffsetEngine(settled, 10)
+  check(s.y < -6.2 && Math.abs(s.x) < 0.01, `facing north, it settles south (${s.x.toFixed(2)}, ${s.y.toFixed(2)})`)
+  check(Math.abs(next - start) < 0.1 && Math.abs(settled - start) < Math.PI / 2 + 0.01, 'a smooth turn, a quarter turn the short way, not three quarters the long')
+  // CONTROL: a rate of 0 does not turn at all.
+  check(autoTurnYaw(1, 0.25, 1 / 60, 0) === 1, 'CONTROL: no rate, no turn')
+  check(clearFraction(() => true) === 1, 'a clear line is all clear')
+  const t = clearFraction((f) => f <= 0.4)
+  check(t <= 0.4 && t > 0.39, `a wall 40% of the way along is found there (${t.toFixed(3)})`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

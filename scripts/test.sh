@@ -488,6 +488,7 @@ suite_client () {
   # would later consume unchanged -- so the state machine is decided once here
   # rather than twice, once per renderer, and found to disagree.
   node client/test/animstate.test.js | grep -E 'FAIL|failures'
+  node client/test/colliders.test.js | grep -E 'FAIL|failures'
   # The camera's path curve. Pure arithmetic, and the half of the path feature
   # that has no other way to be checked: a curve that quietly returned its
   # polyline would look right in every screenshot, so most of this file is the

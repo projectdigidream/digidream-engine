@@ -1924,7 +1924,11 @@ static const char* const CAMERA_FIELD_NAMES[] = {
     "cam_shake", "cam_shake_time",
     // How much further ahead the camera aims the faster its subject runs
     // forward: forward speed times this, added to `lead` (field 18).
-    "lead_velocity"
+    "lead_velocity",
+    // The automatic camera (fields 19..22): it swings round behind the player
+    // unless they turned it in the last auto_delay seconds, at auto_rate; and
+    // with collide, walls pull it in.
+    "auto_turn", "auto_delay", "auto_rate", "collide"
 };
 
 // The fields a Lua table names, in thousandths. Shared by dnp.camera and

@@ -101,6 +101,19 @@ export const DEFAULTS = {
   // Applied as 1 - exp(-rate * dt), like `smoothing`.
   pathBlend: 3,
 
+  // --- the automatic camera (CAMERA_SET auto_turn ...) -------------------------
+
+  // 1: the camera swings round behind the player by itself (autoTurnYaw),
+  // unless they have turned it themselves in the last `autoDelay` seconds.
+  // 0: it stays where the player puts it, as it always has.
+  autoTurn: 0,
+  autoDelay: 2,
+  // How fast it swings, as an approach rate per second (1 - exp(-rate * dt)).
+  autoRate: 1.5,
+  // 1: walls pull the camera in rather than standing between it and the
+  // player (clearFraction); it eases back out to its distance after.
+  collide: 0,
+
   // Ceiling on how fast the camera may SLIDE ALONG a path it is tracking, in
   // units of arc per second. Without one, a subject that teleports -- or simply
   // rounds a corner into view of a far part of the path -- moves the camera the
@@ -642,6 +655,36 @@ export class Camera {
  * framing and a perspective one does not, which is exactly the difference
  * between them and the only difference there should be.
  */
+/**
+ * THE AUTOMATIC CAMERA'S TURN: `yaw` eased toward the yaw that stands the
+ * camera behind a body facing `facingTurns` (the engine's angle, in turns),
+ * the short way round, at `rate` per second. At yaw 0 the camera is due east
+ * of its subject (cameraOffsetEngine), so behind a facing f it stands at
+ * -(f + half a turn).
+ */
+export function autoTurnYaw (yaw, facingTurns, dt, rate) {
+  const TAU = Math.PI * 2
+  const want = -(facingTurns * TAU + Math.PI)
+  const d = ((((want - yaw) % TAU) + TAU * 1.5) % TAU) - Math.PI
+  return yaw + d * (1 - Math.exp(-rate * dt))
+}
+
+/**
+ * How much of the line from the subject to the camera is clear of the map: the
+ * largest t in [0, 1] with `clear(t)` true, by bisection (`steps` halvings).
+ * 1 when the whole line is clear, which is asked first and is the usual case.
+ */
+export function clearFraction (clear, steps = 8) {
+  if (clear(1)) return 1
+  let lo = 0
+  let hi = 1
+  for (let i = 0; i < steps; i++) {
+    const mid = (lo + hi) / 2
+    if (clear(mid)) lo = mid; else hi = mid
+  }
+  return lo
+}
+
 export function cameraOffset (yaw, distance = DEFAULT_DISTANCE, elevation = ISO_ELEVATION) {
   const horizontal = Math.cos(elevation) * distance
   return {

@@ -14,16 +14,16 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // the controller keeps between ticks, because reconciliation overwrites local
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
-const BUF64_LEN = 19
-const BUF32_LEN = 20
+const BUF64_LEN = 20
+const BUF32_LEN = 21
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
-  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17,
+  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17, COYOTE: 19,
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20
 }
 
 // A camera path's header, mirroring PATH32_* in client/wasm/bindings.cpp. Its
@@ -880,6 +880,8 @@ export class WasmWorld {
       attackLeft: u32[b32 + IDX.ATK_LEFT],
       attackCooldownLeft: u32[b32 + IDX.ATK_CD],
       climbing: u32[b32 + IDX.CLIMBING] !== 0,
+      hanging: u32[b32 + IDX.HANGING] !== 0,
+      coyote: i64[b64 + IDX.COYOTE],
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
       grounded: u32[b32 + IDX.GROUNDED] !== 0,
@@ -905,6 +907,7 @@ export class WasmWorld {
     i64[b64 + IDX.VEL] = s.vel.x; i64[b64 + IDX.VEL + 1] = s.vel.y; i64[b64 + IDX.VEL + 2] = s.vel.z
     i64[b64 + IDX.DASH_T] = s.dashTimer ?? z
     i64[b64 + IDX.DASH_CD] = s.dashCooldown ?? z
+    i64[b64 + IDX.COYOTE] = s.coyote ?? z
     i64[b64 + IDX.HOVER_F] = s.hoverFuel ?? z
     i64[b64 + IDX.FLIGHT_F] = s.flightFuel ?? z
     i64[b64 + IDX.GRAP_ANCH] = s.grappleAnchor?.x ?? z
@@ -931,6 +934,7 @@ export class WasmWorld {
     u32[b32 + IDX.ATK_LEFT] = s.attackLeft ?? 0
     u32[b32 + IDX.ATK_CD] = s.attackCooldownLeft ?? 0
     u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
+    u32[b32 + IDX.HANGING] = s.hanging ? 1 : 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
     u32[b32 + IDX.GROUNDED] = s.grounded ? 1 : 0

@@ -89,7 +89,10 @@ export const CAMERA_FIELD = [
   'mode', 'path', 'pathSpeed', 'pathAttach', 'pathBlend',
   'shake', 'shakeTime',
   // 18: the aim point's lead grows with forward speed (camera.js leadVelocity).
-  'leadVelocity'
+  'leadVelocity',
+  // 19..22: the automatic camera -- swings behind the player unless they turn
+  // it, and walls pull it in (camera.js autoTurn, autoDelay, autoRate, collide).
+  'autoTurn', 'autoDelay', 'autoRate', 'collide'
 ]
 
 // The cap on fields in ONE CameraSet, mirroring proto/messages.hpp. Not the
@@ -169,7 +172,9 @@ export const STATE_FLAG = {
   GRAPPLING: 1 << 4,
   ANCHORED: 1 << 5,
   // The body holds weapons: the self block carries the weapon machine.
-  ARMED: 1 << 6
+  ARMED: 1 << 6,
+  // Climbing on a ledge rather than a wall: hanging.
+  HANGING: 1 << 7
 }
 
 // No weapon asked for, in an input frame's `weapon` (sim::NO_WEAPON).
@@ -864,6 +869,7 @@ export function decodeSnapshot (buf) {
   snap.self.dashCooldown = r.fxraw()
   snap.self.hoverFuel = r.fxraw()
   snap.self.flightFuel = r.fxraw()
+  snap.self.coyote = r.fxraw()
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()

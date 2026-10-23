@@ -4357,6 +4357,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             sb.dash_cooldown   = self.mv.dash_cooldown_timer;
             sb.hover_fuel      = self.mv.hover_fuel;
             sb.flight_fuel     = self.mv.flight_fuel;
+            sb.coyote          = self.mv.coyote_timer;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
             // The sector this entity rides (design §3.2.5), encoded with the

@@ -213,6 +213,17 @@ struct MoveParams {
     // pushing into a climbable wall. The module's choice -- a ladder game wants
     // the second, a game where walls must not catch you by accident the first.
     bool climb_auto = false;
+    // A LEDGE GRAB (docs/PLAYER.md): in the air, pushing into the side of a
+    // higher floor whose top is above the waist and no more than `ledge_reach`
+    // above the head catches it -- any side, climbable or not -- and the climb
+    // rules take it from there: hang, push in to pull up onto it, away or
+    // CROUCH to drop, JUMP to leap off. A jump that just misses a ledge makes it.
+    bool ledge_grab = false;
+    fx   ledge_reach = fx::from_frac(1, 2);
+    // COYOTE TIME: how long after walking off an edge the ground jump is still
+    // there, in seconds. After it, a body that fell rather than jumped has
+    // spent its ground jump and has only the air jumps max_jumps leaves.
+    fx   coyote_time = fx::from_frac(1, 10);
 };
 
 // Runtime state the abilities carry between ticks.
@@ -282,6 +293,12 @@ struct MoveState {
 
     bool climbing = false;
     fx2  climb_normal{};
+    // On a LEDGE rather than a wall (MoveParams::ledge_grab): climbing, held
+    // still, waiting for JUMP to hop up. The `hang` animation condition.
+    bool hanging = false;
+    // Coyote time left (MoveParams::coyote_time): full on the ground, running
+    // down in the air. Hashed and in SelfBlock, as every timer here is.
+    fx   coyote_timer{};
 
     bool grappling = false;
     bool grapple_pulling = false;

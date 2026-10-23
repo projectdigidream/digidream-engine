@@ -186,6 +186,7 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
     w.fxraw(s.dash_cooldown);
     w.fxraw(s.hover_fuel);
     w.fxraw(s.flight_fuel);
+    w.fxraw(s.coyote);
     if (s.state_flags & state_flag::GRAPPLING) {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
@@ -238,6 +239,7 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     s.dash_cooldown   = r.fxraw();
     s.hover_fuel      = r.fxraw();
     s.flight_fuel     = r.fxraw();
+    s.coyote          = r.fxraw();
     if (s.state_flags & state_flag::GRAPPLING) {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();
@@ -348,7 +350,11 @@ bool SnapshotWriter::try_entity(const EntityBlock& e) noexcept {
     if (!began_ || vfx_started_ || entity_count_ == 0xFFFF) return false;
     const size_t m = w_.mark();
     encode_entity(w_, e);
-    if (!w_.ok()) {
+    // ROOM FOR THE TAIL: finish() writes the vfx count (a u16) after the
+    // entities, and an entity that fills the datagram to within a byte of the
+    // end leaves it nowhere to go -- finish() then fails and the server sends
+    // NOTHING that tick, every tick, for as long as the sizes land that way.
+    if (!w_.ok() || (!vfx_started_ && w_.remaining() < 2)) {
         w_.rollback(m);   // leaves the buffer exactly as it was
         return false;
     }

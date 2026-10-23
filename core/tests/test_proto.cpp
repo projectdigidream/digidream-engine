@@ -1438,6 +1438,42 @@ int main() {
     // one forward, while an event that does not fit is gone -- it happened at a
     // moment that has passed. So the caller reserves room, and this is the
     // property that reserve exists for.
+    // A SNAPSHOT FILLED WITH ENTITIES TO THE LAST BYTE STILL FINISHES. The vfx
+    // count goes after the entities; when one filled the buffer to within a
+    // byte, finish() had nowhere for it, returned 0, and the server sent
+    // nothing that tick -- every tick, once the sizes landed that way. Every
+    // capacity from an empty snapshot's size to 60 bytes more: several land
+    // exactly there. (The stack's snapshot-order test, 250 monsters, is the
+    // one that caught it in a real server.)
+    {
+        std::printf("proto: a snapshot packed with entities to the last byte is still sent\n");
+        // From an empty snapshot's own size up: below it nothing could be sent.
+        size_t empty = 0;
+        {
+            u8 big[512];
+            SnapshotWriter w(big, sizeof big);
+            SnapshotHeader h{};
+            w.begin(h, SelfBlock{}, 100);
+            empty = w.finish();
+        }
+        u32 bad = 0, tried = 0;
+        for (size_t cap = empty; cap <= empty + 60; ++cap) {
+            u8 buf[512];
+            SnapshotWriter w(buf, cap);
+            SnapshotHeader h{};
+            w.begin(h, SelfBlock{}, 100);
+            for (u32 i = 0; i < 100; ++i) {
+                EntityBlock e;
+                e.handle = Handle::make(i + 1, 0);
+                e.mask = ent_field::POS;
+                if (!w.try_entity(e)) break;
+            }
+            ++tried;
+            if (w.finish() == 0) ++bad;
+        }
+        std::printf("  %u of %u capacities finished (an empty snapshot is %zu bytes)\n", tried - bad, tried, empty);
+        CHECK(empty > 0 && bad == 0);
+    }
     {
         std::printf("proto: a snapshot full of entities still carries its events\n");
         u8 buf[MAX_DATAGRAM_BYTES];

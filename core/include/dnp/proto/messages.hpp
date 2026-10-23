@@ -348,6 +348,8 @@ inline constexpr u16 GRAPPLING = 1u << 4;
 inline constexpr u16 ANCHORED  = 1u << 5;
 // The body holds weapons, so SelfBlock carries the weapon machine's state.
 inline constexpr u16 ARMED     = 1u << 6;
+// Climbing on a ledge rather than a wall: hanging (MoveState::hanging).
+inline constexpr u16 HANGING   = 1u << 7;
 }  // namespace state_flag
 
 inline constexpr u16 SNAP_RESYNC_REQUIRED = 1u << 0;
@@ -423,6 +425,7 @@ struct SelfBlock {
     fx     dash_cooldown{};
     fx     hover_fuel{};
     fx     flight_fuel{};
+    fx     coyote{};                // MoveState::coyote_timer
 
     // Only encoded when state_flags & GRAPPLING. A swinging player is the
     // exception, and gating it keeps 32 bytes off every other snapshot.

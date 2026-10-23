@@ -99,6 +99,9 @@ inline constexpr ParamDesc PARAM_TABLE[] = {
     // Appended: this table's ORDER is the wire format.
     DNP_PARAM(move_relative,        ParamType::Bool),   // 43
     DNP_PARAM(climb_auto,           ParamType::Bool),   // 44
+    DNP_PARAM(ledge_grab,           ParamType::Bool),   // 45
+    DNP_PARAM(ledge_reach,          ParamType::Fx),     // 46
+    DNP_PARAM(coyote_time,          ParamType::Fx),     // 47
 };
 
 #undef DNP_PARAM
@@ -124,7 +127,7 @@ inline constexpr u16 PARAM_COUNT = static_cast<u16>(sizeof(PARAM_TABLE) / sizeof
 // and asserts every id reads back the field it wrote; a field nobody registered
 // simply is not there to be missed. Between them, an fx or a pointer is caught
 // by size and a byte is caught by absence.
-static_assert(sizeof(MoveParams) == 320,
+static_assert(sizeof(MoveParams) == 336,
               "MoveParams changed. Append the new field(s) to PARAM_TABLE in this "
               "file -- appending is safe, reordering breaks the wire format -- "
               "then update this size. See docs/protocol.md 8.4.");

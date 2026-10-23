@@ -1135,6 +1135,10 @@ function EXEC.camera_follow(g, n, ev, pull)
   if n.lock ~= nil then f.lock_yaw = n.lock and 1 or 0; f.lock_zoom = n.lock and 1 or 0 end
   if n.lead ~= nil then f.lead = n.lead end
   if n.lead_velocity ~= nil then f.lead_velocity = n.lead_velocity end
+  if n.auto ~= nil then f.auto_turn = n.auto and 1 or 0 end
+  if n.auto_delay ~= nil then f.auto_delay = n.auto_delay end
+  if n.auto_rate ~= nil then f.auto_rate = n.auto_rate end
+  if n.collide ~= nil then f.collide = n.collide and 1 or 0 end
   for _, p in ipairs(audience(n, g, ev, pull)) do dnp.camera(p, f) end
   return "then"
 end

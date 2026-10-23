@@ -952,6 +952,7 @@ u16 World::state_flags(u32 i) const noexcept {
     if (m.hovering)  f |= proto::state_flag::HOVERING;
     if (m.flying)    f |= proto::state_flag::FLYING;
     if (m.grappling) f |= proto::state_flag::GRAPPLING;
+    if (m.hanging)   f |= proto::state_flag::HANGING;
     // Declared in the protocol since Phase 1 and never populated until now.
     // Its absence cost 18 ticks of divergence after every teleport: the client
     // kept riding an anchor the server had dropped, and the two only reconverged
@@ -1059,7 +1060,9 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.fxv(m.dash_cooldown_timer);
     h.vec2(m.dash_dir);
     h.boolv(m.climbing);
+    h.boolv(m.hanging);
     h.vec2(m.climb_normal);
+    h.fxv(m.coyote_timer);
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
     // NOT rebased, deliberately. A grapple anchor is a point on the geometry

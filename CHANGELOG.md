@@ -14,6 +14,42 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **A crowded level could stop sending snapshots altogether.** When the
+  entities filled a datagram to within a byte of its end, there was no room
+  left for the count that follows them. The snapshot was then dropped every
+  tick for as long as the sizes landed that way, and the player saw the world
+  freeze. The writer now always keeps that room.
+- **Coyote time was unlimited**: walking off an edge kept the ground jump for
+  the whole fall. A new player rule, `coyote_time` (0.1 s by default), sets
+  how long it lasts. After it, a body that fell rather than jumped has only
+  the air jumps `max_jumps` leaves.
+
+### Added
+
+- **Ledge grab** (`ledge_grab`, off by default): in the air, pushing into the
+  side of a higher floor whose top is a little above your reach
+  (`ledge_reach`, 0.5) catches it, on any side, climbable or not. The body
+  hangs head level with the top. JUMP with the stick at the ledge pulls up
+  onto it; JUMP with the stick still is a small hop that falls back and
+  catches it again; JUMP with the stick away leaps off. Pushing away or
+  CROUCH lets go. A `hang` animation condition (`avatar <id> when hang state
+  <n>`) draws it, falling back to `climb`'s state.
+- **An automatic camera**: it swings smoothly round behind the player by
+  itself, the short way, unless they turned it themselves within the last
+  `auto_delay` seconds (2 by default), at `auto_rate`. With `collide`, walls
+  pull it in front of them at once, and it eases back out to its `distance`.
+  It stays at the preferred `distance` and `pitch`, as always. Set it with
+  CAMERA_SET (`auto_turn`, `auto_delay`, `auto_rate`, `collide`: Lua
+  `dnp.camera`, or the `camera_follow` node's `auto`, `auto_delay`,
+  `auto_rate` and `collide`), or try it with `?autocam=1`. It is never used
+  in first person, nor while a map locks the yaw.
+- **Colliders drawn over the frame**, a debug view: every body's collision
+  cylinder in a colour for what it is (the player green, solid bodies orange,
+  props nothing collides with grey). Turn it on with `?colliders=1`, or
+  switch it with F4.
+
 ## 0.2.3.6 -- 2026-10-22
 
 ### Added

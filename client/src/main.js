@@ -27,9 +27,10 @@ import {
   makeFacingArrow, aimFacingArrow
 } from './render/scene.js'
 import { Sky, skyFromMessage } from './render/sky.js'
+import { ColliderView } from './render/colliders.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  viewYaw, between,
+  viewYaw, between, autoTurnYaw, clearFraction,
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
@@ -647,6 +648,12 @@ let camOverridePitch = null
 let camLockYaw = false
 let camLockZoom = false
 let yaw = START_YAW
+// When the player last turned the camera themselves (ms, the frame clock): the
+// automatic camera leaves it alone for autoDelay seconds after.
+let camTurnedAt = -Infinity
+// The automatic camera's distance as walls leave it (camera.js clearFraction):
+// in at once, out again gently.
+let camClearDistance = null
 // Camera paths (design 4.1). The TAG, not an index: inserting a path earlier in
 // a .map file renumbers every index after it, and would silently repoint every
 // camera in the level. Resolved to a spline inside the frame loop, where the
@@ -1691,6 +1698,11 @@ function buildBody () {
 // this five ids short the moment MoveParams grew a field, which is the same
 // two-programs-one-number trap the prop catalogue exists to avoid.
 const SHOW_SWING = params.get('swing') !== '0'
+// THE COLLIDERS, drawn over the frame (render/colliders.js): ?colliders=1 at
+// launch, F4 to switch while playing.
+const colliders = new ColliderView({ THREE, scene })
+colliders.setShown(params.get('colliders') === '1')
+dnpStats.colliders = () => colliders.shown
 
 // The two wedges, REBUILT whenever the shape changes.
 //
@@ -2294,6 +2306,10 @@ function enterLevel (w, streamed) {
 let viewHeight = START_ZOOM
 const cam3 = makeCamera(PROJECTION, innerWidth / innerHeight, viewHeight, FOV)
 const camera = new Camera()
+// ?autocam=1: the automatic camera -- behind the player, walls pulling it in --
+// without a script asking for it (a module turns it on with CAMERA_SET).
+// &camcollide=0 leaves the walls out of it.
+if (params.get('autocam') === '1') { camera.cfg.autoTurn = 1; camera.cfg.collide = params.get('camcollide') === '0' ? 0 : 1 }
 // Settings that arrived before the camera existed (see camCfgPending).
 Object.assign(camera.cfg, camCfgPending)
 cameraReady = true
@@ -2360,6 +2376,13 @@ addEventListener('keydown', (e) => {
   }
 })
 addEventListener('keyup', (e) => held.delete(e.code))
+// F4: the colliders over the frame, on and off -- in solo and live alike.
+addEventListener('keydown', (e) => {
+  if (e.code !== 'F4' || e.repeat) return
+  e.preventDefault()
+  colliders.setShown(!colliders.shown)
+  say(colliders.shown ? 'colliders shown (F4 hides them)' : 'colliders hidden')
+})
 addEventListener('blur', () => held.clear())
 
 // FIRST PERSON: the mouse is the view. A click on the game takes the pointer
@@ -2909,6 +2932,8 @@ function frame (now) {
   const turnable = !camLockYaw && !controlsTaken()
   if (turnable && held.has('KeyQ')) yaw -= 1.5 * dt
   if (turnable && held.has('KeyR')) yaw += 1.5 * dt
+  // The player turning the camera themselves: the automatic camera waits.
+  if (turnable && (held.has('KeyQ') || held.has('KeyR'))) camTurnedAt = now
   if (touch) {
     touch.setStickHidden(controlsTaken())
     // TAKEN once per frame, which zeroes them. A drag accumulates between
@@ -2918,6 +2943,7 @@ function frame (now) {
     // drag does not pile up and land the moment the lock lifts.
     const dyaw = touch.state.takeYaw()
     if (turnable) yaw += dyaw
+    if (turnable && dyaw !== 0) camTurnedAt = now
     const pinch = touch.state.takeZoom()
     // Pixels of pinch to a zoom factor. Exponential rather than linear so that
     // the same finger movement is the same proportional change however far in
@@ -3160,6 +3186,22 @@ function frame (now) {
   }
 
   body.position.set(subject.x, subject.y + body.userData.yOffset, subject.z)
+  // Every collider this frame, when they are shown: ours, then every other
+  // body's -- the catalogue's size for anything with a kind, a player's own
+  // replicated size for a player -- where its mesh stands (less the sprite's
+  // lift, so the cylinder stands on the feet).
+  if (colliders.shown) {
+    const list = [{ x: subject.x, y: subject.y, z: subject.z, radius: bodyRadius, height: bodyHeight, kind: 'player' }]
+    for (const ent of others.entities.values()) {
+      const m = ent.mesh
+      if (!m?.parent) continue
+      const def = ent.kind ? props?.kinds.get(ent.kind) : null
+      const solid = (ent.solid ?? 1) !== 0 && (!def || (def.flags & 1) !== 0)
+      list.push({ x: m.position.x, y: m.position.y - (m.userData.yOffset ?? 0), z: m.position.z,
+                  radius: def?.radius ?? bodyRadius, height: def?.height ?? bodyHeight, kind: solid ? 'solid' : 'ghost' })
+    }
+    colliders.update(list)
+  }
   if (SHOW_SWING) {
     // The shape as it is NOW, and a rebuild BEFORE anything is drawn with it.
     // A parameter change arrives as a PARAM_UPDATE and is applied to the
@@ -3462,9 +3504,35 @@ function frame (now) {
   // modes produced it. Never a snapshot: see camera.js.
   // Pitch arrives in TURNS, which is the engine's angle unit everywhere else;
   // cameraOffset wants radians.
-  camera.cfg.offset = cameraOffset(
-    yaw, camDistance(),
-    camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2)
+  // THE AUTOMATIC CAMERA (CAMERA_SET auto_turn, auto_delay, auto_rate,
+  // collide). Behind the player unless they turned it lately; never in first
+  // person, whose camera is the eyes, nor while a map locks the yaw.
+  const camCfg = camera.cfg
+  if (!isFps() && !camLockYaw && !controlsTaken() && camCfg.autoTurn >= 0.5 &&
+      now - camTurnedAt > camCfg.autoDelay * 1000) {
+    yaw = autoTurnYaw(yaw, (a.facing >>> 0) / 4294967296, dt, camCfg.autoRate)
+  }
+  const camPitch = camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2
+  let camDist = camDistance()
+  if (!isFps() && camCfg.collide >= 0.5) {
+    // From the head to where the camera wants to be, in the engine's frame;
+    // a wall in the way pulls the camera in front of it, at once, and it eases
+    // back out to its distance when the way is clear.
+    const want = cameraOffset(yaw, camDist, camPitch)
+    const FX = (v) => BigInt(Math.round(v * 4294967296))
+    const head = { x: px, y: py, z: pz + bodyHeight * 0.9 }
+    const at = (t) => ({ x: FX(head.x + want.x * t), y: FX(head.y - want.z * t), z: FX(head.z + want.y * t) })
+    const from = at(0)
+    const t = clearFraction((f) => world.lineClear(from, at(f)))
+    const reach = Math.max(1, camDist * t - 0.4)
+    camClearDistance = camClearDistance === null || reach < camClearDistance
+      ? Math.min(reach, camDist)
+      : Math.min(reach, camClearDistance + (camDist - camClearDistance) * (1 - Math.exp(-2 * dt)))
+    camDist = camClearDistance
+  } else {
+    camClearDistance = null
+  }
+  camera.cfg.offset = cameraOffset(yaw, camDist, camPitch)
   // The camera path this tag names, rebuilt only when its points have moved.
   //
   // Resolved HERE rather than where CAMERA_SET is applied, because a level's

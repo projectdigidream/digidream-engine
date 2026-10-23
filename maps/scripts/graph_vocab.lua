@@ -163,6 +163,12 @@ graph_vocab = {
       doc = "Moves relative to its facing (first person)." },
     { name = "climb_auto", type = "bool", access = "read_write", of = "movement",
       doc = "Grabs a climbable wall by pushing into it." },
+    { name = "ledge_grab", type = "bool", access = "read_write", of = "movement",
+      doc = "Catches the edge of a higher floor a jump just misses, and hangs from it." },
+    { name = "ledge_reach", type = "number", access = "read_write", of = "movement",
+      doc = "How far above the head a ledge's top may be and still be caught." },
+    { name = "coyote_time", type = "number", access = "read_write", of = "movement",
+      doc = "Seconds after walking off an edge that the ground jump is still there." },
   },
   graph_fields = {
     { name = "graph", type = "int",
@@ -915,6 +921,15 @@ graph_vocab = {
                { name = "lead_velocity", type = "number", optional = true,
                  doc = "And further ahead the faster they run forward: their forward speed times this " ..
                        "(about \"this many seconds of running ahead\"). 0 is a fixed lead." },
+               { name = "auto", type = "bool", optional = true,
+                 doc = "The automatic camera: it swings round behind the player by itself, unless " ..
+                       "they turn it; `distance` and `height` are where it stays." },
+               { name = "auto_delay", type = "number", optional = true,
+                 doc = "Seconds after the player turns it before it swings back behind. Defaults to 2." },
+               { name = "auto_rate", type = "number", optional = true,
+                 doc = "How fast it swings round, per second. Defaults to 1.5." },
+               { name = "collide", type = "bool", optional = true,
+                 doc = "Walls pull the camera in rather than standing between it and the player." },
                { name = "everyone", type = "bool", optional = true } },
       exec_in = { "in" }, exec_out = { "then" },
       data_in = { "entity", "distance", "height", "angle", "lead", "lead_velocity" }, data_out = {},

@@ -47,7 +47,8 @@ constexpr int BUF64_GRAP_ANCH = 11;  // 3
 constexpr int BUF64_GRAP_DIST = 14;
 constexpr int BUF64_DASH_DIR  = 15;  // 2
 constexpr int BUF64_CLIMB_N   = 17;  // 2
-constexpr int BUF64_LEN       = 19;
+constexpr int BUF64_COYOTE    = 19;  // appended: core.js mirrors this by hand
+constexpr int BUF64_LEN       = 20;
 
 // Layout of the u32 buffer.
 constexpr int BUF32_FACING    = 0;
@@ -74,7 +75,8 @@ constexpr int BUF32_INTR_HELD = 16;
 constexpr int BUF32_ATK_HELD  = 17;
 constexpr int BUF32_ATK_LEFT  = 18;
 constexpr int BUF32_ATK_CD    = 19;
-constexpr int BUF32_LEN       = 20;
+constexpr int BUF32_HANGING   = 20;
+constexpr int BUF32_LEN       = 21;
 
 // A camera path's header (design 4.1). Its OWN four slots, not appended to the
 // agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
@@ -1080,6 +1082,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out64[BUF64_DASH_DIR + 1] = m.dash_dir.y.raw;
     out64[BUF64_CLIMB_N + 0] = m.climb_normal.x.raw;
     out64[BUF64_CLIMB_N + 1] = m.climb_normal.y.raw;
+    out64[BUF64_COYOTE] = m.coyote_timer.raw;
 
     out32[BUF32_FACING]    = a.facing.raw;
     out32[BUF32_FLAGS]     = w->state_flags(idx);
@@ -1092,6 +1095,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_DASH_HELD] = m.dash_held ? 1u : 0u;
     out32[BUF32_GRAP_HELD] = m.grapple_held ? 1u : 0u;
     out32[BUF32_CLIMBING]  = m.climbing ? 1u : 0u;
+    out32[BUF32_HANGING]   = m.hanging ? 1u : 0u;
     out32[BUF32_GRAPPLING] = m.grappling ? 1u : 0u;
     out32[BUF32_GRAP_PULL] = m.grapple_pulling ? 1u : 0u;
     out32[BUF32_GROUNDED]  = m.grounded ? 1u : 0u;
@@ -1141,6 +1145,8 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.dash_held = in32[BUF32_DASH_HELD] != 0;
     m.grapple_held = in32[BUF32_GRAP_HELD] != 0;
     m.climbing = in32[BUF32_CLIMBING] != 0;
+    m.hanging = in32[BUF32_HANGING] != 0;
+    m.coyote_timer = fx::from_raw(in64[BUF64_COYOTE]);
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
     m.grounded = in32[BUF32_GROUNDED] != 0;

@@ -24,6 +24,7 @@
 //
 #include <cstdio>
 #include <utility>
+#include <memory>
 
 #include "dnp/sim/world.hpp"
 
@@ -604,9 +605,117 @@ static void test_a_platform_across_two_rooms() {
     CHECK(w.agent(a).pos.x > F(25) && w.agent(a).mv.sector == 1);
 }
 
+// A LEDGE: room 0 (x 0..20, floor 0) beside room 1 (x 20..30, floor `h`), open
+// to each other at x = 20.
+// The default body's height (MoveParams), which the hang sits a head below a top by.
+static fx w_height() { return physics::MoveParams{}.height; }
+
+struct Ledge {
+    MapStorage store;
+    MapData    view{};
+    explicit Ledge(fx h) {
+        const fx2 a[] = {{F(0), F(0)}, {F(20), F(0)}, {F(20), F(20)}, {F(0), F(20)}};
+        const fx2 b[] = {{F(20), F(0)}, {F(30), F(0)}, {F(30), F(20)}, {F(20), F(20)}};
+        store.add_sector(a, 4, F(0), F(20), 1);
+        store.add_sector(b, 4, h, F(20), 1);
+        for (u16 i = 0; i < 4; ++i) store.add_side(0, i, static_cast<u16>((i + 1) % 4), i == 1 ? 1 : NO_SECTOR, 0);
+        for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), i == 3 ? 0 : NO_SECTOR, 0);
+    }
+    void attach(World& w) { view = store.view(); w.set_map(&view); w.set_map_storage(&store); }
+};
+
+static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
+    std::printf("ledge: a jump that just misses a ledge catches it and hangs; JUMP hops, at it pulls up\n");
+    struct Seen { bool hung = false; fx hang_z{}; bool still = true; fx peak{}; bool hung_after = false;
+                  fx z_after{}; i32 sector = -1; fx z{}; };
+    // `toward`: the stick at the ledge as JUMP is pressed while hanging.
+    auto run = [](fx h, bool grab, bool toward) {
+        static World w;
+        // On the heap: a MapStorage is far bigger than a test's stack.
+        static std::unique_ptr<Ledge> L;
+        L = std::make_unique<Ledge>(h);
+        w.reset();
+        L->attach(w);
+        const u32 a = w.spawn(fx3{F(18), F(10), F(0)});
+        w.params_mut(a).ledge_grab = grab;
+        Seen seen;
+        for (u32 t = 0; t < 240; ++t) {
+            proto::InputFrame f;
+            f.move_x = (t < 60 || (toward && t >= 120)) ? 32767 : 0;   // at the ledge; hands off; then (maybe) at it again
+            if (t == 2 || t == 120) f.buttons = proto::button::JUMP;    // the jump at it; then JUMP while hanging
+            w.set_input(a, f);
+            w.step();
+            const auto& g = w.agent(a);
+            if (t == 70) { seen.hung = g.mv.hanging; seen.hang_z = g.pos.z; }
+            if (t > 70 && t < 120 && g.pos.z != seen.hang_z) seen.still = false;
+            if (t > 120 && g.pos.z > seen.peak) seen.peak = g.pos.z;
+            if (t == 200) { seen.hung_after = g.mv.hanging; seen.z_after = g.pos.z; }
+        }
+        seen.sector = w.agent(a).mv.sector;
+        seen.z = w.agent(a).pos.z;
+        return seen;
+    };
+    const Seen hop = run(F(3), true, false);
+    const Seen up = run(F(3), true, true);
+    const Seen off = run(F(3), false, false);
+    const Seen far = run(F(5), true, false);
+    std::printf("  ledge 3 up: hanging %d at %.2f (still %d); JUMP alone: up to %.2f, hanging again %d at %.2f;"
+                " JUMP at it: sector %d at %.2f; switched off: sector %d; 5 up: hanging %d\n",
+                hop.hung, hop.hang_z.raw / 4294967296.0, hop.still, hop.peak.raw / 4294967296.0,
+                hop.hung_after, hop.z_after.raw / 4294967296.0, up.sector, up.z.raw / 4294967296.0,
+                off.sector, far.hung);
+    // Caught, and hanging still with the stick let go: head level with the top.
+    const fx off_by = hop.hang_z - (F(3) - w_height());
+    CHECK(hop.hung && hop.still && off_by < Ff(1, 64) && off_by > -Ff(1, 64));
+    // JUMP alone: a hop up, and the ledge caught again where it hung.
+    CHECK(hop.peak > hop.hang_z + Ff(1, 4));
+    CHECK(hop.hung_after && hop.z_after == hop.hang_z && hop.sector == 0);
+    // JUMP with the stick at it: up onto the ledge.
+    CHECK(up.sector == 1 && up.z == F(3));
+    CHECK(!off.hung && off.sector == 0);           // CONTROL: off, the jump just falls back
+    CHECK(!far.hung);                              // CONTROL: out of reach is out of reach
+}
+
+// COYOTE TIME: walking off room 1's edge (floor 3) into room 0, one jump
+// allowed. A press soon after leaving the ground jumps; a late one does not.
+static void test_coyote_time_runs_out() {
+    std::printf("coyote: the ground jump lasts coyote_time after walking off an edge\n");
+    auto jumped = [](u32 late, fx coyote) {
+        static World w;
+        static std::unique_ptr<Ledge> L;
+        L = std::make_unique<Ledge>(F(6));
+        w.reset();
+        L->attach(w);
+        const u32 a = w.spawn(fx3{F(21), F(10), F(6)});
+        w.params_mut(a).max_jumps = 1;
+        w.params_mut(a).coyote_time = coyote;
+        i32 off_at = -1;
+        bool up = false;
+        for (u32 t = 0; t < 120; ++t) {
+            proto::InputFrame f;
+            f.move_x = -32767;
+            if (off_at >= 0 && t == static_cast<u32>(off_at) + late) f.buttons = proto::button::JUMP;
+            w.set_input(a, f);
+            w.step();
+            if (off_at < 0 && t > 2 && !w.agent(a).mv.grounded) off_at = static_cast<i32>(t);
+            if (off_at >= 0 && t == static_cast<u32>(off_at) + late && w.agent(a).vel.z > fx::zero()) up = true;
+        }
+        return up;
+    };
+    const bool soon = jumped(3, fx::from_frac(1, 10));
+    const bool late = jumped(30, fx::from_frac(1, 10));
+    const bool long_coyote = jumped(30, F(10));
+    std::printf("  3 ticks after: %d; 30 after: %d; 30 after with 10 s of coyote time: %d\n", soon, late, long_coyote);
+    CHECK(soon);
+    CHECK(!late);           // the ground jump is spent
+    CHECK(long_coyote);     // CONTROL: it is the time, not the fall, that spends it
+}
+
 int main() {
     std::printf("== core/sweep test suite ==\n");
     test_a_platform_across_two_rooms();
+    test_a_ledge_is_caught_hung_from_and_hopped_onto();
+    test_coyote_time_runs_out();
     test_it_finds_the_nearest();
     test_a_wall_stops_it();
     test_a_miss_to_the_side_is_a_miss();

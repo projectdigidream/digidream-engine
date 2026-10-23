@@ -54,8 +54,8 @@ console.log('\n--- the two field lists are one list ---')
   // compare two empty lists and pass, which is the classic way a test like this
   // is worth nothing. Pinning the count means a field added on one side alone
   // fails here rather than in a bug report about the pitch.
-  check(names.length === 19, `extracted ${names.length} names (expected 19, lead_velocity the last)`)
-  check(CAMERA_FIELD.length === 19, `the client names ${CAMERA_FIELD.length} fields`)
+  check(names.length === 23, `extracted ${names.length} names (expected 23, collide the last)`)
+  check(CAMERA_FIELD.length === 23, `the client names ${CAMERA_FIELD.length} fields`)
 
   const mapped = names.map(jsName)
   let firstBad = -1

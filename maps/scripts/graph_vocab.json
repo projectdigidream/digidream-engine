@@ -2796,6 +2796,30 @@
           "type": "number"
         },
         {
+          "doc": "The automatic camera: it swings round behind the player by itself, unless they turn it; `distance` and `height` are where it stays.",
+          "name": "auto",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "doc": "Seconds after the player turns it before it swings back behind. Defaults to 2.",
+          "name": "auto_delay",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "How fast it swings round, per second. Defaults to 1.5.",
+          "name": "auto_rate",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Walls pull the camera in rather than standing between it and the player.",
+          "name": "collide",
+          "optional": true,
+          "type": "bool"
+        },
+        {
           "name": "everyone",
           "optional": true,
           "type": "bool"
@@ -3652,6 +3676,27 @@
       "name": "climb_auto",
       "of": "movement",
       "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "Catches the edge of a higher floor a jump just misses, and hangs from it.",
+      "name": "ledge_grab",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "How far above the head a ledge's top may be and still be caught.",
+      "name": "ledge_reach",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "Seconds after walking off an edge that the ground jump is still there.",
+      "name": "coyote_time",
+      "of": "movement",
+      "type": "number"
     }
   ],
   "version": 1
