@@ -58,6 +58,8 @@ console.log('\n--- the derivation reads motion the client already has ---')
   check(derive({ grounded: false, vel: { x: 0n, y: 0n, z: FX(-4) } }) === 'fall', 'falling is fall')
   check(derive({ ...still, climbing: true }) === 'climb', 'climbing is climb')
   check(derive({ ...still, climbing: true, hanging: true }) === 'hang', 'hanging from a ledge is hang, not climb')
+  check(derive({ ...still, climbing: true, hanging: true, hopping: true }) === 'hop', 'a hop off the ledge is hop, not hang')
+  check(derive({ ...still, climbing: true, hopping: true }) === 'hop', 'and so is the pull-up onto it, not climb')
   check(derive({ ...still, grappling: true }) === 'grapple', 'grappling is grapple')
 
   // Precedence, and it is the reason CONDITIONS is ordered: swinging while

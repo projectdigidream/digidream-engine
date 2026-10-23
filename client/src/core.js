@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 20
-const BUF32_LEN = 21
+const BUF32_LEN = 22
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -23,7 +23,7 @@ export const IDX = {
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20, HOPPING: 21
 }
 
 // A camera path's header, mirroring PATH32_* in client/wasm/bindings.cpp. Its
@@ -881,6 +881,7 @@ export class WasmWorld {
       attackCooldownLeft: u32[b32 + IDX.ATK_CD],
       climbing: u32[b32 + IDX.CLIMBING] !== 0,
       hanging: u32[b32 + IDX.HANGING] !== 0,
+      hopping: u32[b32 + IDX.HOPPING] !== 0,
       coyote: i64[b64 + IDX.COYOTE],
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
@@ -935,6 +936,7 @@ export class WasmWorld {
     u32[b32 + IDX.ATK_CD] = s.attackCooldownLeft ?? 0
     u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
     u32[b32 + IDX.HANGING] = s.hanging ? 1 : 0
+    u32[b32 + IDX.HOPPING] = s.hopping ? 1 : 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
     u32[b32 + IDX.GROUNDED] = s.grounded ? 1 : 0

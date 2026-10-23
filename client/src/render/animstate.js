@@ -45,7 +45,7 @@
 // while walking is an attack animation, not a walk one.
 export const CONDITIONS = [
   'death', 'pain', 'attack',
-  'grapple', 'hang', 'climb', 'fly', 'hover',
+  'grapple', 'hop', 'hang', 'climb', 'fly', 'hover',
   'jump', 'fall', 'land',
   'crouch', 'run', 'walk', 'idle'
 ]
@@ -59,7 +59,7 @@ export const CONDITIONS = [
 // idle. A module that draws more points `when` at the numbers it drew.
 const DEFAULTS = {
   idle: 0, crouch: 0, land: 0,
-  walk: 1, run: 1, jump: 1, fall: 1, fly: 1, hover: 1, grapple: 1, climb: 1, hang: 1,
+  walk: 1, run: 1, jump: 1, fall: 1, fly: 1, hover: 1, grapple: 1, climb: 1, hang: 1, hop: 1,
   attack: 2,
   pain: 3,
   death: 4
@@ -96,6 +96,9 @@ export function derive (m) {
   if (m.grappling) return 'grapple'
   // Hanging from a ledge (ledge_grab) before climbing a wall: both climb,
   // and the ledge is the more specific.
+  // A hop off a ledge (its small hop, or the pull-up onto it) before the
+  // hang it starts from: JUMP on a ledge plays `hop`, not `jump`.
+  if (m.hopping) return 'hop'
   if (m.hanging) return 'hang'
   if (m.climbing) return 'climb'
   if (m.flying) return 'fly'

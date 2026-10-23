@@ -296,6 +296,10 @@ struct MoveState {
     // On a LEDGE rather than a wall (MoveParams::ledge_grab): climbing, held
     // still, waiting for JUMP to hop up. The `hang` animation condition.
     bool hanging = false;
+    // Off a ledge by JUMP rather than by a jump (MoveParams::ledge_grab): the
+    // small hop that catches it again, or the pull-up onto it. The `hop`
+    // animation condition, which stands in for `jump` there.
+    bool hopping = false;
     // Coyote time left (MoveParams::coyote_time): full on the ground, running
     // down in the air. Hashed and in SelfBlock, as every timer here is.
     fx   coyote_timer{};

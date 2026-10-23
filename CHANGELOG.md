@@ -16,6 +16,10 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **A `hop` animation off a ledge**: JUMP while hanging plays `hop`
+  (`avatar <id> when hop state <n>`) instead of `jump`, for the small hop
+  that catches the ledge again and for the pull-up onto it. It falls back to
+  `jump`'s state when a catalogue draws none. Leaping off is still a jump.
 - **The studio's Play can show the colliders**: a launch with `colliders` opens
   the game with `?colliders=1`, in the desktop and Android shells.
 

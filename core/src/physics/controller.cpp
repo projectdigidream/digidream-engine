@@ -70,6 +70,7 @@ void handoff_to_standard(MoveState& st, fx3& vel, fx3 carried_velocity) noexcept
     st.mode = ControllerMode::Standard;
     st.climbing = false;
     st.hanging = false;
+    st.hopping = false;
     st.grappling = false;
     st.grapple_pulling = false;
     st.hovering = false;
@@ -199,6 +200,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
             if (st.hanging && jump_pressed) {
                 if (v > push_grab) {
                     st.hanging = false;
+                    st.hopping = true;
                     st.jumps_used = 1;
                 } else if (v < -push_grab) {
                     st.climbing = false;
@@ -207,6 +209,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
                                                      st.climb_normal.y * p.move_speed, p.jump_impulse});
                 } else {
                     vel.z = p.jump_impulse / fx::from_int(2);
+                    st.hopping = true;
                 }
             } else if (st.hanging && (let_go || v < -push_grab)) {
                 st.climbing = false;
@@ -259,6 +262,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         if (ledge || (face && (climb_down || (p.climb_auto && into(n) > push_grab)))) {
             st.climbing = true;
             st.hanging = ledge;
+            st.hopping = false;
             st.climb_normal = n;
             vel = fx3::zero();   // grabbing the surface kills momentum
             st.jumps_used = 0;   // a wall you hold is ground enough to jump from
@@ -327,9 +331,12 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
             vel = fx3::zero();
             if (was_vz > fx::zero() || pos.z > want) {
                 vel.z = was_vz + sim::GRAVITY * dt;
-                if (vel.z <= fx::zero() && pos.z + vel.z * dt <= want) vel.z = (want - pos.z) / dt;
+                // Caught: the hop is over -- here, not when the body is exactly
+                // at the hang, which a fixed-point hair above it never is.
+                if (vel.z <= fx::zero() && pos.z + vel.z * dt <= want) { vel.z = (want - pos.z) / dt; st.hopping = false; }
             } else {
                 vel.z = fx_clamp((want - pos.z) / dt, fx::zero(), p.climb_speed);
+                st.hopping = false;   // back at the hang: the hop is over
             }
         } else if (ledge_pull) {
             vel = pos.z < ledge_top

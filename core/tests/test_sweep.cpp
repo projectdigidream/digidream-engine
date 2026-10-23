@@ -627,7 +627,7 @@ struct Ledge {
 static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
     std::printf("ledge: a jump that just misses a ledge catches it and hangs; JUMP hops, at it pulls up\n");
     struct Seen { bool hung = false; fx hang_z{}; bool still = true; fx peak{}; bool hung_after = false;
-                  fx z_after{}; i32 sector = -1; fx z{}; };
+                  fx z_after{}; i32 sector = -1; fx z{}; bool hopped = false; bool hop_after = true; };
     // `toward`: the stick at the ledge as JUMP is pressed while hanging.
     auto run = [](fx h, bool grab, bool toward) {
         static World w;
@@ -649,16 +649,19 @@ static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
             if (t == 70) { seen.hung = g.mv.hanging; seen.hang_z = g.pos.z; }
             if (t > 70 && t < 120 && g.pos.z != seen.hang_z) seen.still = false;
             if (t > 120 && g.pos.z > seen.peak) seen.peak = g.pos.z;
+            if (t > 120 && t < 150 && g.mv.hopping) seen.hopped = true;
             if (t == 200) { seen.hung_after = g.mv.hanging; seen.z_after = g.pos.z; }
         }
         seen.sector = w.agent(a).mv.sector;
         seen.z = w.agent(a).pos.z;
+        seen.hop_after = w.agent(a).mv.hopping;
         return seen;
     };
     const Seen hop = run(F(3), true, false);
     const Seen up = run(F(3), true, true);
     const Seen off = run(F(3), false, false);
     const Seen far = run(F(5), true, false);
+    std::printf("  hop flag: JUMP alone %d then %d; JUMP at it %d then %d\n", hop.hopped, hop.hop_after, up.hopped, up.hop_after);
     std::printf("  ledge 3 up: hanging %d at %.2f (still %d); JUMP alone: up to %.2f, hanging again %d at %.2f;"
                 " JUMP at it: sector %d at %.2f; switched off: sector %d; 5 up: hanging %d\n",
                 hop.hung, hop.hang_z.raw / 4294967296.0, hop.still, hop.peak.raw / 4294967296.0,
@@ -672,6 +675,10 @@ static void test_a_ledge_is_caught_hung_from_and_hopped_onto() {
     CHECK(hop.hung_after && hop.z_after == hop.hang_z && hop.sector == 0);
     // JUMP with the stick at it: up onto the ledge.
     CHECK(up.sector == 1 && up.z == F(3));
+    // Both are hops (the `hop` animation, not `jump`), over once caught or on it.
+    CHECK(hop.hopped && !hop.hop_after);
+    CHECK(up.hopped && !up.hop_after);
+    CHECK(!off.hopped);                            // CONTROL: no ledge, no hop
     CHECK(!off.hung && off.sector == 0);           // CONTROL: off, the jump just falls back
     CHECK(!far.hung);                              // CONTROL: out of reach is out of reach
 }

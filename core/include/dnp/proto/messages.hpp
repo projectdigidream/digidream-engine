@@ -350,6 +350,8 @@ inline constexpr u16 ANCHORED  = 1u << 5;
 inline constexpr u16 ARMED     = 1u << 6;
 // Climbing on a ledge rather than a wall: hanging (MoveState::hanging).
 inline constexpr u16 HANGING   = 1u << 7;
+// Off a ledge by JUMP: its small hop, or the pull-up (MoveState::hopping).
+inline constexpr u16 HOPPING   = 1u << 8;
 }  // namespace state_flag
 
 inline constexpr u16 SNAP_RESYNC_REQUIRED = 1u << 0;

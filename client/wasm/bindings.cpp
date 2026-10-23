@@ -76,7 +76,8 @@ constexpr int BUF32_ATK_HELD  = 17;
 constexpr int BUF32_ATK_LEFT  = 18;
 constexpr int BUF32_ATK_CD    = 19;
 constexpr int BUF32_HANGING   = 20;
-constexpr int BUF32_LEN       = 21;
+constexpr int BUF32_HOPPING   = 21;
+constexpr int BUF32_LEN       = 22;
 
 // A camera path's header (design 4.1). Its OWN four slots, not appended to the
 // agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
@@ -1096,6 +1097,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_GRAP_HELD] = m.grapple_held ? 1u : 0u;
     out32[BUF32_CLIMBING]  = m.climbing ? 1u : 0u;
     out32[BUF32_HANGING]   = m.hanging ? 1u : 0u;
+    out32[BUF32_HOPPING]   = m.hopping ? 1u : 0u;
     out32[BUF32_GRAPPLING] = m.grappling ? 1u : 0u;
     out32[BUF32_GRAP_PULL] = m.grapple_pulling ? 1u : 0u;
     out32[BUF32_GROUNDED]  = m.grounded ? 1u : 0u;
@@ -1146,6 +1148,7 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.grapple_held = in32[BUF32_GRAP_HELD] != 0;
     m.climbing = in32[BUF32_CLIMBING] != 0;
     m.hanging = in32[BUF32_HANGING] != 0;
+    m.hopping = in32[BUF32_HOPPING] != 0;
     m.coyote_timer = fx::from_raw(in64[BUF64_COYOTE]);
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;

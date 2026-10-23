@@ -197,6 +197,7 @@ export class Predictor {
       anchored: (sb.stateFlags & STATE_FLAG.ANCHORED) !== 0,
       climbing: (sb.stateFlags & STATE_FLAG.CLIMBING) !== 0,
       hanging: (sb.stateFlags & STATE_FLAG.HANGING) !== 0,
+      hopping: (sb.stateFlags & STATE_FLAG.HOPPING) !== 0,
       coyote: sb.coyote,
       grappling: (sb.stateFlags & STATE_FLAG.GRAPPLING) !== 0,
 

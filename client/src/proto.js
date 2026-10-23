@@ -174,7 +174,9 @@ export const STATE_FLAG = {
   // The body holds weapons: the self block carries the weapon machine.
   ARMED: 1 << 6,
   // Climbing on a ledge rather than a wall: hanging.
-  HANGING: 1 << 7
+  HANGING: 1 << 7,
+  // Off a ledge by JUMP: its hop, or the pull-up.
+  HOPPING: 1 << 8
 }
 
 // No weapon asked for, in an input frame's `weapon` (sim::NO_WEAPON).
