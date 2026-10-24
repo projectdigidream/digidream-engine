@@ -169,6 +169,10 @@ graph_vocab = {
       doc = "How far above the head a ledge's top may be and still be caught." },
     { name = "coyote_time", type = "number", access = "read_write", of = "movement",
       doc = "Seconds after walking off an edge that the ground jump is still there." },
+    { name = "variable_jump", type = "bool", access = "read_write", of = "movement",
+      doc = "A jump is as high as JUMP is held: letting go early cuts it short." },
+    { name = "jump_release_keep", type = "number", access = "read_write", of = "movement",
+      doc = "How much of the rising speed is kept when JUMP is let go early (0.5; 1 cuts nothing)." },
   },
   graph_fields = {
     { name = "graph", type = "int",

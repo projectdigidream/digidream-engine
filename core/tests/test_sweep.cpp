@@ -726,8 +726,39 @@ static void test_coyote_time_runs_out() {
     CHECK(long_coyote);     // CONTROL: it is the time, not the fall, that spends it
 }
 
+// VARIABLE JUMP: in the open middle of room 0, JUMP held `hold` ticks; the
+// highest the feet get. Let go early, the rise is cut; held, the full jump.
+static void test_a_variable_jump_follows_the_press() {
+    std::printf("variable jump: a jump is as high as JUMP is held\n");
+    auto peak = [](bool on, u32 hold) {
+        static World w;
+        static std::unique_ptr<Ledge> L;
+        L = std::make_unique<Ledge>(F(1));
+        w.reset();
+        L->attach(w);
+        const u32 a = w.spawn(fx3{F(10), F(10), F(0)});
+        w.params_mut(a).variable_jump = on;
+        fx top{};
+        for (u32 t = 0; t < 120; ++t) {
+            proto::InputFrame f;
+            if (t >= 5 && t < 5 + hold) f.buttons = proto::button::JUMP;
+            w.set_input(a, f);
+            w.step();
+            if (w.agent(a).pos.z > top) top = w.agent(a).pos.z;
+        }
+        return top;
+    };
+    const fx tap = peak(true, 2), mid = peak(true, 8), held = peak(true, 100), off = peak(false, 2);
+    std::printf("  peak: tap %.2f, 8 ticks %.2f, held %.2f; switched off, a tap %.2f\n",
+                tap.raw / 4294967296.0, mid.raw / 4294967296.0, held.raw / 4294967296.0, off.raw / 4294967296.0);
+    CHECK(tap > fx::zero() && tap < mid && mid < held);   // the longer the press, the higher
+    CHECK(tap < held / fx::from_int(2));                  // a tap is a short hop
+    CHECK(off == held);                                   // CONTROL: off, a tap is the full jump
+}
+
 int main() {
     std::printf("== core/sweep test suite ==\n");
+    test_a_variable_jump_follows_the_press();
     test_a_platform_across_two_rooms();
     test_a_ledge_is_caught_hung_from_and_hopped_onto();
     test_coyote_time_runs_out();

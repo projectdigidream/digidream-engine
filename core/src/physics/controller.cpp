@@ -96,6 +96,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     const bool jump_pressed    = jump_down && !st.jump_held;
     const bool dash_pressed    = dash_down && !st.dash_held;
     const bool grapple_pressed = grapple_down && !st.grapple_held;
+    const bool jump_released   = !jump_down && st.jump_held;
     st.jump_held = jump_down;
     st.dash_held = dash_down;
     st.grapple_held = grapple_down;
@@ -381,6 +382,14 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
             vel.z = p.jump_impulse;
             st.jumps_used = static_cast<u8>(used + 1);
             st.grounded = false;
+        }
+        // VARIABLE JUMP (MoveParams::variable_jump): JUMP let go while the jump
+        // still rises cuts the rise, once -- the release is an edge. Only after a
+        // jump: jumps_used is 0 after a fall or a launch from the ground, and a
+        // ledge's hop is hopping.
+        if (p.variable_jump && jump_released && st.jumps_used > 0 && !st.hopping &&
+            !st.grappling && !st.grounded && vel.z > fx::zero()) {
+            vel.z = vel.z * p.jump_release_keep;
         }
 
         vel.z += sim::GRAVITY * effective_gravity_scale * dt;

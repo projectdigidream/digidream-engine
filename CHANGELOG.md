@@ -21,6 +21,11 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **A variable jump**, for a module that wants one: with `variable_jump` on,
+  letting go of JUMP while the jump still rises cuts it short, so a tap is a
+  short hop and a held press the full jump. `jump_release_keep` (0.5) is how
+  much of the rising speed is kept at the release. Off by default; double
+  jumps and wall jumps follow it too, a ledge's hop does not.
 - **A `change_player_setting` graph node**: one of the player's settings,
   chosen from a list of exactly those (jump height, speed, double jump,
   climbing, dash, ledge grab and the rest), set to a value, added to or

@@ -1198,7 +1198,9 @@
             "climb_auto",
             "ledge_grab",
             "ledge_reach",
-            "coyote_time"
+            "coyote_time",
+            "variable_jump",
+            "jump_release_keep"
           ]
         },
         {
@@ -3807,6 +3809,20 @@
       "access": "read_write",
       "doc": "Seconds after walking off an edge that the ground jump is still there.",
       "name": "coyote_time",
+      "of": "movement",
+      "type": "number"
+    },
+    {
+      "access": "read_write",
+      "doc": "A jump is as high as JUMP is held: letting go early cuts it short.",
+      "name": "variable_jump",
+      "of": "movement",
+      "type": "bool"
+    },
+    {
+      "access": "read_write",
+      "doc": "How much of the rising speed is kept when JUMP is let go early (0.5; 1 cuts nothing).",
+      "name": "jump_release_keep",
       "of": "movement",
       "type": "number"
     }

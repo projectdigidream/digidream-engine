@@ -224,6 +224,12 @@ struct MoveParams {
     // there, in seconds. After it, a body that fell rather than jumped has
     // spent its ground jump and has only the air jumps max_jumps leaves.
     fx   coyote_time = fx::from_frac(1, 10);
+    // A VARIABLE JUMP: letting go of JUMP while a jump still rises keeps only
+    // `jump_release_keep` of the rising speed, so the height follows how long
+    // the button is held -- a tap is a short hop, a held press the full jump.
+    // Off, every jump is the full one.
+    bool variable_jump = false;
+    fx   jump_release_keep = fx::from_frac(1, 2);
 };
 
 // Runtime state the abilities carry between ticks.
