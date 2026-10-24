@@ -1622,6 +1622,41 @@ int main(int argc, char** argv) {
         CHECK(look[pl].remaps == 1 && look[pl].from[0] == 2 && look[pl].to[0] == 14);
     }
 
+    // ================================================================
+    // CHANGE ONE PLAYER SETTING: chosen from the player's settings only; set,
+    // add or multiply; for good or for a while.
+    std::printf("-- change_player_setting --\n");
+    {
+        CHECK(load_graph(R"({ "graph": 1, "name": "tune",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "tune" },
+                     { "id": "a", "type": "change_player_setting", "setting": "jump_impulse", "value": 12 },
+                     { "id": "b", "type": "change_player_setting", "setting": "max_jumps", "value": 1, "how": "add" },
+                     { "id": "c", "type": "change_player_setting", "setting": "move_speed", "value": 2,
+                       "how": "multiply", "seconds": 1 } ],
+          "links": [ ["go.then", "a.in"], ["a.then", "b.in"], ["b.then", "c.in"] ] })"));
+        const physics::MoveParams before = effects.compute(player);
+        CHECK(run("graphs.call('tune', dnp.players()[1], nil)", "tuning"));
+        ticks(2);
+        const physics::MoveParams during = effects.compute(player);
+        ticks(70);
+        effects.expire(g_world->tick());   // as the server does every tick; this harness does not
+        const physics::MoveParams later = effects.compute(player);
+        std::printf("  jump_impulse %g -> %g, max_jumps %d -> %d, move_speed %g -> %g, a second on %g\n",
+                    before.jump_impulse.raw / 4294967296.0, during.jump_impulse.raw / 4294967296.0,
+                    before.max_jumps, during.max_jumps, before.move_speed.raw / 4294967296.0,
+                    during.move_speed.raw / 4294967296.0, later.move_speed.raw / 4294967296.0);
+        CHECK(during.jump_impulse == F(12));                                  // set
+        CHECK(during.max_jumps == before.max_jumps + 1);                      // add
+        CHECK(during.move_speed == before.move_speed * F(2));                 // multiply...
+        CHECK(later.move_speed == before.move_speed);                         // ...for a second
+        CHECK(later.jump_impulse == F(12));                                   // CONTROL: a set with no seconds stays
+        // CONTROL: a setting that is not a player setting is refused at load.
+        CHECK(!load_graph(R"({ "graph": 1, "name": "tunebad",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "x" },
+                     { "id": "a", "type": "change_player_setting", "setting": "hp", "value": 5 } ],
+          "links": [ ["go.then", "a.in"] ] })"));
+    }
+
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

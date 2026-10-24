@@ -1147,6 +1147,106 @@
     {
       "args": [
         {
+          "doc": "Which of the player's settings: a jump's height, the speed, double jump, climbing, dash, ledge grab... The list is the player's settings only.",
+          "name": "setting",
+          "type": "enum",
+          "values": [
+            "radius",
+            "height",
+            "move_speed",
+            "ground_accel",
+            "air_accel",
+            "friction",
+            "gravity_scale",
+            "jump_impulse",
+            "max_jumps",
+            "climb_enabled",
+            "climb_speed",
+            "hover_enabled",
+            "hover_fuel_max",
+            "hover_drain",
+            "hover_gravity_scale",
+            "hover_vspeed_clamp",
+            "flight_enabled",
+            "flight_fuel_max",
+            "flight_drain",
+            "flight_speed",
+            "shared_fuel",
+            "dash_speed",
+            "dash_duration",
+            "dash_cooldown",
+            "max_dashes",
+            "grapple_enabled",
+            "grapple_range",
+            "swing_damping",
+            "pull_speed",
+            "attack_reach",
+            "attack_half_arc",
+            "attack_sweep_from",
+            "attack_sweep_to",
+            "attack_ticks",
+            "attack_min_reach",
+            "attack_cooldown",
+            "turn_speed",
+            "input_scale",
+            "attack_enabled",
+            "aim_snap",
+            "attack_pitch_from",
+            "attack_pitch_to",
+            "attack_half_pitch",
+            "move_relative",
+            "climb_auto",
+            "ledge_grab",
+            "ledge_reach",
+            "coyote_time"
+          ]
+        },
+        {
+          "doc": "The new value, or how much to add or multiply by. An on/off setting takes 1 or 0.",
+          "name": "value",
+          "type": "number"
+        },
+        {
+          "doc": "Set it to the value (the default), add the value to it, or multiply it.",
+          "name": "how",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "set",
+            "add",
+            "multiply"
+          ]
+        },
+        {
+          "doc": "For a while only: it goes back after this many seconds. Empty: until changed again.",
+          "name": "seconds",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "name": "everyone",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "value"
+      ],
+      "data_out": [],
+      "doc": "Change one of a player's settings -- how high they jump, how fast they run, whether they can climb -- for good or for a while. A player only.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "change_player_setting"
+    },
+    {
+      "args": [
+        {
           "doc": "Picked on the map.",
           "name": "sector",
           "optional": true,

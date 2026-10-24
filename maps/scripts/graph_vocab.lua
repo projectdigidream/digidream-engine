@@ -509,6 +509,25 @@ graph_vocab = {
       doc = "Redefine one of a player's animations: wherever it would play `state`, " ..
             "it plays `to` -- its layers too. An attack that looks different with each " ..
             "weapon. Eight at once. A player only." },
+    -- ONE PLAYER SETTING, chosen from a list of the player's settings and
+    -- nothing else (the movement properties below fill `values`, so a new one
+    -- appears here by itself). The engine's own effects underneath: replicated
+    -- and predicted, so the player feels it at once.
+    { name = "change_player_setting", category = "entity",
+      args = { { name = "setting", type = "enum", values = {},
+                 doc = "Which of the player's settings: a jump's height, the speed, double jump, " ..
+                       "climbing, dash, ledge grab... The list is the player's settings only." },
+               { name = "value", type = "number",
+                 doc = "The new value, or how much to add or multiply by. An on/off setting takes 1 or 0." },
+               { name = "how", type = "enum", values = { "set", "add", "multiply" }, optional = true,
+                 doc = "Set it to the value (the default), add the value to it, or multiply it." },
+               { name = "seconds", type = "number", optional = true,
+                 doc = "For a while only: it goes back after this many seconds. Empty: until changed again." },
+               { name = "everyone", type = "bool", optional = true } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity", "value" }, data_out = {},
+      doc = "Change one of a player's settings -- how high they jump, how fast they run, " ..
+            "whether they can climb -- for good or for a while. A player only." },
 
     -- sectors
     { name = "open_door", category = "sector", level_only = true,
@@ -1050,3 +1069,13 @@ graph_vocab = {
             "replayed level draws the same. Once per run: two readers see one draw." },
   },
 }
+
+-- change_player_setting's list: the player's settings, which are exactly the
+-- movement properties, in their own order.
+for _, n in ipairs(graph_vocab.nodes) do
+  if n.name == "change_player_setting" then
+    for _, p in ipairs(graph_vocab.properties) do
+      if p.of == "movement" then n.args[1].values[#n.args[1].values + 1] = p.name end
+    end
+  end
+end

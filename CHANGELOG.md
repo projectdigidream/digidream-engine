@@ -21,6 +21,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **A `change_player_setting` graph node**: one of the player's settings,
+  chosen from a list of exactly those (jump height, speed, double jump,
+  climbing, dash, ledge grab and the rest), set to a value, added to or
+  multiplied, for good or for a number of seconds. It uses the engine's own
+  effects, so the player's client predicts it at once. A setting that isn't
+  a player's is refused when the graph loads.
 - **The camera's height, over the player**: `camera_height` sets how high
   above the player's feet the camera sits; `distance` is then how far behind,
   and the vertical angle follows from the two. `aim_height` sets how high

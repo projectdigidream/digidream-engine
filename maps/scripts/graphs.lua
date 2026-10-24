@@ -528,6 +528,33 @@ function EXEC.set_animation_for(g, n, ev, pull)
   return "then"
 end
 
+-- One player setting (graph_vocab's change_player_setting): set, add or
+-- multiply, for good or for `seconds`. "Set for good" replaces the last set
+-- of the same setting, as set_var does; an add or a multiply stacks, which is
+-- what adding twice means. A player only: a monster has no settings to change.
+local HOW = { set = "set", add = "add", multiply = "mul" }
+function EXEC.change_player_setting(g, n, ev, pull)
+  local v = tonumber(pull("value"))
+  local p = PROPERTY[n.setting]
+  if v == nil or p == nil or p.of ~= "movement" then return "then" end
+  local op = HOW[n.how or "set"] or "set"
+  local text = string.format("%.6f", v):gsub("0+$", ""):gsub("%.$", "")
+  if p.type ~= "number" then text = tostring(math.floor(v + 0.5)) end
+  local targets = n.everyone and dnp.players() or { entity_of(pull, ev, nil, g.data_src[n.id]) }
+  for _, e in ipairs(targets) do
+    if e ~= nil and e:valid() and e:kind() == 0 then
+      if op == "set" and n.seconds == nil then
+        prop_set(e, n.setting, v)
+      elseif n.seconds ~= nil then
+        e:add_effect(n.setting, op, text, ticks_of(n.seconds))
+      else
+        e:add_effect(n.setting, op, text)
+      end
+    end
+  end
+  return "then"
+end
+
 function EXEC.play_sound(g, n, ev, pull)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   if e ~= nil and dnp.sound ~= nil then dnp.sound(n.sound, e) end
