@@ -10,6 +10,7 @@
 // the shim is one code path. Socket handles are kept as int, as they always
 // were here: a Winsock SOCKET is a small kernel handle in practice, and
 // INVALID_SOCKET converts to -1, which is what the checks below test.
+#ifndef __EMSCRIPTEN__   // the web build has no socket: see the end of this file
 #ifdef _WIN32
 // WSAPoll and inet_pton exist from Windows Vista; MinGW declares them only when
 // told the target is at least that new. Windows 10 is the floor anyway.
@@ -28,10 +29,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
+#endif
 
 namespace dnp::net {
 namespace {
 
+#ifndef __EMSCRIPTEN__
 #ifdef _WIN32
 using sock_poll_t = WSAPOLLFD;
 int  sock_close(int fd) { return ::closesocket(static_cast<SOCKET>(fd)); }
@@ -80,6 +83,7 @@ sock_poll_t poll_entry(int fd, short events) {
 void set_int_option(int fd, int level, int name, int value) {
     ::setsockopt(fd, level, name, reinterpret_cast<const char*>(&value), sizeof(value));
 }
+#endif  // !__EMSCRIPTEN__
 
 u32 read_u32_le(const u8* p) {
     return static_cast<u32>(p[0]) | (static_cast<u32>(p[1]) << 8) |
@@ -97,6 +101,7 @@ void write_u32_le(u8* p, u32 v) {
 
 LinkServer::~LinkServer() { close(); }
 
+#ifndef __EMSCRIPTEN__
 bool LinkServer::listen(u16 port, const char* host) {
     if (!sock_startup()) return false;
     listen_fd_ = static_cast<int>(::socket(AF_INET, SOCK_STREAM, 0));
@@ -192,6 +197,12 @@ void LinkServer::read_edge() {
         return;
     }
 
+    parse_in();
+}
+
+#endif  // !__EMSCRIPTEN__
+
+void LinkServer::parse_in() {
     // Drain complete frames. A TCP read boundary is not a frame boundary, so
     // this loop is the only thing standing between us and a parser that works
     // on loopback and fails under fragmentation.
@@ -234,6 +245,7 @@ void LinkServer::read_edge() {
     if (off > 0) in_.erase(in_.begin(), in_.begin() + static_cast<long>(off));
 }
 
+#ifndef __EMSCRIPTEN__
 void LinkServer::flush_out() {
     size_t sent = 0;
     while (sent < out_.size()) {
@@ -248,6 +260,8 @@ void LinkServer::flush_out() {
     }
     if (sent > 0) out_.erase(out_.begin(), out_.begin() + static_cast<long>(sent));
 }
+
+#endif  // !__EMSCRIPTEN__
 
 bool LinkServer::send_frame(LinkFrame type, u32 session, const u8* data, size_t len) {
     if (edge_fd_ < 0 || len > LINK_MAX_PAYLOAD) return false;
@@ -284,6 +298,7 @@ void LinkServer::close_session(u32 session, u16 reason) {
     send_frame(LinkFrame::SessionClose, session, body, sizeof(body));
 }
 
+#ifndef __EMSCRIPTEN__
 bool LinkServer::poll(int timeout_ms) {
     if (listen_fd_ < 0) return false;
 
@@ -308,6 +323,48 @@ bool LinkServer::poll(int timeout_ms) {
         if (edge_fd_ >= 0 && (fds[1].revents & POLLIN)) read_edge();
     }
     return true;
+}
+
+#endif  // !__EMSCRIPTEN__
+
+// THE WEB BUILD (docs/WEB.md): no socket. The page is the edge, connected from
+// the start; its link bytes come in through feed() and go out through take(),
+// moved by the Worker that hosts this server, and poll() parses what came in.
+#ifdef __EMSCRIPTEN__
+bool LinkServer::listen(u16, const char*) {
+    listen_fd_ = 0;
+    edge_fd_ = 0;
+    in_.reserve(1 << 16);
+    out_.reserve(1 << 16);
+    return true;
+}
+
+void LinkServer::close() { drop_edge(); listen_fd_ = -1; }
+
+void LinkServer::drop_edge() {
+    if (edge_fd_ >= 0) std::fprintf(stderr, "[link] the page's link dropped\n");
+    edge_fd_ = -1;
+    in_.clear();
+    out_.clear();
+}
+
+bool LinkServer::poll(int) {
+    if (listen_fd_ < 0) return false;
+    if (edge_fd_ >= 0) parse_in();
+    return true;
+}
+#endif
+
+void LinkServer::feed(const u8* data, size_t len) {
+    if (edge_fd_ >= 0) in_.insert(in_.end(), data, data + len);
+}
+
+size_t LinkServer::take(u8* out, size_t cap) {
+    const size_t n = out_.size() < cap ? out_.size() : cap;
+    if (n == 0) return 0;
+    std::memcpy(out, out_.data(), n);
+    out_.erase(out_.begin(), out_.begin() + static_cast<long>(n));
+    return n;
 }
 
 }  // namespace dnp::net

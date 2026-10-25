@@ -36,6 +36,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **The server in the page, for single-player web games**: the real server,
+  C++ and Lua, compiled to WebAssembly and run in a Web Worker beside the
+  page. Nothing runs anywhere else, so any static host can serve the game,
+  GitHub Pages included. `?local` on the page turns it on. With it, the dev
+  server alone, given its `--module`s, plays a whole game: the DOOM II module
+  declared its 32 levels and played MAP01 with its 31 monsters, with no
+  mispredictions.
+  `scripts/build_server_web.sh` builds the server. Docs: docs/WEB.md. Not yet
+  done: saving to the browser, and a web target in the Packager.
 - **A test stack your own devices reach from anywhere**: `scripts/run_stack.sh
   --tailscale` serves the page and the game over this machine's Tailscale name,
   with its real certificate (`tailscale cert`), so a phone on mobile data with

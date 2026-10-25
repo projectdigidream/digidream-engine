@@ -480,6 +480,21 @@ suite_lua51 () {
   fi
 }
 
+# The server in the page (docs/WEB.md): the real server built to wasm, played.
+suite_web () {
+  need_maps
+  # The single-player web build runs the server in a Worker. It is the same
+  # server, so what this adds is the build itself (em++, Lua 5.1 for wasm,
+  # the socketless link) and a session against it: a HELLO answered with
+  # WELCOME and the map, snapshots at 30 a second.
+  if command -v em++ >/dev/null; then
+    ./scripts/build_server_web.sh >/dev/null
+    node client/test/server_host.test.js | tail -3
+  else
+    echo "  skip web (source emsdk/emsdk_env.sh)"
+  fi
+}
+
 # The core under ASan + UBSan.
 suite_sanitizers () {
   # Not redundant with the tests above. UBSan is what catches undefined behaviour
@@ -1113,7 +1128,7 @@ suite_fps () {
 
 # --- which, and in what order ----------------------------------------------------
 
-ALL=(guards core tools lua lua51 sanitizers determinism client studio app browser stack fps)
+ALL=(guards core tools lua lua51 web sanitizers determinism client studio app browser stack fps)
 QUICK=(guards core tools lua client)
 
 if [[ "${1:-}" == "--list" ]]; then

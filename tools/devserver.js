@@ -11,9 +11,9 @@
 //
 import { createServer } from 'node:http'
 import { createServer as createTlsServer } from 'node:https'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, normalize, extname, isAbsolute } from 'node:path'
+import { basename, dirname, join, normalize, extname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -212,6 +212,37 @@ async function findMap (name) {
 // last says exactly where it stopped.
 const log = (code, url) => console.log(`[dev] ${code} ${url}`)
 
+// THE SERVER IN THE PAGE (?local, docs/WEB.md): the files the server reads, as
+// [published path, file]: of every --module its module.txt, all of maps/ and
+// assets/props.txt; with no module, the engine's test level and props, as
+// run_stack.sh would start it. Only these are served under /game/.
+async function gameFiles () {
+  const out = []
+  const walk = async (dir, rel) => {
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      if (e.name.startsWith('.')) continue
+      if (e.isDirectory()) await walk(join(dir, e.name), `${rel}/${e.name}`)
+      else out.push([`${rel}/${e.name}`, join(dir, e.name)])
+    }
+  }
+  if (MODULES.length) {
+    for (const m of MODULES) {
+      const name = basename(m)
+      out.push([`${name}/module.txt`, join(m, 'module.txt')])
+      if (existsSync(join(m, 'maps'))) await walk(join(m, 'maps'), `${name}/maps`)
+      if (existsSync(join(m, 'assets', 'props.txt'))) out.push([`${name}/assets/props.txt`, join(m, 'assets', 'props.txt')])
+    }
+  } else {
+    const built = join(ROOT, 'build', process.arch === 'arm64' ? 'arm64' : 'x86_64')
+    for (const f of await readdir(built)) if (/\.(dnpm|lua|json)$/.test(f)) out.push([`maps/${f}`, join(built, f)])
+    out.push(['assets/props.txt', join(ROOT, 'assets', 'props.txt')])
+  }
+  return out
+}
+const gameArgs = () => MODULES.length
+  ? MODULES.flatMap((m) => ['--module', `/game/${basename(m)}`])
+  : ['--map', '/game/maps/test.dnpm']
+
 const serve = (handler) => TLS ? createTlsServer(TLS, handler) : createServer(handler)
 serve(async (req, res) => {
   try {
@@ -223,6 +254,29 @@ serve(async (req, res) => {
     // key sits in the same directory and is deliberately not reachable through
     // any mount, which is why this is one named route rather than serving
     // certs/.
+    // The link framing, at the root as the shipped shells have it, for the
+    // page's server Worker (client/src/server_worker.js).
+    if (req.url === '/framing.js') {
+      log(200, req.url)
+      res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' })
+        .end(await readFile(join(ROOT, 'server', 'edge', 'src', 'framing.js')))
+      return
+    }
+    if (req.url.split('?')[0] === '/game/manifest.json') {
+      const files = await gameFiles()
+      log(200, req.url)
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(JSON.stringify({ root: '/game', args: gameArgs(), files: files.map(([r]) => r) }))
+      return
+    }
+    if (req.url.startsWith('/game/')) {
+      const rel = decodeURIComponent(req.url.split('?')[0].slice('/game/'.length))
+      const hit = (await gameFiles()).find(([r]) => r === rel)
+      log(hit ? 200 : 404, req.url)
+      if (!hit) { res.writeHead(404).end('not a file the game\'s server reads'); return }
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(hit[1]))
+      return
+    }
     if (req.url === '/certhash' && TLS) { log(404, req.url); res.writeHead(404).end('a real certificate'); return }
     if (req.url === '/certhash') {
       const p = join(ROOT, 'server', 'edge', 'certs', 'cert-hash.json')

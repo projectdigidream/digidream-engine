@@ -45,17 +45,19 @@ export const hasLocalTransport = () =>
   typeof window !== 'undefined' && !!window.dnp
 
 export class LocalConnection {
+  // `bridge`: the desktop shell's window.dnp by default; the page's server
+  // Worker (net_worker.js) when the server runs in the page.
   constructor ({ onControl = () => {}, onSnapshot = () => {},
-                 onClose = () => {} } = {}) {
+                 onClose = () => {}, bridge } = {}) {
     this.onControl = onControl
     this.onSnapshot = onSnapshot
     this.onClose = onClose
     this.closed = false
-    this.bridge = typeof window !== 'undefined' ? window.dnp : null
+    this.bridge = bridge ?? (typeof window !== 'undefined' ? window.dnp : null)
   }
 
   async open () {
-    if (!this.bridge) throw new Error('no local transport bridge (not the desktop shell)')
+    if (!this.bridge) throw new Error('no local transport bridge (not the desktop shell, no server in the page)')
 
     this.bridge.onMessage((msg) => {
       if (this.closed) return

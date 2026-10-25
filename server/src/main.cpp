@@ -4803,8 +4803,88 @@ static void dnp_untag_heap() {}
 static volatile std::sig_atomic_t g_stop_requested = 0;
 static void on_stop_signal(int) { g_stop_requested = 1; }
 
+// When the next tick is due, and how many there have been.
+struct TickClock {
+    std::chrono::nanoseconds period{};
+    Clock::time_point next{};
+    u32 count = 0;
+};
+
+// THE TICK, once it is due: the world, the snapshots every few ticks, and the
+// perf report. The native loop at the end of main calls it between polls of
+// the link; the web build (docs/WEB.md), from the page's Worker (dnp_web_pump).
+static void run_due_tick(Server& srv, TickClock& tc) {
+    if (Clock::now() < tc.next) return;
+    // The WHOLE tick, measured from out here, so the report cannot
+    // quietly omit a phase that was added later: if lua + step + snap
+    // stops adding up to this, something is being done that nothing is
+    // counting, and the report says so by not summing.
+    const u64 t_tick0 = srv.perf.every ? Server::now_us() : 0;
+    srv.tick();
+    u64 snap_us = 0;
+    if (++tc.count % srv.snapshot_divisor == 0) {
+        const u64 t_snap0 = srv.perf.every ? Server::now_us() : 0;
+        srv.send_snapshots();
+        if (srv.perf.every) snap_us = Server::now_us() - t_snap0;
+    }
+    if (srv.perf.every) {
+        const u64 whole = Server::now_us() - t_tick0;
+        if (whole > srv.perf.worst_total_us) srv.perf.worst_total_us = whole;
+        srv.perf_report(snap_us);
+    }
+
+    tc.next += tc.period;
+    // If the loop fell far behind (a long stall, a debugger break), do
+    // NOT try to catch up by running a burst of ticks: that would make
+    // the server briefly simulate faster than the client predicts and
+    // guarantee a wave of mispredictions. Drop the missed time instead.
+    const auto behind = Clock::now() - tc.next;
+    if (behind > std::chrono::milliseconds(250)) {
+        std::fprintf(stderr, "[srv] fell %lld ms behind; dropping missed ticks\n",
+                     static_cast<long long>(
+                         std::chrono::duration_cast<std::chrono::milliseconds>(behind).count()));
+        tc.next = Clock::now() + tc.period;
+    }
+}
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+// THE WEB BUILD's server, which main leaves running (docs/WEB.md).
+static Server* g_web_srv = nullptr;
+static TickClock g_web_clock;
+
+extern "C" {
+// One turn, from the page's Worker: the link bytes that came in are parsed, and
+// a tick runs if one is due. The milliseconds until the next one, for the
+// Worker's timer; -1 when there is no server.
+EMSCRIPTEN_KEEPALIVE int dnp_web_pump() {
+    if (g_web_srv == nullptr || !g_web_srv->link.poll(0)) return -1;
+    run_due_tick(*g_web_srv, g_web_clock);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(g_web_clock.next - Clock::now()).count();
+    return ms < 0 ? 0 : static_cast<int>(ms);
+}
+// Link bytes from the page (server/edge/src/framing.js), and for it.
+EMSCRIPTEN_KEEPALIVE void dnp_web_feed(const u8* data, unsigned len) {
+    if (g_web_srv) g_web_srv->link.feed(data, len);
+}
+EMSCRIPTEN_KEEPALIVE unsigned dnp_web_take(u8* out, unsigned cap) {
+    return g_web_srv ? static_cast<unsigned>(g_web_srv->link.take(out, cap)) : 0u;
+}
+}  // extern "C"
+#endif
+
 int main(int argc, char** argv) {
     dnp_untag_heap();
+#ifdef __EMSCRIPTEN__
+    // The web build returns from main with the server running, and callMain's
+    // argv is on a stack that is then reused -- while the server keeps
+    // pointers into it (a map's path, the spawn tag, the state directory).
+    static std::vector<std::string> web_args(argv, argv + argc);
+    static std::vector<char*> web_argv;
+    for (std::string& a : web_args) web_argv.push_back(&a[0]);
+    web_argv.push_back(nullptr);
+    argv = web_argv.data();
+#endif
 
     u16 port = 34500;
     // Repeatable, and the order IS the progression: `--map a --map b` means an
@@ -4934,7 +5014,11 @@ int main(int argc, char** argv) {
         }
     }
 
+#ifdef __EMSCRIPTEN__
+    static Server srv;   // it outlives main (the web build, above)
+#else
     Server srv;
+#endif
     srv.perf.every = perf_every;
     srv.snapshot_divisor = snapshot_divisor_arg;
     // THE TIME SCALE: the flag, else the environment (so an app or a stack
@@ -5370,12 +5454,16 @@ int main(int argc, char** argv) {
     srv.link.on_control([&](u32 id, const u8* d, size_t n) { srv.on_control(id, d, n); });
     srv.link.on_datagram([&](u32 id, const u8* d, size_t n) { srv.on_datagram(id, d, n); });
 
-    auto next_tick = Clock::now() + tick_period;
-    u32 tick_counter = 0;
+    TickClock clock{tick_period, Clock::now() + tick_period, 0};
     // Stopped by a signal: the world is kept on the way out (persist server).
     std::signal(SIGINT, on_stop_signal);
     std::signal(SIGTERM, on_stop_signal);
 
+#ifdef __EMSCRIPTEN__
+    // Running: the page's Worker turns it from here (dnp_web_pump).
+    g_web_srv = &srv;
+    g_web_clock = clock;
+#else
     for (;;) {
         if (g_stop_requested) {
             std::fprintf(stderr, "[srv] stopping\n");
@@ -5383,44 +5471,13 @@ int main(int argc, char** argv) {
             break;
         }
         const auto now = Clock::now();
-        auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(next_tick - now).count();
+        auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(clock.next - now).count();
         if (wait < 0) wait = 0;
         if (wait > 50) wait = 50;
 
         if (!srv.link.poll(static_cast<int>(wait))) break;
-
-        if (Clock::now() >= next_tick) {
-            // The WHOLE tick, measured from out here, so the report cannot
-            // quietly omit a phase that was added later: if lua + step + snap
-            // stops adding up to this, something is being done that nothing is
-            // counting, and the report says so by not summing.
-            const u64 t_tick0 = srv.perf.every ? Server::now_us() : 0;
-            srv.tick();
-            u64 snap_us = 0;
-            if (++tick_counter % srv.snapshot_divisor == 0) {
-                const u64 t_snap0 = srv.perf.every ? Server::now_us() : 0;
-                srv.send_snapshots();
-                if (srv.perf.every) snap_us = Server::now_us() - t_snap0;
-            }
-            if (srv.perf.every) {
-                const u64 whole = Server::now_us() - t_tick0;
-                if (whole > srv.perf.worst_total_us) srv.perf.worst_total_us = whole;
-                srv.perf_report(snap_us);
-            }
-
-            next_tick += tick_period;
-            // If the loop fell far behind (a long stall, a debugger break), do
-            // NOT try to catch up by running a burst of ticks: that would make
-            // the server briefly simulate faster than the client predicts and
-            // guarantee a wave of mispredictions. Drop the missed time instead.
-            const auto behind = Clock::now() - next_tick;
-            if (behind > std::chrono::milliseconds(250)) {
-                std::fprintf(stderr, "[srv] fell %lld ms behind; dropping missed ticks\n",
-                             static_cast<long long>(
-                                 std::chrono::duration_cast<std::chrono::milliseconds>(behind).count()));
-                next_tick = Clock::now() + tick_period;
-            }
-        }
+        run_due_tick(srv, clock);
     }
+#endif
     return 0;
 }

@@ -61,6 +61,11 @@ public:
 
     bool edge_connected() const { return edge_fd_ >= 0; }
 
+    // THE WEB BUILD's link (no socket): bytes the page sends, appended; bytes
+    // for the page, up to `cap`, taken. Natively nothing calls them.
+    void feed(const u8* data, size_t len);
+    size_t take(u8* out, size_t cap);
+
     void on_session_open(SessionOpenFn f) { on_open_ = std::move(f); }
     void on_session_close(SessionCloseFn f) { on_close_ = std::move(f); }
     void on_datagram(MessageFn f) { on_datagram_ = std::move(f); }
@@ -72,6 +77,7 @@ private:
     void read_edge();
     void flush_out();
     void drop_edge();
+    void parse_in();
 
     int listen_fd_ = -1;
     int edge_fd_   = -1;

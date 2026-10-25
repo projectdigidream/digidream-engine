@@ -41,6 +41,7 @@ import { EntityView } from './render/entities.js'
 import { ShadowCaster } from './render/shadows.js'
 import { Connection } from './net.js'
 import { LocalConnection, hasLocalTransport } from './net_local.js'
+import { workerBridge } from './net_worker.js'
 import { Predictor } from './predictor.js'
 import { parseProps, PropRegistry } from './render/props.js'
 import { parseAtlas, pivotDisagreement } from './render/atlas.js'
@@ -89,8 +90,14 @@ let autowalkDir = 1
 // started itself, so there is nothing to name -- and no ?server= to type. The
 // transport differs; nothing after this line does (see net_local.js).
 const DESKTOP = hasLocalTransport()
+// AND A FOURTH: THE SERVER IN THE PAGE (docs/WEB.md), for a single-player game
+// with no server anywhere -- `?local`, or a page built for it (DNP_LOCAL, which
+// the web kit's index.html sets). The real server, compiled to wasm, in a
+// Worker; the desktop transport, with that Worker for its bridge (net_worker.js).
+// `?game=` names the game's server manifest (default game/manifest.json).
+const LOCAL = params.has('local') || globalThis.DNP_LOCAL === true
 const SERVER = params.get('server')
-const LIVE = SERVER !== null || DESKTOP
+const LIVE = SERVER !== null || DESKTOP || LOCAL
 const SERVER_URL = SERVER || 'https://127.0.0.1:34433/dnp'
 
 // --- the controls you can touch ----------------------------------------------
@@ -717,7 +724,7 @@ const ownWeapon = []
 // What the music was when the level began to load (the page test reads it).
 document.documentElement.dataset.levelStart = document.documentElement.dataset.music ?? 'none'
 if (LIVE) {
-  say(DESKTOP ? 'starting...' : `connecting to ${SERVER_URL}...`)
+  say(DESKTOP || LOCAL ? 'starting...' : `connecting to ${SERVER_URL}...`)
   // A development edge presents a self-signed certificate. Its hash is public
   // -- the server sends the certificate itself -- so serving the hash is not a
   // secret being leaked; the private key is never within reach of the dev
@@ -726,7 +733,7 @@ if (LIVE) {
   // The desktop shell serves no /certhash and needs none: its transport is an
   // IPC bridge with no TLS anywhere in it.
   try {
-    if (DESKTOP) throw new Error('desktop: no certificate involved')
+    if (DESKTOP || LOCAL) throw new Error('desktop or in the page: no certificate involved')
     const j = await (await fetch('/certhash')).json()
     certHash = Uint8Array.from(atob(j.sha256_base64), (c) => c.charCodeAt(0))
   } catch {
@@ -738,10 +745,11 @@ if (LIVE) {
   // One of two transports, chosen here and nowhere else. Both present the
   // same four methods and three callbacks, so everything below is written
   // once. LocalConnection ignores `url` and `certHash`.
-  const Transport = DESKTOP ? LocalConnection : Connection
+  const Transport = DESKTOP || LOCAL ? LocalConnection : Connection
   conn = new Transport({
     url: SERVER_URL,
     certHash,
+    bridge: LOCAL ? workerBridge(params.get('game') ?? 'game/manifest.json') : undefined,
     onControl (m) {
       if (m.type === MSG.WELCOME) {
         dnpStats.welcomes++

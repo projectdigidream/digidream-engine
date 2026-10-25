@@ -36,12 +36,17 @@ mkdir -p "$OUT"
 #   DNP_SERVER_EXE      the output name (default dnp-server), e.g. dnp-server.exe
 #   DNP_LUA=lua51       PUC Lua 5.1 instead of LuaJIT (scripts/setup_lua51.sh): what
 #                       the web build runs, built natively to keep scripts working on it
+#   DNP_LUA51_BUILD     which of its archives (default host; the web build's is wasm)
+#   DNP_SERVER_CXXFLAGS extra compile flags (the web build's -fwasm-exceptions)
+# scripts/build_server_web.sh is this script with all of those set for em++.
 CXX="${DNP_SERVER_CXX:-clang++}"
 LUAJIT_DIR="${DNP_LUAJIT_DIR:-$ROOT/third_party/luajit}"
 EXE="${DNP_SERVER_EXE:-dnp-server}"
+NEW=".new"
+[[ "$EXE" == *.mjs ]] && NEW=""   # em++ writes by extension: see the end
 if [[ "${DNP_LUA:-}" == "lua51" ]]; then
   LUA_INC="$ROOT/third_party/lua51/lua-5.1.5/src"
-  LUA_LIB="$ROOT/third_party/lua51/build/host/liblua.a"
+  LUA_LIB="$ROOT/third_party/lua51/build/${DNP_LUA51_BUILD:-host}/liblua.a"
 else
   LUA_INC="$LUAJIT_DIR/src"
   LUA_LIB="$LUAJIT_DIR/src/libluajit.a"
@@ -72,7 +77,7 @@ if [[ -n "${DNP_SERVER_SAN:-}" ]]; then
   echo "[build] AddressSanitizer + UBSan enabled (slower; for diagnosing a crash)"
 fi
 
-"$CXX" -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
+"$CXX" -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS ${DNP_SERVER_CXXFLAGS:-} \
   -I"$ROOT/core/include" -I"$ROOT/server/src" -I"$LUA_INC" \
   "$ROOT/core/src/math/trig.cpp" \
   "$ROOT/core/src/proto/messages.cpp" \
@@ -104,11 +109,13 @@ fi
   "$ROOT/server/src/main.cpp" \
   "$LUA_LIB" \
   -lm $LUA_EXTRA_LIBS ${DNP_SERVER_LDFLAGS:-} \
-  -o "$OUT/$EXE.new"
+  -o "$OUT/$EXE$NEW"
 
 # ATOMIC, even into the default directory. `mv` replaces the directory entry
 # while a running process keeps the inode it already opened, so a server that
-# is mid-game survives a rebuild -- where writing in place corrupts it.
-mv -f "$OUT/$EXE.new" "$OUT/$EXE"
+# is mid-game survives a rebuild -- where writing in place corrupts it. Not for
+# the web build: em++ picks what it writes by the extension, and nothing runs it
+# from here while it builds.
+[[ -z "$NEW" ]] || mv -f "$OUT/$EXE$NEW" "$OUT/$EXE"
 
 echo "[build] $OUT/$EXE"
