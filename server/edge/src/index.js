@@ -3,6 +3,7 @@
 // Edge entry point.
 //
 //   node src/index.js [--port 4433] [--upstream-port 34500] [--path /dnp]
+//                     [--cert cert.pem --key key.pem]   (a real certificate; the dev one otherwise)
 //
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -18,7 +19,7 @@ const arg = (name, fallback) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback
 }
 
-if (!existsSync(join(CERTS, 'cert.pem'))) {
+if (!arg('cert') && !existsSync(join(CERTS, 'cert.pem'))) {
   console.error('no certificate found -- run: npm run certs')
   process.exit(1)
 }
@@ -29,8 +30,8 @@ const edge = new Edge({
   path: arg('path', '/dnp'),
   upstreamHost: arg('upstream-host', '127.0.0.1'),
   upstreamPort: Number(arg('upstream-port', 34500)),
-  certPath: join(CERTS, 'cert.pem'),
-  keyPath: join(CERTS, 'key.pem')
+  certPath: arg('cert', join(CERTS, 'cert.pem')),
+  keyPath: arg('key', join(CERTS, 'key.pem'))
 })
 
 await edge.start()

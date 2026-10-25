@@ -24,6 +24,13 @@
 #
 # Then open http://localhost:8080/?server=https://127.0.0.1:34433/dnp
 #
+# --tailscale: the same stack reachable from your own devices anywhere (a phone
+# on mobile data) through Tailscale. The page and the edge both serve this
+# Mac's real certificate for its tailnet name (`tailscale cert`, fetched into
+# build/tailscale/ and renewed by Tailscale when it nears its end), so a phone
+# trusts both with nothing to accept. Needs the Tailscale app connected and
+# HTTPS certificates enabled for the tailnet (admin console, DNS).
+#
 # Three processes rather than one because that is genuinely what the
 # architecture is: the C++ server is transport-agnostic and speaks a local
 # framed socket, the edge terminates WebTransport, and the page is static. The
@@ -67,6 +74,9 @@ while [[ $i -lt ${#ARGV[@]} ]]; do
   if [[ "${ARGV[$i]}" == "--module" && $((i + 1)) -lt ${#ARGV[@]} ]]; then
     MODULE_ARGS+=(--module "${ARGV[$((i + 1))]}")
     i=$((i + 2))
+  elif [[ "${ARGV[$i]}" == "--tailscale" ]]; then
+    TAILSCALE=1
+    i=$((i + 1))
   else
     REST+=("${ARGV[$i]}")
     i=$((i + 1))
@@ -166,6 +176,21 @@ SERVER="${DNP_SERVER_BIN:-build/server/dnp-server}"
   echo "no dev certificate; run: (cd server/edge && npm run certs)"; exit 1; }
 [[ -f client/wasm/dist/dnp_core.mjs ]] || { echo "no wasm build; run scripts/build_wasm.sh"; exit 1; }
 
+# THE TAILNET NAME AND ITS CERTIFICATE (--tailscale).
+TLS_HOST=""
+EDGE_TLS=()
+if [[ -n "${TAILSCALE:-}" ]]; then
+  TS="$(command -v tailscale || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale)"
+  [[ -x "$TS" ]] || { echo "--tailscale: no tailscale command; install the Tailscale app"; exit 1; }
+  TLS_HOST="$("$TS" status --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write((j.Self&&j.Self.DNSName||"").replace(/\.$/,""))})')"
+  [[ -n "$TLS_HOST" ]] || { echo "--tailscale: Tailscale is not connected"; exit 1; }
+  mkdir -p build/tailscale
+  "$TS" cert --cert-file build/tailscale/cert.pem --key-file build/tailscale/key.pem "$TLS_HOST" || {
+    echo "--tailscale: no certificate for $TLS_HOST -- enable HTTPS certificates at https://login.tailscale.com/admin/dns"; exit 1; }
+  export DNP_TLS_CERT="$ROOT/build/tailscale/cert.pem" DNP_TLS_KEY="$ROOT/build/tailscale/key.pem"
+  EDGE_TLS=(--cert "$DNP_TLS_CERT" --key "$DNP_TLS_KEY")
+fi
+
 pids=()
 cleanup () {
   for p in ${pids[@]+"${pids[@]}"}; do
@@ -203,16 +228,21 @@ echo "[stack] edge    : https://127.0.0.1:$WT_PORT/dnp"
 # before this was found.
 #
 # `exec` replaces the subshell with node, so $! IS node and killing it kills it.
-( cd server/edge && exec node src/index.js --port "$WT_PORT" --upstream-port "$LINK_PORT" ) &
+( cd server/edge && exec node src/index.js --port "$WT_PORT" --upstream-port "$LINK_PORT" ${EDGE_TLS[@]+"${EDGE_TLS[@]}"} ) &
 pids+=($!)
 
-echo "[stack] web     : http://localhost:$HTTP_PORT/"
+echo "[stack] web     : http${TLS_HOST:+s}://${TLS_HOST:-localhost}:$HTTP_PORT/"
 DNP_HTTP_PORT="$HTTP_PORT" node tools/devserver.js \
   ${MODULE_ARGS[@]+"${MODULE_ARGS[@]}"} &
 pids+=($!)
 
 echo
-echo "  open  http://localhost:$HTTP_PORT/?server=https://127.0.0.1:$WT_PORT/dnp"
-echo "  (no ?server= gives the solo renderer, which needs none of the above)"
+if [[ -n "$TLS_HOST" ]]; then
+  echo "  open  https://$TLS_HOST:$HTTP_PORT/?server=https://$TLS_HOST:$WT_PORT/dnp"
+  echo "  (from any device on your tailnet: this Mac, your phone with Tailscale on)"
+else
+  echo "  open  http://localhost:$HTTP_PORT/?server=https://127.0.0.1:$WT_PORT/dnp"
+  echo "  (no ?server= gives the solo renderer, which needs none of the above)"
+fi
 echo
 wait

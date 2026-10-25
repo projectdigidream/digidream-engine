@@ -10,8 +10,9 @@
 // between a change and seeing it.
 //
 import { createServer } from 'node:http'
+import { createServer as createTlsServer } from 'node:https'
 import { readFile, stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, normalize, extname, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,6 +22,12 @@ const ROOT = join(HERE, '..')
 // synth are beside it.
 const REPO = join(ROOT, '..')
 const PORT = Number(process.env.DNP_HTTP_PORT ?? 8080)
+// HTTPS, with a real certificate (run_stack.sh --tailscale): the page is then a
+// secure context away from localhost, which WebTransport requires, and the edge
+// serves the same certificate -- so there is no dev hash to hand out.
+const TLS = process.env.DNP_TLS_CERT && process.env.DNP_TLS_KEY
+  ? { cert: readFileSync(process.env.DNP_TLS_CERT), key: readFileSync(process.env.DNP_TLS_KEY) }
+  : null
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -205,7 +212,8 @@ async function findMap (name) {
 // last says exactly where it stopped.
 const log = (code, url) => console.log(`[dev] ${code} ${url}`)
 
-createServer(async (req, res) => {
+const serve = (handler) => TLS ? createTlsServer(TLS, handler) : createServer(handler)
+serve(async (req, res) => {
   try {
     // The development edge's certificate HASH, so a browser can accept exactly
     // that self-signed certificate via serverCertificateHashes.
@@ -215,6 +223,7 @@ createServer(async (req, res) => {
     // key sits in the same directory and is deliberately not reachable through
     // any mount, which is why this is one named route rather than serving
     // certs/.
+    if (req.url === '/certhash' && TLS) { log(404, req.url); res.writeHead(404).end('a real certificate'); return }
     if (req.url === '/certhash') {
       const p = join(ROOT, 'server', 'edge', 'certs', 'cert-hash.json')
       const body = await readFile(p).catch(() => null)
@@ -332,6 +341,6 @@ createServer(async (req, res) => {
     res.writeHead(e.code === 'ENOENT' ? 404 : 500).end(String(e.message))
   }
 }).listen(PORT, () => {
-  console.log(`[dev] http://localhost:${PORT}/`)
+  console.log(`[dev] ${TLS ? 'https' : 'http'}://localhost:${PORT}/`)
   console.log('[dev] maps are served from build/<arch>/ -- run mapc first')
 })

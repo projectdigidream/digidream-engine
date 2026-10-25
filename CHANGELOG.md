@@ -16,6 +16,11 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **A test stack your own devices reach from anywhere**: `scripts/run_stack.sh
+  --tailscale` serves the page and the game over this machine's Tailscale name,
+  with its real certificate (`tailscale cert`), so a phone on mobile data with
+  Tailscale on plays it with nothing to accept. The edge takes `--cert` and
+  `--key`, and the dev server serves HTTPS when given a certificate.
 - **Effect sectors** (`sector type effect`): a volume for effects and events
   with no floor of its own. Nothing collides with it or stands in it, it draws
   no floor, ceiling or walls, and it may overlap anything: rooms, platforms and
