@@ -125,6 +125,15 @@ struct Sector {
     // removes a whole class of conversion.
     u16 first_hole = 0;
     u16 hole_count = 0;
+
+    // AN EFFECT SECTOR (`sector type effect`, map version 17): a volume and
+    // nothing more -- its footprint between floor_z and ceil_z. Nothing collides
+    // with it and nothing stands in it: find_sector, find_sector_at,
+    // sectors_near and the grid never name it, so no body's sector is ever one,
+    // and it may overlap anything. Nothing draws its floor, ceiling or walls.
+    // What it carries is its effects (fog, snow, ...) and its entering and
+    // leaving (graphs' when_sector_entered / when_sector_left, by e:effect_sectors).
+    bool effect = false;
 };
 
 // Rails and wires (design §3.4).

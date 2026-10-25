@@ -234,6 +234,9 @@ export function flatUV (x, y, style, place) {
 export function buildSectorSurfaces (map, sectorIndex) {
   const s = map.sectors[sectorIndex]
   const out = []
+  // An effect sector is a volume for its effects (sectorfx.js): nothing of its
+  // own is drawn.
+  if (s.effect) return out
 
   // --- flats, from the BAKED triangles -------------------------------------
   //

@@ -133,6 +133,34 @@ int l_entity_sector(lua_State* L) {
     return 1;
 }
 
+// e:effect_sectors() -> the effect sectors (`sector type effect`) the body is
+// in -- the footprint over where it stands, the height overlapping its own --
+// as the level's numbers, ascending; {} when none. They overlap anything, so a
+// body is in any number of them at once; graphs' sector entering and leaving
+// reads them, as e:sector() for a room.
+int l_entity_effect_sectors(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    lua_newtable(L);
+    const geom::MapData* m = ctx.world->map();
+    if (a < 0 || m == nullptr) return 1;
+    const auto& ag = ctx.world->agent(static_cast<u32>(a));
+    const fx feet = ag.pos.z;
+    const fx head = feet + ctx.world->params(static_cast<u32>(a)).height;
+    const u32 first = ctx.chunk ? ctx.chunk->sectors.first : 0u;
+    const u32 count = ctx.chunk ? ctx.chunk->sectors.count : m->sector_count;
+    int n = 0;
+    // ponytail: every sector of the level, per call; a list of the effect ones if levels grow thousands.
+    for (u32 s = first; s < first + count && s < m->sector_count; ++s) {
+        const geom::Sector& sec = m->sector(s);
+        if (!sec.effect || head <= sec.floor_z || feet >= sec.ceil_z) continue;
+        if (!geom::point_in_sector(*m, s, fx2{ag.pos.x, ag.pos.y})) continue;
+        lua_pushnumber(L, ctx.sector_to_local(static_cast<i32>(s)));
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+
 int l_entity_index_of(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -798,6 +826,7 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"jumps", l_entity_jumps},
     {"pitch", l_entity_pitch},
     {"sector", l_entity_sector},
+    {"effect_sectors", l_entity_effect_sectors},
     {"index", l_entity_index_of},
     {"player", l_entity_player},
     {"input_tick", l_entity_input_tick},

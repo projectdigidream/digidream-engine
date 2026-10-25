@@ -417,7 +417,7 @@
         "entity",
         "sector"
       ],
-      "doc": "Somebody came into a sector -- walking, falling or flying in.",
+      "doc": "Somebody came into a sector -- walking, falling or flying in. An effect sector (`type effect`) too: they overlap anything, so a body may be in several at once, and each is entered on its own.",
       "exec_in": [],
       "exec_out": [
         "then"
@@ -455,7 +455,7 @@
         "entity",
         "sector"
       ],
-      "doc": "Somebody went out of a sector.",
+      "doc": "Somebody went out of a sector, an effect sector included.",
       "exec_in": [],
       "exec_out": [
         "then"

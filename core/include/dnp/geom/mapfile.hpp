@@ -19,7 +19,7 @@
 namespace dnp::geom {
 
 inline constexpr u32 MAP_MAGIC   = 0x4D504E44u;   // "DNPM"
-inline constexpr u16 MAP_VERSION = 16;  // 15 added a wall's texture angle and scale; 16 its own scale up the wall
+inline constexpr u16 MAP_VERSION = 17;  // 15 added a wall's texture angle and scale; 16 its own scale up the wall; 17 effect sectors
                                         // (14 added sector effects (docs/SECTOR_FX.md);
                                         // 13 added a flat's texture anchor;
                                         // 12 added flat styles and surface alpha;

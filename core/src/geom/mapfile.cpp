@@ -31,9 +31,13 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         if (rd.side(i).styled()) ++styled_sides;
         if (rd.side(i).stretched()) stretched = true;
     }
+    // 17 only for a map with effect sectors (Sector::effect).
+    u32 effect_sectors = 0;
+    for (u32 i = 0; i < m.sector_count; ++i) if (m.sector(i).effect) ++effect_sectors;
     // 16 only for a wall scaled differently along and up it; one scaled alike
     // both ways is a 15, as it always was.
-    const u16 version = stretched ? MAP_VERSION
+    const u16 version = effect_sectors > 0 ? MAP_VERSION
+                      : stretched ? static_cast<u16>(16)
                       : styled_sides > 0 ? static_cast<u16>(15)
                       : has_effects ? static_cast<u16>(14) : static_cast<u16>(13);
     w.u32v(MAP_MAGIC);
@@ -63,6 +67,7 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
     w.fxraw(store.texture_scale());
     if (version >= 14) w.u32v(store.effect_count());   // 14
     if (version >= 15) w.u32v(styled_sides);           // 15
+    if (version >= 17) w.u32v(effect_sectors);         // 17
 
     for (u32 i = 0; i < m.point_count; ++i) {
         w.fxraw(m.point(i).x);
@@ -231,6 +236,11 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         }
     }
 
+    // Effect sectors (17): their indices, ascending.
+    if (version >= 17) {
+        for (u32 i = 0; i < m.sector_count; ++i) if (m.sector(i).effect) w.u32v(i);
+    }
+
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
     // running different geometry from the server is a detectable condition
     // rather than an unexplained series of collision disagreements.
@@ -274,6 +284,7 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
     const fx texture_scale = r.fxraw();
     const u32 fx_count = version >= 14 ? r.u32v() : 0;
     const u32 styled_count = version >= 15 ? r.u32v() : 0;
+    const u32 effect_sector_count = version >= 17 ? r.u32v() : 0;
     if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
     if (fx_count > MAX_MAP_FX) { store.clear(); return MapLoadStatus::TooLarge; }
 
@@ -846,6 +857,22 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
             sr.scale = scale;
             sr.scale_y = scale_y;
             if (!sr.styled()) { store.clear(); return MapLoadStatus::BadIndex; }
+            next = i + 1;
+        }
+    }
+
+    // EFFECT SECTORS (17), as strict: ascending, none twice, a real sector, and
+    // none with a slab (a slab is something to collide with).
+    if (effect_sector_count > sector_count) { store.clear(); return MapLoadStatus::BadIndex; }
+    {
+        u32 next = 0;
+        for (u32 k = 0; k < effect_sector_count; ++k) {
+            const u32 i = r.u32v();
+            if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
+            if (i >= sector_count || i < next || store.view().sector(i).thickness > fx::zero()) {
+                store.clear(); return MapLoadStatus::BadIndex;
+            }
+            store.sector_mut(i).effect = true;
             next = i + 1;
         }
     }

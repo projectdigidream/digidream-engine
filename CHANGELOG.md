@@ -14,6 +14,18 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **Effect sectors** (`sector type effect`): a volume for effects and events
+  with no floor of its own. Nothing collides with it or stands in it, it draws
+  no floor, ceiling or walls, and it may overlap anything: rooms, platforms and
+  other effect sectors. It carries `fx` lines (fog, snow, rain, dust, embers),
+  and the `when_sector_entered` / `when_sector_left` graph nodes fire for it.
+  A player can be in several at once, and each is entered and left on its own.
+  Lua reads the list with `e:effect_sectors()`. They are saved in map version
+  17, which only a map that has one is written as. Docs: SECTOR_FX.md §7; demo
+  map: `maps/effect_sectors.map`.
+
 ## 0.2.3.8 -- 2026-10-25
 
 ### Fixed

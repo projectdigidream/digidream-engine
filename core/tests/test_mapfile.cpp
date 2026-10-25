@@ -835,6 +835,62 @@ static void test_sector_effects() {
     }
 }
 
+// EFFECT SECTORS (version 17): a map with one is written as 17, round-trips the
+// flag and hashes it; one without is written as it always was (the tests above
+// still read 13, 14, 15 and 16). Canonical like the styles: every bit of the
+// block changes the hash or is refused -- and an effect sector with a slab is
+// refused, as mapc refuses it.
+static void test_effect_sectors() {
+    std::printf("mapfile: effect sectors -- version 17 only when used, hashed, no slab\n");
+    static MapStorage src;
+    static MapStorage dst;
+    static u8 buf[16384];
+    src.clear();
+    build_reference(src);
+    const u64 bare = src.hash();
+    src.sector_mut(2).effect = true;
+    CHECK(src.hash() != bare);      // CONTROL for what follows: the flag IS hashed
+
+    ByteWriter w(buf, sizeof(buf));
+    CHECK(save_map(src, w));
+    const size_t n = w.size();
+    CHECK(buf[4] == 17);
+    {
+        ByteReader r(buf, n);
+        const MapLoadStatus st = load_map(r, dst);
+        std::printf("  version %u, %zu bytes: %s\n", buf[4], n, map_load_status_text(st));
+        CHECK(st == MapLoadStatus::Ok);
+        CHECK(dst.view().sector(2).effect && !dst.view().sector(0).effect &&
+              !dst.view().sector(1).effect && dst.hash() == src.hash());
+    }
+    {
+        static MapStorage slab;
+        static u8 sb[16384];
+        slab.clear();
+        build_reference(slab);
+        slab.sector_mut(1).effect = true;           // the reference's floating slab
+        ByteWriter bw(sb, sizeof(sb));
+        CHECK(save_map(slab, bw));
+        ByteReader br(sb, bw.size());
+        CHECK(load_map(br, dst) != MapLoadStatus::Ok);
+    }
+    {
+        Rng rng(17);
+        int loaded_silently = 0;
+        static u8 bad[16384];
+        for (int trial = 0; trial < 4000; ++trial) {
+            for (size_t i = 0; i < n; ++i) bad[i] = buf[i];
+            // Half the trials aim at the block: the last index, just before the hash.
+            const u32 at = trial % 2 ? rng.next_below(static_cast<u32>(n))
+                                     : static_cast<u32>(n - 8 - 1 - rng.next_below(4));
+            bad[at] = static_cast<u8>(bad[at] ^ (1u << rng.next_below(8)));
+            ByteReader r(bad, n);
+            if (load_map(r, dst) == MapLoadStatus::Ok && dst.hash() == src.hash()) ++loaded_silently;
+        }
+        CHECK(loaded_silently == 0);
+    }
+}
+
 // A WALL'S TEXTURE ANGLE AND SCALE (version 15): a map that uses them is
 // written as 15, round-trips them, and hashes them; one that does not is
 // written as it always was. The block is canonical -- in side order, none
@@ -953,6 +1009,7 @@ static void test_wall_styles() {
 int main() {
     std::printf("== core/geom map file suite ==\n");
     test_sector_effects();
+    test_effect_sectors();
     test_wall_styles();
     test_roundtrip();
     test_matches_hardcoded_map();

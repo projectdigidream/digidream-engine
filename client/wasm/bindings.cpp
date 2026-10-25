@@ -356,6 +356,7 @@ void dnp_map_sector(const geom::MapStorage* m, unsigned i, long long* out64, uns
     out32[13] = r.ceil.alpha;
     out32[14] = r.floor.anchor;
     out32[15] = r.ceil.anchor;
+    out32[16] = s.effect ? 1u : 0u;   // an effect sector: drawn only by its effects
 }
 
 EMSCRIPTEN_KEEPALIVE

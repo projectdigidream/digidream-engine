@@ -91,8 +91,10 @@ u32 sectors_near(const MapData& map, fx2 p, fx radius, u16* out, u32 cap) noexce
     // slow -- the same fallback find_sector takes, and for the same reason: the
     // grid may only ever make the search SHORTER, never different.
     if (!g.usable || g.cols == 0 || g.rows == 0 || g.cell.raw <= 0) {
-        const u32 n = map.sector_count < cap ? map.sector_count : cap;
-        for (u32 i = 0; i < n; ++i) out[i] = static_cast<u16>(i);
+        u32 n = 0;
+        for (u32 i = 0; i < map.sector_count && n < cap; ++i) {
+            if (!map.sector(i).effect) out[n++] = static_cast<u16>(i);
+        }
         return n;
     }
 
@@ -146,7 +148,7 @@ i32 find_sector(const MapData& map, fx2 p) noexcept {
     i128 best_area = 0;
     for (u32 i = 0; i < c.count; ++i) {
         const u32 s = candidate_at(c, i);
-        if (!point_in_sector(map, s, p)) continue;
+        if (map.sector(s).effect || !point_in_sector(map, s, p)) continue;
         if (best == NO_SECTOR) { best = static_cast<i32>(s); continue; }
 
         // Only computed once a second sector claims the point, so the ordinary
@@ -175,7 +177,7 @@ i32 find_sector_at(const MapData& map, fx2 p, fx feet_z, fx body_height) noexcep
     i32 lowest = NO_SECTOR;
     for (u32 i = 0; i < c.count; ++i) {
         const u32 s = candidate_at(c, i);
-        if (!point_in_sector(map, s, p)) continue;
+        if (map.sector(s).effect || !point_in_sector(map, s, p)) continue;
         const fx floor_z = map.sector(s).floor_z;
 
         if (floor_z <= reach) {

@@ -139,5 +139,12 @@ check(lowersFromSector0(0) === 0, 'a flush neighbour shows sector 0 no lower fie
 check(lowersFromSector0(3) === 1, 'and raising it reveals one')
 check(lowersFromSector0(0) === 0, 'and lowering it hides that field again')
 
+// An effect sector draws nothing of its own (its effects are sectorfx.js's).
+const drawn = buildSectorSurfaces(m, 1).length
+m.sectors[1].effect = true
+const asEffect = buildSectorSurfaces(m, 1).length
+m.sectors[1].effect = false
+check(drawn > 0 && asEffect === 0, `an effect sector draws no surfaces (${asEffect}; solid ${drawn})`)
+
 console.log(`\nmapmesh: ${checks} checks, ${fails} failures`)
 process.exit(fails === 0 ? 0 : 1)

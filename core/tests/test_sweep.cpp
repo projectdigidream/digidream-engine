@@ -637,6 +637,54 @@ static void test_the_cameras_line_and_a_platform() {
     CHECK(!wall);                      // CONTROL: a room's wall is still a wall
 }
 
+// AN EFFECT SECTOR across the border of two rooms, level with them, where a
+// solid one would be refused: no lookup names it, and a body walks through it
+// as through open floor.
+static void test_an_effect_sector_is_not_there() {
+    std::printf("effect sector: nothing stands in it, nothing collides with it\n");
+    static Straddle st;
+    static World w;
+    st.store.sector_mut(2).thickness = fx::zero();
+    st.store.sector_mut(2).floor_z = F(0);
+    st.store.sector_mut(2).effect = true;
+    st.store.rebuild_grid();
+    w.reset();
+    st.attach(w);
+    const MapData& m = st.view;
+    // CONTROL: the same sector, solid, level with the rooms -- the smaller
+    // footprint, so find_sector names it.
+    st.store.sector_mut(2).effect = false;
+    st.store.rebuild_grid();
+    const i32 solid = find_sector(m, fx2{F(17), Ff(15, 2)});
+    st.store.sector_mut(2).effect = true;
+    st.store.rebuild_grid();
+    u16 near[16];
+    const u32 n = sectors_near(m, fx2{F(20), Ff(15, 2)}, F(3), near, 16);
+    bool named = false;
+    for (u32 i = 0; i < n; ++i) named = named || near[i] == 2;
+    const i32 found = find_sector(m, fx2{F(17), Ff(15, 2)});
+    const i32 at = find_sector_at(m, fx2{F(17), Ff(15, 2)}, F(0), fx::zero());
+    // Walking east from x 5 through it, into room 1.
+    const u32 a = w.spawn(fx3{F(5), Ff(15, 2), F(0)});
+    proto::InputFrame f;
+    f.move_x = 32767;
+    i32 seen_in = -1;
+    for (u32 t = 0; t < 240; ++t) {
+        w.set_input(a, f);
+        w.step();
+        if (w.agent(a).mv.sector == 2) seen_in = 2;
+    }
+    std::printf("  near names it %d; find_sector %d, find_sector_at %d; walked to x %.2f in sector %d, ever in it %d\n",
+                named, found, at, w.agent(a).pos.x.raw / 4294967296.0, w.agent(a).mv.sector, seen_in);
+    CHECK(!named && found == 0 && at == 0);
+    CHECK(solid == 2);
+    CHECK(w.agent(a).pos.x > F(30) && w.agent(a).mv.sector == 1 && seen_in < 0);
+    st.store.sector_mut(2).effect = false;      // as it was, for anything after
+    st.store.sector_mut(2).floor_z = F(2);
+    st.store.sector_mut(2).thickness = F(2);
+    st.store.rebuild_grid();
+}
+
 // A LEDGE: room 0 (x 0..20, floor 0) beside room 1 (x 20..30, floor `h`), open
 // to each other at x = 20.
 // The default body's height (MoveParams), which the hang sits a head below a top by.
@@ -793,6 +841,7 @@ int main() {
     test_a_variable_jump_follows_the_press();
     test_a_platform_across_two_rooms();
     test_the_cameras_line_and_a_platform();
+    test_an_effect_sector_is_not_there();
     test_a_ledge_is_caught_hung_from_and_hopped_onto();
     test_coyote_time_runs_out();
     test_it_finds_the_nearest();

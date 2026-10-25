@@ -76,6 +76,9 @@ export function readMap (map) {
       floorTex: u32[b32 + 7], ceilTex: u32[b32 + 8],
       light: u32[b32 + 9],
       thickness: fxToFloat(i64[b64 + 2]),
+      // An effect sector (`sector type effect`): no floor, ceiling or walls,
+      // only its effects.
+      effect: u32[b32 + 16] !== 0,
       // How each flat is painted. Turns rather than brad, because that is what
       // every angle becomes the moment it reaches this side; alpha as a
       // fraction, because that is what a material takes. Both conversions

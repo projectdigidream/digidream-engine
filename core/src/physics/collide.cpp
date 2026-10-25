@@ -287,7 +287,7 @@ bool slab_overlaps(const Sector& sec, fx feet_z, fx body_height) noexcept {
     // occupies [feet, feet + height]. They overlap on the standard interval
     // test, and a sector with no thickness has no slab at all -- which is every
     // sector in a sealed room, where "below the floor" is not a place.
-    if (sec.thickness <= fx::zero()) return false;
+    if (sec.thickness <= fx::zero() || sec.effect) return false;
     if (feet_z >= sec.floor_z) return false;                       // above it
     if (feet_z + body_height <= sec.floor_z - sec.thickness) return false;  // below it
     return true;
@@ -972,7 +972,7 @@ namespace {
 bool crosses_slab(const MapData& map, fx3 a, fx3 b) noexcept {
     for (u32 s = 0; s < map.sector_count; ++s) {
         const Sector& sec = map.sector(s);
-        if (sec.thickness <= fx::zero()) continue;
+        if (sec.thickness <= fx::zero() || sec.effect) continue;
         const fx low = sec.floor_z - sec.thickness, high = sec.floor_z;
         fx t0 = fx::zero(), t1 = fx::one();
         if (a.z == b.z) {

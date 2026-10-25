@@ -1424,8 +1424,8 @@ local function tick_starts(now)
   fire_start("every", function(n) local p = math.max(1, ticks_of(n.seconds)); return el > 0 and el % p == 0 end, {})
   fire_start("after", function(n) return el == ticks_of(n.seconds) end, {})
 
-  local spatial = any_start("when_sector_entered") or any_start("when_sector_left")
-               or any_start("when_floor_touched") or any_start("when_near")
+  local rooms = any_start("when_sector_entered") or any_start("when_sector_left")
+  local spatial = rooms or any_start("when_floor_touched") or any_start("when_near")
   local roster = not in_game() and (any_start("when_player_arrives") or any_start("when_player_leaves"))
   if not spatial and not roster then return end
   local list = (spatial and watch_everyone()) and dnp.entities() or dnp.players()
@@ -1455,8 +1455,12 @@ local function tick_starts(now)
         if roster and t.player and t.here then fire_start("when_player_leaves", nil, {}) end
         t = nil
       end
+      -- EFFECT SECTORS (`sector type effect`): volumes laid over anything, so a
+      -- body is in any number at once, and never as its sector.
+      local fx_in = (rooms and e.effect_sectors ~= nil) and e:effect_sectors() or {}
       if t == nil then
-        track[i] = { sector = sec, floor = floor, since = now, player = is_player(e), who = who, seen = now, here = here }
+        track[i] = { sector = sec, floor = floor, since = now, player = is_player(e), who = who, seen = now, here = here,
+                     fx = fx_in }
         if roster and here and is_player(e) then fire_start("when_player_arrives", nil, { entity = e }) end
       else
         t.seen = now
@@ -1479,6 +1483,24 @@ local function tick_starts(now)
                        { entity = e, sector = sec })
           end
         end
+        -- Each effect sector left, then each entered, by the same two start
+        -- nodes as a room's.
+        local was_in, is_in = {}, {}
+        for _, s in ipairs(t.fx or {}) do was_in[s] = true end
+        for _, s in ipairs(fx_in) do is_in[s] = true end
+        for _, s in ipairs(t.fx or {}) do
+          if not is_in[s] then
+            fire_start("when_sector_left", function(n) return who_ok(n.who, e) and sector_ok(n, s) end,
+                       { entity = e, sector = s })
+          end
+        end
+        for _, s in ipairs(fx_in) do
+          if not was_in[s] then
+            fire_start("when_sector_entered", function(n) return who_ok(n.who, e) and sector_ok(n, s) end,
+                       { entity = e, sector = s })
+          end
+        end
+        t.fx = fx_in
         if floor ~= t.floor then
           t.floor = floor
           t.since = now

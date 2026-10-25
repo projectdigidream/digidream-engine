@@ -453,6 +453,7 @@ int main(int argc, char** argv) {
     u16 tag = 0;
     SectorRender sector_render{};
     fx thickness{};
+    bool effect = false;
     int sector_start_line = 0;
 
     char buf[1024];
@@ -475,6 +476,7 @@ int main(int argc, char** argv) {
             tag = 0;
             sector_render = SectorRender{};
             thickness = fx::zero();
+            effect = false;
             sector_start_line = lineno;
             for (size_t i = 1; i + 1 < tok.size(); i += 2) {
                 if (tok[i] == "floor") { if (!parse_fx(tok[i + 1], floor_z)) err(lineno, "bad floor '%s'", tok[i + 1].c_str()); }
@@ -491,6 +493,13 @@ int main(int argc, char** argv) {
                     if (!parse_fx(tok[i + 1], thickness)) {
                         err(lineno, "bad thickness '%s'", tok[i + 1].c_str());
                     }
+                }
+                // `type effect`: a volume for effects and entering, nothing
+                // to collide with or draw (geom::Sector::effect).
+                else if (tok[i] == "type") {
+                    if (tok[i + 1] == "effect") effect = true;
+                    else if (tok[i + 1] == "solid") effect = false;
+                    else err(lineno, "unknown sector type '%s' (solid or effect)", tok[i + 1].c_str());
                 }
                 else if (tok[i] == "floortex") sector_render.floor_tex = intern(lineno, store, tok[i + 1]);
                 else if (tok[i] == "ceiltex") sector_render.ceil_tex = intern(lineno, store, tok[i + 1]);
@@ -660,6 +669,8 @@ int main(int argc, char** argv) {
 
             store.sector_render_mut(si) = sector_render;
             store.sector_mut(si).thickness = thickness;
+            store.sector_mut(si).effect = effect;
+            if (effect && thickness > fx::zero()) err(sector_start_line, "an effect sector has no thickness: nothing collides with it");
             for (SectorFx e : pending_fx) {
                 e.sector = si;
                 if (!store.add_effect(e)) err(sector_start_line, "too many sector effects (the map holds %u)", MAX_MAP_FX);
@@ -936,8 +947,25 @@ int main(int argc, char** argv) {
         }
     }
 
+    // An effect sector joins nothing: no side of one names a neighbour, and no
+    // room opens onto one -- a body can never be in it to cross from it.
+    for (u32 s = 0; s < m.sector_count; ++s) {
+        const Sector& sec = m.sector(s);
+        for (u16 k = 0; k < sec.side_count; ++k) {
+            const i32 n = m.side(sec.first_side + k).neighbor;
+            if (n == NO_SECTOR || n < 0 || static_cast<u32>(n) >= m.sector_count) continue;
+            if (sec.effect || m.sector(static_cast<u32>(n)).effect) {
+                std::fprintf(stderr, "sector %u: side %u joins sector %d, and an effect sector joins nothing "
+                             "(it overlaps what it covers instead)\n", s, k, n);
+                ++g_errors;
+            }
+        }
+    }
+
     // Overlapping footprints.
     //
+    // An effect sector overlaps anything: nothing collides with it or stands
+    // in it, so it never is the sector a body is in.
     // A sector is a 2D footprint, and find_sector returns the FIRST one
     // containing a point -- so where two footprints overlap, which sector you
     // are in depends on the order they were declared in. Everything downstream
@@ -955,9 +983,11 @@ int main(int argc, char** argv) {
     // their vertices lie ON each other's boundaries rather than inside them.
     for (u32 a = 0; a < m.sector_count && g_errors == 0; ++a) {
         const Sector& sa = m.sector(a);
+        if (sa.effect) continue;
         for (u32 b = 0; b < m.sector_count; ++b) {
             if (a == b) continue;
             const Sector& sb = m.sector(b);
+            if (sb.effect) continue;
 
             u32 inside = 0;
             u32 first_inside = 0;

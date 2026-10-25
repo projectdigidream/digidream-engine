@@ -1,0 +1,45 @@
+# Effect sectors (`sector type effect`, docs/SECTOR_FX.md §7): volumes that
+# collide with nothing and draw nothing of their own, laid over the rooms -- a
+# fog bank across the doorway between two rooms, and a snow flurry over part of
+# the hall, overlapping the fog. Walk through both.
+#
+#   scripts/run_stack.sh --module doom2 build/<arch>/effect_sectors.dnpm
+body radius 0.3333 height 1.1667
+texscale 48
+
+# 0: the hall.
+sector floor 0 ceil 6 floortex FLOOR4_8 ceiltex CEIL5_1 light 190
+  vertex  0  0 wall tex STONE2
+  vertex 16  0 neighbor 1
+  vertex 16 12 wall tex STONE2
+  vertex  0 12 wall tex STONE2
+end
+
+# 1: the room beyond it.
+sector floor 0 ceil 6 floortex FLAT5_4 ceiltex CEIL5_1 light 170
+  vertex 16 12 neighbor 0
+  vertex 16  0 wall tex ICKWALL1
+  vertex 28  0 wall tex ICKWALL1
+  vertex 28 12 wall tex ICKWALL1
+end
+
+# 2: a fog bank across the doorway, over both rooms. An effect sector, so it
+# overlaps them, level with their floors, which a solid one could not.
+sector type effect floor 0 ceil 6 tag 5
+  fx fog density 0.45 top 2.5 falloff 1.5 noise 0.6 color 8a9aa8
+  vertex 12  2
+  vertex 20  2
+  vertex 20 10
+  vertex 12 10
+end
+
+# 3: a snow flurry over the hall's far half, overlapping the fog.
+sector type effect floor 0 ceil 6 tag 6
+  fx snow density 8 windx 0.4
+  vertex  6  0
+  vertex 14  0
+  vertex 14 12
+  vertex  6 12
+end
+
+spawn start 3 6 1

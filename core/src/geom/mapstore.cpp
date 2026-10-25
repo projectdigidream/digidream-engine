@@ -465,7 +465,7 @@ void MapStorage::rebuild_grid() noexcept {
     for (u32 pass = 0; pass < 2; ++pass) {
         for (u32 s = 0; s < sector_count_; ++s) {
             const Sector& sec = sectors_[s];
-            if (sec.point_count == 0) continue;
+            if (sec.point_count == 0 || sec.effect) continue;   // never a candidate
             fx2 slo = points_[sec.first_point];
             fx2 shi = slo;
             for (u16 k = 1; k < sec.point_count; ++k) {
@@ -857,6 +857,8 @@ u64 MapStorage::hash() const noexcept {
         h.u32v(s.tag);
         h.u32v(s.tri_count);
         for (u32 t = 0; t < static_cast<u32>(s.tri_count) * 3; ++t) h.u32v(tris_[s.first_tri + t]);
+        // Only when set, so a map without effect sectors keeps its hash.
+        if (s.effect) h.u32v(0xEFFEC7u);
     }
     for (u32 i = 0; i < side_count_; ++i) {
         const Side& sd = sides_[i];

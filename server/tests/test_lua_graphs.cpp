@@ -60,6 +60,19 @@ struct Room {
         for (u16 i = 0; i < 4; ++i) store.add_side(1, i, static_cast<u16>((i + 1) % 4), i == 3 ? 0 : geom::NO_SECTOR, 0);
         for (u16 i = 0; i < 4; ++i) store.add_side(2, i, static_cast<u16>((i + 1) % 4), i == 1 ? 0 : geom::NO_SECTOR, 0);
         store.add_spawn("pad", 3, fx3{-F(22), F(5), fx::zero()});   // on the platform
+        // Three EFFECT sectors laid over the room: 3 (x -10..0) and 4 (x -5..5)
+        // overlapping each other, and 5 over all of it, above a body's head.
+        const fx2 e3[] = {{-F(10), -F(10)}, {F(0), -F(10)}, {F(0), F(10)}, {-F(10), F(10)}};
+        const fx2 e4[] = {{-F(5), -F(10)}, {F(5), -F(10)}, {F(5), F(10)}, {-F(5), F(10)}};
+        const fx2 e5[] = {{-F(10), -F(10)}, {F(10), -F(10)}, {F(10), F(10)}, {-F(10), F(10)}};
+        store.add_sector(e3, 4, fx::zero(), F(10), 7);
+        store.add_sector(e4, 4, fx::zero(), F(10), 8);
+        store.add_sector(e5, 4, F(6), F(10), 9);
+        for (u32 s = 3; s <= 5; ++s) {
+            for (u16 i = 0; i < 4; ++i) store.add_side(s, i, static_cast<u16>((i + 1) % 4), geom::NO_SECTOR, 0);
+            store.sector_mut(s).effect = true;
+        }
+        store.rebuild_grid();
         view = store.view();
     }
 };
@@ -167,6 +180,12 @@ static bool raises(const char* src) {
 static double num(const char* global) {
     lua_getglobal(L, global);
     const double v = lua_isnumber(L, -1) ? lua_tonumber(L, -1) : -1;
+    lua_pop(L, 1);
+    return v;
+}
+static std::string str(const char* global) {
+    lua_getglobal(L, global);
+    const std::string v = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
     lua_pop(L, 1);
     return v;
 }
@@ -701,6 +720,51 @@ int main(int argc, char** argv) {
     CHECK(num("w8") >= 3 && num("w8") <= 4);    // ~110 ticks at every 30
     CHECK(num("w9") == 1);                      // after a second, once
     CHECK(num("w10") == 2);                     // held touches are one; a later one is another
+
+    // ================================================================
+    // EFFECT SECTORS: entering and leaving each of two that overlap, while the
+    // body's own sector stays the room's.
+    std::printf("-- effect sectors --\n");
+    CHECK(run("graphs.reset(); dnp.players()[1]:teleport(vec3.new(fx.int(15), fx.int(0), fx.int(0)))", "a clean slate"));
+    ticks(2);
+    CHECK(load_graph(R"({
+      "graph": 1, "name": "volumes",
+      "nodes": [
+        { "id": "in3",  "type": "when_sector_entered", "sector": 3 },
+        { "id": "c1",   "type": "action", "a": "counter_add", "counter": "v_in3" },
+        { "id": "out3", "type": "when_sector_left", "sector": 3 },
+        { "id": "c2",   "type": "action", "a": "counter_add", "counter": "v_out3" },
+        { "id": "in4",  "type": "when_sector_entered", "tag": 8 },
+        { "id": "c3",   "type": "action", "a": "counter_add", "counter": "v_in4" },
+        { "id": "out4", "type": "when_sector_left", "sector": 4 },
+        { "id": "c4",   "type": "action", "a": "counter_add", "counter": "v_out4" },
+        { "id": "in5",  "type": "when_sector_entered", "sector": 5 },
+        { "id": "c5",   "type": "action", "a": "counter_add", "counter": "v_in5" },
+        { "id": "room", "type": "when_sector_left", "sector": 0 },
+        { "id": "c6",   "type": "action", "a": "counter_add", "counter": "v_room" }
+      ],
+      "links": [ ["in3.then", "c1.in"], ["out3.then", "c2.in"], ["in4.then", "c3.in"], ["out4.then", "c4.in"],
+                 ["in5.then", "c5.in"], ["room.then", "c6.in"] ]
+    })"));
+    ticks(3);
+    const auto at = [&](int x, const char* what) {
+        CHECK(run((std::string("dnp.players()[1]:teleport(vec3.new(fx.int(") + std::to_string(x) +
+                   "), fx.int(0), fx.int(0)))").c_str(), what));
+        ticks(3);
+    };
+    at(-7, "into 3");
+    at(-2, "into 4 as well");
+    CHECK(run("local p = dnp.players()[1]; v_both = table.concat(p:effect_sectors(), ','); v_sec = p:sector()", "reading"));
+    at(3, "out of 3, still in 4");
+    at(15, "out of 4");
+    CHECK(run("local c = triggers.counter\n"
+              "v1, v2, v3, v4, v5, v6 = c('v_in3'), c('v_out3'), c('v_in4'), c('v_out4'), c('v_in5'), c('v_room')", "counting"));
+    std::printf("  in both at x -2: {%s}, its sector %g; 3 in %g out %g, 4 in %g out %g; 5 (over the head) %g; the room left %g\n",
+                str("v_both").c_str(), num("v_sec"), num("v1"), num("v2"), num("v3"), num("v4"), num("v5"), num("v6"));
+    CHECK(str("v_both") == "3,4" && num("v_sec") == 0);
+    CHECK(num("v1") == 1 && num("v2") == 1 && num("v3") == 1 && num("v4") == 1);
+    CHECK(num("v5") == 0);                      // CONTROL: its height is above the body's head
+    CHECK(num("v6") == 0);                      // CONTROL: the room was never left
 
     // ================================================================
     // A CUTSCENE: controls taken, bars in, two lines spoken one after another,
