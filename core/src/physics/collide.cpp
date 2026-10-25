@@ -963,6 +963,70 @@ bool reach_clear(const geom::MapData& map, i32 sector, fx2 from, fx2 to, fx z) n
     return hit.distance <= fx::zero() || hit.distance >= dist;
 }
 
+namespace {
+// Does the segment a-b pass through any platform's slab, [floor - thickness,
+// floor] over its footprint? The part of the segment inside the slab's heights,
+// then that part against the footprint: an end inside it, or a side crossed.
+// ponytail: every sector, each call (a few a frame); the broadphase along the
+// segment if maps come to have thousands.
+bool crosses_slab(const MapData& map, fx3 a, fx3 b) noexcept {
+    for (u32 s = 0; s < map.sector_count; ++s) {
+        const Sector& sec = map.sector(s);
+        if (sec.thickness <= fx::zero()) continue;
+        const fx low = sec.floor_z - sec.thickness, high = sec.floor_z;
+        fx t0 = fx::zero(), t1 = fx::one();
+        if (a.z == b.z) {
+            if (a.z <= low || a.z >= high) continue;
+        } else {
+            fx ta = (low - a.z) / (b.z - a.z), tb = (high - a.z) / (b.z - a.z);
+            if (ta > tb) { const fx k = ta; ta = tb; tb = k; }
+            if (ta > t0) t0 = ta;
+            if (tb < t1) t1 = tb;
+            if (t0 >= t1) continue;
+        }
+        const fx2 p0{a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0};
+        const fx2 p1{a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1};
+        if (point_in_sector(map, s, p0) || point_in_sector(map, s, p1)) return true;
+        for (u32 k = 0; k < sec.side_count; ++k) {
+            const Side& sd = map.side(sec.first_side + k);
+            fx t;
+            if (segment_intersect(p0, p1, map.point(sd.a), map.point(sd.b), t)) return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
+bool line_clear(const MapData& map, fx3 a, fx3 b) noexcept {
+    const fx2 d{b.x - a.x, b.y - a.y};
+    fx left = length(d);
+    if (left <= fx::zero()) return true;
+    if (crosses_slab(map, a, b)) return false;
+    const fx2 dir = normalize(d);
+    fx2 from{a.x, a.y};
+    fx z = a.z;
+    // One leg per platform edge the line leaves by; bounded like raycast's hops.
+    for (int legs = 0; legs < 8; ++legs) {
+        const i32 s = find_sector_at(map, from, z, fx::zero());
+        if (s < 0) return true;                                  // out in the void
+        const Sector& sec = map.sector(static_cast<u32>(s));
+        if (z >= sec.ceil_z) return true;                        // above the room
+        if (z < sec.floor_z) return false;                       // into its floor
+        const RayHit h = raycast(map, s, from, dir, left, 0, z, b.z);
+        if (!h.blocked) return true;
+        if (h.side < 0) return false;
+        const Side& sd = map.side(static_cast<u32>(h.side));
+        if (sd.neighbor != NO_SECTOR || (sd.flags & side_flag::LEDGE) == 0) return false;
+        // Off a platform's edge: on, a hair past it, at the line's height there.
+        const fx gone = h.distance + fx::from_frac(1, 64);
+        if (gone >= left) return true;
+        z = z + (b.z - z) * (gone / left);
+        from = from + dir * gone;
+        left = left - gone;
+    }
+    return false;
+}
+
 // The middle of a column, and then one end of it. See the header.
 bool can_see(const geom::MapData& map, i32 from_sector, fx3 eye,
              fx2 target, fx low, fx high) noexcept {

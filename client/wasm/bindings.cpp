@@ -871,28 +871,16 @@ int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long
 }
 
 // Whether the MAP leaves the straight line from a to b clear (in: six i64,
-// a then b, fx raw): walls, and floors, ceilings and steps along its height.
-// Bodies are not asked. For a marker hidden behind a wall (docs/MARKERS.md):
-// 1 clear, 0 blocked. A line starting outside the map is clear, so a camera
-// out in the void hides nothing.
+// a then b, fx raw): physics::line_clear, walls, heights and platforms. Bodies
+// are not asked. For the camera's walls and a marker hidden behind a wall
+// (docs/MARKERS.md): 1 clear, 0 blocked.
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_line_clear(const sim::World* w, const long long* in64) {
     const geom::MapData* m = w->map();
     if (m == nullptr) return 1;
     const fx3 a{fx::from_raw(in64[0]), fx::from_raw(in64[1]), fx::from_raw(in64[2])};
     const fx3 b{fx::from_raw(in64[3]), fx::from_raw(in64[4]), fx::from_raw(in64[5])};
-    const fx2 d{b.x - a.x, b.y - a.y};
-    const fx dist = length(d);
-    if (dist <= fx::zero()) return 1;
-    const i32 s = geom::find_sector_at(*m, fx2{a.x, a.y}, a.z, fx::zero());
-    if (s < 0) return 1;
-    // ABOVE THE ROOM, as the platformer's camera is: the map is drawn with its
-    // ceilings cut away, so the camera sees over walls the ray would call
-    // solid. Only a camera inside a room (first person) has walls between it
-    // and what it looks at.
-    if (a.z >= m->sector(static_cast<u32>(s)).ceil_z) return 1;
-    const physics::RayHit h = physics::raycast(*m, s, fx2{a.x, a.y}, normalize(d), dist, 0, a.z, b.z);
-    return h.blocked ? 0 : 1;
+    return physics::line_clear(*m, a, b) ? 1 : 0;
 }
 
 // The effects the predicted weapon would have been sent on the last step

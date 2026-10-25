@@ -27,6 +27,7 @@
 #include <memory>
 
 #include "dnp/sim/world.hpp"
+#include "dnp/physics/collide.hpp"
 
 using namespace dnp;
 using namespace dnp::geom;
@@ -605,6 +606,37 @@ static void test_a_platform_across_two_rooms() {
     CHECK(w.agent(a).pos.x > F(25) && w.agent(a).mv.sector == 1);
 }
 
+// THE CAMERA'S LINE AND A PLATFORM (physics::line_clear), on the straddling
+// platform above (x 15..25, y 5..10, top 2, slab 0..2). From the head of a body
+// on it out over its edge to a camera behind and above: clear. Through its slab
+// from beside it: blocked.
+static void test_the_cameras_line_and_a_platform() {
+    std::printf("line_clear: a platform's edge lets the camera's line on, its slab stops it\n");
+    static Straddle st;
+    const MapData& m = (st.view = st.store.view(), st.view);
+    // What the camera asked before: the ray from the head's sector alone.
+    auto ray_only = [&](fx3 a, fx3 b) {
+        const i32 s = find_sector_at(m, fx2{a.x, a.y}, a.z, fx::zero());
+        const fx2 d{b.x - a.x, b.y - a.y};
+        return !physics::raycast(m, s, fx2{a.x, a.y}, normalize(d), length(d), 0, a.z, b.z).blocked;
+    };
+    const fx3 head{F(18), Ff(15, 2), Ff(7, 2)}, behind{F(18), F(14), F(6)};
+    const fx3 beside{F(18), F(13), Ff(3, 2)}, low{F(18), F(2), Ff(6, 5)};
+    const fx3 beside_up{F(18), F(13), F(3)}, high{F(18), F(2), Ff(7, 2)};
+    const bool off_edge = physics::line_clear(m, head, behind);
+    const bool through = physics::line_clear(m, beside, low);
+    const bool over = physics::line_clear(m, beside_up, high);
+    const bool wall = physics::line_clear(m, fx3{F(5), F(8), F(1)}, fx3{F(-5), F(8), F(1)});
+    std::printf("  off the edge %d (the ray alone %d); through the slab %d (the ray alone %d); over it %d; a wall %d\n",
+                off_edge, ray_only(head, behind), through, ray_only(beside, low), over, wall);
+    CHECK(off_edge);
+    CHECK(!ray_only(head, behind));    // CONTROL: what the camera met: the edge as a wall
+    CHECK(!through);
+    CHECK(ray_only(beside, low));      // CONTROL: and the slab not there at all
+    CHECK(over);                       // CONTROL: above the slab is open
+    CHECK(!wall);                      // CONTROL: a room's wall is still a wall
+}
+
 // A LEDGE: room 0 (x 0..20, floor 0) beside room 1 (x 20..30, floor `h`), open
 // to each other at x = 20.
 // The default body's height (MoveParams), which the hang sits a head below a top by.
@@ -760,6 +792,7 @@ int main() {
     std::printf("== core/sweep test suite ==\n");
     test_a_variable_jump_follows_the_press();
     test_a_platform_across_two_rooms();
+    test_the_cameras_line_and_a_platform();
     test_a_ledge_is_caught_hung_from_and_hopped_onto();
     test_coyote_time_runs_out();
     test_it_finds_the_nearest();

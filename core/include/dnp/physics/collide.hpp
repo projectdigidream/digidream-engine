@@ -293,4 +293,16 @@ bool can_see(const geom::MapData& map, i32 from_sector, fx3 eye,
 // it and in nobody's way.
 bool reach_clear(const geom::MapData& map, i32 sector, fx2 from, fx2 to, fx z) noexcept;
 
+// DOES THE MAP LEAVE THE STRAIGHT LINE FROM a TO b CLEAR? For the camera's
+// walls and a marker's occlusion (client/wasm bindings), not for gameplay:
+// walls, and floors, ceilings and steps along its height, as raycast judges
+// them -- and PLATFORMS, which raycast's walk from sector to sector cannot see.
+// A platform shares no side with the room it stands in, so its own open edge
+// (LEDGE, no neighbour) reads as a wall to a line leaving it, and its slab is
+// invisible to a line crossing the room. Here the edge lets the line on, into
+// whatever room is beyond it at that height, and a slab stops it.
+// A line starting outside the map, or above its room (the platformer's camera
+// sees over walls, the ceilings cut away), is clear.
+bool line_clear(const geom::MapData& map, fx3 a, fx3 b) noexcept;
+
 }  // namespace dnp::physics

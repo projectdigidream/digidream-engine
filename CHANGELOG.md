@@ -14,6 +14,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **The automatic camera on a platform**: walls pulling the camera in took
+  the platform's own open edge for a wall, so on a platform the camera
+  snapped in close, and beside one it did not see the platform at all and
+  went in under it or through it. The platform's edge now lets the camera
+  out over it, and its slab pulls the camera in like a wall. Markers hidden
+  behind a platform are hidden too.
+
 ### Changed
 
 - **A ledge is caught only on the way down.** Rising past one, a jump goes
