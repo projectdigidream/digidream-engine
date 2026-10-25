@@ -619,6 +619,7 @@ suite_studio () {
   fi
   node ../studio/test/bake.test.js | tail -2
   node ../studio/test/topology.test.js | tail -2
+  node ../studio/test/rooms.test.js | tail -1
   node ../studio/test/mapfmt.test.js | tail -2
   node ../studio/test/pack.test.js | tail -2
   # The GitHub sync plugin's engine: two devices against a fake GitHub.
