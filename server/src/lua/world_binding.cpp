@@ -21,6 +21,7 @@ extern "C" {
 #include "lauxlib.h"
 #include "lua.h"
 }
+#include "lua/lua51_compat.hpp"
 
 namespace dnp::server::lua {
 
@@ -28,6 +29,14 @@ namespace {
 
 const char* const ENTITY_MT = "dnp.entity";
 const char* const CTX_KEY   = "dnp_world_ctx";
+
+// An angle argument in brad, of any size and either sign, wrapped to a turn
+// (2^32) as every angle in the engine wraps. A negative or huge double cast
+// straight to u32 is undefined -- and in wasm (the web build) a trap.
+brad check_brad(lua_State* L, int idx) {
+    const double d = std::fmod(luaL_checknumber(L, idx), 4294967296.0);
+    return brad(static_cast<u32>(static_cast<i64>(d < 0 ? d + 4294967296.0 : d)));
+}
 
 WorldContext& ctx_of(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, CTX_KEY);
@@ -357,7 +366,7 @@ int l_entity_set_input(lua_State* L) {
     proto::InputFrame f;
     f.move_x = axis(2);
     f.move_y = axis(3);
-    f.aim = brad(static_cast<u32>(luaL_checknumber(L, 4)));
+    f.aim = check_brad(L, 4);
     f.buttons = static_cast<u16>(lua_isnoneornil(L, 5) ? 0 : luaL_checknumber(L, 5));
     ctx.world->set_input(static_cast<u32>(a), f);
     return 0;
@@ -1022,7 +1031,7 @@ int l_prop_set_facing(lua_State* L) {
     const i32 e = resolve_prop(L, ctx, check_prop_handle(L, 1));
     if (e < 0) return 0;
     ctx.world->prop_mut(static_cast<u32>(e)).facing =
-        brad(static_cast<u32>(luaL_checknumber(L, 2)));
+        check_brad(L, 2);
     return 0;
 }
 
@@ -2649,7 +2658,7 @@ int l_dnp_vfx(lua_State* L) {
     sim::PendingVfx v;
     v.kind = static_cast<u16>(luaL_checknumber(L, 1));
     v.pos = ctx.to_world(check_vec3(L, 2));
-    v.dir = brad(lua_isnoneornil(L, 3) ? 0u : static_cast<u32>(luaL_checknumber(L, 3)));
+    v.dir = lua_isnoneornil(L, 3) ? brad(0u) : check_brad(L, 3);
     v.param = lua_isnoneornil(L, 4) ? 0u : static_cast<u32>(luaL_checknumber(L, 4));
     // An optional entity whose own client already drew this one, from its
     // predicted weapon (docs/WEAPON_PREDICTION.md): everybody else is sent it,
@@ -3120,7 +3129,7 @@ int l_dnp_atan2(lua_State* L) {
 
 // dnp.dir(brad) -> a unit vec3 in the XY plane
 int l_dnp_dir(lua_State* L) {
-    const fx2 d = fx_dir(brad(static_cast<u32>(luaL_checknumber(L, 1))));
+    const fx2 d = fx_dir(check_brad(L, 1));
     push_vec3(L, fx3{d.x, d.y, fx::zero()});
     return 1;
 }
@@ -3156,6 +3165,11 @@ bool encode_at(lua_State* L, int idx, std::string& out, std::string& err,
                int depth, const std::string& path, bool handles = false) {
     // Lua 5.1 (LuaJIT) has no lua_absindex.
     if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
+    // ROOM ON THE LUA STACK for this level's key, value and key copy. Lua
+    // promises 20 free slots and no more; at three a level, a table nested
+    // seven deep wrote past the stack's end -- unseen under LuaJIT, whose stack
+    // starts bigger, and a corrupted heap under PUC Lua 5.1 (the web build).
+    if (!lua_checkstack(L, 4)) { err = "out of Lua stack at " + path; return false; }
     switch (lua_type(L, idx)) {
         // Only ever at the top: a table holds no nils. A function returning
         // `nil, x` across two VMs (CrossSink) is the case it is for.
@@ -3270,6 +3284,8 @@ bool read_i64(Reader& r, long long& v) {
 }
 
 bool decode_at(lua_State* L, Reader& r, std::string& err, int depth, bool handles = false) {
+    // As encode_at: a table, a key and a value a level.
+    if (!lua_checkstack(L, 4)) { err = "out of Lua stack"; return false; }
     if (r.at_end()) { err = "save data ends early"; return false; }
     if (depth >= MAX_SAVE_DEPTH) { err = "save data nested too deep"; return false; }
     const char c = r.s[r.i++];

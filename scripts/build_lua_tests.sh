@@ -16,17 +16,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$ROOT/.." && pwd)"
 OUT="$ROOT/build/lua"
 LJ="$ROOT/third_party/luajit"
+LUA_INC="$LJ/src"
+LUA_LIB="$LJ/src/libluajit.a"
+# DNP_LUA=lua51: the same tests on PUC Lua 5.1 (scripts/setup_lua51.sh), what the
+# web build's server runs, into build/lua-lua51.
+if [[ "${DNP_LUA:-}" == "lua51" ]]; then
+  OUT="$ROOT/build/lua-lua51"
+  LUA_INC="$ROOT/third_party/lua51/lua-5.1.5/src"
+  LUA_LIB="$ROOT/third_party/lua51/build/host/liblua.a"
+fi
 
-if [[ ! -f "$LJ/src/libluajit.a" ]]; then
-  echo "[lua-tests] LuaJIT not installed -- run scripts/setup_luajit.sh" >&2
+if [[ ! -f "$LUA_LIB" ]]; then
+  echo "[lua-tests] Lua not installed at $LUA_LIB -- run scripts/setup_luajit.sh (or setup_lua51.sh)" >&2
   exit 2
 fi
 
 mkdir -p "$OUT"
 
 FLAGS=(-std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror
-       -I"$ROOT/core/include" -I"$ROOT/server/src" -I"$LJ/src")
-LINK=("$LJ/src/libluajit.a" -lm)
+       -I"$ROOT/core/include" -I"$ROOT/server/src" -I"$LUA_INC")
+LINK=("$LUA_LIB" -lm)
 [[ "$(uname -s)" == "Darwin" ]] || LINK+=(-ldl)
 
 SRCS=("$ROOT/server/src/lua/vm.cpp" "$ROOT/server/src/lua/fx_binding.cpp")

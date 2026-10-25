@@ -14,6 +14,26 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **Saving a deeply nested table could write past the end of Lua's stack.**
+  The save encoder and decoder (`dnp.persist`, saved levels, cross-VM calls)
+  pushed three values per level without asking Lua for room, and Lua promises
+  only twenty. A table seven levels deep could damage the server's memory.
+  They now ask, and refuse with "out of Lua stack" if Lua cannot give it.
+- **A negative angle passed from Lua was undefined behaviour**: `dnp.dir`, a
+  prop's facing, an effect's direction and a scripted aim. The angle is now
+  wrapped to a turn first, so a negative angle turns the other way.
+
+### Changed
+
+- **Scripts should keep to Lua 5.1**: no `goto`, no `ffi`, no `jit`. The coming
+  single-player web build runs its server on PUC Lua 5.1, because LuaJIT
+  cannot run in WebAssembly. The `bit` library stays, bundled there too. The
+  engine's own scripts keep to it, the one `goto` in `mobs.lua` is gone, and
+  `scripts/test.sh lua51` runs the Lua tests on it (`scripts/setup_lua51.sh`
+  installs it).
+
 ### Added
 
 - **A test stack your own devices reach from anywhere**: `scripts/run_stack.sh

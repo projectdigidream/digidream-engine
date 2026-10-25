@@ -1608,61 +1608,60 @@ function acts.hitscan(m, a)
     -- impact point and every pellet then flew.
     if at == nil then
       if M.on_shot then M.on_shot(m, nil, a.range) end
-      goto next_pellet
-    end
+    else
 
-    -- The tracer carries its START, its DIRECTION and its LENGTH. A client
-    -- given only the impact has no idea where the shot came from; one given
-    -- only a direction draws a line to infinity through whatever it hit.
-    --
-    -- The muzzle height is `at.z` -- the height the ENGINE cast at -- rather
-    -- than a guess, and the direction is the body's FACING rather than its
-    -- aim: turning is a rate, so those differ while a monster is still coming
-    -- round, and drawing the intent puts the line beside the thing it hit.
-    --
-    -- PLUS THIS PELLET'S OWN OFFSET, which is the whole of what makes a shotgun
-    -- look like one. Without it every pellet's tracer is drawn down the centre
-    -- line: seven rays are cast, seven scatter, seven land in different places
-    -- -- and seven tracers are stacked on top of each other, so the player sees
-    -- ONE. The damage was right and the picture was a lie, which is the worst
-    -- way round.
-    if a.tracer then
-      local from = m.p or m.e:pos()
-      local len = dnp.length(vec3.new(at.x - from.x, at.y - from.y, ZERO))
-      -- AND ITS RISE, so the line is drawn where the bullet went.
+      -- The tracer carries its START, its DIRECTION and its LENGTH. A client
+      -- given only the impact has no idea where the shot came from; one given
+      -- only a direction draws a line to infinity through whatever it hit.
       --
-      -- `at.z` is where the ray ENDED, so the muzzle is that height less
-      -- whatever the slope climbed on the way there -- the engine's own
-      -- arithmetic read backwards rather than a second guess at eye height,
-      -- which is how the two would come to disagree. A flat shot climbs
-      -- nothing and this is the line it always was.
-      local rise = slope ~= nil and slope * len or ZERO
-      local muzzle = vec3.new(from.x, from.y, at.z - rise)
-      -- Length and rise in 1/256 units, which the event carries as one u32.
-      -- A shot the core aimed was drawn by its shooter's own client the
-      -- moment it was predicted (World::present_weapon): sent to everybody
-      -- but that client.
-      dnp.vfx(a.tracer, muzzle, wrap_brad(m.e:facing() + off),
-              tracer_param(len, rise), a.offsets ~= nil and m.e or nil)
-    end
+      -- The muzzle height is `at.z` -- the height the ENGINE cast at -- rather
+      -- than a guess, and the direction is the body's FACING rather than its
+      -- aim: turning is a rate, so those differ while a monster is still coming
+      -- round, and drawing the intent puts the line beside the thing it hit.
+      --
+      -- PLUS THIS PELLET'S OWN OFFSET, which is the whole of what makes a shotgun
+      -- look like one. Without it every pellet's tracer is drawn down the centre
+      -- line: seven rays are cast, seven scatter, seven land in different places
+      -- -- and seven tracers are stacked on top of each other, so the player sees
+      -- ONE. The damage was right and the picture was a lie, which is the worst
+      -- way round.
+      if a.tracer then
+        local from = m.p or m.e:pos()
+        local len = dnp.length(vec3.new(at.x - from.x, at.y - from.y, ZERO))
+        -- AND ITS RISE, so the line is drawn where the bullet went.
+        --
+        -- `at.z` is where the ray ENDED, so the muzzle is that height less
+        -- whatever the slope climbed on the way there -- the engine's own
+        -- arithmetic read backwards rather than a second guess at eye height,
+        -- which is how the two would come to disagree. A flat shot climbs
+        -- nothing and this is the line it always was.
+        local rise = slope ~= nil and slope * len or ZERO
+        local muzzle = vec3.new(from.x, from.y, at.z - rise)
+        -- Length and rise in 1/256 units, which the event carries as one u32.
+        -- A shot the core aimed was drawn by its shooter's own client the
+        -- moment it was predicted (World::present_weapon): sent to everybody
+        -- but that client.
+        dnp.vfx(a.tracer, muzzle, wrap_brad(m.e:facing() + off),
+                tracer_param(len, rise), a.offsets ~= nil and m.e or nil)
+      end
 
-    -- An observability hook, for anything that wants to know what the shots
-    -- are actually doing. `reached` is how far the bullet got -- which is the
-    -- number a tracer draws, so a range test can measure the thing a player
-    -- sees rather than infer it from a description.
-    if M.on_shot then
-      local dx, dy = at.x - (m.p or m.e:pos()).x, at.y - (m.p or m.e:pos()).y
-      M.on_shot(m, target, dnp.length(vec3.new(dx, dy, ZERO)))
-    end
+      -- An observability hook, for anything that wants to know what the shots
+      -- are actually doing. `reached` is how far the bullet got -- which is the
+      -- number a tracer draws, so a range test can measure the thing a player
+      -- sees rather than infer it from a description.
+      if M.on_shot then
+        local dx, dy = at.x - (m.p or m.e:pos()).x, at.y - (m.p or m.e:pos()).y
+        M.on_shot(m, target, dnp.length(vec3.new(dx, dy, ZERO)))
+      end
 
-    -- The shot ARRIVES. dnp.hitscan already answered what was in the way,
-    -- walls included, so a target here is one the bullet actually reached.
-    if target ~= nil and target:valid() then
-      hurt(target, a.damage, m)
-      M.apply_hit(target, m.p or m.e:pos(), a)
-    end
+      -- The shot ARRIVES. dnp.hitscan already answered what was in the way,
+      -- walls included, so a target here is one the bullet actually reached.
+      if target ~= nil and target:valid() then
+        hurt(target, a.damage, m)
+        M.apply_hit(target, m.p or m.e:pos(), a)
+      end
 
-    ::next_pellet::
+    end
   end
 end
 

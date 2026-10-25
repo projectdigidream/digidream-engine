@@ -73,7 +73,9 @@ static void test_full_trust_reaches_the_machine() {
     CHECK(reachable(vm, "os"));
     CHECK(reachable(vm, "os.time"));
     CHECK(reachable(vm, "require"));
-    CHECK(reachable(vm, "require('ffi')"));
+#if __has_include("luajit.h")
+    CHECK(reachable(vm, "require('ffi')"));   // PUC Lua 5.1 (the web build) has no ffi
+#endif
     CHECK(reachable(vm, "package"));
 
     // Actually touch the disk, rather than merely finding the symbol.
@@ -280,9 +282,10 @@ static void test_the_jit_is_off_because_the_budget_requires_it() {
     Vm vm;
     VmConfig cfg;
     CHECK(vm.open(cfg));
-    CHECK(run(vm, "if jit.status() then error('JIT is on: the instruction budget "
+    // PUC Lua 5.1 (DNP_LUA=lua51, the web build) has no JIT at all.
+    CHECK(run(vm, "if jit and jit.status() then error('JIT is on: the instruction budget "
                   "is unenforceable inside compiled traces') end"));
-    std::printf("       jit.status() == false\n");
+    std::printf("       jit.status() == false, or no jit\n");
 }
 
 // Two scripts, one hook, and both must run.

@@ -461,6 +461,25 @@ suite_lua () {
   fi
 }
 
+# The server's Lua tests on PUC Lua 5.1, what the single-player web build runs.
+suite_lua51 () {
+  need_maps
+  # LuaJIT has no wasm port, so the web build's server runs PUC Lua 5.1
+  # (scripts/setup_lua51.sh). The same tests, the same scripts, so a script
+  # that only LuaJIT takes (a goto, ffi) is found here, not in a browser.
+  if [[ -f third_party/lua51/build/host/liblua.a ]]; then
+    DNP_LUA=lua51 ./scripts/build_lua_tests.sh >/dev/null
+    for t in test_lua_vm test_lua_fx test_lua_effects test_lua_persist test_lua_triggers test_lua_shootrange test_lua_mobneeds; do
+      "./build/lua-lua51/$t" | tail -1
+    done
+    for t in test_lua_graphs test_mob_graph test_mob_loop test_lua_weapons test_lua_game; do
+      "./build/lua-lua51/$t" . | tail -1
+    done
+  else
+    echo "  skip lua51 tests (run: scripts/setup_lua51.sh)"
+  fi
+}
+
 # The core under ASan + UBSan.
 suite_sanitizers () {
   # Not redundant with the tests above. UBSan is what catches undefined behaviour
@@ -1094,7 +1113,7 @@ suite_fps () {
 
 # --- which, and in what order ----------------------------------------------------
 
-ALL=(guards core tools lua sanitizers determinism client studio app browser stack fps)
+ALL=(guards core tools lua lua51 sanitizers determinism client studio app browser stack fps)
 QUICK=(guards core tools lua client)
 
 if [[ "${1:-}" == "--list" ]]; then

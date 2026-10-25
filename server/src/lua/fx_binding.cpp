@@ -9,6 +9,7 @@ extern "C" {
 #include "lauxlib.h"
 #include "lua.h"
 }
+#include "lua/lua51_compat.hpp"
 
 namespace dnp::server::lua {
 
@@ -139,8 +140,11 @@ int l_fx_tostring(lua_State* L) {
     const u64 frac = mag & 0xFFFFFFFFull;
     // Six decimal places, computed in integers.
     const u64 micros = (frac * 1000000ull) >> 32;
-    lua_pushfstring(L, "%s%d.%06d", neg ? "-" : "", static_cast<int>(whole),
-                    static_cast<int>(micros));
+    // snprintf, not lua_pushfstring: PUC Lua 5.1's takes no widths (the web build).
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%s%llu.%06llu", neg ? "-" : "",
+                  static_cast<unsigned long long>(whole), static_cast<unsigned long long>(micros));
+    lua_pushstring(L, buf);
     return 1;
 }
 

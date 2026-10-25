@@ -12,7 +12,11 @@
 extern "C" {
 #include "lauxlib.h"
 #include "lua.h"
-#include "luajit.h"
+#if __has_include("luajit.h")
+#include "luajit.h"   // PUC Lua 5.1 (the web build, DNP_LUA=lua51) has no JIT to turn off
+#else
+int luaopen_bit(lua_State* L);   // Lua BitOp, in liblua.a (setup_lua51.sh)
+#endif
 #include "lualib.h"
 }
 
@@ -151,8 +155,9 @@ void Vm::count_hook(lua_State* L, lua_Debug* /*ar*/) {
         lua_sethook(L, count_hook, LUA_MASKCOUNT, 1);
     }
 
-    luaL_error(L, "instruction budget exceeded in '%s' (%u per call / %u per tick)",
-               vm->current_, vm->cfg_.budget_per_call, vm->cfg_.budget_per_tick);
+    // %d, not %u: PUC Lua 5.1's luaL_error knows only %d %s %f %p %c (the web build).
+    luaL_error(L, "instruction budget exceeded in '%s' (%d per call / %d per tick)",
+               vm->current_, static_cast<int>(vm->cfg_.budget_per_call), static_cast<int>(vm->cfg_.budget_per_tick));
 }
 
 bool Vm::open(const VmConfig& cfg) {
@@ -168,6 +173,12 @@ bool Vm::open(const VmConfig& cfg) {
     }
 
     luaL_openlibs(L_);
+#ifndef LUAJIT_VERSION
+    // `bit`, which LuaJIT's openlibs opens and PUC Lua 5.1's does not (Lua
+    // BitOp, the same library; scripts/setup_lua51.sh).
+    lua_pushcfunction(L_, luaopen_bit);
+    lua_call(L_, 0, 0);
+#endif
 
     // The hook needs to find this Vm from a bare lua_State.
     lua_pushlightuserdata(L_, this);
@@ -210,7 +221,9 @@ bool Vm::open(const VmConfig& cfg) {
     // would have bought nothing and cost the only control that can stop a
     // runaway script. Making those calls cheaper is a different piece of work
     // and does not start here.
+#ifdef LUAJIT_VERSION
     luaJIT_setmode(L_, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_OFF);
+#endif
 
     const char* prof = std::getenv("DNP_LUA_PROFILE");
     profile_ = prof != nullptr && prof[0] == '1';
