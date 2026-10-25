@@ -1437,6 +1437,13 @@ void dnp_map_set_sector_render(geom::MapStorage* m, unsigned i, unsigned floor_t
     m->sector_mut(i).thickness = fx::from_raw(thickness64[0]);
 }
 
+// An effect sector (`sector type effect`, geom::Sector::effect), for a reader
+// that builds a map itself (editor/src/build.js) rather than through mapc.
+EMSCRIPTEN_KEEPALIVE
+void dnp_map_set_sector_effect(geom::MapStorage* m, unsigned i, int on) {
+    if (i < m->sector_count()) m->sector_mut(i).effect = on != 0;
+}
+
 // HOW A FLAT IS PAINTED: `which` is 0 for the floor and 1 for the ceiling, and
 // off64 is {off_x, off_y, scale} in raw fx.
 //
