@@ -168,7 +168,7 @@ async function measure (n, dormant = false) {
     throw new Error(`asked for dormant=${dormant} and the level reported ${asked[4]}`)
   }
   const rows = [...log.matchAll(
-    /\[perf\] (\d+) ticks {2}agents (\d+) {2}lua (\d+) us {2}step (\d+) us {2}snap (\d+) us {2}total (\d+) us of (\d+) {2}worst (\d+) us/g)]
+    /\[perf\] (\d+) ticks {2}agents (\d+)(?: {2}levels \S+)? {2}lua (\d+) us {2}step (\d+) us {2}snap (\d+) us {2}total (\d+) us of (\d+) {2}worst (\d+) us/g)]
 
   // The agent broadphase falling back to the full O(n^2) sweep. It is not a
   // wrong answer -- the fallback IS the reference sweep -- but it costs exactly
