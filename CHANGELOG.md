@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.8 -- 2026-10-25
+
 ### Fixed
 
 - **The automatic camera on a platform**: walls pulling the camera in took
