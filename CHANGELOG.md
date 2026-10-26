@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.10 -- 2026-10-26
+
 ### Added
 
 - **Props, monsters and players are lit by the map**, as its walls and floors
