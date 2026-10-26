@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.9 -- 2026-10-26
+
 ### Fixed
 
 - **The automatic camera could show what is behind a wall** when it was
@@ -36,8 +38,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Changed
 
-- **Scripts should keep to Lua 5.1**: no `goto`, no `ffi`, no `jit`. The coming
-  single-player web build runs its server on PUC Lua 5.1, because LuaJIT
+- **Scripts should keep to Lua 5.1**: no `goto`, no `ffi`, no `jit`. The
+  single-player web build (below) runs its server on PUC Lua 5.1, because LuaJIT
   cannot run in WebAssembly. The `bit` library stays, bundled there too. The
   engine's own scripts keep to it, the one `goto` in `mobs.lua` is gone, and
   `scripts/test.sh lua51` runs the Lua tests on it (`scripts/setup_lua51.sh`
