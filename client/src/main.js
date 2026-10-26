@@ -30,7 +30,7 @@ import { Sky, skyFromMessage } from './render/sky.js'
 import { ColliderView } from './render/colliders.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  viewYaw, between, autoTurnYaw, clearFraction, byHeight,
+  viewYaw, between, autoTurnYaw, clearBall, byHeight,
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
@@ -659,7 +659,11 @@ let yaw = START_YAW
 // When the player last turned the camera themselves (ms, the frame clock): the
 // automatic camera leaves it alone for autoDelay seconds after.
 let camTurnedAt = -Infinity
-// The automatic camera's distance as walls leave it (camera.js clearFraction):
+// THE AUTOMATIC CAMERA'S SIZE, with walls on (camera.js clearBall): a ball this
+// wide is kept clear of the map, and it comes no nearer the head than the other.
+const CAM_BALL = 0.35
+const CAM_NEAREST = 0.3
+// The automatic camera's distance as walls leave it (camera.js clearBall):
 // in at once, out again gently.
 let camClearDistance = null
 // Camera paths (design 4.1). The TAG, not an index: inserting a path earlier in
@@ -1049,6 +1053,10 @@ if (region) {
   simStore = map
 }
 let world = core.createWorld({ map: simStore })
+// The map's line test for the automatic camera's ball (CAM_BALL), from floats.
+const camFx = (v) => BigInt(Math.round(v * 4294967296))
+const camLineClear = (a, b) => world.lineClear({ x: camFx(a.x), y: camFx(a.y), z: camFx(a.z) },
+                                               { x: camFx(b.x), y: camFx(b.y), z: camFx(b.z) })
 
 if (LIVE && welcome && map.hash !== welcome.mapHash) {
   // Same bytes, different parse: that is a build mismatch, and it is worth
@@ -3534,17 +3542,17 @@ function frame (now) {
     camDist = h.distance
     camPitch = h.elevation
   }
-  if (!isFps() && camCfg.collide >= 0.5) {
+  const camWalls = !isFps() && camCfg.collide >= 0.5
+  const camHead = { x: px, y: py, z: pz + (aimH > 0 ? aimH : bodyHeight * 0.9) }
+  if (camWalls) {
     // From the head to where the camera wants to be, in the engine's frame;
     // a wall in the way pulls the camera in front of it, at once, and it eases
-    // back out to its distance when the way is clear.
+    // back out to its distance when the way is clear. The camera is a ball
+    // (CAM_BALL, camera.js clearBall), so its near plane stays this side too.
     const want = cameraOffset(yaw, camDist, camPitch)
-    const FX = (v) => BigInt(Math.round(v * 4294967296))
-    const head = { x: px, y: py, z: pz + (aimH > 0 ? aimH : bodyHeight * 0.9) }
-    const at = (t) => ({ x: FX(head.x + want.x * t), y: FX(head.y - want.z * t), z: FX(head.z + want.y * t) })
-    const from = at(0)
-    const t = clearFraction((f) => world.lineClear(from, at(f)))
-    const reach = Math.max(1, camDist * t - 0.4)
+    const t = clearBall(camLineClear, camHead,
+                        { x: camHead.x + want.x, y: camHead.y - want.z, z: camHead.z + want.y }, CAM_BALL)
+    const reach = Math.max(CAM_NEAREST, camDist * t)
     camClearDistance = camClearDistance === null || reach < camClearDistance
       ? Math.min(reach, camDist)
       : Math.min(reach, camClearDistance + (camDist - camClearDistance) * (1 - Math.exp(-2 * dt)))
@@ -3617,6 +3625,21 @@ function frame (now) {
   const aimed = aimH && !isFps() ? { x: subject.x, y: subject.y + aimH, z: subject.z } : subject
   const eye = camera.update(aimed, dt, facingDirection(a.facing), camPathSpline,
                             { x: fxToFloat(a.vel.x), z: -fxToFloat(a.vel.y) })
+  // AND WHERE IT EASED TO. The eye follows its target with a spring, so on the
+  // way it can cut a corner the target never crossed; the ball is checked again
+  // there, the eye pulled in along the line to the head, and the spring set to
+  // where it was pulled to, so it does not keep pressing into the wall.
+  if (camWalls && !camPathSpline) {
+    const to = { x: eye.x, y: -eye.z, z: eye.y }   // three to the engine's frame
+    const t = clearBall(camLineClear, camHead, to, CAM_BALL)
+    if (t < 1) {
+      eye.x = camHead.x + (to.x - camHead.x) * t
+      eye.y = camHead.z + (to.z - camHead.z) * t
+      eye.z = -(camHead.y + (to.y - camHead.y) * t)
+      camera.position.x = eye.x; camera.position.y = eye.y; camera.position.z = eye.z
+      camera.velocity.x = 0; camera.velocity.y = 0; camera.velocity.z = 0
+    }
+  }
   cam3.position.set(eye.x, eye.y, eye.z)
   cam3.lookAt(eye.lookAt.x, eye.lookAt.y, eye.lookAt.z)
   // FIRST PERSON: the camera is the player's eyes, looking where the view does,
@@ -3649,7 +3672,9 @@ function frame (now) {
   // CORNERS reach further than its centre -- about 1.7x at this field of view --
   // so it has to sit well inside the radius, not just under it. Depth
   // precision at 0.05 is still ~1 cm at 100 m.
-  const wantNear = isFps() && !camPathSpline ? 0.05 : 0.5
+  // The automatic camera with walls on: 0.15, whose corners (~0.17 at this
+  // field of view) stay inside its ball (CAM_BALL), however close it is pulled.
+  const wantNear = isFps() && !camPathSpline ? 0.05 : camWalls ? 0.15 : 0.5
   if (cam3.near !== wantNear) { cam3.near = wantNear; cam3.updateProjectionMatrix() }
   if (isFps() && !camPathSpline) {
     // The core's eye, where a first-person shot leaves from (EYE_FRACTION).

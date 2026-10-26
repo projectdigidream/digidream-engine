@@ -703,6 +703,41 @@ export function clearFraction (clear, steps = 8) {
   return lo
 }
 
+/**
+ * THE CAMERA AS A BALL, not a point (the automatic camera's walls): the largest
+ * t in [0, 1] for which a ball of `radius` at from + (to - from) * t is clear of
+ * the map -- the line to its centre clear, and five short lines from the centre
+ * out to its surface (right, left, up, down and back, square to and along the
+ * line) clear too. `clear(a, b)` judges a line; points are in the engine's
+ * frame, z up, as world.lineClear takes them.
+ *
+ * Why a ball: a point camera stopped in front of a wall still draws past it.
+ * The picture starts at the near plane, a rectangle around the camera whose
+ * corners reach further than the camera's own distance to a wall beside it, or
+ * to the one it backed up to -- and past that rectangle nothing is drawn.
+ */
+export function clearBall (clear, from, to, radius, steps = 8) {
+  const d = { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z }
+  const len = Math.hypot(d.x, d.y, d.z)
+  if (len < 1e-9) return 1
+  const f = { x: d.x / len, y: d.y / len, z: d.z / len }
+  // Right: level, square to the line (any level direction for a line straight
+  // up or down). Up: square to both.
+  let rx = f.y, ry = -f.x
+  const rl = Math.hypot(rx, ry)
+  if (rl < 1e-9) { rx = 1; ry = 0 } else { rx /= rl; ry /= rl }
+  const u = { x: ry * f.z, y: -rx * f.z, z: rx * f.y - ry * f.x }
+  const dirs = [{ x: rx, y: ry, z: 0 }, { x: -rx, y: -ry, z: 0 }, u, { x: -u.x, y: -u.y, z: -u.z }, f]
+  return clearFraction((t) => {
+    const p = { x: from.x + d.x * t, y: from.y + d.y * t, z: from.z + d.z * t }
+    if (!clear(from, p)) return false
+    for (const o of dirs) {
+      if (!clear(p, { x: p.x + o.x * radius, y: p.y + o.y * radius, z: p.z + o.z * radius })) return false
+    }
+    return true
+  }, steps)
+}
+
 export function cameraOffset (yaw, distance = DEFAULT_DISTANCE, elevation = ISO_ELEVATION) {
   const horizontal = Math.cos(elevation) * distance
   return {

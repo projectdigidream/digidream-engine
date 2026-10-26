@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, clearFraction, byHeight
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, clearFraction, clearBall, byHeight
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -1015,6 +1015,27 @@ console.log('camera: a lead that grows with forward speed')
   check(near(o.y, 2, 1e-9) && near(Math.hypot(o.x, o.z), 4, 1e-9), `3 up and 4 behind, aimed 1 up: ${o.y.toFixed(3)} above the aim, ${Math.hypot(o.x, o.z).toFixed(3)} behind`)
   const below = byHeight(4, 0.5, 1)
   check(below.elevation < 0, 'CONTROL: a camera below the aim point looks up at it')
+}
+
+// THE CAMERA AS A BALL: a wall at x = 2 (a line reaching it is blocked).
+{
+  const wall = (a, b) => Math.max(a.x, b.x) < 2
+  const head = { x: 0, y: 0, z: 1 }
+  // Along the wall, 1.8 from it: the line is clear, a ball of 0.35 is not.
+  const along = { x: 1.8, y: -6, z: 1 }
+  const point = clearBall(wall, head, along, 0)
+  const ball = clearBall(wall, head, along, 0.35)
+  check(point === 1, `CONTROL: a point camera beside the wall is clear (${point})`)
+  check(ball < 1 && ball > 0, `a ball there is held back from the wall (${ball.toFixed(3)} of the way)`)
+  // Straight at it from 0 to 4: the point stops at the wall, the ball 0.35 short of it.
+  const at = { x: 4, y: 0, z: 1 }
+  const p = clearBall(wall, head, at, 0) * 4
+  const b = clearBall(wall, head, at, 0.35) * 4
+  check(Math.abs(p - 2) < 0.03 && Math.abs(b - 1.65) < 0.03,
+        `toward the wall a point reaches ${p.toFixed(2)}, the ball ${b.toFixed(2)} (2 and 1.65)`)
+  // And a clear way is clear whatever the size, straight up included.
+  check(clearBall(wall, head, { x: -4, y: 3, z: 2 }, 0.35) === 1 && clearBall(wall, head, { x: 0, y: 0, z: 5 }, 0.35) === 1,
+        'away from the wall, and straight up, all clear')
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)

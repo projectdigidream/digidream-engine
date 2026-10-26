@@ -16,6 +16,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Fixed
 
+- **The automatic camera could show what is behind a wall** when it was
+  pulled in close to one. With walls on, it now has a size: a ball 0.35 units
+  across that it keeps clear of the map. It is checked both where the camera
+  wants to be and where its easing has taken it, so it cannot cut through a
+  corner on the way. Its near plane is smaller while walls are on (0.15), so
+  the picture starts inside that ball. It also no longer holds a minimum
+  distance of one unit from the player, which could put it behind a wall
+  right behind the player.
+
 - **Saving a deeply nested table could write past the end of Lua's stack.**
   The save encoder and decoder (`dnp.persist`, saved levels, cross-VM calls)
   pushed three values per level without asking Lua for room, and Lua promises
