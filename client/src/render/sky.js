@@ -23,6 +23,7 @@
 // module with no sky looks exactly as it did.
 //
 
+import { BASE } from '../base.js'
 export const SKY_KIND = Object.freeze({ NONE: 0, STRIP: 1, PANORAMA: 2, CUBE: 3 })
 // The wire's field ids (MSG.SKY_SET, docs/SKY.md): thousandths.
 export const SKY_FIELD = Object.freeze({ 1: 'repeat', 2: 'yaw', 3: 'height' })
@@ -162,7 +163,7 @@ const SURFACE_FRAGMENT = /* glsl */`
  * scene, and the material every MapView gives its sky surfaces.
  */
 export class Sky {
-  constructor (THREE, { baseUrl = '/textures', clear = 0x0b0d12, warn = (m) => console.warn(m) } = {}) {
+  constructor (THREE, { baseUrl = `${BASE}textures`, clear = 0x0b0d12, warn = (m) => console.warn(m) } = {}) {
     this.THREE = THREE
     this.baseUrl = baseUrl
     this.warn = warn

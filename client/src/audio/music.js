@@ -26,6 +26,7 @@
 // player touches something is the browser's rule, not a fault to work around.
 //
 
+import { BASE } from '../base.js'
 const READY_TIMEOUT_MS = 10000
 
 // What midisynth renders at, and cannot be told otherwise: SAMPLE_RATE in
@@ -48,7 +49,7 @@ export class Music {
    * @param contentUrl  where gm_bank.json and gm_kit.json live
    * @param onStatus    called ~10 Hz with the worklet's status feed
    */
-  constructor ({ baseUrl = '/synth', contentUrl = '/synth-content',
+  constructor ({ baseUrl = `${BASE}synth`, contentUrl = `${BASE}synth-content`,
                  onStatus = null, log = () => {} } = {}) {
     this.baseUrl = baseUrl
     this.contentUrl = contentUrl

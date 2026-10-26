@@ -11,9 +11,10 @@
 //
 import { createServer } from 'node:http'
 import { createServer as createTlsServer } from 'node:https'
-import { readFile, readdir, stat } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
-import { basename, dirname, join, normalize, extname, isAbsolute } from 'node:path'
+import { readFile, stat } from 'node:fs/promises'
+import { resolveModule, artFile, catalogue, uiIndex, gameFiles, gameArgs } from './gamefiles.js'
+import { readFileSync } from 'node:fs'
+import { dirname, join, normalize, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -80,8 +81,7 @@ for (let i = 2; i < process.argv.length; i++) {
     // completion produces it.
     // The engine's own modules/ last (the starter lives there), as the build
     // scripts look: a module beside the engine first, then the engine's.
-    const candidates = isAbsolute(given) ? [given] : [join(REPO, 'modules', given), join(REPO, given), join(ROOT, given), join(ROOT, 'modules', given)]
-    const root = candidates.find((p) => existsSync(p))
+    const { root, candidates } = resolveModule(given)
     if (!root) {
       // LOUDLY, AND FATAL. `join(REPO, 'modules', 'modules/doom2')` is a
       // perfectly good path that simply does not exist, and serving from it
@@ -98,21 +98,6 @@ for (let i = 2; i < process.argv.length; i++) {
 }
 if (MODULES.length) console.error('[web] modules: ' + MODULES.join(', '))
 
-/**
- * The first module that has this file, or the engine's own copy.
- *
- * `rel` is a path under a module root, like 'assets/sprites/POSSA1.png'. The
- * engine's fallback drops the leading 'assets/' because that IS its assets
- * root -- modules/x/assets/sprites/a.png and assets/sprites/a.png are the same
- * file in two places.
- */
-async function moduleFile (rel) {
-  for (const m of MODULES) {
-    const p = join(m, rel)
-    if (await readFile(p).then(() => true).catch(() => false)) return p
-  }
-  return join(ROOT, rel)
-}
 
 const MOUNTS = [
   ['/vendor/three/', join(ROOT, 'client', 'node_modules', 'three', 'build')],
@@ -212,36 +197,8 @@ async function findMap (name) {
 // last says exactly where it stopped.
 const log = (code, url) => console.log(`[dev] ${code} ${url}`)
 
-// THE SERVER IN THE PAGE (?local, docs/WEB.md): the files the server reads, as
-// [published path, file]: of every --module its module.txt, all of maps/ and
-// assets/props.txt; with no module, the engine's test level and props, as
-// run_stack.sh would start it. Only these are served under /game/.
-async function gameFiles () {
-  const out = []
-  const walk = async (dir, rel) => {
-    for (const e of await readdir(dir, { withFileTypes: true })) {
-      if (e.name.startsWith('.')) continue
-      if (e.isDirectory()) await walk(join(dir, e.name), `${rel}/${e.name}`)
-      else out.push([`${rel}/${e.name}`, join(dir, e.name)])
-    }
-  }
-  if (MODULES.length) {
-    for (const m of MODULES) {
-      const name = basename(m)
-      out.push([`${name}/module.txt`, join(m, 'module.txt')])
-      if (existsSync(join(m, 'maps'))) await walk(join(m, 'maps'), `${name}/maps`)
-      if (existsSync(join(m, 'assets', 'props.txt'))) out.push([`${name}/assets/props.txt`, join(m, 'assets', 'props.txt')])
-    }
-  } else {
-    const built = join(ROOT, 'build', process.arch === 'arm64' ? 'arm64' : 'x86_64')
-    for (const f of await readdir(built)) if (/\.(dnpm|lua|json)$/.test(f)) out.push([`maps/${f}`, join(built, f)])
-    out.push(['assets/props.txt', join(ROOT, 'assets', 'props.txt')])
-  }
-  return out
-}
-const gameArgs = () => MODULES.length
-  ? MODULES.flatMap((m) => ['--module', `/game/${basename(m)}`])
-  : ['--map', '/game/maps/test.dnpm']
+// The server in the page (?local, docs/WEB.md): tools/gamefiles.js says what it reads.
+const gameFilesHere = () => gameFiles(MODULES)
 
 const serve = (handler) => TLS ? createTlsServer(TLS, handler) : createServer(handler)
 serve(async (req, res) => {
@@ -263,15 +220,15 @@ serve(async (req, res) => {
       return
     }
     if (req.url.split('?')[0] === '/game/manifest.json') {
-      const files = await gameFiles()
+      const files = await gameFilesHere()
       log(200, req.url)
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-        .end(JSON.stringify({ root: '/game', args: gameArgs(), files: files.map(([r]) => r) }))
+        .end(JSON.stringify({ root: '/game', args: gameArgs(MODULES), files: files.map(([r]) => r) }))
       return
     }
     if (req.url.startsWith('/game/')) {
       const rel = decodeURIComponent(req.url.split('?')[0].slice('/game/'.length))
-      const hit = (await gameFiles()).find(([r]) => r === rel)
+      const hit = (await gameFilesHere()).find(([r]) => r === rel)
       log(hit ? 200 : 404, req.url)
       if (!hit) { res.writeHead(404).end('not a file the game\'s server reads'); return }
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' }).end(await readFile(hit[1]))
@@ -333,34 +290,18 @@ serve(async (req, res) => {
     // engine's. It has to be the same rule, or an index naming hud.json would be
     // one module's while the hud.json served for it was another's.
     if (req.url.split('?')[0] === '/ui/index.json') {
-      const out = { version: 1, default: null, maps: {} }
-      for (const dir of [...MODULES, ROOT]) {
-        const raw = await readFile(join(dir, 'assets', 'ui', 'index.json'), 'utf8').catch(() => null)
-        if (!raw) continue
-        let j
-        try { j = JSON.parse(raw) } catch { continue }
-        if (j.default) out.default ??= j.default
-        for (const [k, v] of Object.entries(j.maps ?? {})) out.maps[k] ??= v
-      }
       log(200, req.url)
-      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(out))
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        .end(JSON.stringify(await uiIndex(MODULES)))
       return
     }
 
-    for (const [route, rel] of [['/animations.txt', 'assets/animations.txt'],
-                                ['/props.txt', 'assets/props.txt']]) {
+    for (const route of ['/animations.txt', '/props.txt']) {
       if (req.url.split('?')[0] !== route) continue
-      const parts = []
-      const base = await readFile(join(ROOT, rel)).catch(() => null)
-      if (base) parts.push(base.toString())
-      for (const m of MODULES) {
-        const extra = await readFile(join(m, rel)).catch(() => null)
-        if (extra) parts.push('\n# --- ' + m + ' ---\n' + extra.toString())
-      }
-      log(parts.length ? 200 : 404, req.url)
-      if (!parts.length) { res.writeHead(404).end('no ' + rel); return }
-      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-         .end(parts.join('\n'))
+      const text = await catalogue(MODULES, route.slice(1))
+      log(text ? 200 : 404, req.url)
+      if (!text) { res.writeHead(404).end('no assets' + route); return }
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end(text)
       return
     }
 
@@ -375,7 +316,7 @@ serve(async (req, res) => {
       // have to carry the other two thousand, and one that ships a whole set
       // overrides all of them -- without either having to say which it is.
       const clean = normalize(decodeURIComponent(req.url.split('?')[0]))
-      file = clean.includes('..') ? null : await moduleFile(join('assets', clean))
+      file = clean.includes('..') ? null : await artFile(MODULES, join('assets', clean))
     } else {
       file = resolve(req.url)
     }

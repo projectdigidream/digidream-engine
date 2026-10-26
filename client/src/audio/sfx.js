@@ -14,6 +14,7 @@
 // listener's yaw: sound/docs/EMBEDDING.md, 4.
 //
 import { soundHash } from '../proto.js'
+import { BASE } from '../base.js'
 
 const READY_TIMEOUT_MS = 10000
 // Q16.16 from a world-unit float.
@@ -24,7 +25,7 @@ export class Sfx {
    * @param worklet  the worklet's URL
    * @param onDuck   called with the music's gain, 0..1000, when it changes
    */
-  constructor ({ worklet = '/src/audio/sfx-worklet.js', onDuck = null, log = () => {} } = {}) {
+  constructor ({ worklet = `${BASE}src/audio/sfx-worklet.js`, onDuck = null, log = () => {} } = {}) {
     this.workletUrl = worklet
     // Settled when a bank has been loaded and its cache built -- or found
     // missing. Both are ON THE AUDIO THREAD the music shares (buildCache

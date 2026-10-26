@@ -17,6 +17,7 @@
 // The arithmetic is pure and exported; the DOM half is a thin class over it.
 //
 
+import { BASE } from '../base.js'
 export const TIC = 1 / 35
 
 /**
@@ -91,7 +92,7 @@ export class ViewModel {
    * @param doc    for a test or the studio: a document to make elements in
    * @param sprites  URL of the sprite directory
    */
-  constructor ({ host, doc = globalThis.document, sprites = '/sprites/', log = () => {} } = {}) {
+  constructor ({ host, doc = globalThis.document, sprites = `${BASE}sprites/`, log = () => {} } = {}) {
     this.log = log
     // The animation the player's weapon is in (setAnim), and how far into it.
     this.animState = null

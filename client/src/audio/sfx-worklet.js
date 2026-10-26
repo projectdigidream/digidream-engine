@@ -14,7 +14,7 @@
 // Positions are the SIMULATION's, in Q16.16 world units: X/Y on the ground, Z
 // up. The listener's yaw is a brad about +Z.
 //
-import createSfx from '/sfx/dsound.mjs'
+import createSfx from '../../sfx/dsound.mjs'   // the site's root: src/ and sfx/ are siblings in every layout
 
 const CONTROL = 64       // the engine's control block; frames must be a multiple
 

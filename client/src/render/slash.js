@@ -15,6 +15,7 @@
 //
 
 import { swingYaw, sweptSpan } from './swing.js'
+import { BASE } from '../base.js'
 
 /** What a swing looks like when nothing says otherwise. */
 export const DEFAULT_SLASH = Object.freeze({
@@ -129,7 +130,7 @@ export function slashPiece ({ inner, outer, from, to, steps = 4, uOf = () => 0 }
  * lived, so each is built and freed rather than pooled.
  */
 export class SlashView {
-  constructor ({ THREE, scene, textureUrl = (f) => `/sprites/${f}`, loader = null }) {
+  constructor ({ THREE, scene, textureUrl = (f) => `${BASE}sprites/${f}`, loader = null }) {
     this.THREE = THREE
     this.scene = scene
     this.textureUrl = textureUrl

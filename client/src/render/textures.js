@@ -18,6 +18,7 @@
 // heights in the test maps are single digits, so 4 puts a couple of tiles on a
 // typical wall -- enough to see tiling and alignment without turning the screen
 // into a grid.
+import { BASE } from '../base.js'
 export const DEFAULT_WORLD_SIZE = 4
 
 const PIXELS = 128
@@ -168,7 +169,7 @@ function cutSheet (THREE, tex, spec, warn) {
 const SHARED_TEXTURES = new Map()
 
 export async function loadRealTextures (THREE, names, materials, {
-  baseUrl = '/textures', pxPerUnit = 32, extra = [],
+  baseUrl = `${BASE}textures`, pxPerUnit = 32, extra = [],
   // Sprite sheets (animations.txt `sheet` lines): name -> { layout, frames }.
   // A sheet's material shows its first frame, sized as one frame; the frames
   // come back in `frames` as NAME, NAME#1, ... for the animator.

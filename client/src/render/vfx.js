@@ -58,6 +58,7 @@
 // is not this one.
 //
 
+import { BASE } from '../base.js'
 /**
  * How long a trail goes on after the last frame that asked for it (follow):
  * long enough to ride out a slow frame, short enough that a missile that has
@@ -423,7 +424,7 @@ export function particleShape (shape, n = 32) {
  */
 export const defaultImageUrls = (name) => {
   const file = /\.(png|webp)$/i.test(name) ? name : `${name}.png`
-  return [`/sprites/${file}`, `/textures/${file}`]
+  return [`${BASE}sprites/${file}`, `${BASE}textures/${file}`]
 }
 
 export class VfxView {

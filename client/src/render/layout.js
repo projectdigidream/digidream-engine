@@ -20,6 +20,7 @@
 // once and by no author.
 //
 
+import { BASE } from '../base.js'
 export const ANCHORS = ['tl', 't', 'tr', 'l', 'c', 'r', 'bl', 'b', 'br']
 const TYPES = ['text', 'number', 'bar', 'image', 'group']
 const SHOWS = ['always', 'touch', 'desktop']
@@ -223,7 +224,7 @@ export class UiAssets {
   // The browser's fetch must be called unbound (as itself): stored and called
   // as this.fetch(...) it throws "Illegal invocation", which no stub shows.
   constructor ({ fetch = (...a) => globalThis.fetch(...a), FontFace = globalThis.FontFace, fonts = globalThis.document?.fonts,
-                 Image = globalThis.Image, base = '/ui/', warn = (m) => console.warn(m) } = {}) {
+                 Image = globalThis.Image, base = `${BASE}ui/`, warn = (m) => console.warn(m) } = {}) {
     Object.assign(this, { fetch, FontFace, fonts, Image, base, warn })
     this.asked = new Map()       // key -> Promise<boolean>
   }
@@ -592,7 +593,7 @@ export function layoutFileFor (index, levelName) {
  * is not in the world (render/ui.js makes the same choice).
  */
 export class HudView {
-  constructor ({ host, doc = globalThis.document, touch = false, insets = null, size = null, assetUrl = (f) => `/ui/${f}`, subtitlesOver = false } = {}) {
+  constructor ({ host, doc = globalThis.document, touch = false, insets = null, size = null, assetUrl = (f) => `${BASE}ui/${f}`, subtitlesOver = false } = {}) {
     this.host = host
     // Where a file the layout names is fetched from (docs/UI_STYLES.md 6.1).
     // No HUD element draws a /ui/ file yet; kept for when one does.
@@ -768,8 +769,8 @@ export class HudView {
       // baked to /textures/, never to /sprites/.
       if (frame && n.img && n.img.dataset.frame !== frame) {
         n.img.dataset.frame = frame
-        n.img.onerror = () => { if (n.img.dataset.frame === frame && !n.img.src.includes('/textures/')) n.img.src = `/textures/${frame}.png` }
-        n.img.src = `/sprites/${frame}.png`
+        n.img.onerror = () => { if (n.img.dataset.frame === frame && !n.img.src.includes(`${BASE}textures/`)) n.img.src = `${BASE}textures/${frame}.png` }
+        n.img.src = `${BASE}sprites/${frame}.png`
       }
     }
     for (const k of n.kids) this.#fill(k)

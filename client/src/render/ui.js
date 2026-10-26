@@ -17,6 +17,7 @@
 //
 import { UI_KIND } from '../proto.js'
 import { place, sizeOf, uiScale, HudView, DEFAULT_LAYOUT } from './layout.js'
+import { BASE } from '../base.js'
 
 const STYLE = `
 .dnp-ui-layer{position:fixed;inset:0;pointer-events:none;z-index:50;
@@ -55,7 +56,7 @@ const STYLE = `
 // the slices, in UI units, scaled like every UI unit.
 // Where a file the layout names is fetched from: the server's /ui/ route, or
 // the view's `assetUrl` (docs/UI_STYLES.md 6.1; the studio's own copies).
-export const UI_URL = (f) => `/ui/${f}`
+export const UI_URL = (f) => `${BASE}ui/${f}`
 function nineSlice (el, image, slice, scale, url = UI_URL) {
   const [t, r, b, l] = Array.isArray(slice) ? slice : [0, 0, 0, 0]
   el.style.borderStyle = 'solid'

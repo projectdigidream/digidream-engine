@@ -16,7 +16,7 @@ import { startServer } from './server_host.js'
 import createModule from '../wasm/dist/dnp-server.mjs'
 import {
   LINK, encodeLinkFrame, createLinkReader, decodeLinkFrame, createControlReader
-} from '/framing.js'
+} from '../framing.js'   // the site's root: src/ and framing.js are siblings in every layout
 
 const SESSION = 1
 const links = createLinkReader()

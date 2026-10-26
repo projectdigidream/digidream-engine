@@ -74,6 +74,7 @@ import { SCHEME, FpsLook, fpsPush, TOUCH_SENSITIVITY } from './controls.js'
 import { ViewModel } from './render/viewmodel.js'
 import { HudView, parseLayout, layoutFileFor, DEFAULT_LAYOUT, UiAssets } from './render/layout.js'
 import { soundHash } from './proto.js'
+import { BASE } from './base.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -141,7 +142,7 @@ const TOUCH_BITS = {
   grab: BUTTON.CLIMB
 }
 
-const MAP_URL = params.get('map') ?? '/maps/test.dnpm'
+const MAP_URL = params.get('map') ?? `${BASE}maps/test.dnpm`
 const SPAWN = params.get('spawn') ?? 'start'
 // View controls as URL parameters, so a particular framing can be reproduced --
 // by a person comparing two builds, or by a headless render in a script.
@@ -277,7 +278,7 @@ window.__music = music
 const sfx = new Sfx({ log: (m) => console.log(m), onDuck: (milli) => music.duck(milli, 60) })
 window.__sfx = sfx
 music.onContext = (ctx) => sfx.attach(ctx).catch((e) => console.warn(`[sfx] ${e.message}`))
-sfx.setBank('/sounds/bank.sfxproj')
+sfx.setBank(`${BASE}sounds/bank.sfxproj`)
 music.arm()
 
 // WHICH TRACK BELONGS TO THIS MAP, by content hash.
@@ -295,7 +296,7 @@ music.arm()
 let musicIndex = null
 async function musicFor (hash, name) {
   if (musicIndex === null) {
-    musicIndex = await fetch('/music/index.json').then((r) => r.json()).catch(() => ({}))
+    musicIndex = await fetch(`${BASE}music/index.json`).then((r) => r.json()).catch(() => ({}))
   }
   const key = musicKeyFor(musicIndex, hash, name)
   const cues = key ? musicIndex[key] : null
@@ -307,7 +308,7 @@ async function musicFor (hash, name) {
   // Every DOOM II map has exactly one; a map with a quiet loop and a fight loop
   // has several and switches between them while you are in it.
   const out = {}
-  for (const [name, file] of Object.entries(cues)) out[name] = `/music/${file}`
+  for (const [name, file] of Object.entries(cues)) out[name] = `${BASE}music/${file}`
   return out
 }
 
@@ -496,7 +497,7 @@ let uiLayoutFile = null
 async function loadLayout (levelName) {
   try {
     if (uiIndex === null) {
-      const r = await fetch('/ui/index.json')
+      const r = await fetch(`${BASE}ui/index.json`)
       uiIndex = r.ok ? await r.json() : {}
     }
     const file = layoutFileFor(uiIndex, levelName)
@@ -504,7 +505,7 @@ async function loadLayout (levelName) {
     uiLayoutFile = file
     let layout = DEFAULT_LAYOUT
     if (file) {
-      const r = await fetch(`/ui/${file}`)
+      const r = await fetch(`${BASE}ui/${file}`)
       const parsed = parseLayout(r.ok ? await r.text() : '{}')
       // A layout's errors are SAID, on screen -- a phone has no console. What
       // failed was dropped and replaced by the default (parseLayout's rule),
@@ -533,8 +534,8 @@ async function loadLayout (levelName) {
 }
 const WEAPON_GROUP = soundHash('weapon')
 Promise.all([
-  fetch('/sprites/weapons.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
-  fetch('/sprites/index.json').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  fetch(`${BASE}sprites/weapons.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  fetch(`${BASE}sprites/index.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
 ]).then(([defs, index]) => { if (defs) viewModel.setDefs(defs, index) })
 // Where the listener was last placed, for the sounds that are the CLIENT's own
 // (a panel opening, a widget clicked): heard at the ear, not from anywhere.
@@ -1344,7 +1345,7 @@ if (movers.length) view.setDynamicSectors(movers)
 let animCatalogue = { groups: [], sheets: new Map(), warnings: [] }
 let animator = null
 try {
-  animCatalogue = parseAnimations(await (await fetch('/animations.txt')).text())
+  animCatalogue = parseAnimations(await (await fetch(`${BASE}animations.txt`)).text())
   for (const w of animCatalogue.warnings) console.warn(`[anim] ${w}`)
 } catch (e) {
   // Not fatal, and the failure is the right one: everything draws its first
@@ -1764,7 +1765,7 @@ const swingTrail = SHOW_SWING ? new SwingTrail({ THREE, scene }) : null
 // somebody tuning a weapon; this is the effect.
 const slash = new SlashView({ THREE, scene })
 let swingStyles = parseSwingStyles({}).styles
-fetch('/sprites/swings.json').then((r) => (r.ok ? r.text() : null)).then((text) => {
+fetch(`${BASE}sprites/swings.json`).then((r) => (r.ok ? r.text() : null)).then((text) => {
   if (text === null) return
   const parsed = parseSwingStyles(text)
   // Said, not fatal: what is wrong is left out and the rest is used.
@@ -1828,7 +1829,7 @@ let vfx = null
 let vfxSeen = 0
 let vfxNoView = 0
 try {
-  const text = await (await fetch('/props.txt')).text()
+  const text = await (await fetch(`${BASE}props.txt`)).text()
   const catalogue = parseProps(text)
   for (const w of catalogue.warnings) console.warn(`[props] ${w}`)
 
@@ -1852,7 +1853,7 @@ try {
     const loader = new THREE.TextureLoader()
     const load = (name) => new Promise((resolve) => {
       loader.load(
-        `/sprites/${name}.png`,
+        `${BASE}sprites/${name}.png`,
         (tex) => {
           // Nearest, and no mipmaps. A Doom sprite is 20-odd pixels tall and
           // filtering one is how it turns into a smudge -- the same reason the
@@ -1894,7 +1895,7 @@ try {
     const sheetLoader = new THREE.TextureLoader()
     await Promise.all([...sheets].map(async (name) => {
       try {
-        const res = await fetch(`/sprites/${name}.json`)
+        const res = await fetch(`${BASE}sprites/${name}.json`)
         if (!res.ok) throw new Error(`${res.status} fetching the manifest`)
         const atlas = parseAtlas(await res.json(), `${name}.json`)
         // The manifest states the feet twice. If the two disagree the sheet was
@@ -1903,7 +1904,7 @@ try {
         const drift = pivotDisagreement(atlas)
         if (drift > 1e-6) console.warn(`[props] sheet ${name}: its two statements of the feet differ by ${drift}`)
         const texture = await new Promise((resolve, reject) => {
-          sheetLoader.load(`/sprites/${atlas.image}`, resolve, undefined,
+          sheetLoader.load(`${BASE}sprites/${atlas.image}`, resolve, undefined,
                            () => reject(new Error(`cannot load ${atlas.image}`)))
         })
         texture.magFilter = THREE.NearestFilter
