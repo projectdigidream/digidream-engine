@@ -75,6 +75,7 @@ import { ViewModel } from './render/viewmodel.js'
 import { HudView, parseLayout, layoutFileFor, DEFAULT_LAYOUT, UiAssets } from './render/layout.js'
 import { soundHash } from './proto.js'
 import { BASE } from './base.js'
+import { propLight, lightMesh } from './render/proplight.js'
 
 const TICK_HZ = 60
 const DT = 1 / TICK_HZ
@@ -1814,6 +1815,29 @@ const shadows = new ShadowCaster({ THREE, scene, radius: bodyRadius, bodyHeight 
 // The surface a shadow lands on. The sector's floor, taken LIVE so a shadow on
 // a lift rides with it, and null out over the void -- where there is nothing
 // beneath and drawing a disc at some default height would put it in mid-air.
+// Every body lit as the map is (render/proplight.js): its sector's light level
+// -- the home level's sectors, whose runtime changes this page applies; a body
+// outside them, in the void or a neighbour over a seam, at full light -- and
+// the home level's lamps. A kind the catalogue calls `bright` stays unlit.
+const lightAtProp = new THREE.Vector3()
+function lightProps () {
+  const home = region ? simStore.chunkRange(homeLevel) : { sectorFirst: 0, sectorCount: mapData.sectors.length }
+  const origin = view.root.position
+  for (const [mesh, rec] of props.animated) {
+    if (!mesh.parent || !mesh.visible) continue
+    if (rec.def?.bright) { lightMesh(mesh, FULL_LIGHT); continue }
+    mesh.getWorldPosition(lightAtProp)
+    // The middle of the body, where its light is sampled: a sheet sprite's
+    // origin is its feet, a picture's its middle already (props.js yOffset).
+    if (!mesh.userData.yOffset) lightAtProp.y += (rec.def?.height ?? 1) / 2
+    const s = simStore.findSector(lightAtProp.x, -lightAtProp.z)
+    const i = home ? s - home.sectorFirst : -1
+    const level = s >= 0 && i >= 0 && i < home.sectorCount ? (mapData.sectors[i]?.light ?? 255) : 255
+    lightMesh(mesh, propLight(level, lightAtProp, view.lights, origin))
+  }
+}
+const FULL_LIGHT = { r: 1, g: 1, b: 1 }
+
 function groundUnder (x, z) {
   // three-space back to engine: x stays, three z is the negated engine y.
   const s = simStore.findSector(x, -z)
@@ -1926,8 +1950,9 @@ try {
           // is what lets the renderer batch them, and what makes disposing it
           // from any one of them a bug. Said on the object rather than left to
           // the reader, because the disposal path is three files away.
+          // vertexColors: each body's light, per body (render/proplight.js).
           material: Object.assign(new THREE.MeshBasicMaterial({
-            map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide
+            map: texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, vertexColors: true
           }), { userData: { shared: true } })
         })
       } catch (e) {
@@ -3751,6 +3776,10 @@ function frame (now) {
   // orbit camera and a much larger error on a path, where the eye can cross the
   // room between two frames.
   if (props) props.update(now / 1000, cam3.position)
+  // THE MAP'S LIGHT ON EVERY BODY (render/proplight.js): placed and animated
+  // above, batched below with the light they were given here. ?proplight=0
+  // leaves them unlit, as they were: for comparing.
+  if (props && params.get('proplight') !== '0') lightProps()
 
   // SECTOR EFFECTS (docs/SECTOR_FX.md): the home level's rain, snow and fog,
   // rebuilt when the level is a different one and drawn where its view is.

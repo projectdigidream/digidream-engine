@@ -8,7 +8,7 @@
 # TWO RECORD TYPES, because two different programs need two different halves and
 # neither should have to understand the other's:
 #
-#   prop   <id> <name> radius <r> height <h> [speed <s>] [scale <k>] [solid] [usable]
+#   prop   <id> <name> radius <r> height <h> [speed <s>] [scale <k>] [solid] [usable] [bright]
 #           The SIMULATION's half. The server reads it. `radius` and `height`
 #           are the cylinder an agent has to be inside to touch the thing;
 #           `solid` means a body cannot walk through it, and `usable` means
@@ -35,6 +35,13 @@
 #           as tall to walk into as it was, because that half is replicated and
 #           predicted: drawing one size and colliding at another is a
 #           misprediction on every touch and looks like a netcode fault.
+#
+#           `bright` is the renderer's too, and the server reads past it as it
+#           does `scale`. Every kind is lit as the map is: its sector's light
+#           level, and the lamps near it, added on top. A `bright` kind is not
+#           lit, because it is its own light: a fireball, a lamp, Doom's
+#           fullbright. It is drawn as its picture is, at full brightness, in the
+#           darkest room.
 #
 #
 #   sprite <id> size <world-height> [billboard] [rot8] [once] [state <n>] [fps <f>]

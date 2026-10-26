@@ -14,6 +14,17 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **Props, monsters and players are lit by the map**, as its walls and floors
+  are: their sector's light level, plus the lamps near them added on top. A
+  monster in a dark room is dark, and one beside a torch takes its colour. A
+  kind marked `bright` on its `prop` line is its own light and is drawn at
+  full brightness: DOOM II's projectiles and the lost soul are. `?proplight=0`
+  draws everything unlit, as before, for comparing. The server reads past
+  `bright` as it does `scale`, so a server older than this drops any prop that
+  has it.
+
 ## 0.2.3.9 -- 2026-10-26
 
 ### Fixed

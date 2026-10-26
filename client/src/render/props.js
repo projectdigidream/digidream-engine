@@ -29,6 +29,7 @@
 import { SpriteBatcher } from './spritebatch.js'
 import { frameKey, quadFor, uvFor } from './atlas.js'
 import { CONDITIONS, defaultStates } from './animstate.js'
+import { lightable } from './proplight.js'
 
 /**
  * Put one atlas frame's corners into a plane's attributes.
@@ -119,6 +120,8 @@ export function parseProps (text) {
         // file uses.
         if (tok[k] === 'solid') { d.flags |= 1; continue }
         if (tok[k] === 'usable') { d.flags |= 2; continue }
+        // Its own light, not lit by the map's (proplight.js): a fireball, a lamp.
+        if (tok[k] === 'bright') { d.bright = true; continue }
         const v = tok[k + 1]
         if (v === undefined) break
         k++
@@ -543,10 +546,12 @@ export class PropRegistry {
     // aligned including its up vector, which under this camera's tilt makes a
     // key lie down as you rotate. A plane rotated about Y only stays upright in
     // the world and turns to face the viewer, which is what a Doom sprite does.
-    const geo = new THREE.PlaneGeometry(size, size)
+    // Lightable: the map's light reaches it through its vertex colour (proplight.js).
+    const geo = lightable(THREE, new THREE.PlaneGeometry(size, size))
     const mat = new THREE.MeshBasicMaterial({
       map: first ?? null,
       color: first ? 0xffffff : 0xff00ff,
+      vertexColors: true,
       transparent: true,
       // A sprite is mostly empty, and its empty parts must not write depth or
       // they punch holes in whatever is behind them.
@@ -593,7 +598,7 @@ export class PropRegistry {
     const THREE = this.THREE
     // 1x1 and then rewritten every time the frame changes. The size passed here
     // never survives; what matters is that the attributes exist to write into.
-    const geo = new THREE.PlaneGeometry(1, 1)
+    const geo = lightable(THREE, new THREE.PlaneGeometry(1, 1))
     const mesh = new THREE.Mesh(geo, entry.material)
     mesh.userData.propKind = kind
     mesh.userData.yOffset = 0

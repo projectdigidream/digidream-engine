@@ -140,6 +140,9 @@ public:
                 // do not have to be counted as key/value pairs.
                 if (tok[i] == "solid")  { d.flags |= sim::prop_flag::SOLID;  continue; }
                 if (tok[i] == "usable") { d.flags |= sim::prop_flag::USABLE; continue; }
+                // The renderer's half, consumed as `scale` is below: a kind that
+                // is its own light, not lit by the map's.
+                if (tok[i] == "bright") continue;
                 if (i + 1 >= tok.size()) {
                     std::fprintf(stderr, "[props] %s:%d: '%s' has no value\n",
                                  path, lineno, tok[i].c_str());

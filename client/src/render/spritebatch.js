@@ -77,11 +77,15 @@ export class SpriteBatcher {
     const g = b.mesh.geometry
     const pos = new THREE.BufferAttribute(new Float32Array(cap * 4 * 3), 3)
     const uv = new THREE.BufferAttribute(new Float32Array(cap * 4 * 2), 2)
+    // Each body's light (proplight.js), so batching a sheet keeps it per body.
+    const col = new THREE.BufferAttribute(new Float32Array(cap * 4 * 3).fill(1), 3)
     pos.setUsage(THREE.DynamicDrawUsage)
     uv.setUsage(THREE.DynamicDrawUsage)
+    col.setUsage(THREE.DynamicDrawUsage)
     const index = new Uint32Array(cap * 6)
     g.setAttribute('position', pos)
     g.setAttribute('uv', uv)
+    g.setAttribute('color', col)
     g.setIndex(new THREE.BufferAttribute(index, 1))
     b.capacity = cap
   }
@@ -127,12 +131,14 @@ export class SpriteBatcher {
       const g = b.mesh.geometry
       const P = g.attributes.position.array
       const U = g.attributes.uv.array
+      const C = g.attributes.color.array
       const I = g.index.array
       let q = 0
       for (const mesh of list) {
         const src = mesh.geometry
         const sp = src.attributes.position
         const su = src.attributes.uv
+        const sc = src.attributes.color
         const base = q * 4
         for (let k = 0; k < 4; k++) {
           this._v.fromBufferAttribute(sp, k).applyMatrix4(mesh.matrixWorld)
@@ -141,6 +147,9 @@ export class SpriteBatcher {
           P[(base + k) * 3 + 2] = this._v.z
           U[(base + k) * 2] = su.getX(k)
           U[(base + k) * 2 + 1] = su.getY(k)
+          C[(base + k) * 3] = sc ? sc.getX(k) : 1
+          C[(base + k) * 3 + 1] = sc ? sc.getY(k) : 1
+          C[(base + k) * 3 + 2] = sc ? sc.getZ(k) : 1
         }
         // The quad's own triangles, in its own order (a PlaneGeometry's), so
         // its winding -- and so which face is front -- is what it was.
@@ -153,6 +162,7 @@ export class SpriteBatcher {
       quads += q
       g.attributes.position.needsUpdate = true
       g.attributes.uv.needsUpdate = true
+      g.attributes.color.needsUpdate = true
       g.index.needsUpdate = true
       g.setDrawRange(0, q * 6)
     }
