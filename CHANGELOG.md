@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.12 -- 2026-10-27
+
 ### Fixed
 
 - **The starter's key hint says what F is: a punch.** The starter has no weapon;
