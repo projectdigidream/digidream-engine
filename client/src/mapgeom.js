@@ -223,6 +223,14 @@ export function flatUV (x, y, style, place) {
   return [u / k, v / k]
 }
 
+/** Whether any side of sector `s` is an open edge (SIDE_FLAG.LEDGE): something to fall off. */
+function hasOpenEdge (map, s) {
+  for (let k = 0; k < s.sideCount; k++) {
+    if ((map.sides[s.firstSide + k]?.flags ?? 0) & SIDE_FLAG.LEDGE) return true
+  }
+  return false
+}
+
 /**
  * Every drawable surface belonging to one sector.
  *
@@ -260,6 +268,13 @@ export function buildSectorSurfaces (map, sectorIndex) {
   // different tiles on one piece of geometry.
   if (s.thickness > 0) {
     flats.push([SURFACE.UNDERSIDE, s.floorZ - s.thickness, s.floorTex, false, s.floorStyle])
+  } else if (hasOpenEdge(map, s)) {
+    // A PLATFORM WITH NO THICKNESS is a sheet, seen from below too: its floor
+    // again, facing down. Without it a platform overhead was not there at all,
+    // the floor being drawn one-sided. A room's floor never needs one -- below
+    // it is nothing anybody stands in -- so only a sector something can fall
+    // off (an `open` edge) gets it.
+    flats.push([SURFACE.UNDERSIDE, s.floorZ, s.floorTex, false, s.floorStyle])
   }
 
   for (const [kind, z, tex, up, style] of flats) {

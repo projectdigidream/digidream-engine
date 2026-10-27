@@ -261,7 +261,7 @@ console.log('\n--- the shader and the material it is used with agree ---')
   // map material refuses -- so the two materials must disagree, on purpose, and
   // a change that made them agree again would break one of them silently.
   const clearMaterial = sceneSrc.slice(sceneSrc.indexOf('#clearMaterial'),
-                                       sceneSrc.indexOf('materialFor ('))
+                                       sceneSrc.indexOf('ALPHA 254 IS A CUT-OUT'))
   check(/transparent:\s*true/.test(clearMaterial),
         'the see-through material IS transparent')
   check(/depthWrite:\s*false/.test(clearMaterial),
@@ -270,6 +270,17 @@ console.log('\n--- the shader and the material it is used with agree ---')
         'and it is the only one compiled with the alpha branch')
   check(!/FRAGMENT_SHADER_ALPHA/.test(mapMaterial),
         'CONTROL: the map material is not')
+
+  // AND ALPHA 254 IS NEITHER: a cut-out, "the picture's own holes". The opaque
+  // shader with its holes discarded, writing depth and not blended, so water and
+  // everything else see-through is ordered against a plank bridge by depth.
+  const cutout = sceneSrc.slice(sceneSrc.indexOf('#cutoutMaterial (texture) {'), sceneSrc.indexOf('materialFor ('))
+  check(cutout.length > 0 && /CUTOUT/.test(cutout) && /depthWrite:\s*true/.test(cutout) &&
+        !/transparent:\s*true/.test(cutout) && !/FRAGMENT_SHADER_ALPHA/.test(cutout),
+        'alpha 254 is a cut-out: its holes discarded, depth written, nothing blended')
+  check(/alphaTest = 0\.5/.test(cutout), "and says so to the fog's depth pass, which keeps its holes")
+  check(/alpha >= 254 \/ 255/.test(sceneSrc) && /#cutoutMaterial\(texture\)/.test(sceneSrc),
+        'materialFor sends 254 there, and below it to the blended one')
 
   // CONTROL: the drift this exists for. The map material as it used to be must
   // be caught -- otherwise the assertion above is satisfied by a slice that

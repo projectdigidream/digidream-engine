@@ -15,7 +15,7 @@
 //      find out.
 //
 import { buildSectorSurfaces, mergeByTexture, flatUV, SURFACE } from '../src/mapgeom.js'
-import { NO_TEXTURE, NO_SECTOR, PEG } from '../src/mapdata.js'
+import { NO_TEXTURE, NO_SECTOR, PEG, SIDE_FLAG } from '../src/mapdata.js'
 
 let checks = 0
 let fails = 0
@@ -94,6 +94,29 @@ console.log('\n--- flats ---')
   let allAtFloor = true
   for (let i = 1; i < floor.positions.length; i += 3) if (floor.positions[i] !== 0) allAtFloor = false
   check(allAtFloor, 'and every floor vertex is at the floor height')
+}
+
+console.log('\n--- a platform seen from below ---')
+{
+  // Sector 0 with an open edge (y = 0): a platform. With no thickness its floor
+  // is a sheet, and from below it must be there too: its own underside, at the
+  // floor's height, facing down. CONTROL: the same sector walled has none --
+  // a room's floor is never seen from below -- and a slab keeps its bottom
+  // where its thickness puts it.
+  const platform = fixture({ f0: 2 })
+  platform.sides[0].flags = SIDE_FLAG.LEDGE
+  const under = find(buildSectorSurfaces(platform, 0), SURFACE.UNDERSIDE)
+  check(!!under, 'a platform with no thickness has an underside')
+  check(under && near(faceNormal(under)[1], -1), 'facing down')
+  let atFloor = !!under
+  for (let i = 1; under && i < under.positions.length; i += 3) if (under.positions[i] !== 2) atFloor = false
+  check(atFloor && under.texture === 1, 'at its floor, in its floor\'s picture')
+  check(!find(buildSectorSurfaces(fixture({ f0: 2 }), 0), SURFACE.UNDERSIDE), 'CONTROL: a walled room has none')
+  const slab = fixture({ f0: 2 })
+  slab.sides[0].flags = SIDE_FLAG.LEDGE
+  slab.sectors[0].thickness = 1.5
+  const bottom = find(buildSectorSurfaces(slab, 0), SURFACE.UNDERSIDE)
+  check(bottom && bottom.positions[1] === 0.5, 'a slab keeps its bottom at floor - thickness')
 }
 
 console.log('\n--- solid walls ---')

@@ -262,16 +262,42 @@ export class MapView {
     })
   }
 
+  /**
+   * ALPHA 254 IS A CUT-OUT: "the picture's own holes" -- a grate, a fence, a
+   * plank bridge -- not glass. The opaque material with its holes discarded,
+   * writing depth, so whatever see-through thing is drawn after it, water
+   * included, is in front of it or behind it by depth and not by the order
+   * three.js sorts them in. Blended, it wrote no depth: a filled pool under a
+   * plank bridge drew over the planks or under them by that order.
+   */
+  #cutoutMaterial (texture) {
+    const base = this.materials[texture]
+    if (!base) return this.missing
+    const m = new THREE.ShaderMaterial({
+      uniforms: { map: base.uniforms.map, repeat: base.uniforms.repeat, ...this.lightUniforms },
+      vertexShader: VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER,
+      defines: { CUTOUT: '' },
+      side: THREE.FrontSide,
+      depthWrite: true
+    })
+    // Read by the fog's depth pass (sectorfx.js leanDepthScene), which keeps a
+    // cut-out's own material so the fog shows through its holes.
+    m.alphaTest = 0.5
+    return m
+  }
+
   materialFor (texture, alpha = 1) {
     if (texture === NO_TEXTURE) return this.missing
     // A window onto the sky (render/sky.js), once there is a sky to show:
     // every view shares the one material, so every level's sky is one sky.
     if (MapView.sky && isSkyName(this.map.textures[texture])) return MapView.sky.surface
     if (!(alpha < 1)) return this.materials[texture] ?? this.missing
-    const key = `${texture}:${alpha}`
+    const cut = alpha >= 254 / 255
+    const key = cut ? `${texture}:cut` : `${texture}:${alpha}`
     let m = this.clearMaterials.get(key)
     if (!m) {
-      m = this.#clearMaterial(texture, alpha)
+      m = cut ? this.#cutoutMaterial(texture) : this.#clearMaterial(texture, alpha)
       this.clearMaterials.set(key, m)
     }
     return m

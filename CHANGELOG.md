@@ -37,6 +37,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Fixed
 
+- **A platform is seen from below.** A floating platform (open edges) with no
+  thickness drew its floor one-sided, so from underneath it was not there. It
+  has an underside now, at its floor, in its floor's picture.
+- **Water under a see-through platform stays under it.** A surface at alpha 254
+  ("the picture's own holes": planks, a grate, a fence) is drawn as a cut-out
+  now, its holes discarded and depth written, rather than blended. A filled
+  pool's textured top under a plank bridge was drawn over the planks or under
+  them depending on draw order; now it is behind them by depth, from any angle.
 - **A body in the water no longer appears, disappears or half-disappears as the
   camera turns.** The water and a sprite drawn alone (a player's avatar, most
   often) were sorted by distance and swapped places with the angle; sprites now
