@@ -14,6 +14,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **The studio's self-update says how far it is.** The desktop app and the
+  Android app report the download as it arrives -- bytes so far of the whole --
+  then unpacking (desktop) or Android's installer, then the restart, through
+  `window.__dnpSelfUpdateProgress(phase, got, total)`; the studio draws a bar from
+  it. An app from before this updates as it did, without the measure.
+
 ## 0.2.3.11 -- 2026-10-27
 
 ### Added

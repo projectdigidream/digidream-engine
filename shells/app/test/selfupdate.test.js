@@ -6,7 +6,7 @@
 //
 //   node shells/app/test/selfupdate.test.js
 
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -55,6 +55,24 @@ for (let i = 0; i < 50 && !existsSync(join(app, 'started')); i++) await wait(100
 check(readFileSync(join(app, 'version'), 'utf8') === 'new\n', 'the app folder now holds the new release')
 check(!existsSync(app + '.old'), 'and the old one is gone, not left beside it')
 check(existsSync(join(app, 'started')), 'and the new one was started')
+
+// HOW FAR IT IS, as the download arrives: a real Response in three pieces,
+// told as bytes so far of the whole, then unpacking, then the restart.
+{
+  const heard = []
+  rmSync(join(app, 'started'), { force: true }); writeFileSync(join(app, 'version'), 'old\n')
+  const third = Math.ceil(bytes.length / 3)
+  const streamed = async () => new Response(new ReadableStream({
+    start (c) { for (let at = 0; at < bytes.length; at += third) c.enqueue(new Uint8Array(bytes.subarray(at, at + third))); c.close() }
+  }), { headers: { 'content-length': String(bytes.length) } })
+  await update('https://example.com/studio-linux-x64.tar.gz', { fetchFn: streamed, platform: 'linux', execPath: exe, pid: gone, progress: (p, got, total) => heard.push([p, got, total]) })
+  const downs = heard.filter(([p]) => p === 'download')
+  check(downs.length >= 4 && downs.every(([, , t]) => t === bytes.length) && downs.at(-1)[1] === bytes.length && downs.every(([, g], i) => i === 0 || g >= downs[i - 1][1]),
+    `the download is told piece by piece, of the whole, up to all of it (${downs.map(([, g]) => g).join(', ')} of ${bytes.length})`)
+  check(heard.map(([p]) => p).filter((p, i, a) => p !== a[i - 1]).join() === 'download,unpack,restart', `then unpacking, then the restart (${[...new Set(heard.map(([p]) => p))].join(', ')})`)
+  for (let i = 0; i < 50 && readFileSync(join(app, 'version'), 'utf8') !== 'new\n'; i++) await wait(100)
+  check(readFileSync(join(app, 'version'), 'utf8') === 'new\n', 'and the streamed archive installs as the whole one did')
+}
 
 // A STUDIO UNZIPPED LOOSE (its files among a user's own, in Downloads): the
 // swap would replace the whole folder, so nothing is done, and the user's

@@ -360,6 +360,17 @@ public final class MainActivity extends Activity {
    * updating itself needs no prompt; older ones (or a refusal) show the
    * system's own "Update?" dialog, through STATUS_PENDING_USER_ACTION.
    */
+  /**
+   * How far the update is, for the studio's bar: {@code
+   * window.__dnpSelfUpdateProgress(phase, got, total)}, as the desktop shell
+   * tells it ("download" with the bytes so far and the whole, 0 when the server
+   * does not say; then "install", once Android's installer has it).
+   */
+  private void progress(String phase, long got, long total) {
+    final String js = "window.__dnpSelfUpdateProgress && window.__dnpSelfUpdateProgress(" + JSONObject.quote(phase) + "," + got + "," + Math.max(0, total) + ")";
+    ui.post(() -> web.evaluateJavascript(js, null));
+  }
+
   private void selfUpdate(String url) throws IOException {
     HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
     c.setInstanceFollowRedirects(true); // GitHub sends assets on to its storage, https to https
@@ -368,12 +379,23 @@ public final class MainActivity extends Activity {
     if (Build.VERSION.SDK_INT >= 31) sp.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
     int sid = pi.createSession(sp);
     try (PackageInstaller.Session s = pi.openSession(sid)) {
-      try (InputStream in = c.getInputStream(); OutputStream os = s.openWrite("update.apk", 0, c.getContentLengthLong())) {
+      long total = c.getContentLengthLong();
+      try (InputStream in = c.getInputStream(); OutputStream os = s.openWrite("update.apk", 0, total)) {
         byte[] buf = new byte[64 * 1024];
         int n;
-        while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+        long got = 0;
+        long told = 0;
+        progress("download", 0, total);
+        while ((n = in.read(buf)) > 0) {
+          os.write(buf, 0, n);
+          got += n;
+          long now = System.currentTimeMillis();
+          if (now - told >= 100) { told = now; progress("download", got, total); }
+        }
+        progress("download", got, total);
         s.fsync(os);
       }
+      progress("install", 0, 0);
       String action = getPackageName() + ".SELF_UPDATE";
       BroadcastReceiver r = new BroadcastReceiver() {
         @Override public void onReceive(Context ctx, Intent i) {

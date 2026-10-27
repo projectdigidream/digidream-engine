@@ -391,7 +391,17 @@ async function start () {
         if (!manifest.studio) throw new Error('only the studio updates itself')
         // Only a studio release: whatever this installs runs as the studio.
         if (!/^https:\/\/github\.com\/projectdigidream\/digidream-studio\/releases\/download\//.test(String(a))) throw new Error('only a studio release installs itself')
-        await selfUpdate(a, { fetchFn: (u) => fetch(u), log: (m) => log(`[update] ${m}`) })
+        // How far it is, to the page as it goes (the studio's bar), as Android
+        // tells it: window.__dnpSelfUpdateProgress(phase, got, total). A tenth
+        // of a second apart at most, and every change of phase.
+        let told = 0; let phase = ''
+        const progress = (p, got, total) => {
+          const now = Date.now()
+          if (p === phase && now - told < 100 && got !== total) return
+          told = now; phase = p
+          win.webContents.executeJavaScript(`window.__dnpSelfUpdateProgress && window.__dnpSelfUpdateProgress(${JSON.stringify(p)}, ${Number(got) || 0}, ${Number(total) || 0})`).catch(() => {})
+        }
+        await selfUpdate(a, { fetchFn: (u) => fetch(u), log: (m) => log(`[update] ${m}`), progress })
         setTimeout(() => app.quit(), 800)
         return 'installing'
       }

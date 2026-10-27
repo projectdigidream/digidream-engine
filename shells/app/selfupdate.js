@@ -78,8 +78,11 @@ const run = (cmd, args) => new Promise((resolve, reject) => {
  * Download `url` (https), unpack it, and leave the swap to a detached script.
  * Resolves once that script is running; the caller then quits the app.
  * `fetchFn` follows redirects (GitHub sends a release asset on to its storage).
+ * `progress(phase, got, total)` hears how far it is: 'download' with the bytes
+ * so far and the whole (0 when the server does not say), then 'unpack', then
+ * 'restart' -- the studio draws its bar from it.
  */
-export async function update (url, { fetchFn, platform = process.platform, execPath = process.execPath, pid = process.pid, log = () => {} } = {}) {
+export async function update (url, { fetchFn, platform = process.platform, execPath = process.execPath, pid = process.pid, log = () => {}, progress = () => {} } = {}) {
   if (!/^https:\/\//.test(String(url))) throw new Error('only https addresses')
   const plan = planFor(platform, execPath)
   // Where the new one will go must be writable, or nothing is done at all.
@@ -89,8 +92,9 @@ export async function update (url, { fetchFn, platform = process.platform, execP
   const res = await fetchFn(url)
   if (!res.ok) throw new Error(`download failed (${res.status})`)
   const archive = join(work, basename(new URL(url).pathname))
-  writeFileSync(archive, new Uint8Array(await res.arrayBuffer()))
+  writeFileSync(archive, await download(res, progress))
   log(`downloaded ${basename(archive)}`)
+  progress('unpack', 0, 0)
   const out = join(work, 'new')
   if (plan.kind === 'mac') await run('ditto', ['-x', '-k', archive, out])
   else if (plan.kind === 'windows') await run('powershell', ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${out}' -Force`])
@@ -113,5 +117,21 @@ export async function update (url, { fetchFn, platform = process.platform, execP
     : spawn('/bin/sh', [script], { detached: true, stdio: 'ignore' })
   child.unref()
   log(`the swap waits for this app to quit: ${plan.target}`)
+  progress('restart', 0, 0)
   return { target: plan.target }
+}
+
+/** The body as it arrives, each piece told to `progress`; a response with no stream (a test's) in one go. */
+async function download (res, progress) {
+  const total = Number(res.headers?.get?.('content-length')) || 0
+  if (!res.body?.[Symbol.asyncIterator]) {
+    const all = new Uint8Array(await res.arrayBuffer())
+    progress('download', all.length, total || all.length)
+    return all
+  }
+  const parts = []
+  let got = 0
+  progress('download', 0, total)
+  for await (const chunk of res.body) { parts.push(chunk); got += chunk.length; progress('download', got, total) }
+  return Buffer.concat(parts)
 }
