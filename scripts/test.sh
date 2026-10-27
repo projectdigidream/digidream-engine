@@ -53,6 +53,11 @@ need_maps () {
   # documents (docs/STUDIO.md): if this map stops baking, the studio's .map
   # writer has drifted from mapc's grammar.
   "./build/$HOST_ARCH/mapc" ../modules/starter/maps/first.map "build/$HOST_ARCH/starter_first.dnpm"
+  # The movement course (modules/movetest), baked from its source for
+  # test_course; a checkout without the workspace's modules has none.
+  if [[ -f ../modules/movetest/maps/move.map ]]; then
+    "./build/$HOST_ARCH/mapc" ../modules/movetest/maps/move.map "build/$HOST_ARCH/movetest.dnpm"
+  fi
 
   "./build/$HOST_ARCH/mapc" maps/doors.map  "build/$HOST_ARCH/doors.dnpm"
   # The same map, its behaviour written as triggers instead of as Doom line
@@ -181,6 +186,12 @@ suite_core () {
   "./build/$HOST_ARCH/test_sweep"
   # Movement states defined by data (docs/MOVEMENT.md).
   "./build/$HOST_ARCH/test_movestates"
+  # And the course people play them on, bay by bay (modules/movetest).
+  if [[ -f "build/$HOST_ARCH/movetest.dnpm" ]]; then
+    "./build/$HOST_ARCH/test_course" "build/$HOST_ARCH/movetest.dnpm" ../modules/movetest/module.txt
+  else
+    echo "  skip test_course (no ../modules/movetest)"
+  fi
   "./build/$HOST_ARCH/test_sight"
   "./build/$HOST_ARCH/test_weapons"
   "./build/$HOST_ARCH/test_chunks"
@@ -987,6 +998,8 @@ suite_stack () {
      `# Climbing on modules/climbtest's course: a vine ledge climbed and mantled` \
      `# onto, never the air above it. CONTROL: the bare ledge beside it never grabs.` \
      && node test/climb.test.js 2>/dev/null | grep -E 'FAIL|failures' \
+     `# The movement states on a real server, every bay predicted (modules/movetest).` \
+     && node test/movement.test.js 2>/dev/null | grep -E 'FAIL|failures|skipped' \
      `# Sector looks (SECTOR_SET): a floor, fog and a fading light set by a script;` \
      `# whoever arrives later is told the state. CONTROL: not told to fade.` \
      && node test/sector.test.js 2>/dev/null | grep -E 'FAIL|failures' \
