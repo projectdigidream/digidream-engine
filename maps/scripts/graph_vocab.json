@@ -1965,7 +1965,8 @@
             "snow",
             "dust",
             "embers",
-            "fog"
+            "fog",
+            "fill"
           ]
         },
         {
@@ -1975,7 +1976,7 @@
           "type": "bool"
         },
         {
-          "doc": "How thick it is. Defaults to the effect's own.",
+          "doc": "How thick it is (a fill has none). Defaults to the effect's own.",
           "name": "density",
           "optional": true,
           "type": "number"
@@ -1985,6 +1986,12 @@
           "name": "color",
           "optional": true,
           "type": "string"
+        },
+        {
+          "doc": "0..1, how much it hides. Defaults to the effect's own.",
+          "name": "alpha",
+          "optional": true,
+          "type": "number"
         }
       ],
       "category": "sector",
@@ -1993,7 +2000,7 @@
         "density"
       ],
       "data_out": [],
-      "doc": "Start or stop rain, snow, dust, embers or fog in a sector (docs/SECTOR_FX.md).",
+      "doc": "Start or stop rain, snow, dust, embers, fog or a fill in a sector (docs/SECTOR_FX.md).",
       "exec_in": [
         "in"
       ],

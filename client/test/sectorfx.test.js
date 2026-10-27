@@ -7,7 +7,7 @@
 import * as THREE from 'three'
 import {
   triArea, sectorTriangles, samplePoint, inTriangle, bandOf, particleCounts,
-  rayPrism, opticalDepth, fogAlpha, SectorFx, KIND, mulberry, BUDGET
+  rayPrism, opticalDepth, fogAlpha, SectorFx, KIND, mulberry, BUDGET, fillShell, inFill
 } from '../src/render/sectorfx.js'
 
 let checks = 0
@@ -143,6 +143,58 @@ const MAP = {
   check(small.counts.reduce((a, b) => a + b) <= 100, 'a small budget is kept')
   check(new SectorFx({ THREE, map: { ...MAP, fx: [] } }).hasFog === false, 'CONTROL: a map with no fog has no fog pass')
   check(BUDGET.touch < BUDGET.desktop, 'a phone gets the smaller budget')
+  fx.dispose()
+}
+
+// --- a fill's shell: outward, one face per outline edge --------------------------
+{
+  // MAP's sector, one triangle wound the other way, as a bake may hand it over.
+  const st = sectorTriangles(MAP, 0)
+  const tris = st.tris.map(([a, b, c], i) => (i === 1 ? [a, c, b] : [a, b, c]))
+  const shell = fillShell(tris)
+  const signed = ([a, b, c]) => (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)
+  check(signed(tris[1]) < 0 && shell.tris.every((t) => signed(t) > 0), 'every top triangle faces up, however it came')
+  // The square's diagonal is shared; the triangle on top touches it at a corner.
+  check(shell.outline.length === 7, `the outline is the edges one triangle has (${shell.outline.length})`)
+  const isDiagonal = ([p, q]) => (p === MAP.points[0] && q === MAP.points[2]) || (p === MAP.points[2] && q === MAP.points[0])
+  check(!shell.outline.some(isDiagonal), 'CONTROL: and the shared diagonal is not in it')
+  // Outward, by the shape itself: just right of each edge is outside, just left inside.
+  const inside = (p) => tris.some(([a, b, c]) => inTriangle(p, a, b, c))
+  const sideOf = ([p, q], k) => {
+    const dx = q.x - p.x
+    const dy = q.y - p.y
+    const n = Math.hypot(dx, dy)
+    return { x: (p.x + q.x) / 2 + k * dy / n, y: (p.y + q.y) / 2 - k * dx / n }
+  }
+  check(shell.outline.every((e) => !inside(sideOf(e, 1e-3)) && inside(sideOf(e, -1e-3))), 'each outline edge has the volume on its left')
+  check(!shell.outline.every((e) => !inside(sideOf([e[1], e[0]], 1e-3))), 'CONTROL: reversed, they would not')
+  check(inFill({ x: 1, y: 0.5, z: 1 }, shell.tris, 0, 2) && !inFill({ x: 1, y: 0.5, z: 2.5 }, shell.tris, 0, 2),
+        'inside the band and the footprint is in; above the band is not')
+  check(!inFill({ x: 3, y: 0.5, z: 1 }, shell.tris, 0, 2), 'CONTROL: and beside the footprint is not')
+}
+
+// --- a fill, built: its top shares the map's picture; the eye inside tints -------
+{
+  const map = { ...MAP, sectors: [{ ...MAP.sectors[0], effect: true, ceilTex: 0, ceilStyle: { alpha: 0.5 } }],
+                fx: [{ sector: 0, kind: KIND.FILL, params: { color: 0x3a6a8a, alpha: 0.4, top: 2 } }] }
+  const pic = { map: { value: new THREE.Texture() }, repeat: { value: new THREE.Vector2(0.25, 0.25) } }
+  const fx = new SectorFx({ THREE, map, surfaces: (i) => (i === 0 ? pic : null) })
+  const [top, body, tint] = fx.root.children
+  check(top.name === 'fill:top:0' && body.name === 'fill:body:0' && tint === fx.tint, 'a fill: its top, its body, and one tint')
+  check(top.material.uniforms.map === pic.map && top.material.uniforms.repeat === pic.repeat,
+        "the top shares the map's own uniforms, so it shows the picture as it loads and animates")
+  check(body.material.uniforms.textured.value === 0 && top.material.uniforms.surface.value === 0.5,
+        "CONTROL: the body has no picture; the top's opacity is the ceiling's alpha")
+  check(top.material.side === THREE.DoubleSide && body.material.side === THREE.FrontSide, 'the top both ways, the rest outward only')
+  check(body.geometry.attributes.position.count === 7 * 6 + 3 * 3, 'seven sides of two triangles, and a bottom of three')
+  check(!fx.hasFog, 'a fill takes no fog pass')
+  const solid = new SectorFx({ THREE, map: { ...map, sectors: [{ ...map.sectors[0], effect: false }] }, surfaces: () => pic })
+  check(solid.root.children[0].material.uniforms.textured.value === 0, "CONTROL: a solid room's fill has a plain top -- its ceiltex is its ceiling")
+  solid.dispose()
+  fx.update(0, new THREE.Vector3(1, 1, -0.5))                   // sim (1, 0.5, 1): in it
+  check(tint.visible && near(tint.material.uniforms.alpha.value, 0.4), 'the eye in the fill tints the view, by its alpha')
+  fx.update(0, new THREE.Vector3(1, 2.5, -0.5))                 // above its top
+  check(!tint.visible, 'CONTROL: above it, no tint')
   fx.dispose()
 }
 

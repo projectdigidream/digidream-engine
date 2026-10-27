@@ -16,6 +16,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **Filled volumes** (docs/SECTOR_FX.md §1.3). A new sector effect,
+  `fx fill color 2c6a90 alpha 0.45`, fills its sector's volume: whatever is seen
+  through it is tinted by the colour, `alpha` hiding that much, and a camera
+  inside sees the whole view tinted. On an effect area or a liquid, its top wears
+  the sector's ceiling picture (`ceiltex`, with `ceilalpha` as the picture's
+  opacity), animated sheets included: water you can see into. Scripts take
+  `dnp.set_sector_effect(s, "fill", { color = "#2c6a90", alpha = 0.3 })`, and
+  the `set_sector_effect` graph node offers `fill` and an `alpha`.
+  modules/movetest's pool is filled.
 - **Movement states, defined by data** (docs/MOVEMENT.md, step 1 of 5). A
   module declares up to 8 states with `movestate` lines in its module.txt:
   - a group: `floor`, `air`, `liquid` (3D, JUMP up and CROUCH down) or `none`;

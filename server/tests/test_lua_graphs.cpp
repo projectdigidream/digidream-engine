@@ -985,6 +985,16 @@ int main(int argc, char** argv) {
             CHECK(g_ui.sectors[2].fx.kind == 2 && g_ui.sectors[2].on && g_ui.sectors[2].fx.params[0].raw == F(2).raw);
             CHECK(g_ui.sectors[3].fx.kind == 5 && !g_ui.sectors[3].on);
         }
+        // A fill by the node: its alpha goes, a density it has none of does not --
+        // fill takes no density, so sending it would be a script error.
+        g_ui.sectors.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "flood",
+          "nodes": [ { "id": "go", "type": "on_call", "name": "flood" },
+                     { "id": "f", "type": "set_sector_effect", "sector": 0, "effect": "fill", "density": 2, "alpha": 0.25 } ],
+          "links": [ ["go.then", "f.in"] ] })"));
+        CHECK(run("graphs.call('flood', nil, nil)", "the fill"));
+        CHECK(g_ui.sectors.size() == 1 && g_ui.sectors[0].fx.kind == 6 && g_ui.sectors[0].fx.count == 1 &&
+              g_ui.sectors[0].fx.params[0].key == 9 && g_ui.sectors[0].fx.params[0].raw == fx::from_frac(1, 4).raw);
         // A CHAIN OUTLIVES ITS EVENT'S PROP: removing the prop the event names
         // (despawn, who: target) and carrying on into a light loop with
         // delays -- the prop gone by the time the delays fire -- keeps looping.

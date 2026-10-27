@@ -1,6 +1,6 @@
 #pragma once
 //
-// SECTOR EFFECTS: rain, snow, dust, embers and fog (docs/SECTOR_FX.md).
+// SECTOR EFFECTS: rain, snow, dust, embers, fog and fill (docs/SECTOR_FX.md).
 //
 // Rendering attributes of a sector, authored as `fx` lines in a map's source
 // and carried in the baked file from version 14. Nothing in the simulation
@@ -14,8 +14,8 @@
 
 namespace dnp::geom {
 
-enum class FxKind : u8 { Rain = 1, Snow = 2, Dust = 3, Embers = 4, Fog = 5 };
-inline constexpr u8 FX_KIND_COUNT = 5;
+enum class FxKind : u8 { Rain = 1, Snow = 2, Dust = 3, Embers = 4, Fog = 5, Fill = 6 };
+inline constexpr u8 FX_KIND_COUNT = 6;
 
 inline const char* fx_kind_name(u8 k) noexcept {
     switch (k) {
@@ -24,6 +24,7 @@ inline const char* fx_kind_name(u8 k) noexcept {
         case 3: return "dust";
         case 4: return "embers";
         case 5: return "fog";
+        case 6: return "fill";
         default: return nullptr;
     }
 }
@@ -31,10 +32,14 @@ inline const char* fx_kind_name(u8 k) noexcept {
 // Which kinds take a key: one bit per kind, bit (kind - 1).
 inline constexpr u8 FX_PARTICLES = 0x0F;   // rain, snow, dust, embers
 inline constexpr u8 FX_FOG = 0x10;
+// A fill: the volume tinted, its colour as much as `alpha` hides, the sector's
+// ceiling picture on its top (docs/SECTOR_FX.md 1.3).
+inline constexpr u8 FX_FILL = 0x20;
 inline constexpr u8 FX_ANY = FX_PARTICLES | FX_FOG;
+inline constexpr u8 FX_ALL = FX_ANY | FX_FILL;
 
 // A key's value is an fx, except `color`, which is 0xRRGGBB in the raw bits.
-// The defaults are per kind -- rain, snow, dust, embers, fog -- in THOUSANDTHS
+// The defaults are per kind -- rain, snow, dust, embers, fog, fill -- in THOUSANDTHS
 // (integers: core holds no floating point, docs/physics-contract.md), except a
 // colour's, which is the colour. FX_NONE marks a key the kind does not take;
 // `top` -1000 is "the ceiling".
@@ -50,22 +55,22 @@ inline constexpr i64 FX_NONE = INT64_MIN;
 
 // ORDER IS THE FORMAT: a key's id is its index here plus one. Append only.
 inline constexpr FxKeyDef FX_KEYS[] = {
-    //  name       kinds          color   rain      snow      dust      embers    fog
-    { "density",  FX_ANY,        false, { 8000,     4000,     1500,     600,      150 } },
-    { "speed",    FX_PARTICLES,  false, { 9000,     800,      150,      600,      DNP_FX_N } },
-    { "windx",    FX_PARTICLES,  false, { 0,        0,        0,        0,        DNP_FX_N } },
-    { "windy",    FX_PARTICLES,  false, { 0,        0,        0,        0,        DNP_FX_N } },
-    { "sway",     FX_PARTICLES,  false, { 0,        250,      100,      150,      DNP_FX_N } },
-    { "size",     FX_PARTICLES,  false, { 12,       40,       15,       30,       DNP_FX_N } },
-    { "length",   FX_PARTICLES,  false, { 350,      0,        0,        0,        DNP_FX_N } },
-    { "color",    FX_ANY,        true,  { 0xaab4c8, 0xffffff, 0xc8b48c, 0xff8a2a, 0x8090a0 } },
-    { "alpha",    FX_ANY,        false, { 350,      900,      400,      900,      1000 } },
-    { "bottom",   FX_ANY,        false, { 0,        0,        0,        0,        0 } },
-    { "top",      FX_ANY,        false, { -1000,    -1000,    -1000,    -1000,    -1000 } },
-    { "glow",     FX_ANY,        false, { 0,        0,        0,        1000,     0 } },
-    { "falloff",  FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 0 } },
-    { "noise",    FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 0 } },
-    { "drift",    FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 300 } },
+    //  name       kinds          color   rain      snow      dust      embers    fog       fill
+    { "density",  FX_ANY,        false, { 8000,     4000,     1500,     600,      150,      DNP_FX_N } },
+    { "speed",    FX_PARTICLES,  false, { 9000,     800,      150,      600,      DNP_FX_N, DNP_FX_N } },
+    { "windx",    FX_PARTICLES,  false, { 0,        0,        0,        0,        DNP_FX_N, DNP_FX_N } },
+    { "windy",    FX_PARTICLES,  false, { 0,        0,        0,        0,        DNP_FX_N, DNP_FX_N } },
+    { "sway",     FX_PARTICLES,  false, { 0,        250,      100,      150,      DNP_FX_N, DNP_FX_N } },
+    { "size",     FX_PARTICLES,  false, { 12,       40,       15,       30,       DNP_FX_N, DNP_FX_N } },
+    { "length",   FX_PARTICLES,  false, { 350,      0,        0,        0,        DNP_FX_N, DNP_FX_N } },
+    { "color",    FX_ALL,        true,  { 0xaab4c8, 0xffffff, 0xc8b48c, 0xff8a2a, 0x8090a0, 0x3a6a8a } },
+    { "alpha",    FX_ALL,        false, { 350,      900,      400,      900,      1000,     500 } },
+    { "bottom",   FX_ALL,        false, { 0,        0,        0,        0,        0,        0 } },
+    { "top",      FX_ALL,        false, { -1000,    -1000,    -1000,    -1000,    -1000,    -1000 } },
+    { "glow",     FX_ALL,        false, { 0,        0,        0,        1000,     0,        0 } },
+    { "falloff",  FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 0,        DNP_FX_N } },
+    { "noise",    FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 0,        DNP_FX_N } },
+    { "drift",    FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 300,      DNP_FX_N } },
 };
 #undef DNP_FX_N
 inline constexpr u8 FX_KEY_COUNT = static_cast<u8>(sizeof(FX_KEYS) / sizeof(FX_KEYS[0]));

@@ -688,8 +688,9 @@ function EXEC.set_sector_effect(g, n, ev, pull)
   local settings = false
   if n.on ~= false then
     settings = {}
-    if n.density ~= nil then settings.density = n.density end
+    if n.density ~= nil and n.effect ~= "fill" then settings.density = n.density end
     if n.color ~= nil then settings.color = n.color end
+    if n.alpha ~= nil then settings.alpha = n.alpha end
   end
   for _, idx in ipairs(sectors_for(n, pull)) do dnp.set_sector_effect(idx, n.effect, settings) end
   return "then"

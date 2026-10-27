@@ -1,5 +1,5 @@
 //
-// SECTOR EFFECTS: rain, snow, dust and embers, and volumetric fog
+// SECTOR EFFECTS: rain, snow, dust and embers, volumetric fog, and fills
 // (docs/SECTOR_FX.md).
 //
 // Authored in the map file, one `fx` line per effect inside a sector block, and
@@ -18,12 +18,21 @@
 // not the camera is inside. One prism's alpha is 1 - exp(-tau), and prisms of one fog
 // composite to the exact total in any order: (1 - a1)(1 - a2) = exp(-(t1 + t2)).
 //
+// A FILL is the volume tinted: its colour, as much as `alpha` hides, on whatever
+// is seen through it. Its shell faces OUTWARD and is drawn one-sided, so a ray
+// crosses exactly one face going in and none coming out -- and a wall the shell
+// lies on faces the other way, into its room, so the two never fight. The top
+// is the exception, drawn both ways: from above it is the sector's ceiling
+// picture over the body, from below the picture alone. With the eye inside, the
+// body is a tint over the whole view instead.
+//
 // The math is exported and pure, and client/test/sectorfx.test.js holds the
 // shader's own arithmetic to it.
 //
-import { toThreeX, toThreeY, toThreeZ } from '../mapgeom.js'
+import { toThreeX, toThreeY, toThreeZ, flatUV } from '../mapgeom.js'
+import { NO_TEXTURE } from '../mapdata.js'
 
-export const KIND = { RAIN: 1, SNOW: 2, DUST: 3, EMBERS: 4, FOG: 5 }
+export const KIND = { RAIN: 1, SNOW: 2, DUST: 3, EMBERS: 4, FOG: 5, FILL: 6 }
 export const PARTICLE_KINDS = [KIND.RAIN, KIND.SNOW, KIND.DUST, KIND.EMBERS]
 
 /** Particles per map, before an even scale-down across its effects. */
@@ -113,6 +122,34 @@ export function particleCounts (wants, budget) {
   const total = wants.reduce((s, n) => s + n, 0)
   const k = total > budget ? budget / total : 1
   return wants.map((n) => Math.floor(n * k))
+}
+
+// --- pure: a fill's shell ---------------------------------------------------------
+
+const ccw = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y) > 0
+
+/**
+ * A fill's shell, from its sector's triangles: each wound counter-clockwise seen
+ * from above, and the OUTLINE -- the edges only one triangle has -- each as
+ * [p, q] with the volume on its left, so the face built on it looks right,
+ * outward. A hole's edges are outline too, facing into the hole.
+ */
+export function fillShell (tris) {
+  const up = tris.map(([a, b, c]) => ccw(a, b, c) ? [a, b, c] : [a, c, b])
+  const key = (p, q) => `${p.x},${p.y};${q.x},${q.y}`
+  const edges = new Map()
+  for (const [a, b, c] of up) {
+    for (const [p, q] of [[a, b], [b, c], [c, a]]) {
+      // Shared, the edge runs the other way in its neighbour: inside, not outline.
+      if (!edges.delete(key(q, p))) edges.set(key(p, q), [p, q])
+    }
+  }
+  return { tris: up, outline: [...edges.values()] }
+}
+
+/** Is `p` (simulation space: x, y, z up) inside a fill of these triangles and band? */
+export function inFill (p, tris, lo, hi) {
+  return p.z >= lo && p.z <= hi && tris.some(([a, b, c]) => inTriangle(p, a, b, c))
 }
 
 // --- pure: the fog integral (the shader's own arithmetic, in JS) ------------------
@@ -339,6 +376,60 @@ void main () {
 }
 `
 
+const FILL_VS = /* glsl */`
+varying vec2 vUv;
+void main () {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`
+
+// PREMULTIPLIED. The top, from above: the picture (`surface` its opacity) over
+// the body. From below, the picture alone: the eye is in the body, whose tint is
+// the overlay's. The rest of the shell is the body and nothing else.
+const FILL_FS = /* glsl */`
+uniform sampler2D map;
+uniform vec2 repeat;
+uniform float textured;
+uniform float surface;
+uniform vec3 color;
+uniform float alpha;
+uniform float lit;
+varying vec2 vUv;
+void main () {
+  float a = gl_FrontFacing ? alpha : 0.0;
+  vec3 c = color * a;
+  if (textured > 0.5) {
+    vec4 t = texture2D(map, vUv * repeat);
+    float s = surface * t.a;
+    c = t.rgb * lit * s + c * (1.0 - s);
+    a = s + a * (1.0 - s);
+  }
+  if (a < 0.002) discard;
+  gl_FragColor = vec4(c, a);
+}
+`
+
+// The eye inside a fill: its body over the whole view.
+const TINT_VS = /* glsl */`
+void main () { gl_Position = vec4(position.xy, 0.0, 1.0); }
+`
+const TINT_FS = /* glsl */`
+uniform vec3 color;
+uniform float alpha;
+void main () { gl_FragColor = vec4(color * alpha, alpha); }
+`
+
+// Premultiplied over: what the shader writes is colour times alpha.
+const PREMULTIPLIED = (THREE) => ({
+  blending: THREE.CustomBlending,
+  blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneFactor,
+  blendDst: THREE.OneMinusSrcAlphaFactor,
+  blendSrcAlpha: THREE.OneFactor,
+  blendDstAlpha: THREE.OneMinusSrcAlphaFactor
+})
+
 // The fog target, laid over the picture: premultiplied, stretched to the screen.
 const COMPOSITE_VS = /* glsl */`
 varying vec2 vUv;
@@ -355,10 +446,12 @@ void main () { gl_FragColor = texture2D(fog, vUv); }
  * into a scene of their own (drawn after the main pass, over the depth).
  *
  * An effect is lit by its sector's light level unless it glows. `touch` picks
- * the smaller particle budget.
+ * the smaller particle budget. `surfaces(texture)` is the map view's uniforms
+ * for a texture (`map`, `repeat`), which a fill's top shares, so it shows the
+ * picture as it loads and animates; without it, a fill has no picture.
  */
 export class SectorFx {
-  constructor ({ THREE, map, touch = false, budget = null, rng = mulberry(0x5eed), fogScale = 0.5 }) {
+  constructor ({ THREE, map, touch = false, budget = null, rng = mulberry(0x5eed), fogScale = 0.5, surfaces = null }) {
     this.THREE = THREE
     // The fog's resolution against the screen's: its depth pass and its prisms
     // are drawn into targets this fraction of the size, then laid over the
@@ -398,7 +491,85 @@ export class SectorFx {
       const mesh = this.#fog(THREE, map, e, shapeOf(e.sector))
       if (mesh) { this.fogScene.add(mesh); this.meshes.push(mesh) }
     }
+
+    // FILLS: the top, then the rest of the shell, so the top is drawn first.
+    this.fills = []
+    for (const e of fx.filter((f) => f.kind === KIND.FILL)) this.#fill(THREE, map, e, shapeOf(e.sector), surfaces)
+    if (this.fills.length > 0) {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { color: { value: new THREE.Color() }, alpha: { value: 0 } },
+        vertexShader: TINT_VS,
+        fragmentShader: TINT_FS,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        ...PREMULTIPLIED(THREE)
+      })
+      this.tint = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat)
+      this.tint.frustumCulled = false
+      this.tint.renderOrder = 1e6     // over every other thing in the view
+      this.tint.visible = false
+      this.tint.name = 'fill:tint'
+      this.root.add(this.tint)
+      this.meshes.push(this.tint)
+    }
     this.depthTarget = null
+  }
+
+  #fill (THREE, map, e, st, surfaces) {
+    if (st.tris.length === 0) return
+    const s = map.sectors[e.sector]
+    const { lo, hi } = bandOf(e, s)
+    const p = e.params
+    const shell = fillShell(st.tris)
+    const glow = Math.max(0, Math.min(1, p.glow ?? 0))
+    const lit = glow + (1 - glow) * ((s.light ?? 255) / 255)
+    const color = new THREE.Color().setHex(p.color ?? 0x3a6a8a, THREE.LinearSRGBColorSpace).multiplyScalar(lit)
+    const alpha = Math.max(0, Math.min(1, p.alpha ?? 0.5))
+    // The ceiling's picture on the top only where the sector draws no ceiling of
+    // its own: a solid room's ceiltex is its ceiling, not its water.
+    const pic = s.effect && s.ceilTex !== NO_TEXTURE && surfaces ? surfaces(s.ceilTex) : null
+    const material = (top) => new THREE.ShaderMaterial({
+      uniforms: {
+        map: pic && top ? pic.map : { value: null },
+        repeat: pic && top ? pic.repeat : { value: new THREE.Vector2(1, 1) },
+        textured: { value: pic && top ? 1 : 0 },
+        surface: { value: s.ceilStyle?.alpha ?? 1 },
+        color: { value: color },
+        alpha: { value: alpha },
+        lit: { value: lit }
+      },
+      vertexShader: FILL_VS,
+      fragmentShader: FILL_FS,
+      transparent: true,
+      depthWrite: false,
+      side: top ? THREE.DoubleSide : THREE.FrontSide,
+      ...PREMULTIPLIED(THREE)
+    })
+    const mesh = (pos, uv, name, top) => {
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+      const m = new THREE.Mesh(geo, material(top))
+      m.frustumCulled = false
+      m.name = `fill:${name}:${e.sector}`
+      this.root.add(m)
+      this.meshes.push(m)
+    }
+    const at = (q, z) => [toThreeX(q.x), toThreeY(z), toThreeZ(q.y)]
+    // The top, facing up, painted as the sector's ceiling is (flatUV).
+    const top = []
+    const uv = []
+    for (const tri of shell.tris) {
+      for (const q of tri) { top.push(...at(q, hi)); uv.push(...flatUV(q.x, q.y, s.ceilStyle, s.motion)) }
+    }
+    mesh(top, uv, 'top', true)
+    // The sides, facing out, and the bottom, facing down.
+    const body = []
+    for (const [a, b] of shell.outline) body.push(...at(a, lo), ...at(b, lo), ...at(b, hi), ...at(a, lo), ...at(b, hi), ...at(a, hi))
+    for (const [a, b, c] of shell.tris) body.push(...at(a, lo), ...at(c, lo), ...at(b, lo))
+    mesh(body, new Array(body.length / 3 * 2).fill(0), 'body', false)
+    this.fills.push({ tris: shell.tris, lo, hi, color, alpha })
   }
 
   #particles (THREE, map, e, st, n, rng) {
@@ -506,13 +677,7 @@ export class SectorFx {
       transparent: true,
       depthWrite: false,
       depthTest: false,
-      // Premultiplied over: what the shader writes is colour times alpha.
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.AddEquation,
-      blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneMinusSrcAlphaFactor,
-      blendSrcAlpha: THREE.OneFactor,
-      blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+      ...PREMULTIPLIED(THREE),
       // Both sides, so the exit face is drawn however it is wound; the shader
       // discards the entry face, so no prism counts twice.
       side: THREE.DoubleSide
@@ -533,8 +698,19 @@ export class SectorFx {
     for (const m of this.fogMaterials) m.uniforms.offset.value.set(x, y, z)
   }
 
-  /** Advance the animation. One uniform, shared by every effect. */
-  update (seconds) { this.time.value = seconds }
+  /**
+   * Advance the animation -- one uniform, shared by every effect -- and, given
+   * the eye (THREE space), tint the view when it is inside a fill.
+   */
+  update (seconds, eye = null) {
+    this.time.value = seconds
+    if (!this.tint) return
+    const o = this.root.position
+    const p = eye && { x: eye.x - o.x, y: -(eye.z - o.z), z: eye.y - o.y }
+    const f = p && this.fills.find((k) => inFill(p, k.tris, k.lo, k.hi))
+    this.tint.visible = !!f
+    if (f) { this.tint.material.uniforms.color.value.copy(f.color); this.tint.material.uniforms.alpha.value = f.alpha }
+  }
 
   get hasFog () { return this.fogCount > 0 }
 
@@ -673,12 +849,7 @@ export class SectorFx {
       transparent: true,
       depthTest: false,
       depthWrite: false,
-      blending: THREE.CustomBlending,
-      blendEquation: THREE.AddEquation,
-      blendSrc: THREE.OneFactor,
-      blendDst: THREE.OneMinusSrcAlphaFactor,
-      blendSrcAlpha: THREE.OneFactor,
-      blendDstAlpha: THREE.OneMinusSrcAlphaFactor
+      ...PREMULTIPLIED(THREE)
     })
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat)
     quad.frustumCulled = false

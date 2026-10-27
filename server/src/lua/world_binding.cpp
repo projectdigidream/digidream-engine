@@ -2324,7 +2324,7 @@ static bool fx_setting(lua_State* L, int idx, bool is_color, i64& raw) {
 }
 
 // dnp.set_sector_effect(sector, kind [, settings | false])
-//   kind: "rain" "snow" "dust" "embers" "fog"; settings by the map's own `fx`
+//   kind: "rain" "snow" "dust" "embers" "fog" "fill"; settings by the map's own `fx`
 //   key names (density, color, ...), each optional; false takes it off.
 int l_dnp_set_sector_effect(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
@@ -2334,7 +2334,7 @@ int l_dnp_set_sector_effect(lua_State* L) {
     t.what = proto::SectorWhat::Effect;
     const char* kind = luaL_checkstring(L, 2);
     for (u8 k = 1; k <= geom::FX_KIND_COUNT; ++k) if (std::strcmp(kind, geom::fx_kind_name(k)) == 0) t.fx.kind = k;
-    if (t.fx.kind == 0) return luaL_error(L, "no sector effect '%s' (rain, snow, dust, embers, fog)", kind);
+    if (t.fx.kind == 0) return luaL_error(L, "no sector effect '%s' (rain, snow, dust, embers, fog, fill)", kind);
     t.on = !(lua_isboolean(L, 3) && !lua_toboolean(L, 3));
     if (t.on && lua_istable(L, 3)) {
         lua_pushnil(L);

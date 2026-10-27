@@ -815,6 +815,13 @@ static void test_sector_effects() {
     e = rain; e.params[2].raw = 0x1000000;      CHECK(refused(e));   // not a colour
     e = rain; e.params[0].key = 0;              CHECK(refused(e));   // key 0
     e = rain; e.params[0].key = FX_KEY_COUNT + 1; CHECK(refused(e)); // past the table
+    // A fill: a colour and an alpha load; a density, which it has none of, does not.
+    SectorFx fill;
+    fill.sector = 1; fill.kind = static_cast<u8>(FxKind::Fill);
+    fill.params[fill.count++] = { key("color"), 0x3a6a8a };
+    fill.params[fill.count++] = { key("alpha"), fx::from_frac(2, 5).raw };
+    CHECK(!refused(fill) && std::strcmp(fx_kind_name(fill.kind), "fill") == 0);
+    e = fill; e.params[1].key = key("density"); CHECK(refused(e));   // CONTROL: fill takes no density
 
     // And no single flipped bit in the file loads silently -- the effects
     // section included, which is the last thing before the hash.

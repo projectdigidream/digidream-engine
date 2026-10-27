@@ -3798,14 +3798,14 @@ function frame (now) {
   // leaves them unlit, as they were: for comparing.
   if (props && params.get('proplight') !== '0') lightProps()
 
-  // SECTOR EFFECTS (docs/SECTOR_FX.md): the home level's rain, snow and fog,
+  // SECTOR EFFECTS (docs/SECTOR_FX.md): the home level's rain, snow, fog and fills,
   // rebuilt when the level is a different one and drawn where its view is.
   // Neighbours seen over a seam draw none -- they are built from the worker's
   // groups, which do not carry them.
   if (sectorFxFor !== mapData) {
     sectorFx?.dispose()
     sectorFx = (mapData?.fx?.length ?? 0) > 0
-      ? new SectorFx({ THREE, map: mapData, touch: wantsTouch(params) })
+      ? new SectorFx({ THREE, map: mapData, touch: wantsTouch(params), surfaces: (i) => view.materials[i]?.uniforms })
       : null
     if (sectorFx) scene.add(sectorFx.root)
     sectorFxFor = mapData
@@ -3813,7 +3813,7 @@ function frame (now) {
   if (sectorFx) {
     const o = view.root.position
     sectorFx.setOrigin(o.x, o.y, o.z)
-    sectorFx.update(now / 1000)
+    sectorFx.update(now / 1000, cam3.position)
   }
 
   // GRAB on the touch controls while this body's rules hold walls by a

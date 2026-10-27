@@ -118,10 +118,10 @@ bool parse_fx(const std::string& tok, fx& out);
 // core/include/dnp/geom/sector_fx.hpp's table -- this only parses against it.
 // A colour is six hex digits; everything else is a number like any other here.
 bool parse_effect(int line, const std::vector<std::string>& tok, SectorFx& out) {
-    if (tok.size() < 2) { err(line, "fx needs a kind: rain, snow, dust, embers or fog"); return false; }
+    if (tok.size() < 2) { err(line, "fx needs a kind: rain, snow, dust, embers, fog or fill"); return false; }
     out = SectorFx{};
     for (u8 k = 1; k <= FX_KIND_COUNT; ++k) if (tok[1] == fx_kind_name(k)) out.kind = k;
-    if (out.kind == 0) { err(line, "unknown fx kind '%s' (rain, snow, dust, embers, fog)", tok[1].c_str()); return false; }
+    if (out.kind == 0) { err(line, "unknown fx kind '%s' (rain, snow, dust, embers, fog, fill)", tok[1].c_str()); return false; }
     if ((tok.size() - 2) % 2 != 0) { err(line, "fx %s: '%s' has no value", tok[1].c_str(), tok.back().c_str()); return false; }
     bool ok = true;
     u32 seen = 0;

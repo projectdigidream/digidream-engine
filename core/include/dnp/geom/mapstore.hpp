@@ -267,7 +267,7 @@ public:
     u32 light_count() const noexcept { return light_count_; }
     const MapLight& light(u32 i) const noexcept { return lights_[i]; }
 
-    // Sector effects: rain, snow, dust, embers, fog (docs/SECTOR_FX.md).
+    // Sector effects: rain, snow, dust, embers, fog, fill (docs/SECTOR_FX.md).
     // Cosmetic like lights, and refused rather than dropped when full, for the
     // same reason. `sector` is checked by the loader, not here: mapc adds an
     // effect for the sector it has just created.
