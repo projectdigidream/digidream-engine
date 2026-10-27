@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.3.11 -- 2026-10-27
+
 ### Added
 
 - **Filled volumes** (docs/SECTOR_FX.md §1.3). A new sector effect,
