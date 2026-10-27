@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <utility>
 
 #include "dnp/geom/mapstore.hpp"
@@ -59,7 +60,11 @@ static void test_the_parser() {
         "transition default -> nowhere when grounded\n",        // a state nobody declared
         "movestate a group floor\ntransition default -> a when\n",          // no condition
         "movestate a group floor\ntransition default -> a when depth knees\n",  // no such depth
-        "movestate a group floor\ntransition default -> a when meter air empty\n",  // not built yet
+        "movestate a group floor\ntransition default -> a when meter air empty\n",  // no such meter
+        "meter air max 0\n",                                                        // nothing to fill
+        "meter air max 10 start 11\n",                                              // more than its max
+        "meter air max 10\nmeter air in nowhere rate 1\n",                         // no such state
+        "meter air max 10\nmovestate a group floor\ntransition default -> a when grounded do meter air fill 3\n",
         "movestate a group floor\ntransition default -> a when pressed sneeze\n",
         "movestate a group floor\ntransition default -> a when grounded do dance\n",
     };
@@ -245,6 +250,93 @@ static void test_wading_and_swimming() {
     CHECK(walked.out == 0 && walked.out_x < 10);               // or up the edge on foot: not left swimming on land
 }
 
+// BREATH: under the water to the eyes the air drains; above, it comes back;
+// out of it the swimmer drowns -- a state with no control, sinking.
+static const char* BREATH =
+    "movestate swim group liquid speed 4 accel 20 friction 1 gravity 0.3 buoyancy 8\n"
+    "movestate drown group none\n"
+    "meter air max 10 rate 5\n"
+    "meter air in swim rate -2 when depth eyes\n"
+    "meter air in drown rate 0\n"
+    "transition default -> swim when depth waist falling\n"
+    "transition swim -> drown when meter air empty\n";
+
+static void test_breath() {
+    std::printf("meters: breath -- drains under the water, comes back above it, and runs out\n");
+    static Pool pool;
+    static World w;
+    static MoveDefs d;
+    auto dive = [&](const char* text) {
+        CHECK(parse(d, text));
+        w.reset();
+        pool.attach(w);
+        w.set_move_defs(d);
+        const u32 a = w.spawn(fx3{fx::from_int(30), fx::from_int(8), fx::zero()});   // over the deep end
+        struct { double start, under, back, last; int state_end; } r{};
+        r.start = f(w.agent(a).mv.meters[0]);
+        for (u32 t = 0; t < 1500; ++t) {
+            proto::InputFrame in;
+            if ((t >= 60 && t < 150) || t >= 600) in.buttons = proto::button::CROUCH;   // down; up; down for good
+            w.set_input(a, in);
+            w.step();
+            if (t == 149) r.under = f(w.agent(a).mv.meters[0]);
+            if (t == 599) r.back = f(w.agent(a).mv.meters[0]);
+        }
+        r.last = f(w.agent(a).mv.meters[0]);
+        r.state_end = w.agent(a).mv.move_state;
+        return r;
+    };
+    const auto held = dive(BREATH);
+    std::string no_rule = BREATH;   // the same, without the rule under the water
+    no_rule.erase(no_rule.find("meter air in"), std::strlen("meter air in swim rate -2 when depth eyes\n"));
+    const auto free = dive(no_rule.c_str());
+    std::printf("  air: %.2f at the start, %.2f after 1.5 s down, %.2f after 7.5 s up, %.2f at the end in state %d\n",
+                held.start, held.under, held.back, held.last, held.state_end);
+    std::printf("  CONTROL, no rule for under the water: %.2f, %.2f, %.2f, state %d\n",
+                free.under, free.back, free.last, free.state_end);
+    CHECK(held.start == 10 && held.under < 7 && held.under > 0);     // down there 2 a second goes
+    CHECK(held.back == 10);                                           // back, at +5, and no more than the max
+    CHECK(held.last == 0 && held.state_end == 2);                     // ran out: drowning, and its own rate 0
+    CHECK(free.under == 10 && free.last == 10 && free.state_end == 1);   // CONTROL: it never drains
+}
+
+// STAMINA: a sprint that costs 10 to start and drains 30 a second, back to
+// walking when it is gone, while walking refills it.
+static void test_stamina() {
+    std::printf("meters: stamina -- a sprint that costs it, and stops when it runs out\n");
+    static World w;
+    static MoveDefs d;
+    CHECK(parse(d,
+                "movestate sprint group floor speed 14 accel 40\n"
+                "meter stamina max 100 rate 20\n"
+                "meter stamina in sprint rate -30\n"
+                "transition default -> sprint when held dash meter stamina above 10 do meter stamina add -10\n"
+                "transition sprint -> default when meter stamina empty\n"
+                "transition sprint -> default when released dash\n"));
+    w.reset();
+    w.set_map(&test_map());
+    w.set_move_defs(d);
+    const u32 a = w.spawn(fx3{fx::from_int(2), fx::from_int(10), fx::zero()});
+    double first = 0, at_1s = 0, speed_1s = 0;
+    int state_1s = -1, out_at = -1;
+    for (u32 t = 0; t < 300; ++t) {
+        proto::InputFrame in;
+        in.move_x = t % 120 < 60 ? 32767 : -32767;   // back and forth, the test map is not wide
+        in.buttons = proto::button::DASH;
+        w.set_input(a, in);
+        w.step();
+        const auto& g = w.agent(a);
+        if (t == 0) first = f(g.mv.meters[0]);
+        if (t == 60) { at_1s = f(g.mv.meters[0]); state_1s = g.mv.move_state; speed_1s = f(length(fx2{g.vel.x, g.vel.y})); }
+        if (out_at < 0 && t > 0 && g.mv.move_state == 0) out_at = static_cast<int>(t);
+    }
+    std::printf("  stamina %.2f after the start's cost, %.2f a second on (state %d at %.2f units/s); out of it at tick %d\n",
+                first, at_1s, state_1s, speed_1s, out_at);
+    CHECK(first < 90 && first > 89);                  // 100, less 10 to start, less a tick's drain
+    CHECK(state_1s == 1 && at_1s < 61 && at_1s > 58); // sprinting, 30 a second gone
+    CHECK(out_at > 170 && out_at < 190);              // 90 / 30 = 3 s, then back to walking
+}
+
 static void test_it_is_deterministic() {
     std::printf("movestates: the same inputs, the same states and hash\n");
     auto once = []() {
@@ -273,6 +365,8 @@ int main() {
     test_a_crouch_slide();
     test_a_liquid_state_and_a_flag();
     test_wading_and_swimming();
+    test_breath();
+    test_stamina();
     test_it_is_deterministic();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

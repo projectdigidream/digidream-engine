@@ -237,6 +237,9 @@ struct MoveParams {
 // All of it is simulation state and all of it is hashed: a reconciliation
 // replay that started from the wrong dash timer or jump-edge flag would diverge
 // from the server for reasons no amount of position correction repairs.
+// How many meters a module may declare (docs/MOVEMENT.md "Meters").
+inline constexpr u32 MAX_MOVE_METERS = 8;
+
 struct MoveState {
     ControllerMode mode = ControllerMode::Standard;
 
@@ -317,6 +320,10 @@ struct MoveState {
     u8   move_state = 0;
     u16  state_ticks = 0;
     u16  prev_buttons = 0;
+    // THE METERS (docs/MOVEMENT.md "Meters"): the module's, by their order in
+    // MoveDefs -- breath, stamina, whatever it names -- each 0..its max. Hashed
+    // and in SelfBlock; a spawn starts them at their `start`.
+    fx   meters[MAX_MOVE_METERS]{};
 
     bool grappling = false;
     bool grapple_pulling = false;

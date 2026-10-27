@@ -14,12 +14,12 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // the controller keeps between ticks, because reconciliation overwrites local
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
-const BUF64_LEN = 20
+const BUF64_LEN = 28
 const BUF32_LEN = 25
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
-  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17, COYOTE: 19,
+  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17, COYOTE: 19, METERS: 20,
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
@@ -908,6 +908,8 @@ export class WasmWorld {
       hanging: u32[b32 + IDX.HANGING] !== 0,
       hopping: u32[b32 + IDX.HOPPING] !== 0,
       coyote: i64[b64 + IDX.COYOTE],
+      // The meters (docs/MOVEMENT.md "Meters"): eight raw fx, the module's in order.
+      meters: Array.from({ length: 8 }, (_, k) => i64[b64 + IDX.METERS + k]),
       // The movement state (docs/MOVEMENT.md): 0 `default`, 1..8 the module's.
       moveState: u32[b32 + IDX.MOVE_STATE],
       stateTicks: u32[b32 + IDX.STATE_TICKS],
@@ -938,6 +940,7 @@ export class WasmWorld {
     i64[b64 + IDX.DASH_T] = s.dashTimer ?? z
     i64[b64 + IDX.DASH_CD] = s.dashCooldown ?? z
     i64[b64 + IDX.COYOTE] = s.coyote ?? z
+    for (let k = 0; k < 8; k++) i64[b64 + IDX.METERS + k] = s.meters?.[k] ?? z
     i64[b64 + IDX.HOVER_F] = s.hoverFuel ?? z
     i64[b64 + IDX.FLIGHT_F] = s.flightFuel ?? z
     i64[b64 + IDX.GRAP_ANCH] = s.grappleAnchor?.x ?? z

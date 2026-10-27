@@ -4383,6 +4383,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             sb.coyote          = self.mv.coyote_timer;
             sb.move_state      = self.mv.move_state;
             sb.state_ticks     = self.mv.state_ticks;
+            for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) sb.meters[k] = self.mv.meters[k];
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
             // The sector this entity rides (design §3.2.5), encoded with the
@@ -5130,9 +5131,10 @@ int main(int argc, char** argv) {
         char line[512];
         while (std::fgets(line, sizeof(line), f)) {
             char what[64] = {0};
-            // `movestate` and `transition` (docs/MOVEMENT.md): collected as text,
-            // read once every module has had its say (below).
-            if (std::strncmp(line, "movestate ", 10) == 0 || std::strncmp(line, "transition ", 11) == 0) {
+            // `movestate`, `transition` and `meter` (docs/MOVEMENT.md): collected
+            // as text, read once every module has had its say (below).
+            if (std::strncmp(line, "movestate ", 10) == 0 || std::strncmp(line, "transition ", 11) == 0 ||
+                std::strncmp(line, "meter ", 6) == 0) {
                 srv.move_text += line;
                 if (srv.move_text.back() != '\n') srv.move_text += '\n';
                 srv.move_origin.push_back(std::string(module_dirs[mi]) + "/module.txt");
@@ -5272,8 +5274,9 @@ int main(int argc, char** argv) {
         char err[160] = {0};
         if (physics::parse_move_defs(srv.move_defs, srv.move_text.data(),
                                      static_cast<u32>(srv.move_text.size()), err, sizeof(err))) {
-            std::fprintf(stderr, "[srv] movement: %u state(s) of the module's, %u transition(s)\n",
-                         srv.move_defs.state_count - 1u, static_cast<unsigned>(srv.move_defs.transition_count));
+            std::fprintf(stderr, "[srv] movement: %u state(s) of the module's, %u transition(s), %u meter(s)\n",
+                         srv.move_defs.state_count - 1u, static_cast<unsigned>(srv.move_defs.transition_count),
+                         static_cast<unsigned>(srv.move_defs.meter_count));
         } else {
             const int n = std::atoi(err + 5);
             const char* why = std::strchr(err, ':');

@@ -189,6 +189,12 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
     w.fxraw(s.coyote);
     w.u8v(s.move_state);
     w.u16v(s.state_ticks);
+    {
+        u8 n = physics::MAX_MOVE_METERS;
+        while (n > 0 && s.meters[n - 1] == fx::zero()) --n;
+        w.u8v(n);
+        for (u8 i = 0; i < n; ++i) w.fxraw(s.meters[i]);
+    }
     if (s.state_flags & state_flag::GRAPPLING) {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
@@ -244,6 +250,14 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     s.coyote          = r.fxraw();
     s.move_state      = r.u8v();
     s.state_ticks     = r.u16v();
+    {
+        // More than the core holds is read past, not kept: no server sends it.
+        const u8 n = r.u8v();
+        for (u8 i = 0; i < n; ++i) {
+            const fx v = r.fxraw();
+            if (i < physics::MAX_MOVE_METERS) s.meters[i] = v;
+        }
+    }
     if (s.state_flags & state_flag::GRAPPLING) {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();

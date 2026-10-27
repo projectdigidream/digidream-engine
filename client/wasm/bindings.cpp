@@ -48,7 +48,8 @@ constexpr int BUF64_GRAP_DIST = 14;
 constexpr int BUF64_DASH_DIR  = 15;  // 2
 constexpr int BUF64_CLIMB_N   = 17;  // 2
 constexpr int BUF64_COYOTE    = 19;  // appended: core.js mirrors this by hand
-constexpr int BUF64_LEN       = 20;
+constexpr int BUF64_METERS    = 20;  // physics::MAX_MOVE_METERS (docs/MOVEMENT.md)
+constexpr int BUF64_LEN       = 28;
 
 // Layout of the u32 buffer.
 constexpr int BUF32_FACING    = 0;
@@ -1097,6 +1098,7 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out64[BUF64_CLIMB_N + 0] = m.climb_normal.x.raw;
     out64[BUF64_CLIMB_N + 1] = m.climb_normal.y.raw;
     out64[BUF64_COYOTE] = m.coyote_timer.raw;
+    for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) out64[BUF64_METERS + k] = m.meters[k].raw;
 
     out32[BUF32_FACING]    = a.facing.raw;
     out32[BUF32_FLAGS]     = w->state_flags(idx);
@@ -1169,6 +1171,7 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.state_ticks = static_cast<u16>(in32[BUF32_STATE_TICKS]);
     m.prev_buttons = static_cast<u16>(in32[BUF32_PREV_BUTTONS]);
     m.coyote_timer = fx::from_raw(in64[BUF64_COYOTE]);
+    for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) m.meters[k] = fx::from_raw(in64[BUF64_METERS + k]);
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
     m.grounded = in32[BUF32_GROUNDED] != 0;

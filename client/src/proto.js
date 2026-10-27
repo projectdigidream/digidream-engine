@@ -886,6 +886,9 @@ export function decodeSnapshot (buf) {
   // The movement state and its ticks in it (docs/MOVEMENT.md).
   snap.self.moveState = r.u8()
   snap.self.stateTicks = r.u16()
+  // The meters, up to the last that is not 0; the rest are 0. Raw fx, as BigInt.
+  snap.self.meters = Array(8).fill(0n)
+  for (let k = 0, n = r.u8(); k < n; k++) { const v = r.fxraw(); if (k < 8) snap.self.meters[k] = v }
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()

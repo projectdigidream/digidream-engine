@@ -147,6 +147,10 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
         case MoveCond::DepthAtLeast: return depth >= c.arg;
         case MoveCond::DepthNone:    return depth == 0;
         case MoveCond::DepthBelow:   return depth < c.arg;
+        case MoveCond::MeterEmpty:   return st.meters[c.arg] <= fx::zero();
+        case MoveCond::MeterFull:    return st.meters[c.arg] >= c.value;
+        case MoveCond::MeterBelow:   return st.meters[c.arg] < c.value;
+        case MoveCond::MeterAbove:   return st.meters[c.arg] > c.value;
         case MoveCond::None: break;
     }
     return false;
@@ -179,10 +183,37 @@ void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p,
                 case MoveAction::ImpulseUp: vel.z = vel.z + t.value; break;
                 case MoveAction::ImpulseFacing: vel.x = vel.x + facing.x * t.value; vel.y = vel.y + facing.y * t.value; break;
                 case MoveAction::ImpulseBack: vel.x = vel.x - facing.x * t.value; vel.y = vel.y - facing.y * t.value; break;
+                case MoveAction::MeterSet:
+                case MoveAction::MeterAdd: {
+                    const fx v = t.action == MoveAction::MeterSet ? t.value : st.meters[t.meter] + t.value;
+                    st.meters[t.meter] = fx_clamp(v, fx::zero(), d.meters[t.meter].max);
+                    break;
+                }
                 case MoveAction::None: break;
             }
             return;
         }
+    }
+}
+
+// THE METERS, for a tick: each fills or drains at the rate of the first rule
+// that holds -- the state's own, then `any`'s, in file order -- or its own
+// rate with none, and stays within 0..max.
+void run_meters(const MoveDefs& d, const MapData& map, MoveState& st, fx3 vel, u16 now, u16 pressed,
+                u16 released, u8 depth, fx dt) noexcept {
+    for (u8 m = 0; m < d.meter_count; ++m) {
+        fx rate = d.meters[m].rate;
+        bool found = false;
+        for (int pass = 0; pass < 2 && !found; ++pass) {
+            for (u8 k = 0; k < d.meter_rule_count && !found; ++k) {
+                const MeterRule& r = d.meter_rules[k];
+                if (r.meter != m || r.in != (pass == 0 ? st.move_state : MOVE_ANY)) continue;
+                bool all = true;
+                for (u8 c = 0; c < r.cond_count && all; ++c) all = holds(r.cond[c], map, st, vel, now, pressed, released, depth);
+                if (all) { rate = r.rate; found = true; }
+            }
+        }
+        st.meters[m] = fx_clamp(st.meters[m] + rate * dt, fx::zero(), d.meters[m].max);
     }
 }
 
@@ -314,6 +345,9 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         take_transition(*defs, map, p, st, vel, facing, now_buttons, pressed, released, depth);
     }
     if (st.state_ticks < 0xFFFF) ++st.state_ticks;
+    if (defs != nullptr && defs->meter_count > 0) {
+        run_meters(*defs, map, st, vel, now_buttons, pressed, released, depth, dt);
+    }
     if (defs != nullptr && st.move_state != 0 && st.move_state < defs->state_count) {
         const MoveStateDef& s = defs->states[st.move_state];
         step_data_state(s, p, st, cmd, wish, has_wish, pressed, depth, vel, dt);

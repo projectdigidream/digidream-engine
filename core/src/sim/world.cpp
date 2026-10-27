@@ -76,6 +76,7 @@ u32 World::spawn(fx3 pos) noexcept {
                      : geom::NO_SECTOR;
             agents_[i].mv.hover_fuel = params_[i].hover_fuel_max;
             agents_[i].mv.flight_fuel = params_[i].flight_fuel_max;
+            for (u8 k = 0; k < move_defs_.meter_count; ++k) agents_[i].mv.meters[k] = move_defs_.meters[k].start;
             return i;
         }
     }
@@ -1072,6 +1073,7 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.u32v(m.move_state);
     h.u32v(m.state_ticks);
     h.u32v(m.prev_buttons);
+    for (const fx& v : m.meters) h.fxv(v);
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
     // NOT rebased, deliberately. A grapple anchor is a point on the geometry

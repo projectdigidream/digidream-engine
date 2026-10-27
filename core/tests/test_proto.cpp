@@ -287,6 +287,10 @@ TEST_FN void test_snapshot_roundtrip() {
         self.facing      = brad(rng.next_u32());
         self.move_state  = static_cast<u8>(rng.next_u32());
         self.state_ticks = static_cast<u16>(rng.next_u32());
+        // Meters: some, with zeros among and after them, so the trailing-zero
+        // trim is exercised and a zero inside the run is kept.
+        for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k)
+            self.meters[k] = (rng.next_u32() % 3 == 0) ? fx::zero() : fx::from_raw(static_cast<i64>(rng.next_u64()) >> 24);
         // Every flag, ARMED included, so the weapon block is written on about
         // half the iterations and its absence is exercised on the rest.
         self.state_flags = static_cast<u16>(rng.next_u32() & 0x7F);
@@ -402,6 +406,11 @@ TEST_FN void test_snapshot_roundtrip() {
         CHECK(got.self.animation_state == self.animation_state);
         CHECK(got.self.avatar == self.avatar);
         CHECK(got.self.move_state == self.move_state && got.self.state_ticks == self.state_ticks);
+        {
+            bool same = true;
+            for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) same = same && got.self.meters[k] == self.meters[k];
+            CHECK(same);
+        }
         if (self.state_flags & state_flag::ARMED) {
             const sim::WeaponState& a = got.self.weapon;
             const sim::WeaponState& b = self.weapon;

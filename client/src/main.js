@@ -3922,7 +3922,9 @@ function frame (now) {
       `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
       `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}` +
       // The movement state (docs/MOVEMENT.md), when it is one of the module's.
-      `${a.moveState ? `   state ${a.moveState} for ${a.stateTicks}t` : ''}\n` +
+      `${a.moveState ? `   state ${a.moveState} for ${a.stateTicks}t` : ''}` +
+      // The meters (docs/MOVEMENT.md), up to the last that is not 0, raw fx to two places.
+      `${a.meters.some((v) => v) ? `   meters ${a.meters.slice(0, 1 + a.meters.findLastIndex((v) => v)).map((v) => (Number(v) / 4294967296).toFixed(2)).join(' ')}` : ''}\n` +
       `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}\n` +
       `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
       // Which half is which, and no allocation to read it: `view.meshes` builds a

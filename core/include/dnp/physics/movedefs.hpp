@@ -29,6 +29,7 @@ inline constexpr u8 MAX_MOVE_TRANSITIONS = 32;
 inline constexpr u8 MAX_MOVE_CONDITIONS = 4;
 inline constexpr u8 MOVE_NAME_LEN = 16;           // with its terminating NUL
 inline constexpr u8 MOVE_ANY = 0xFF;              // a transition from any state
+inline constexpr u8 MAX_METER_RULES = 16;
 
 // What the stick moves you through.
 enum class MoveGroup : u8 {
@@ -96,6 +97,8 @@ enum class MoveCond : u8 {
     DepthAtLeast,                   // arg: 1 feet, 2 waist, 3 eyes (geom::liquid_depth)
     DepthNone,                      // out of every liquid
     DepthBelow,                     // arg: less deep than this
+    MeterEmpty, MeterFull,          // arg: the meter (value: its max, for full)
+    MeterBelow, MeterAbove,         // arg: the meter; value: the level
 };
 
 struct MoveCondition {
@@ -111,6 +114,8 @@ enum class MoveAction : u8 {
     ImpulseUp,                // value: units/s added up
     ImpulseFacing,            // value: units/s added the way the body aims
     ImpulseBack,              // value: units/s added the other way
+    MeterSet,                 // meter: which; value: to what
+    MeterAdd,                 // meter: which; value: how much (less than 0 takes)
 };
 
 struct MoveTransition {
@@ -119,7 +124,27 @@ struct MoveTransition {
     u8 cond_count = 0;
     MoveCondition cond[MAX_MOVE_CONDITIONS]{};
     MoveAction action = MoveAction::None;
+    u8 meter = 0;             // for MeterSet / MeterAdd
     fx value{};
+};
+
+// A METER: a number per body, 0..max, that fills or drains by itself at
+// `rate` a second (+ fills, - drains) -- breath, stamina. Its rate can depend
+// on the state and on conditions (MeterRule); transitions read it and change it.
+struct MeterDef {
+    char name[MOVE_NAME_LEN]{};
+    fx max{}, start{}, rate{};
+};
+
+// `meter <name> in <state|any> rate <v> [when <conditions>]`: while it holds,
+// the meter's rate is this one. A state's own rules first, then `any`'s, in
+// file order; the first that holds wins, and with none the meter's own rate.
+struct MeterRule {
+    u8 meter = 0;
+    u8 in = 0;                // a state, or MOVE_ANY
+    u8 cond_count = 0;
+    MoveCondition cond[MAX_MOVE_CONDITIONS]{};
+    fx rate{};
 };
 
 struct MoveDefs {
@@ -127,13 +152,18 @@ struct MoveDefs {
     MoveStateDef states[MAX_MOVE_STATES]{};
     u8 transition_count = 0;
     MoveTransition transitions[MAX_MOVE_TRANSITIONS]{};
+    u8 meter_count = 0;
+    MeterDef meters[MAX_MOVE_METERS]{};
+    u8 meter_rule_count = 0;
+    MeterRule meter_rules[MAX_METER_RULES]{};
     // Whether anything asks how deep a body stands -- a `depth` condition, or a
     // liquid state -- so the controller measures it only then.
     bool uses_depth = false;
 };
 
-// Read a module's movement text: every `movestate` line, then every
-// `transition` line (so a transition may name a state declared after it).
+// Read a module's movement text: every `movestate` and `meter` declaration,
+// then every `transition` line and meter rule (so either may name a state or a
+// meter declared after it).
 // Other lines are not ours and are skipped. On the first refusal, false, with
 // the line number and the reason in `err`, and `out` reset to `default` alone:
 // a half-read set would move one client differently from the server.
@@ -141,5 +171,8 @@ bool parse_move_defs(MoveDefs& out, const char* text, u32 len, char* err, u32 er
 
 // A state by name, or -1.
 i32 move_state_index(const MoveDefs& defs, const char* name) noexcept;
+
+// A meter by name, or -1.
+i32 meter_index(const MoveDefs& defs, const char* name) noexcept;
 
 }  // namespace dnp::physics

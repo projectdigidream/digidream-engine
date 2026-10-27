@@ -134,26 +134,13 @@ const char* read_state(MoveDefs& d, const Line& L) noexcept {
     return nullptr;
 }
 
-const char* read_transition(MoveDefs& d, const Line& L) noexcept {
-    if (d.transition_count == MAX_MOVE_TRANSITIONS) return "a module has at most 32 transitions";
-    if (L.n < 5 || !is(L.tok[2], "->") || !is(L.tok[4], "when"))
-        return "a transition is: transition <from|any> -> <to> when <conditions> [do <action>]";
-    MoveTransition t;
-    if (is(L.tok[1], "any")) t.from = MOVE_ANY;
-    else {
-        const i32 f = state_of(d, L.tok[1]);
-        if (f < 0) return "it names a state no movestate line declares";
-        t.from = static_cast<u8>(f);
-    }
-    const i32 to = state_of(d, L.tok[3]);
-    if (to < 0) return "it names a state no movestate line declares";
-    t.to = static_cast<u8>(to);
-    if (t.from == t.to) return "a transition goes from a state to another one";
-
-    u32 i = 5;
+// Conditions from token i up to `do` or the end: at most four, all of which
+// must hold. Shared by transitions and meter rules.
+const char* read_conditions(MoveDefs& d, const Line& L, u32& i, MoveCondition (&cond)[MAX_MOVE_CONDITIONS],
+                            u8& count) noexcept {
     while (i < L.n && !is(L.tok[i], "do")) {
-        if (t.cond_count == MAX_MOVE_CONDITIONS) return "a transition has at most 4 conditions";
-        MoveCondition& c = t.cond[t.cond_count];
+        if (count == MAX_MOVE_CONDITIONS) return "at most 4 conditions";
+        MoveCondition& c = cond[count];
         const char* k = L.tok[i++];
         const char* a = i < L.n ? L.tok[i] : "";
         if (is(k, "grounded")) c.kind = MoveCond::Grounded;
@@ -192,15 +179,99 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
             d.uses_depth = true;
             i += below ? 2 : 1;
         } else if (is(k, "meter")) {
-            return "meters are not built yet (docs/MOVEMENT.md, step 3)";
+            // meter <name> empty|full|below <v>|above <v>
+            const i32 m = meter_index(d, a);
+            if (m < 0) return "it names a meter no meter line declares";
+            c.arg = static_cast<u32>(m);
+            const char* how = i + 1 < L.n ? L.tok[i + 1] : "";
+            if (is(how, "empty")) { c.kind = MoveCond::MeterEmpty; i += 2; }
+            else if (is(how, "full")) { c.kind = MoveCond::MeterFull; c.value = d.meters[m].max; i += 2; }
+            else if ((is(how, "below") || is(how, "above")) && i + 2 < L.n && number(L.tok[i + 2], c.value)) {
+                c.kind = is(how, "below") ? MoveCond::MeterBelow : MoveCond::MeterAbove;
+                i += 3;
+            } else return "meter <name> empty, full, below <n> or above <n>";
         } else {
-            return "not a condition (grounded airborne rising falling pressed held released speed after floor depth)";
+            return "not a condition (grounded airborne rising falling pressed held released speed after floor depth meter)";
         }
-        ++t.cond_count;
+        ++count;
     }
+    return nullptr;
+}
+
+// `meter <name> max <v> [start <v>] [rate <v>]`: a declaration. Start is the
+// max unless given; rate is 0 (it stays where it is put) unless given.
+const char* read_meter(MoveDefs& d, const Line& L) noexcept {
+    if (L.n < 2) return "meter needs a name";
+    if (d.meter_count == MAX_MOVE_METERS) return "a module has at most 8 meters";
+    if (meter_index(d, L.tok[1]) >= 0) return "a meter of that name is already declared";
+    MeterDef m;
+    if (!copy_name(m.name, L.tok[1])) return "a meter's name is 1 to 15 characters";
+    bool has_max = false, has_start = false;
+    for (u32 i = 2; i < L.n; i += 2) {
+        const char* k = L.tok[i];
+        fx v{};
+        if (i + 1 >= L.n || !number(L.tok[i + 1], v)) return "a meter setting is a word and a number: max 10";
+        if (is(k, "max")) { m.max = v; has_max = true; }
+        else if (is(k, "start")) { m.start = v; has_start = true; }
+        else if (is(k, "rate")) m.rate = v;
+        else return "a meter has max, start and rate (rules say `in <state>`)";
+    }
+    if (!has_max || m.max <= fx::zero()) return "a meter needs a max above 0";
+    if (!has_start) m.start = m.max;
+    if (m.start < fx::zero() || m.start > m.max) return "a meter starts between 0 and its max";
+    d.meters[d.meter_count++] = m;
+    return nullptr;
+}
+
+// `meter <name> in <state|any> rate <v> [when <conditions>]`: a rule.
+const char* read_meter_rule(MoveDefs& d, const Line& L) noexcept {
+    if (d.meter_rule_count == MAX_METER_RULES) return "a module has at most 16 meter rules";
+    if (L.n < 6 || !is(L.tok[2], "in") || !is(L.tok[4], "rate"))
+        return "a meter rule is: meter <name> in <state|any> rate <n> [when <conditions>]";
+    MeterRule r;
+    const i32 m = meter_index(d, L.tok[1]);
+    if (m < 0) return "it names a meter no meter line declares";
+    r.meter = static_cast<u8>(m);
+    if (is(L.tok[3], "any")) r.in = MOVE_ANY;
+    else {
+        const i32 st = state_of(d, L.tok[3]);
+        if (st < 0) return "it names a state no movestate line declares";
+        r.in = static_cast<u8>(st);
+    }
+    if (!number(L.tok[5], r.rate)) return "a number is a decimal, like 9 or 0.25";
+    u32 i = 6;
+    if (i < L.n) {
+        if (!is(L.tok[i], "when")) return "after the rate, `when` and its conditions";
+        ++i;
+        if (const char* why = read_conditions(d, L, i, r.cond, r.cond_count)) return why;
+        if (r.cond_count == 0) return "`when` needs a condition";
+        if (i < L.n) return "a meter rule does nothing; `do` is a transition's";
+    }
+    d.meter_rules[d.meter_rule_count++] = r;
+    return nullptr;
+}
+
+const char* read_transition(MoveDefs& d, const Line& L) noexcept {
+    if (d.transition_count == MAX_MOVE_TRANSITIONS) return "a module has at most 32 transitions";
+    if (L.n < 5 || !is(L.tok[2], "->") || !is(L.tok[4], "when"))
+        return "a transition is: transition <from|any> -> <to> when <conditions> [do <action>]";
+    MoveTransition t;
+    if (is(L.tok[1], "any")) t.from = MOVE_ANY;
+    else {
+        const i32 f = state_of(d, L.tok[1]);
+        if (f < 0) return "it names a state no movestate line declares";
+        t.from = static_cast<u8>(f);
+    }
+    const i32 to = state_of(d, L.tok[3]);
+    if (to < 0) return "it names a state no movestate line declares";
+    t.to = static_cast<u8>(to);
+    if (t.from == t.to) return "a transition goes from a state to another one";
+
+    u32 i = 5;
+    if (const char* why = read_conditions(d, L, i, t.cond, t.cond_count)) return why;
     if (t.cond_count == 0) return "a transition needs at least one condition";
     if (i < L.n) {   // `do`
-        if (i + 1 >= L.n) return "do what? (jump, stop, impulse up|facing|back <n>)";
+        if (i + 1 >= L.n) return "do what? (jump, stop, impulse up|facing|back <n>, meter <name> set|add <n>)";
         const char* act = L.tok[i + 1];
         if (is(act, "jump")) { t.action = MoveAction::Jump; i += 2; }
         else if (is(act, "stop")) { t.action = MoveAction::Stop; i += 2; }
@@ -212,9 +283,19 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
             else return "impulse up, facing or back, then a speed";
             if (i + 3 >= L.n || !number(L.tok[i + 3], t.value)) return "impulse needs a speed";
             i += 4;
-        } else if (is(act, "move") || is(act, "meter")) {
-            return "layered moves and meters are not built yet (docs/MOVEMENT.md)";
-        } else return "do jump, stop, or impulse up|facing|back <n>";
+        } else if (is(act, "meter")) {
+            const i32 m = meter_index(d, i + 2 < L.n ? L.tok[i + 2] : "");
+            if (m < 0) return "it names a meter no meter line declares";
+            const char* how = i + 3 < L.n ? L.tok[i + 3] : "";
+            if (is(how, "set")) t.action = MoveAction::MeterSet;
+            else if (is(how, "add")) t.action = MoveAction::MeterAdd;
+            else return "meter <name> set <n> or meter <name> add <n>";
+            if (i + 4 >= L.n || !number(L.tok[i + 4], t.value)) return "meter set|add needs a number";
+            t.meter = static_cast<u8>(m);
+            i += 5;
+        } else if (is(act, "move")) {
+            return "layered moves are not built yet (docs/MOVEMENT.md, step 4)";
+        } else return "do jump, stop, impulse up|facing|back <n>, or meter <name> set|add <n>";
         if (i < L.n) return "one action after `do`";
     }
     d.transitions[d.transition_count++] = t;
@@ -222,6 +303,13 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
 }
 
 }  // namespace
+
+i32 meter_index(const MoveDefs& d, const char* name) noexcept {
+    for (u8 i = 0; i < d.meter_count; ++i) {
+        if (std::strcmp(d.meters[i].name, name) == 0) return i;
+    }
+    return -1;
+}
 
 i32 move_state_index(const MoveDefs& d, const char* name) noexcept {
     for (u8 i = 1; i < d.state_count; ++i) {
@@ -244,7 +332,9 @@ bool parse_move_defs(MoveDefs& out, const char* text, u32 len, char* err, u32 er
             const char* why = nullptr;
             if (!tokenize(text + at, end - at, L)) why = "a line too long, or with too many words";
             else if (L.n > 0 && pass == 0 && is(L.tok[0], "movestate")) why = read_state(out, L);
+            else if (L.n > 0 && pass == 0 && is(L.tok[0], "meter") && !(L.n > 2 && is(L.tok[2], "in"))) why = read_meter(out, L);
             else if (L.n > 0 && pass == 1 && is(L.tok[0], "transition")) why = read_transition(out, L);
+            else if (L.n > 0 && pass == 1 && is(L.tok[0], "meter") && L.n > 2 && is(L.tok[2], "in")) why = read_meter_rule(out, L);
             if (why) {
                 if (err && err_cap) std::snprintf(err, err_cap, "line %u: %s", lineno, why);
                 out = MoveDefs{};

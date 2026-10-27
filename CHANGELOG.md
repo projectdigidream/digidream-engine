@@ -37,6 +37,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   buoyancy lifts only while the water is at the waist or above, and swimming
   up stops at the surface. Wading, swimming and climbing or jumping out of a
   pool are seven lines; `maps/pool.map` is a pool to try them in.
+- **Meters** (docs/MOVEMENT.md, step 3 of 5): up to 8 numbers per body, named
+  by the module (breath, stamina), with `meter <name> max <n> [start] [rate]`
+  lines. A state, with conditions or without, can set a meter's rate.
+  Transitions ask `meter <name> empty|full|below|above` and can
+  `do meter <name> add|set <n>`. Predicted, like the states. Breath that runs
+  out under water, and a sprint that costs stamina, are a few lines each.
 
 ## 0.2.3.10 -- 2026-10-26
 

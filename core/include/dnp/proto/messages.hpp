@@ -7,6 +7,7 @@
 // socket, so an attacker-chosen count must never become an allocation size --
 // the caps below are what stops a two-byte field from asking for a gigabyte.
 //
+#include "dnp/physics/params.hpp"
 #include "dnp/proto/bytes.hpp"
 #include "dnp/sim/weapon.hpp"
 #include "dnp/geom/sector_fx.hpp"
@@ -434,6 +435,9 @@ struct SelfBlock {
     fx     coyote{};                // MoveState::coyote_timer
     u8     move_state = 0;          // MoveState::move_state (docs/MOVEMENT.md)
     u16    state_ticks = 0;         // MoveState::state_ticks
+    // The meters (docs/MOVEMENT.md "Meters"), sent up to the last that is not
+    // 0: nearly always as many as the module declares, and none for most.
+    fx     meters[physics::MAX_MOVE_METERS]{};
 
     // Only encoded when state_flags & GRAPPLING. A swinging player is the
     // exception, and gating it keeps 32 bytes off every other snapshot.

@@ -221,6 +221,7 @@ export class Predictor {
       // when a transition is taken, and so must the client's replay start there.
       moveState: sb.moveState ?? 0,
       stateTicks: sb.stateTicks ?? 0,
+      meters: sb.meters,
 
       // The swing countdown IS replicated, because it cannot be derived: the
       // server decides when a swing ends, and the client holds only the button
