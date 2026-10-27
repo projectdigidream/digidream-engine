@@ -1804,6 +1804,50 @@ int main(int argc, char** argv) {
         // A name the module never declared raises from a script, and stops nothing else.
         CHECK(raises("dnp.players()[1]:meter('breath')"));
         CHECK(!raises("dnp.players()[1]:meter('air')"));             // CONTROL
+
+        // SWITCHED OFF AND ON, by the nodes and by Lua: through the queue, read
+        // back by e:movement_state_enabled / e:move_enabled.
+        CHECK(load_graph(R"({
+          "graph": 1, "name": "switches",
+          "nodes": [
+            { "id": "lock",  "type": "on_call", "name": "lock" },
+            { "id": "s0",    "type": "enable_movement_state", "state": "stunned", "on": false },
+            { "id": "m0",    "type": "enable_move", "move": "shove", "on": false },
+            { "id": "open",  "type": "on_call", "name": "open" },
+            { "id": "s1",    "type": "enable_movement_state", "state": "stunned" },
+            { "id": "m1",    "type": "enable_move", "move": "shove" }
+          ],
+          "links": [ ["lock.then", "s0.in"], ["s0.then", "m0.in"], ["open.then", "s1.in"], ["s1.then", "m1.in"] ]
+        })"));
+        const auto switches = [&](const char* label) {
+            CHECK(run("local p = dnp.players()[1]\n"
+                      "sw_state = p:movement_state_enabled('stunned') and 1 or 0\n"
+                      "sw_move = p:move_enabled('shove') and 1 or 0", label));
+            return std::make_pair(num("sw_state"), num("sw_move"));
+        };
+        const auto before = switches("on to begin");
+        CHECK(run("graphs.call('lock', dnp.players()[1], nil)", "locking"));
+        ticks(2);
+        const auto locked = switches("locked");
+        CHECK(run("dnp.players()[1]:ask_movement_state('stunned')", "asking while it is off"));
+        ticks(3);
+        CHECK(run("sw_asked = dnp.players()[1]:movement_state()", "not taken"));
+        CHECK(run("graphs.call('open', dnp.players()[1], nil)", "opening"));
+        ticks(2);
+        const auto opened = switches("open again");
+        CHECK(run("dnp.players()[1]:set_move_enabled('shove', false)", "Lua off"));
+        ticks(2);
+        const auto lua_off = switches("Lua's");
+        std::printf("  switches (state, move): to begin %g %g; locked by nodes %g %g (asked while off: %s); "
+                    "opened %g %g; Lua's move off %g\n", before.first, before.second, locked.first, locked.second,
+                    str("sw_asked").c_str(), opened.first, opened.second, lua_off.second);
+        CHECK(before.first == 1 && before.second == 1);
+        CHECK(locked.first == 0 && locked.second == 0 && str("sw_asked") == "default");
+        CHECK(opened.first == 1 && opened.second == 1);              // CONTROL: the nodes really switch both ways
+        CHECK(lua_off.first == 1 && lua_off.second == 0);
+        CHECK(raises("dnp.players()[1]:set_movement_state_enabled('flying', true)"));
+        CHECK(raises("dnp.players()[1]:set_movement_state_enabled('default', false)"));
+        CHECK(!raises("dnp.players()[1]:set_move_enabled('shove', true)"));   // CONTROL
         g_world->set_move_defs(physics::MoveDefs{});
     }
 

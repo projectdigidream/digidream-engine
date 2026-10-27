@@ -542,6 +542,14 @@ function EXEC.start_move(g, n, ev, pull)
   movement(g, n, entity_of(pull, ev, nil, g.data_src[n.id]), "start_move", n.move or "")
   return "then"
 end
+function EXEC.enable_movement_state(g, n, ev, pull)
+  movement(g, n, entity_of(pull, ev, nil, g.data_src[n.id]), "set_movement_state_enabled", n.state or "", n.on ~= false)
+  return "then"
+end
+function EXEC.enable_move(g, n, ev, pull)
+  movement(g, n, entity_of(pull, ev, nil, g.data_src[n.id]), "set_move_enabled", n.move or "", n.on ~= false)
+  return "then"
+end
 
 function EXEC.set_animation_for(g, n, ev, pull)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])

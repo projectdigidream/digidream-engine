@@ -85,7 +85,9 @@ constexpr int BUF32_PREV_BUTTONS = 24;
 constexpr int BUF32_MOVES     = 25;   // 2 per axis: physics::ActiveMove move, left
 constexpr int BUF32_ASKED     = 29;   // MoveState::asked
 constexpr int BUF32_WALL      = 30;   // MoveState::wall_contact
-constexpr int BUF32_LEN       = 31;
+constexpr int BUF32_STATES_OFF = 31;  // MoveState::states_off
+constexpr int BUF32_MOVES_OFF = 32;   // MoveState::moves_off
+constexpr int BUF32_LEN       = 33;
 
 // A camera path's header (design 4.1). Its OWN four slots, not appended to the
 // agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
@@ -1134,6 +1136,8 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     }
     out32[BUF32_ASKED] = m.asked;
     out32[BUF32_WALL] = m.wall_contact ? 1u : 0u;
+    out32[BUF32_STATES_OFF] = m.states_off;
+    out32[BUF32_MOVES_OFF] = m.moves_off;
 
     out32[BUF32_FACING]    = a.facing.raw;
     out32[BUF32_FLAGS]     = w->state_flags(idx);
@@ -1214,6 +1218,8 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     }
     m.asked = static_cast<u8>(in32[BUF32_ASKED]);
     m.wall_contact = in32[BUF32_WALL] != 0;
+    m.states_off = static_cast<u8>(in32[BUF32_STATES_OFF]);
+    m.moves_off = static_cast<u8>(in32[BUF32_MOVES_OFF]);
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
     m.grounded = in32[BUF32_GROUNDED] != 0;

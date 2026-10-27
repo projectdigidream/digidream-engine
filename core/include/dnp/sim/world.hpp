@@ -308,6 +308,14 @@ public:
     bool set_meter(u32 i, u32 meter, fx v) noexcept;
     bool start_move(u32 i, u32 move) noexcept;
     bool ask_movement_state(u32 i, u32 state) noexcept;
+    // Switch one of the module's states (1..8) or layered moves on or off for
+    // body `i` (MoveState::states_off, moves_off). False for `default` or an
+    // index the module did not declare.
+    bool set_movement_state_enabled(u32 i, u32 state, bool on) noexcept;
+    bool set_move_enabled(u32 i, u32 move, bool on) noexcept;
+    // The starting switches, from the definitions' `off`: what a spawn takes.
+    static u8 states_off_of(const physics::MoveDefs& d) noexcept;
+    static u8 moves_off_of(const physics::MoveDefs& d) noexcept;
     // The flags of the movement state body `i` is in (physics::move_flag); 0 in `default`.
     u16 state_flags_of(u32 i) const noexcept {
         const u8 st = agents_[i].mv.move_state;

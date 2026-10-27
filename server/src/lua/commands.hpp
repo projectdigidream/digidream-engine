@@ -66,6 +66,10 @@ enum class CmdKind : u8 {
     SetMeter = 6,
     StartMove = 7,
     AskState = 8,
+    // e:set_movement_state_enabled / e:set_move_enabled: `v.x` the state or
+    // move by index, `v.y` 1 on, 0 off.
+    EnableState = 9,
+    EnableMove = 10,
 };
 
 struct Command {
@@ -122,6 +126,8 @@ public:
                 case CmdKind::SetMeter:    world.set_meter(c.subject, static_cast<u32>(c.v.x.floor_int()), c.v.y); break;
                 case CmdKind::StartMove:   world.start_move(c.subject, static_cast<u32>(c.v.x.floor_int())); break;
                 case CmdKind::AskState:    world.ask_movement_state(c.subject, static_cast<u32>(c.v.x.floor_int())); break;
+                case CmdKind::EnableState: world.set_movement_state_enabled(c.subject, static_cast<u32>(c.v.x.floor_int()), c.v.y != fx::zero()); break;
+                case CmdKind::EnableMove:  world.set_move_enabled(c.subject, static_cast<u32>(c.v.x.floor_int()), c.v.y != fx::zero()); break;
             }
             touched(c.subject);
             ++applied;

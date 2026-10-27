@@ -443,6 +443,8 @@ struct SelfBlock {
     physics::ActiveMove moves[physics::MOVE_AXES]{};
     u8     asked = 0;               // MoveState::asked: a script's ask, until given
     u8     wall_contact = 0;        // MoveState::wall_contact, for `touching wall`
+    u8     states_off = 0;          // MoveState::states_off: the module's states switched off
+    u8     moves_off = 0;           // MoveState::moves_off: its layered moves switched off
 
     // Only encoded when state_flags & GRAPPLING. A swinging player is the
     // exception, and gating it keeps 32 bytes off every other snapshot.

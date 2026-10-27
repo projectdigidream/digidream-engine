@@ -73,6 +73,7 @@ u16 flag(const char* s) noexcept {
     if (is(s, "weapon_hidden")) return move_flag::WEAPON_HIDDEN;
     if (is(s, "counts_as_ground")) return move_flag::COUNTS_AS_GROUND;
     if (is(s, "invulnerable")) return move_flag::INVULNERABLE;
+    if (is(s, "off")) return move_flag::OFF;
     return 0;
 }
 
@@ -263,7 +264,7 @@ const char* read_meter_rule(MoveDefs& d, const Line& L) noexcept {
 const char* read_move(MoveDefs& d, const Line& L) noexcept {
     if (d.move_count == MAX_LAYERED_MOVES) return "a module has at most 8 layered moves";
     if (L.n < 7 || !is(L.tok[5], "for"))
-        return "a move is: move <name> add|set facing|back|up|down <speed> for <seconds> [priority <n>] [cost <meter> <n>] [when <conditions>]";
+        return "a move is: move <name> add|set facing|back|up|down <speed> for <seconds> [priority <n>] [cost <meter> <n>] [off] [when <conditions>]";
     if (layered_move_index(d, L.tok[1]) >= 0) return "a move of that name is already declared";
     LayeredMoveDef m;
     if (!copy_name(m.name, L.tok[1])) return "a move's name is 1 to 15 characters";
@@ -295,7 +296,10 @@ const char* read_move(MoveDefs& d, const Line& L) noexcept {
             if (!number(L.tok[i + 2], m.cost) || m.cost < fx::zero()) return "cost <meter> <n>, n 0 or more";
             m.cost_meter = static_cast<u8>(mt);
             i += 3;
-        } else return "after `for`: priority <n>, cost <meter> <n>, when <conditions>";
+        } else if (is(k, "off")) {
+            m.off = true;
+            ++i;
+        } else return "after `for`: priority <n>, cost <meter> <n>, off, when <conditions>";
     }
     if (i < L.n) {
         ++i;

@@ -191,6 +191,7 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
 }  // namespace
 
 bool start_layered_move(const MoveDefs& d, u8 k, MoveState& st, fx3& vel, fx2 facing) noexcept {
+    if ((st.moves_off >> k) & 1u) return false;   // switched off: nothing starts it
     const LayeredMoveDef& m = d.moves[k];
     const bool vertical = m.dir == MoveDir::Up || m.dir == MoveDir::Down;
     ActiveMove& slot = st.moves[vertical ? 1 : 0];
@@ -216,11 +217,15 @@ namespace {
 // never re-enters the state already running, which would restart its clock.
 void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p, MoveState& st,
                      fx3& vel, fx2 facing, u16 now, u16 pressed, u16 released, u8 depth) noexcept {
+    // A STATE SWITCHED OFF is left at once, for `default`, and no transition
+    // goes into one: the way out of `default` is then whatever else holds.
+    const auto off = [&](u8 s) { return s != 0 && ((st.states_off >> (s - 1)) & 1u); };
+    if (off(st.move_state)) { st.move_state = 0; st.state_ticks = 0; }
     for (int pass = 0; pass < 2; ++pass) {
         for (u8 k = 0; k < d.transition_count; ++k) {
             const MoveTransition& t = d.transitions[k];
             if (pass == 0 ? t.from != st.move_state : (t.from != MOVE_ANY || t.to == st.move_state)) continue;
-            if (t.to >= d.state_count) continue;
+            if (t.to >= d.state_count || off(t.to)) continue;
             bool all = true;
             for (u8 c = 0; c < t.cond_count && all; ++c) all = holds(t.cond[c], map, st, vel, now, pressed, released, depth);
             if (!all) continue;
@@ -423,6 +428,8 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     const u8 depth = (defs != nullptr && defs->uses_depth) ? liquid_depth(map, pos, p.height) : 0;
     // The layered moves' clocks, before anything can start one this tick.
     for (ActiveMove& am : st.moves) {
+        // Switched off while it runs, a move stops there.
+        if (am.move != 0 && ((st.moves_off >> (am.move - 1)) & 1u)) am = ActiveMove{};
         if (am.move != 0 && --am.left == 0) am = ActiveMove{};
     }
     if (defs != nullptr && defs->transition_count > 0) {

@@ -591,6 +591,89 @@ static void test_it_is_deterministic() {
     CHECK(once() == once());
 }
 
+// SWITCHING THEM OFF (docs/MOVEMENT.md): a state that starts `off` is never
+// entered until a script turns it on; switched off while in it, the body is
+// back in `default` the next tick; a move switched off does not start, and a
+// running one stops. Each with its control: the same input, switched on.
+static void test_switching_off() {
+    std::printf("movestates: switched off, a state is not entered and a move does not start\n");
+    static World w;
+    static MoveDefs d;
+    CHECK(parse(d,
+        "movestate glide group air speed 8 accel 6 gravity 0.1 flags off\n"
+        "transition default -> glide when falling held jump\n"
+        "transition glide -> default when grounded\n"
+        "move dash set facing 18 for 0.5 when pressed dash\n"
+        "move boost add facing 4 for 0.25 off\n"));
+    CHECK(d.states[1].flags & move_flag::OFF);
+    CHECK(d.moves[1].off && !d.moves[0].off);
+    // Jump and hold it: the glide, if it may be had.
+    auto jump_and_hold = [&](bool glide_on) {
+        w.reset();
+        w.set_map(&test_map());
+        w.set_move_defs(d);
+        const u32 a = w.spawn(fx3{fx::from_int(10), fx::from_int(10), fx::zero()});
+        const u8 started_off = w.agent(a).mv.states_off;
+        if (glide_on) w.set_movement_state_enabled(a, 1, true);
+        int glided = 0;
+        for (u32 t = 0; t < 60; ++t) {
+            proto::InputFrame in;
+            in.buttons = proto::button::JUMP;
+            w.set_input(a, in);
+            w.step();
+            if (w.agent(a).mv.move_state == 1) ++glided;
+        }
+        return std::make_pair(started_off, glided);
+    };
+    const auto locked = jump_and_hold(false);
+    const auto found = jump_and_hold(true);
+    std::printf("  spawned with states_off %u; held jump: glided %d ticks locked, %d once on\n",
+                locked.first, locked.second, found.second);
+    CHECK(locked.first == 1 && locked.second == 0);    // `flags off`: never entered
+    CHECK(found.second > 10);                          // CONTROL: switched on, the same jump glides
+    // Switched off mid-glide: back in `default` on the next tick.
+    {
+        const u32 a = 0;
+        CHECK(w.agent(a).mv.move_state == 1);
+        CHECK(w.set_movement_state_enabled(a, 1, false));
+        proto::InputFrame in;
+        in.buttons = proto::button::JUMP;
+        w.set_input(a, in);
+        w.step();
+        CHECK(w.agent(a).mv.move_state == 0);
+        CHECK(!w.ask_movement_state(a, 1));            // nor may a script ask for it now
+        CHECK(!w.set_movement_state_enabled(a, 0, false));   // `default` is not a switch
+    }
+    // A move: DASH starts `dash`; switched off it does not, and one running stops.
+    {
+        w.reset();
+        w.set_map(&test_map());
+        w.set_move_defs(d);
+        const u32 a = w.spawn(fx3{fx::from_int(10), fx::from_int(10), fx::zero()});
+        CHECK(w.agent(a).mv.moves_off == 2);           // `boost` starts off
+        CHECK(!w.start_move(a, 1));                    // and nothing starts it
+        CHECK(w.set_move_enabled(a, 1, true) && w.start_move(a, 1));   // CONTROL: switched on, it does
+        auto press_dash = [&]() {
+            proto::InputFrame in;
+            in.buttons = proto::button::DASH;
+            w.set_input(a, in);
+            w.step();
+            const bool running = w.agent(a).mv.moves[0].move == 1;
+            w.set_input(a, proto::InputFrame{});
+            w.step();
+            return running;
+        };
+        const bool on = press_dash();
+        w.set_move_enabled(a, 0, false);
+        w.step();
+        const bool stopped = w.agent(a).mv.moves[0].move == 0;
+        for (int t = 0; t < 40; ++t) w.step();
+        const bool off = press_dash();
+        std::printf("  dash on: ran %d; switched off while running: stopped %d; pressed again off: ran %d\n", on, stopped, off);
+        CHECK(on && stopped && !off);
+    }
+}
+
 int main() {
     std::printf("== core/movestates test suite ==\n");
     test_the_parser();
@@ -603,6 +686,7 @@ int main() {
     test_stamina();
     test_layered_moves();
     test_scripts_and_walls();
+    test_switching_off();
     test_it_is_deterministic();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

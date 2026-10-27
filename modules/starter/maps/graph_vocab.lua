@@ -561,6 +561,20 @@ graph_vocab = {
       data_in = { "entity" }, data_out = {},
       doc = "Start a layered move: a knockback, a boost. As a transition's `do move` would: " ..
             "not if its axis runs a move of higher priority, or its cost cannot be paid." },
+    { name = "enable_movement_state", category = "entity",
+      args = { { name = "state", type = "string", doc = "A movestate's name, from module.txt." },
+               { name = "on", type = "bool", optional = true, doc = "Defaults to on; off switches it off." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Switch one of the module's movement states on or off for a body: a glide found, " ..
+            "a swim not learnt yet. Off, no transition goes into it, and a body in it goes back to `default`." },
+    { name = "enable_move", category = "entity",
+      args = { { name = "move", type = "string", doc = "A layered move's name, from module.txt." },
+               { name = "on", type = "bool", optional = true, doc = "Defaults to on; off switches it off." } },
+      exec_in = { "in" }, exec_out = { "then" },
+      data_in = { "entity" }, data_out = {},
+      doc = "Switch one of the module's layered moves on or off for a body: a dash unlocked, " ..
+            "a boost taken away. Off, nothing starts it, and a running one stops." },
     -- ONE PLAYER SETTING, chosen from a list of the player's settings and
     -- nothing else (the movement properties below fill `values`, so a new one
     -- appears here by itself). The engine's own effects underneath: replicated

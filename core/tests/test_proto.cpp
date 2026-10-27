@@ -293,6 +293,8 @@ TEST_FN void test_snapshot_roundtrip() {
             self.meters[k] = (rng.next_u32() % 3 == 0) ? fx::zero() : fx::from_raw(static_cast<i64>(rng.next_u64()) >> 24);
         self.asked = static_cast<u8>(rng.next_u32() % 10);
         self.wall_contact = static_cast<u8>(rng.next_u32() & 1);
+        self.states_off = static_cast<u8>(rng.next_u32());
+        self.moves_off = static_cast<u8>(rng.next_u32());
         // Layered moves: each axis present or not, apart.
         for (u32 k = 0; k < physics::MOVE_AXES; ++k) {
             if (rng.next_u32() % 2) continue;
@@ -423,6 +425,7 @@ TEST_FN void test_snapshot_roundtrip() {
             bool same = true;
             for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) same = same && got.self.meters[k] == self.meters[k];
             same = same && got.self.asked == self.asked && got.self.wall_contact == self.wall_contact;
+            same = same && got.self.states_off == self.states_off && got.self.moves_off == self.moves_off;
             // CONTROL inside: off a wall it is not sent, and comes back nothing.
             same = same && ((self.state_flags & state_flag::CLIMBING)
                                 ? got.self.climb_normal.x == self.climb_normal.x && got.self.climb_normal.y == self.climb_normal.y

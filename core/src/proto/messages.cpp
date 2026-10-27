@@ -206,6 +206,8 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         }
         w.u8v(s.asked);
         w.u8v(s.wall_contact);
+        w.u8v(s.states_off);
+        w.u8v(s.moves_off);
     }
     if (s.state_flags & state_flag::GRAPPLING) {
         w.vec3_raw(s.grapple_anchor);
@@ -283,6 +285,8 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         }
         s.asked = r.u8v();
         s.wall_contact = r.u8v();
+        s.states_off = r.u8v();
+        s.moves_off = r.u8v();
     }
     if (s.state_flags & state_flag::GRAPPLING) {
         s.grapple_anchor = r.vec3_raw();

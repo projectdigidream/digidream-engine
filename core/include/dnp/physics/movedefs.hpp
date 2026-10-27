@@ -52,6 +52,7 @@ inline constexpr u16 NO_CROUCH        = 1u << 4;
 inline constexpr u16 WEAPON_HIDDEN    = 1u << 5;
 inline constexpr u16 COUNTS_AS_GROUND = 1u << 6;   // jumps and coyote time come back, as on the ground
 inline constexpr u16 INVULNERABLE     = 1u << 7;
+inline constexpr u16 OFF              = 1u << 8;   // starts switched off: a script turns it on
 }  // namespace move_flag
 
 // Which of a state's numbers it sets; the rest are the player's own.
@@ -173,6 +174,7 @@ struct LayeredMoveDef {
     fx  cost{};
     u8  cond_count = 0;       // 0: it starts only when something starts it
     MoveCondition cond[MAX_MOVE_CONDITIONS]{};
+    bool off = false;         // starts switched off: a script turns it on
 };
 
 struct MoveDefs {

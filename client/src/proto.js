@@ -896,6 +896,9 @@ export function decodeSnapshot (buf) {
     : { move: 0, left: 0, dir: { x: 0n, y: 0n } })
   snap.self.asked = r.u8()
   snap.self.wallContact = r.u8() !== 0
+  // The module's states and moves switched off (MoveState::states_off, moves_off).
+  snap.self.statesOff = r.u8()
+  snap.self.movesOff = r.u8()
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()

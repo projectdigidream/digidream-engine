@@ -341,6 +341,12 @@ struct MoveState {
     // met a wall: `touching wall`. Hashed and in SelfBlock.
     u8   asked = 0;
     bool wall_contact = false;
+    // SWITCHED OFF (docs/MOVEMENT.md "Switching them off"): bit k-1 a state k
+    // that no transition may enter, bit k a layered move k that may not start.
+    // A spawn takes them from the definitions (`flags off`, a move's `off`);
+    // scripts and graphs change them. Hashed and in SelfBlock.
+    u8   states_off = 0;
+    u8   moves_off = 0;
 
     bool grappling = false;
     bool grapple_pulling = false;

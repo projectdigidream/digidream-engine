@@ -652,6 +652,46 @@ int l_entity_start_move(lua_State* L) {
     return 0;
 }
 
+// e:set_movement_state_enabled(name, on) / e:set_move_enabled(name, on) --
+// switch one of the module's states or layered moves on or off for this body,
+// from the next tick (docs/MOVEMENT.md "Switching them off"). `on` defaults to
+// true. `default` is always on: naming it is an error, as a typo is.
+int enable_movement(lua_State* L, bool state) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const char* n = luaL_checkstring(L, 2);
+    if (state && std::strcmp(n, "default") == 0) return luaL_error(L, "'default' is always on");
+    const i32 k = state ? named(L, 2, physics::move_state_index(move_defs_of(ctx), n), "movement state")
+                        : named(L, 2, physics::layered_move_index(move_defs_of(ctx), n), "move");
+    const bool on = lua_isnoneornil(L, 3) || lua_toboolean(L, 3);
+    if (a < 0) return 0;
+    if (ctx.commands->push(Command{state ? CmdKind::EnableState : CmdKind::EnableMove, static_cast<u32>(a),
+                                   fx3{fx::from_int(k), on ? fx::one() : fx::zero(), fx::zero()}})) {
+        ++ctx.stats.commands_queued;
+    }
+    return 0;
+}
+int l_entity_set_movement_state_enabled(lua_State* L) { return enable_movement(L, true); }
+int l_entity_set_move_enabled(lua_State* L) { return enable_movement(L, false); }
+
+// e:movement_state_enabled(name) / e:move_enabled(name) -- whether it is on now
+// (a switch queued this tick shows from the next).
+int movement_enabled(lua_State* L, bool state) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const char* n = luaL_checkstring(L, 2);
+    if (state && std::strcmp(n, "default") == 0) { lua_pushboolean(L, a >= 0); return 1; }
+    const i32 k = state ? named(L, 2, physics::move_state_index(move_defs_of(ctx), n), "movement state")
+                        : named(L, 2, physics::layered_move_index(move_defs_of(ctx), n), "move");
+    if (a < 0) { lua_pushnil(L); return 1; }
+    const physics::MoveState& m = ctx.world->agent(static_cast<u32>(a)).mv;
+    const u8 bits = state ? m.states_off : m.moves_off;
+    lua_pushboolean(L, ((bits >> (state ? k - 1 : k)) & 1u) == 0);
+    return 1;
+}
+int l_entity_movement_state_enabled(lua_State* L) { return movement_enabled(L, true); }
+int l_entity_move_enabled(lua_State* L) { return movement_enabled(L, false); }
+
 int l_entity_kind(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -933,6 +973,10 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"meter", l_entity_meter},
     {"set_meter", l_entity_set_meter},
     {"start_move", l_entity_start_move},
+    {"set_movement_state_enabled", l_entity_set_movement_state_enabled},
+    {"set_move_enabled", l_entity_set_move_enabled},
+    {"movement_state_enabled", l_entity_movement_state_enabled},
+    {"move_enabled", l_entity_move_enabled},
     {"kind", l_entity_kind},
     {"name", l_entity_name},
     {"facing", l_entity_facing},

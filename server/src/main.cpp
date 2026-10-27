@@ -4387,6 +4387,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             for (u32 k = 0; k < physics::MOVE_AXES; ++k) sb.moves[k] = self.mv.moves[k];
             sb.asked           = self.mv.asked;
             sb.wall_contact    = self.mv.wall_contact ? 1 : 0;
+            sb.states_off      = self.mv.states_off;
+            sb.moves_off       = self.mv.moves_off;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
             sb.climb_normal    = self.mv.climb_normal;

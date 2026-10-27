@@ -77,6 +77,8 @@ u32 World::spawn(fx3 pos) noexcept {
             agents_[i].mv.hover_fuel = params_[i].hover_fuel_max;
             agents_[i].mv.flight_fuel = params_[i].flight_fuel_max;
             for (u8 k = 0; k < move_defs_.meter_count; ++k) agents_[i].mv.meters[k] = move_defs_.meters[k].start;
+            agents_[i].mv.states_off = states_off_of(move_defs_);
+            agents_[i].mv.moves_off = moves_off_of(move_defs_);
             return i;
         }
     }
@@ -858,8 +860,39 @@ bool World::start_move(u32 i, u32 move) noexcept {
     return physics::start_layered_move(move_defs_, static_cast<u8>(move), a.mv, a.vel, fx_dir(a.facing));
 }
 
+bool World::set_movement_state_enabled(u32 i, u32 state, bool on) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active || state == 0 || state >= move_defs_.state_count) return false;
+    const u8 bit = static_cast<u8>(1u << (state - 1));
+    u8& off = agents_[i].mv.states_off;
+    off = static_cast<u8>(on ? (off & ~bit) : (off | bit));
+    return true;
+}
+
+bool World::set_move_enabled(u32 i, u32 move, bool on) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active || move >= move_defs_.move_count) return false;
+    const u8 bit = static_cast<u8>(1u << move);
+    u8& off = agents_[i].mv.moves_off;
+    off = static_cast<u8>(on ? (off & ~bit) : (off | bit));
+    return true;
+}
+
+u8 World::states_off_of(const physics::MoveDefs& d) noexcept {
+    u8 off = 0;
+    for (u8 s = 1; s < d.state_count; ++s) if (d.states[s].flags & physics::move_flag::OFF) off = static_cast<u8>(off | (1u << (s - 1)));
+    return off;
+}
+
+u8 World::moves_off_of(const physics::MoveDefs& d) noexcept {
+    u8 off = 0;
+    for (u8 k = 0; k < d.move_count; ++k) if (d.moves[k].off) off = static_cast<u8>(off | (1u << k));
+    return off;
+}
+
 bool World::ask_movement_state(u32 i, u32 state) noexcept {
     if (i >= MAX_AGENTS || !agents_[i].active || state >= move_defs_.state_count) return false;
+    // An ask for a state switched off is no ask: it would wait, and be taken
+    // the moment the state came back on, long after anyone meant it.
+    if (state != 0 && ((agents_[i].mv.states_off >> (state - 1)) & 1u)) return false;
     agents_[i].mv.asked = agents_[i].mv.move_state == state ? 0 : static_cast<u8>(state + 1);
     return true;
 }
@@ -1095,6 +1128,8 @@ u64 World::agent_hash(u32 i) const noexcept {
     for (const physics::ActiveMove& am : m.moves) { h.u32v(am.move); h.u32v(am.left); h.vec2(am.dir); }
     h.u32v(m.asked);
     h.boolv(m.wall_contact);
+    h.u32v(m.states_off);
+    h.u32v(m.moves_off);
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
     // NOT rebased, deliberately. A grapple anchor is a point on the geometry

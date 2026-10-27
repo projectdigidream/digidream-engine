@@ -16,6 +16,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **The module's movement states and moves can be switched on and off**, per
+  player (docs/MOVEMENT.md "Switching them off"): a glide found on a ledge, a
+  dash learnt. `flags off` on a `movestate` and `off` on a `move` start them
+  switched off; `e:set_movement_state_enabled(name, on)` and
+  `e:set_move_enabled(name, on)` switch them, and the graph nodes
+  `enable_movement_state` and `enable_move` do the same. Off, a state is never
+  entered (and a body in it is back in `default`), and a move does not start
+  (and a running one stops). Predicted, like the rest of the movement.
 - **A fill's picture has its own opacity**: `surface` (0..1) on the `fx fill`
   line, beside its colour and alpha (docs/SECTOR_FX.md §1.3), and in the
   studio's fill settings. It multiplies the ceiling's `ceilalpha`, so a map
