@@ -14,6 +14,23 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **Movement states, defined by data** (docs/MOVEMENT.md, step 1 of 5). A
+  module declares up to 8 states with `movestate` lines in its module.txt:
+  - a group: `floor`, `air`, `liquid` (3D, JUMP up and CROUCH down) or `none`;
+  - the numbers that differ from the player's own: speed, accel, friction,
+    gravity, buoyancy, jump;
+  - flags.
+
+  `transition` lines take a body in and out: grounded or airborne, rising or
+  falling, a button pressed, held or released (crouch included), speed above
+  or below, time in the state, the floor's tag. They can jump, stop or give an
+  impulse as they happen. A crouch-slide is three lines. The client predicts
+  all of it: a slide on a live server mispredicted nothing. State 0,
+  `default`, is the movement as it always was. The debug overlay shows the
+  state.
+
 ## 0.2.3.10 -- 2026-10-26
 
 ### Added

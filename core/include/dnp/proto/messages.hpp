@@ -130,6 +130,10 @@ inline constexpr u8  MSG_SKY_SET     = 0x36;
 // picture, its light (with a fade), or one of its effects. Kept per level and
 // sent to whoever arrives, as a switch thrown is. Not simulation state.
 inline constexpr u8  MSG_SECTOR_SET  = 0x37;
+// The module's movement states as TEXT (docs/MOVEMENT.md): the `movestate` and
+// `transition` lines, read by the client's core with the server's own parser.
+// Sent once, before the first snapshot.
+inline constexpr u8  MSG_MOVE_DEFS   = 0x3B;
 // The module's own keys (docs/KEYS.md): u8 n, then per action its name, its
 // keyboard code (a KeyboardEvent.code, "KeyR") and its touch button's label
 // (empty for none), each u16 length + bytes. Bit i of InputFrame::actions is
@@ -428,6 +432,8 @@ struct SelfBlock {
     fx     hover_fuel{};
     fx     flight_fuel{};
     fx     coyote{};                // MoveState::coyote_timer
+    u8     move_state = 0;          // MoveState::move_state (docs/MOVEMENT.md)
+    u16    state_ticks = 0;         // MoveState::state_ticks
 
     // Only encoded when state_flags & GRAPPLING. A swinging player is the
     // exception, and gating it keeps 32 bytes off every other snapshot.

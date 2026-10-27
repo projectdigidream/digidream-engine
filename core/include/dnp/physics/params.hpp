@@ -309,6 +309,14 @@ struct MoveState {
     // Coyote time left (MoveParams::coyote_time): full on the ground, running
     // down in the air. Hashed and in SelfBlock, as every timer here is.
     fx   coyote_timer{};
+    // THE MOVEMENT STATE (docs/MOVEMENT.md): 0 is `default`, the controller as
+    // it always was; 1..8 the module's own (MoveDefs). How many ticks it has
+    // been in it, for `after`; and last tick's buttons -- the controller's, and
+    // the vertical axis as CROUCH and UP (move_button) -- for `pressed` and
+    // `released`. Hashed and in SelfBlock, as every field here.
+    u8   move_state = 0;
+    u16  state_ticks = 0;
+    u16  prev_buttons = 0;
 
     bool grappling = false;
     bool grapple_pulling = false;

@@ -39,6 +39,7 @@ em++ -std=c++17 -O2 \
   "$ROOT/core/src/geom/rail.cpp" \
   "$ROOT/core/src/physics/collide.cpp" \
   "$ROOT/core/src/physics/controller.cpp" \
+  "$ROOT/core/src/physics/movedefs.cpp" \
   "$ROOT/core/src/nav/navgraph.cpp" \
   "$ROOT/client/wasm/bindings.cpp" \
   -sMODULARIZE=1 \

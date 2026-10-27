@@ -51,6 +51,8 @@ export const MSG = {
   // its removal by id.
   MARK_SET: 0x39,
   MARK_CLEAR: 0x3A,
+  // The module's movement states, as the text of its lines (docs/MOVEMENT.md).
+  MOVE_DEFS: 0x3B,
   HELLO: 0x01,
   WELCOME: 0x02,
   REJECT: 0x03,
@@ -673,6 +675,12 @@ export function decodeControlMessage (buf) {
     if (!r.ok || b === null) return null
     return { type, op: ['save', 'load', 'new'][op] ?? 'unknown', slot, ok, text: new TextDecoder().decode(b) }
   }
+  // The movement states' text, for the wasm core to read with the server's own
+  // parser (docs/MOVEMENT.md); no second reader of it here either.
+  if (type === MSG.MOVE_DEFS) {
+    if (len < 1 || buf.length < 4 + len) return null
+    return { type, text: new TextDecoder().decode(buf.subarray(5, 4 + len)) }
+  }
   // The weapon table, as bytes: the wasm core decodes it with the server's
   // own decoder, so there is no second reader of it here.
   if (type === MSG.WEAPON_DEFS) {
@@ -875,6 +883,9 @@ export function decodeSnapshot (buf) {
   snap.self.hoverFuel = r.fxraw()
   snap.self.flightFuel = r.fxraw()
   snap.self.coyote = r.fxraw()
+  // The movement state and its ticks in it (docs/MOVEMENT.md).
+  snap.self.moveState = r.u8()
+  snap.self.stateTicks = r.u16()
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()

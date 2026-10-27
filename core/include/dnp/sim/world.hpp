@@ -11,6 +11,7 @@
 //
 #include "dnp/geom/map.hpp"
 #include "dnp/physics/controller.hpp"
+#include "dnp/physics/movedefs.hpp"
 #include "dnp/proto/messages.hpp"
 #include "dnp/sim/constants.hpp"
 #include "dnp/sim/crush.hpp"
@@ -276,6 +277,11 @@ struct AgentState {
     physics::MoveState mv{};
 };
 
+// A tick's input as the movement states see its buttons (physics::move_buttons):
+// what MoveState::prev_buttons holds after that tick. For a client deriving it
+// from the input it sent, rather than receiving it.
+u16 move_buttons_of_input(const proto::InputFrame& f) noexcept;
+
 class World {
 public:
     World() noexcept { reset(); }
@@ -288,6 +294,17 @@ public:
     // turns into a physics mystery.
     void set_map(const geom::MapData* map) noexcept { map_ = map; }
     const geom::MapData* map() const noexcept { return map_; }
+
+    // The module's movement states (docs/MOVEMENT.md), shared by every body in
+    // this world: the server's from module.txt, a client's from MOVE_DEFS -- the
+    // same text through the same parser. Kept across reset(), as the map is.
+    void set_move_defs(const physics::MoveDefs& defs) noexcept { move_defs_ = defs; }
+    const physics::MoveDefs& move_defs() const noexcept { return move_defs_; }
+    // The flags of the movement state body `i` is in (physics::move_flag); 0 in `default`.
+    u16 state_flags_of(u32 i) const noexcept {
+        const u8 st = agents_[i].mv.move_state;
+        return st != 0 && st < move_defs_.state_count ? move_defs_.states[st].flags : 0;
+    }
 
     // Attach mutable map storage, which sector motion needs in order to write
     // the moved geometry back. Without it the world is read-only and no sector
@@ -852,6 +869,7 @@ private:
     void detect_vertical_crush() noexcept;
 
     const geom::MapData* map_ = nullptr;
+    physics::MoveDefs move_defs_{};
     geom::MapStorage*    store_ = nullptr;
     SectorMotionSet      motions_{};
     CrushLog             crushes_{};

@@ -721,6 +721,10 @@ const renderClock = new RenderClock()
 // which has to be handed them again.
 let weaponDefs = null
 let weaponDefsWorld = null
+// The module's movement states (MOVE_DEFS, docs/MOVEMENT.md): the text, and the
+// world it was last given to -- a new world (a level change) is given it again.
+let moveDefs = null
+let moveDefsWorld = null
 // A number key: the n-th weapon held, asked for in the next tick's input.
 let weaponSlotWanted = 0
 // What our predicted weapon did on each new tick since the last frame: its
@@ -827,6 +831,7 @@ if (LIVE) {
       else if (m.type === MSG.SECTOR_MOTION_SET) motionSets.push(m)
       else if (m.type === MSG.PARAM_UPDATE) paramUpdates.push(m)
       else if (m.type === MSG.WEAPON_DEFS) { weaponDefs = m.bytes; weaponDefsWorld = null }
+      else if (m.type === MSG.MOVE_DEFS) { moveDefs = m.text; moveDefsWorld = null }
       // Panels (docs/protocol.md §11). Reliable channel, like everything that
       // must not be missed.
       else if (m.type === MSG.UI_OPEN) { ui.open(m); uiSound('ui.open') }
@@ -2793,6 +2798,7 @@ function drainSnapshots () {
   if (ownParams) refreshBody()
   paramUpdates.length = 0
   applyWeaponDefs()
+  applyMoveDefs()
 }
 
 // THE BODY'S SIZE, as the server's parameters say it now. Read once on entering
@@ -2853,6 +2859,15 @@ function stepSwingOf (weapon, phase, step) {
   const key = (weapon << 16) | (phase << 8) | step
   if (!stepSwings.has(key)) stepSwings.set(key, world.stepSwing(weapon, phase, step))
   return stepSwings.get(key)
+}
+
+// Predict our own movement states with the text the server sent, read by the
+// core's own parser. A refusal is a client older or newer than its server.
+function applyMoveDefs () {
+  if (moveDefs === null || moveDefsWorld === world) return
+  const why = world.setMoveDefs(moveDefs)
+  if (why) report(`[movement] this client cannot read the server's movement states (${why}); not predicting them`, 'error')
+  moveDefsWorld = world
 }
 
 // Predict our own weapon with the table the server sent, drawing the spread
@@ -3905,7 +3920,9 @@ function frame (now) {
       (timeScale !== 1 ? `   time x${timeScale}` : '') + '\n' +
       `pos  ${px.toFixed(2)} ${py.toFixed(2)} ${pz.toFixed(2)}\n` +
       `sector ${a.sector < 0 ? 'VOID' : a.sector}   ${a.grounded ? 'grounded' : 'airborne'}` +
-      `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}\n` +
+      `${a.anchored ? `   riding sector ${a.anchorSector}` : ''}` +
+      // The movement state (docs/MOVEMENT.md), when it is one of the module's.
+      `${a.moveState ? `   state ${a.moveState} for ${a.stateTicks}t` : ''}\n` +
       `jumps ${a.jumpsUsed}   movers ${movers.length}   textures ${mapData.textures.length}\n` +
       `draws ${ri.calls}   tris ${ri.triangles}   px ${renderer.getPixelRatio()}   ` +
       // Which half is which, and no allocation to read it: `view.meshes` builds a

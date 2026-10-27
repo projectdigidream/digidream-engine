@@ -438,6 +438,10 @@ MoveCommand to_command(const proto::InputFrame& f) noexcept {
 
 }  // namespace
 
+u16 move_buttons_of_input(const proto::InputFrame& f) noexcept {
+    return physics::move_buttons(to_command(f));
+}
+
 void World::step_agent(u32 i) noexcept {
     AgentState& a = agents_[i];
     MoveCommand cmd = to_command(live_input(i));
@@ -522,7 +526,7 @@ void World::step_agent(u32 i) noexcept {
     // when the button went down, not wherever the tick's movement carried it.
     // Edge-triggered, or a held button works a door sixty times a second.
     {
-        const bool want = (cmd.buttons & act::INTERACT) != 0;
+        const bool want = (cmd.buttons & act::INTERACT) != 0 && !(state_flags_of(i) & physics::move_flag::NO_USE);
         if (want && !a.mv.interact_held && map_) {
             // A prop first. If you are standing in front of a lever, that is
             // what you meant -- the wall behind it is always also there, and
@@ -585,7 +589,7 @@ void World::step_agent(u32 i) noexcept {
         // nothing at all, and the client has to predict that it does. A weapon
         // that swings from its steps sets it to zero too: its button runs its
         // phases, and the steps say when.
-        } else if (swing && params_[i].attack_enabled &&
+        } else if (swing && params_[i].attack_enabled && !(state_flags_of(i) & physics::move_flag::NO_ATTACK) &&
                    !a.mv.attack_held && a.mv.attack_left == 0 &&
                    a.mv.attack_cooldown_left == 0) {
             swing_over_[i] = WSwing{};
@@ -615,7 +619,7 @@ void World::step_agent(u32 i) noexcept {
     const i32  from_sector = a.mv.sector;
 
     if (map_) {
-        step_controller(*map_, params_[i], a.mv, cmd, a.pos, a.vel, DT);
+        step_controller(*map_, params_[i], a.mv, cmd, a.pos, a.vel, DT, &move_defs_);
 
         // Anchoring follows footprint contact, not proximity (design §3.2.5):
         // standing on a sector anchors to it, and the anchor survives until the
@@ -1065,6 +1069,9 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.boolv(m.hopping);
     h.vec2(m.climb_normal);
     h.fxv(m.coyote_timer);
+    h.u32v(m.move_state);
+    h.u32v(m.state_ticks);
+    h.u32v(m.prev_buttons);
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
     // NOT rebased, deliberately. A grapple anchor is a point on the geometry

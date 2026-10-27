@@ -52,6 +52,7 @@ SRCS=(
   "$ROOT/core/src/geom/rail.cpp"
   "$ROOT/core/src/physics/collide.cpp"
   "$ROOT/core/src/physics/controller.cpp"
+  "$ROOT/core/src/physics/movedefs.cpp"
   "$ROOT/core/src/nav/navgraph.cpp"
 )
 
@@ -77,6 +78,7 @@ clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_interact.cpp"     -o "
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_props.cpp"        -o "$OUT/test_props"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_bodies.cpp"       -o "$OUT/test_bodies"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sweep.cpp"        -o "$OUT/test_sweep"
+clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_movestates.cpp"   -o "$OUT/test_movestates"
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_sight.cpp"        -o "$OUT/test_sight"
 # The weapon machine both sides run (docs/WEAPON_PREDICTION.md).
 clang++ "${FLAGS[@]}" "${SRCS[@]}" "$ROOT/core/tests/test_weapons.cpp"      -o "$OUT/test_weapons"

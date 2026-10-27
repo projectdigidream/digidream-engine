@@ -1,4 +1,5 @@
 #include "dnp/physics/controller.hpp"
+#include "dnp/physics/movedefs.hpp"
 
 #include "dnp/sim/constants.hpp"
 
@@ -64,6 +65,178 @@ fx decay(fx t, fx dt) noexcept {
     return n < fx::zero() ? fx::zero() : n;
 }
 
+
+// THE END OF EVERY TICK, whatever moved the body: the swept move, where it is
+// now, whether it stands, and what standing gives back. Its own function since
+// the module's movement states (docs/MOVEMENT.md) end their ticks here too.
+void finish_tick(const MapData& map, const MoveParams& p, MoveState& st, fx3& pos, fx3& vel,
+                 fx dt) noexcept {
+    MoveInput mi;
+    mi.pos = pos;
+    mi.vel = vel;
+    mi.radius = p.radius;
+    mi.height = p.height;
+    mi.sector = st.sector;
+    mi.grounded = st.grounded;
+
+    const MoveResult mr = move(map, mi, dt);
+
+    pos = mr.pos;
+    vel = mr.vel;
+    st.sector = mr.sector;
+
+    // Climbing and flight hold themselves up; being at floor level while doing
+    // either must not count as landing.
+    const bool now_grounded = mr.grounded && !st.climbing && !st.flying;
+
+    if (now_grounded) {
+        // Charges reset on every grounded tick, not on the landing transition.
+        // A standing agent must be able to jump again immediately rather than
+        // waiting to re-enter the grounded state, so `max_jumps` and
+        // `max_dashes` bound AIRBORNE use -- which is exactly what they are for.
+        // Ground dashing is paced by dash_cooldown instead.
+        st.jumps_used = 0;
+        st.dashes_used = 0;
+
+        // Fuel refills on the landing TRANSITION only. Design §7.1.1 leaves
+        // refill policy to Lua (over time, on an item, on landing); this is the
+        // one native case, and doing it every tick would make a grounded agent's
+        // fuel un-drainable.
+        if (!st.grounded) {
+            st.hover_fuel = p.hover_fuel_max;
+            st.flight_fuel = p.flight_fuel_max;
+        }
+    }
+    st.grounded = now_grounded;
+    // Coyote time: full on the ground and on a wall (both are ground enough to
+    // jump from), running down in the air.
+    st.coyote_timer = (now_grounded || st.climbing) ? p.coyote_time : decay(st.coyote_timer, dt);
+}
+
+// The flags `default` carries for the abilities it alone has, cleared on the
+// way into one of the module's states so none of them outlives it.
+void enter_data_state(MoveState& st) noexcept {
+    st.climbing = false;
+    st.hanging = false;
+    st.hopping = false;
+    st.grappling = false;
+    st.grapple_pulling = false;
+    st.hovering = false;
+    st.flying = false;
+}
+
+bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 vel,
+           u16 now, u16 pressed, u16 released) noexcept {
+    switch (c.kind) {
+        case MoveCond::Grounded: return st.grounded;
+        case MoveCond::Airborne: return !st.grounded;
+        case MoveCond::Rising:   return !st.grounded && vel.z > fx::zero();
+        case MoveCond::Falling:  return !st.grounded && vel.z < fx::zero();
+        case MoveCond::Pressed:  return (pressed & c.arg) != 0;
+        case MoveCond::Held:     return (now & c.arg) != 0;
+        case MoveCond::Released: return (released & c.arg) != 0;
+        case MoveCond::SpeedAbove:
+        case MoveCond::SpeedBelow: {
+            const fx s = length(fx2{vel.x, vel.y});
+            return c.kind == MoveCond::SpeedAbove ? s > c.value : s < c.value;
+        }
+        case MoveCond::After:    return st.state_ticks >= c.arg;
+        case MoveCond::FloorTag:
+            return st.grounded && st.sector >= 0 && static_cast<u32>(st.sector) < map.sector_count &&
+                   map.sector(static_cast<u32>(st.sector)).tag == c.arg;
+        case MoveCond::None: break;
+    }
+    return false;
+}
+
+// THE WAY OUT, if one holds this tick: the state's own transitions before
+// `any`'s, each in file order, the first whose every condition holds. `any`
+// never re-enters the state already running, which would restart its clock.
+void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p, MoveState& st,
+                     fx3& vel, fx2 facing, u16 now, u16 pressed, u16 released) noexcept {
+    for (int pass = 0; pass < 2; ++pass) {
+        for (u8 k = 0; k < d.transition_count; ++k) {
+            const MoveTransition& t = d.transitions[k];
+            if (pass == 0 ? t.from != st.move_state : (t.from != MOVE_ANY || t.to == st.move_state)) continue;
+            if (t.to >= d.state_count) continue;
+            bool all = true;
+            for (u8 c = 0; c < t.cond_count && all; ++c) all = holds(t.cond[c], map, st, vel, now, pressed, released);
+            if (!all) continue;
+            if (st.move_state == 0 && t.to != 0) enter_data_state(st);
+            st.move_state = t.to;
+            st.state_ticks = 0;
+            const MoveStateDef& to = d.states[t.to];
+            switch (t.action) {
+                case MoveAction::Jump:
+                    vel.z = (to.has & move_has::JUMP) ? to.jump : p.jump_impulse;
+                    st.grounded = false;
+                    if (st.jumps_used == 0) st.jumps_used = 1;
+                    break;
+                case MoveAction::Stop: vel = fx3::zero(); break;
+                case MoveAction::ImpulseUp: vel.z = vel.z + t.value; break;
+                case MoveAction::ImpulseFacing: vel.x = vel.x + facing.x * t.value; vel.y = vel.y + facing.y * t.value; break;
+                case MoveAction::ImpulseBack: vel.x = vel.x - facing.x * t.value; vel.y = vel.y - facing.y * t.value; break;
+                case MoveAction::None: break;
+            }
+            return;
+        }
+    }
+}
+
+// ONE OF THE MODULE'S STATES, for a tick: one rule with its numbers. Velocity
+// moves toward (stick x speed) at `accel` while the stick is pushed and eases
+// off at `friction` when it is not; gravity x `gravity`, plus `buoyancy`. The
+// group says what the stick moves you through. A number the state does not
+// set is the player's own.
+void step_data_state(const MoveStateDef& s, const MoveParams& p, MoveState& st, const MoveCommand& cmd,
+                     fx2 wish, bool has_wish, u16 pressed, fx3& vel, fx dt) noexcept {
+    const fx speed    = (s.has & move_has::SPEED)    ? s.speed    : p.move_speed;
+    const fx accel    = (s.has & move_has::ACCEL)    ? s.accel    : p.ground_accel;
+    const fx friction = (s.has & move_has::FRICTION) ? s.friction : p.friction;
+    const fx gravity  = (s.has & move_has::GRAVITY)  ? s.gravity  : p.gravity_scale;
+    const fx jump     = (s.has & move_has::JUMP)     ? s.jump     : p.jump_impulse;
+    const fx buoyancy = (s.has & move_has::BUOYANCY) ? s.buoyancy : fx::zero();
+    const bool ground = st.grounded || (s.flags & move_flag::COUNTS_AS_GROUND) != 0;
+
+    switch (s.group) {
+        case MoveGroup::Floor:
+        case MoveGroup::Air: {
+            // On the ground a floor state accelerates and brakes as walking
+            // does; in the air -- off a ledge mid-slide -- and always for an
+            // air state, it steers as a fall does.
+            const bool on_floor = s.group == MoveGroup::Floor && st.grounded;
+            const fx air = (s.has & move_has::ACCEL) ? accel : p.air_accel;
+            const fx rate = on_floor ? (has_wish ? accel : friction) : air;
+            const fx2 v2 = approach2(fx2{vel.x, vel.y}, wish * speed, rate, dt);
+            vel.x = v2.x;
+            vel.y = v2.y;
+            if ((pressed & act::JUMP) && !(s.flags & move_flag::NO_JUMP) && ground) {
+                vel.z = jump;
+                st.grounded = false;
+                st.jumps_used = 1;
+            }
+            break;
+        }
+        case MoveGroup::Liquid: {
+            // In 3D: the stick on the level, JUMP up and CROUCH down (cmd.up).
+            const fx3 target{wish.x * speed, wish.y * speed, cmd.up * speed};
+            const fx rate = (has_wish || cmd.up != fx::zero()) ? accel : friction;
+            vel.x = approach(vel.x, target.x, rate, dt);
+            vel.y = approach(vel.y, target.y, rate, dt);
+            vel.z = approach(vel.z, target.z, rate, dt);
+            break;
+        }
+        case MoveGroup::None: {
+            const fx2 v2 = approach2(fx2{vel.x, vel.y}, fx2{}, st.grounded ? friction : p.air_accel, dt);
+            vel.x = v2.x;
+            vel.y = v2.y;
+            break;
+        }
+        case MoveGroup::Default: break;
+    }
+    vel.z = vel.z + (sim::GRAVITY * gravity + buoyancy) * dt;
+}
+
 }  // namespace
 
 void handoff_to_standard(MoveState& st, fx3& vel, fx3 carried_velocity) noexcept {
@@ -79,7 +252,8 @@ void handoff_to_standard(MoveState& st, fx3& vel, fx3 carried_velocity) noexcept
 }
 
 void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
-                     const MoveCommand& cmd, fx3& pos, fx3& vel, fx dt) noexcept {
+                     const MoveCommand& cmd, fx3& pos, fx3& vel, fx dt,
+                     const MoveDefs* defs) noexcept {
     // One gate for every ability below (design §7.1.1). A rail, wire or vehicle
     // controller owns motion entirely while it is active.
     if (st.mode != ControllerMode::Standard) return;
@@ -113,6 +287,29 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     const fx2 wish = cmd.move * p.input_scale;
     const bool has_wish = wish.x.raw != 0 || wish.y.raw != 0;
     const fx2 wish_dir = has_wish ? normalize(wish) : facing;
+
+    // ------------------------------------------------------- movement states
+    //
+    // THE MODULE'S MOVEMENT STATES (docs/MOVEMENT.md). Their ways in and out
+    // are taken here, once a tick, before anything moves; while one of them
+    // runs it is the whole of this tick's movement, and everything below --
+    // `default` -- is what runs in state 0. The buttons are remembered every
+    // tick, states or none, so `pressed` means pressed this tick.
+    const u16 now_buttons = move_buttons(cmd);
+    const u16 pressed = static_cast<u16>(now_buttons & ~st.prev_buttons);
+    const u16 released = static_cast<u16>(st.prev_buttons & ~now_buttons);
+    st.prev_buttons = now_buttons;
+    if (defs != nullptr && defs->transition_count > 0) {
+        take_transition(*defs, map, p, st, vel, facing, now_buttons, pressed, released);
+    }
+    if (st.state_ticks < 0xFFFF) ++st.state_ticks;
+    if (defs != nullptr && st.move_state != 0 && st.move_state < defs->state_count) {
+        const MoveStateDef& s = defs->states[st.move_state];
+        step_data_state(s, p, st, cmd, wish, has_wish, pressed, vel, dt);
+        finish_tick(map, p, st, pos, vel, dt);
+        if (s.flags & move_flag::COUNTS_AS_GROUND) { st.jumps_used = 0; st.coyote_timer = p.coyote_time; }
+        return;
+    }
 
     // ---------------------------------------------------------------- grapple
 
@@ -425,48 +622,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         }
     }
 
-    // ------------------------------------------------------------- integrate
-
-    MoveInput mi;
-    mi.pos = pos;
-    mi.vel = vel;
-    mi.radius = p.radius;
-    mi.height = p.height;
-    mi.sector = st.sector;
-    mi.grounded = st.grounded;
-
-    const MoveResult mr = move(map, mi, dt);
-
-    pos = mr.pos;
-    vel = mr.vel;
-    st.sector = mr.sector;
-
-    // Climbing and flight hold themselves up; being at floor level while doing
-    // either must not count as landing.
-    const bool now_grounded = mr.grounded && !st.climbing && !st.flying;
-
-    if (now_grounded) {
-        // Charges reset on every grounded tick, not on the landing transition.
-        // A standing agent must be able to jump again immediately rather than
-        // waiting to re-enter the grounded state, so `max_jumps` and
-        // `max_dashes` bound AIRBORNE use -- which is exactly what they are for.
-        // Ground dashing is paced by dash_cooldown instead.
-        st.jumps_used = 0;
-        st.dashes_used = 0;
-
-        // Fuel refills on the landing TRANSITION only. Design §7.1.1 leaves
-        // refill policy to Lua (over time, on an item, on landing); this is the
-        // one native case, and doing it every tick would make a grounded agent's
-        // fuel un-drainable.
-        if (!st.grounded) {
-            st.hover_fuel = p.hover_fuel_max;
-            st.flight_fuel = p.flight_fuel_max;
-        }
-    }
-    st.grounded = now_grounded;
-    // Coyote time: full on the ground and on a wall (both are ground enough to
-    // jump from), running down in the air.
-    st.coyote_timer = (now_grounded || st.climbing) ? p.coyote_time : decay(st.coyote_timer, dt);
+    finish_tick(map, p, st, pos, vel, dt);
 }
 
 }  // namespace dnp::physics

@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 20
-const BUF32_LEN = 22
+const BUF32_LEN = 25
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -23,7 +23,8 @@ export const IDX = {
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
-  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20, HOPPING: 21
+  GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20, HOPPING: 21,
+  MOVE_STATE: 22, STATE_TICKS: 23, PREV_BUTTONS: 24
 }
 
 // A camera path's header, mirroring PATH32_* in client/wasm/bindings.cpp. Its
@@ -840,6 +841,30 @@ export class WasmWorld {
     return M._dnp_world_line_clear(this.ptr, c.line64) !== 0
   }
 
+  /**
+   * The module's movement states (docs/MOVEMENT.md): the text the server sent
+   * in MOVE_DEFS, read by the core's own parser. Null when read; why, if not.
+   */
+  setMoveDefs (text) {
+    const M = this.core.M
+    if (!M._dnp_world_set_move_defs) return 'this client has no movement states'
+    const bytes = new TextEncoder().encode(text ?? '')
+    const ptr = M._malloc(Math.max(1, bytes.length))
+    const err = M._malloc(160)
+    M.HEAPU8.set(bytes, ptr)
+    const ok = M._dnp_world_set_move_defs(this.ptr, ptr, bytes.length, err, 160)
+    const why = ok ? null : new TextDecoder().decode(M.HEAPU8.subarray(err, M.HEAPU8.indexOf(0, err)))
+    M._free(ptr)
+    M._free(err)
+    return why
+  }
+
+  /** What the wire's buttons leave in MoveState.prev_buttons (movedefs.hpp move_buttons). */
+  moveButtons (protoButtons) {
+    const M = this.core.M
+    return M._dnp_move_buttons ? M._dnp_move_buttons(protoButtons) : 0
+  }
+
   /** The weapon in display slot `n` (1-based, by the table's order), or 255. */
   weaponSlot (idx, n) { return this.core.M._dnp_world_weapon_slot(this.ptr, idx, n) }
 
@@ -883,6 +908,10 @@ export class WasmWorld {
       hanging: u32[b32 + IDX.HANGING] !== 0,
       hopping: u32[b32 + IDX.HOPPING] !== 0,
       coyote: i64[b64 + IDX.COYOTE],
+      // The movement state (docs/MOVEMENT.md): 0 `default`, 1..8 the module's.
+      moveState: u32[b32 + IDX.MOVE_STATE],
+      stateTicks: u32[b32 + IDX.STATE_TICKS],
+      prevButtons: u32[b32 + IDX.PREV_BUTTONS],
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
       grounded: u32[b32 + IDX.GROUNDED] !== 0,
@@ -937,6 +966,9 @@ export class WasmWorld {
     u32[b32 + IDX.CLIMBING] = s.climbing ? 1 : 0
     u32[b32 + IDX.HANGING] = s.hanging ? 1 : 0
     u32[b32 + IDX.HOPPING] = s.hopping ? 1 : 0
+    u32[b32 + IDX.MOVE_STATE] = s.moveState ?? 0
+    u32[b32 + IDX.STATE_TICKS] = s.stateTicks ?? 0
+    u32[b32 + IDX.PREV_BUTTONS] = s.prevButtons ?? 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
     u32[b32 + IDX.GROUNDED] = s.grounded ? 1 : 0

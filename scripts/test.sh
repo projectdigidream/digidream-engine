@@ -179,6 +179,8 @@ suite_core () {
   "./build/$HOST_ARCH/test_props"
   "./build/$HOST_ARCH/test_bodies"
   "./build/$HOST_ARCH/test_sweep"
+  # Movement states defined by data (docs/MOVEMENT.md).
+  "./build/$HOST_ARCH/test_movestates"
   "./build/$HOST_ARCH/test_sight"
   "./build/$HOST_ARCH/test_weapons"
   "./build/$HOST_ARCH/test_chunks"

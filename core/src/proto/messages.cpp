@@ -187,6 +187,8 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
     w.fxraw(s.hover_fuel);
     w.fxraw(s.flight_fuel);
     w.fxraw(s.coyote);
+    w.u8v(s.move_state);
+    w.u16v(s.state_ticks);
     if (s.state_flags & state_flag::GRAPPLING) {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
@@ -240,6 +242,8 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     s.hover_fuel      = r.fxraw();
     s.flight_fuel     = r.fxraw();
     s.coyote          = r.fxraw();
+    s.move_state      = r.u8v();
+    s.state_ticks     = r.u16v();
     if (s.state_flags & state_flag::GRAPPLING) {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();

@@ -120,6 +120,8 @@ public:
     // 0 for none. Kept across levels: the table is the game's, and a client
     // already holding it needs it again only when it changes.
     u64 weapon_defs_sent = 0;
+    // Whether this client has the movement states' text (MOVE_DEFS).
+    bool move_defs_sent = false;
 
     proto::UiPanel* find_ui(u32 ui_id) {
         for (auto& p : open_ui) if (p.ui_id == ui_id) return &p;

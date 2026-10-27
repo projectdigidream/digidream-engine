@@ -33,7 +33,7 @@ FLAGS=(
 )
 
 SRCS=("$ROOT/core/src/math/trig.cpp" "$ROOT/core/src/proto/messages.cpp" "$ROOT/core/src/sim/world.cpp" "$ROOT/core/src/sim/testmap.cpp" "$ROOT/core/src/sim/sectormotion.cpp" "$ROOT/core/src/sim/weapon.cpp"
-  "$ROOT/core/src/sim/crush.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/geom/triangulate.cpp" "$ROOT/core/src/geom/mapstore.cpp" "$ROOT/core/src/geom/mapfile.cpp" "$ROOT/core/src/geom/rail.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/src/physics/controller.cpp" "$ROOT/core/src/nav/navgraph.cpp")
+  "$ROOT/core/src/sim/crush.cpp" "$ROOT/core/src/geom/map.cpp" "$ROOT/core/src/geom/triangulate.cpp" "$ROOT/core/src/geom/mapstore.cpp" "$ROOT/core/src/geom/mapfile.cpp" "$ROOT/core/src/geom/rail.cpp" "$ROOT/core/src/physics/collide.cpp" "$ROOT/core/src/physics/controller.cpp" "$ROOT/core/src/physics/movedefs.cpp" "$ROOT/core/src/nav/navgraph.cpp")
 
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1

@@ -16,13 +16,19 @@
 
 namespace dnp::physics {
 
+struct MoveDefs;   // movedefs.hpp
+
 // Advance one agent by exactly one fixed timestep.
 //
 // `pos` and `vel` are updated in place, as is `st`. Pure: given identical
 // arguments it produces identical results on every target, which is what
 // client-side prediction depends on.
+//
+// `defs` are the module's movement states (movedefs.hpp, docs/MOVEMENT.md);
+// none, or none declared, is `default` alone -- the controller as it always was.
 void step_controller(const geom::MapData& map, const MoveParams& p, MoveState& st,
-                     const MoveCommand& cmd, fx3& pos, fx3& vel, fx dt) noexcept;
+                     const MoveCommand& cmd, fx3& pos, fx3& vel, fx dt,
+                     const MoveDefs* defs = nullptr) noexcept;
 
 // Hand an entity's current motion back to standard physics.
 //

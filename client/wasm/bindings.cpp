@@ -77,7 +77,10 @@ constexpr int BUF32_ATK_LEFT  = 18;
 constexpr int BUF32_ATK_CD    = 19;
 constexpr int BUF32_HANGING   = 20;
 constexpr int BUF32_HOPPING   = 21;
-constexpr int BUF32_LEN       = 22;
+constexpr int BUF32_MOVE_STATE  = 22;   // MoveState::move_state (docs/MOVEMENT.md)
+constexpr int BUF32_STATE_TICKS = 23;
+constexpr int BUF32_PREV_BUTTONS = 24;
+constexpr int BUF32_LEN       = 25;
 
 // A camera path's header (design 4.1). Its OWN four slots, not appended to the
 // agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
@@ -875,6 +878,27 @@ int dnp_world_sweep(const sim::World* w, const long long* in64, int ignore, long
 // a then b, fx raw): physics::line_clear, walls, heights and platforms. Bodies
 // are not asked. For the camera's walls and a marker hidden behind a wall
 // (docs/MARKERS.md): 1 clear, 0 blocked.
+// THE MODULE'S MOVEMENT STATES (docs/MOVEMENT.md): the text the server sent in
+// MOVE_DEFS, read by the same parser it read it with. 1 when read; 0 with why
+// in `err` (and `default` alone in force), which would be a client older or
+// newer than its server.
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_set_move_defs(sim::World* w, const char* text, unsigned len, char* err, unsigned cap) {
+    static physics::MoveDefs defs;   // too big for a wasm frame; the world copies it
+    const bool ok = physics::parse_move_defs(defs, text, len, err, cap);
+    w->set_move_defs(defs);
+    return ok ? 1 : 0;
+}
+
+// What a tick's buttons (the wire's) leave in MoveState::prev_buttons, for the
+// predictor deriving it from the input it sent (sim::move_buttons_of_input).
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_move_buttons(unsigned proto_buttons) {
+    proto::InputFrame f;
+    f.buttons = static_cast<u16>(proto_buttons);
+    return sim::move_buttons_of_input(f);
+}
+
 EMSCRIPTEN_KEEPALIVE
 int dnp_world_line_clear(const sim::World* w, const long long* in64) {
     const geom::MapData* m = w->map();
@@ -1087,6 +1111,9 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out32[BUF32_CLIMBING]  = m.climbing ? 1u : 0u;
     out32[BUF32_HANGING]   = m.hanging ? 1u : 0u;
     out32[BUF32_HOPPING]   = m.hopping ? 1u : 0u;
+    out32[BUF32_MOVE_STATE]  = m.move_state;
+    out32[BUF32_STATE_TICKS] = m.state_ticks;
+    out32[BUF32_PREV_BUTTONS] = m.prev_buttons;
     out32[BUF32_GRAPPLING] = m.grappling ? 1u : 0u;
     out32[BUF32_GRAP_PULL] = m.grapple_pulling ? 1u : 0u;
     out32[BUF32_GROUNDED]  = m.grounded ? 1u : 0u;
@@ -1138,6 +1165,9 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.climbing = in32[BUF32_CLIMBING] != 0;
     m.hanging = in32[BUF32_HANGING] != 0;
     m.hopping = in32[BUF32_HOPPING] != 0;
+    m.move_state = static_cast<u8>(in32[BUF32_MOVE_STATE]);
+    m.state_ticks = static_cast<u16>(in32[BUF32_STATE_TICKS]);
+    m.prev_buttons = static_cast<u16>(in32[BUF32_PREV_BUTTONS]);
     m.coyote_timer = fx::from_raw(in64[BUF64_COYOTE]);
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;

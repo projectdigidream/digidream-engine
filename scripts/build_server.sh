@@ -93,6 +93,7 @@ fi
   "$ROOT/core/src/geom/rail.cpp" \
   "$ROOT/core/src/physics/collide.cpp" \
   "$ROOT/core/src/physics/controller.cpp" \
+  "$ROOT/core/src/physics/movedefs.cpp" \
   "$ROOT/core/src/nav/navgraph.cpp" \
   "$ROOT/server/src/net/link.cpp" \
   "$ROOT/server/src/lua/vm.cpp" \

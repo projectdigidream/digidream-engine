@@ -838,6 +838,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // 0 platformer, 1 fps. Sent in WELCOME; an fps player's body turns at once
     // to the view and walks relative to it (MoveParams::move_relative).
     u8 controls = 0;
+    // THE MODULE'S MOVEMENT STATES (docs/MOVEMENT.md): every module's
+    // `movestate` and `transition` lines, in load order, as text -- sent to each
+    // client in MOVE_DEFS, whose core reads it with the same parser -- and read
+    // here into every level's world. Where each line came from, for a refusal.
+    std::string move_text;
+    std::vector<std::string> move_origin;
+    physics::MoveDefs move_defs;
     // THE DEBUG OVERLAY, the module's to choose (module.txt `debug off`): 1
     // the client draws its numbers block and the controls legend, 0 it launches
     // clean. Sent in WELCOME after `controls`; the page's ?debug= overrides it.
@@ -1725,6 +1732,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
 
         L.view = L.map_store.view();
+        L.world.set_move_defs(move_defs);
         if (L.own) {
             L.world.set_map(&L.view);
             L.world.set_map_storage(&L.map_store);
@@ -1739,6 +1747,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
                 return false;
             }
             H.region_view = H.store->view();
+            H.world.set_move_defs(move_defs);
             H.world.set_map(&H.region_view);
             H.world.set_map_storage(H.store);
             if (first) H.world.set_tick(clock_);
@@ -3668,6 +3677,19 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // (docs/WEAPON_PREDICTION.md): the game's when its scripts own the
     // weapons, else this level's. Sent when the client has not got this one --
     // on arrival, once the table first compiles, and if it ever changes.
+    // THE MOVEMENT STATES' TEXT (MOVE_DEFS, docs/MOVEMENT.md), once to each
+    // client: they are the game's, the same in every level.
+    void send_move_defs(Session& s) {
+        if (s.move_defs_sent || move_text.empty()) return;
+        std::vector<u8> bytes(5 + move_text.size());
+        const u32 body = static_cast<u32>(1 + move_text.size());
+        for (int k = 0; k < 4; ++k) bytes[k] = static_cast<u8>((body >> (8 * k)) & 0xFF);
+        bytes[4] = proto::MSG_MOVE_DEFS;
+        std::memcpy(bytes.data() + 5, move_text.data(), move_text.size());
+        link.send_control(s.id, bytes.data(), bytes.size());
+        s.move_defs_sent = true;
+    }
+
     void send_weapon_defs(Session& s, Level& L) {
         u64 seed = 0;
         const sim::WeaponTable* t = nullptr;
@@ -4307,6 +4329,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             // indices and tick in it mean nothing anywhere else.
             Level& L = level(s.level);
             const sim::World& world = L.world;
+            send_move_defs(s);
             send_weapon_defs(s, L);
 
             const sim::AgentState& self = world.agent(s.agent);
@@ -4358,6 +4381,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             sb.hover_fuel      = self.mv.hover_fuel;
             sb.flight_fuel     = self.mv.flight_fuel;
             sb.coyote          = self.mv.coyote_timer;
+            sb.move_state      = self.mv.move_state;
+            sb.state_ticks     = self.mv.state_ticks;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
             // The sector this entity rides (design §3.2.5), encoded with the
@@ -5102,9 +5127,17 @@ int main(int argc, char** argv) {
     for (u32 mi = 0; mi < module_count; ++mi) {
         std::FILE* f = std::fopen((std::string(module_dirs[mi]) + "/module.txt").c_str(), "rb");
         if (!f) continue;
-        char line[256];
+        char line[512];
         while (std::fgets(line, sizeof(line), f)) {
             char what[64] = {0};
+            // `movestate` and `transition` (docs/MOVEMENT.md): collected as text,
+            // read once every module has had its say (below).
+            if (std::strncmp(line, "movestate ", 10) == 0 || std::strncmp(line, "transition ", 11) == 0) {
+                srv.move_text += line;
+                if (srv.move_text.back() != '\n') srv.move_text += '\n';
+                srv.move_origin.push_back(std::string(module_dirs[mi]) + "/module.txt");
+                continue;
+            }
             // `game <file>`: a script the game runs ONCE, found in the module's
             // maps directory beside the copies its levels run. The first module
             // to name a file wins; a second naming the same one is the same
@@ -5232,6 +5265,25 @@ int main(int argc, char** argv) {
         }
         std::fclose(f);
     }
+    // The movement states, read once all of them are in: a transition may name
+    // a state another module declares. A refusal turns them all off, said with
+    // the module it came from -- half a set would move bodies no client predicts.
+    if (!srv.move_text.empty()) {
+        char err[160] = {0};
+        if (physics::parse_move_defs(srv.move_defs, srv.move_text.data(),
+                                     static_cast<u32>(srv.move_text.size()), err, sizeof(err))) {
+            std::fprintf(stderr, "[srv] movement: %u state(s) of the module's, %u transition(s)\n",
+                         srv.move_defs.state_count - 1u, static_cast<unsigned>(srv.move_defs.transition_count));
+        } else {
+            const int n = std::atoi(err + 5);
+            const char* why = std::strchr(err, ':');
+            std::fprintf(stderr, "[srv] %s: %s -- the movement states are off\n",
+                         n >= 1 && static_cast<size_t>(n) <= srv.move_origin.size() ? srv.move_origin[n - 1].c_str() : "module.txt",
+                         why ? why + 2 : err);
+            srv.move_text.clear();
+        }
+    }
+
     if (persist_arg) {
         const std::string a = persist_arg;
         const bool all = a == "all";

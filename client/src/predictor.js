@@ -214,6 +214,13 @@ export class Predictor {
       grappleHeld: (held & 0x0020) !== 0,
       interactHeld: (held & 0x0040) !== 0,
       attackHeld: (held & 0x0080) !== 0,
+      // The movement states' last buttons, derived as the held flags are, by
+      // the core's own rule (movedefs.hpp move_buttons).
+      prevButtons: this.world.moveButtons(held),
+      // The movement state (docs/MOVEMENT.md) is replicated: the server decides
+      // when a transition is taken, and so must the client's replay start there.
+      moveState: sb.moveState ?? 0,
+      stateTicks: sb.stateTicks ?? 0,
 
       // The swing countdown IS replicated, because it cannot be derived: the
       // server decides when a swing ends, and the client holds only the button

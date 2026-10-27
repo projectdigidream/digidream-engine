@@ -39,6 +39,7 @@ add_library(dnp_core STATIC
   core/src/geom/rail.cpp
   core/src/physics/collide.cpp
   core/src/physics/controller.cpp
+  core/src/physics/movedefs.cpp
   core/src/nav/navgraph.cpp
 )
 
