@@ -129,6 +129,7 @@ const char* read_state(MoveDefs& d, const Line& L) noexcept {
         s.has |= bit;
     }
     if (!grouped) return "a movestate needs a group: floor, air, liquid or none";
+    if (s.group == MoveGroup::Liquid) d.uses_depth = true;
     d.states[d.state_count++] = s;
     return nullptr;
 }
@@ -180,10 +181,20 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
             c.kind = MoveCond::FloorTag;
             c.arg = static_cast<u32>(std::atoi(L.tok[i + 1]));
             i += 2;
-        } else if (is(k, "depth") || is(k, "meter")) {
-            return "depth and meters are not built yet (docs/MOVEMENT.md, steps 2 and 3)";
+        } else if (is(k, "depth")) {
+            // depth none|feet|waist|eyes (at least that deep), depth below <level>
+            const bool below = is(a, "below");
+            const char* lv = below ? (i + 1 < L.n ? L.tok[i + 1] : "") : a;
+            const u32 level = is(lv, "feet") ? 1 : is(lv, "waist") ? 2 : is(lv, "eyes") ? 3 : is(lv, "none") ? 0 : 99;
+            if (level == 99 || (below && level == 0)) return "depth none|feet|waist|eyes, or depth below feet|waist|eyes";
+            c.kind = below ? MoveCond::DepthBelow : level == 0 ? MoveCond::DepthNone : MoveCond::DepthAtLeast;
+            c.arg = level;
+            d.uses_depth = true;
+            i += below ? 2 : 1;
+        } else if (is(k, "meter")) {
+            return "meters are not built yet (docs/MOVEMENT.md, step 3)";
         } else {
-            return "not a condition (grounded airborne rising falling pressed held released speed after floor)";
+            return "not a condition (grounded airborne rising falling pressed held released speed after floor depth)";
         }
         ++t.cond_count;
     }

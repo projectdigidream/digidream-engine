@@ -31,12 +31,18 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         if (rd.side(i).styled()) ++styled_sides;
         if (rd.side(i).stretched()) stretched = true;
     }
-    // 17 only for a map with effect sectors (Sector::effect).
+    // 17 only for a map with effect sectors (Sector::effect); 18 only for one
+    // whose effect sectors have a medium, a liquid (Sector::medium).
     u32 effect_sectors = 0;
-    for (u32 i = 0; i < m.sector_count; ++i) if (m.sector(i).effect) ++effect_sectors;
+    bool mediums = false;
+    for (u32 i = 0; i < m.sector_count; ++i) {
+        if (m.sector(i).effect) ++effect_sectors;
+        if (m.sector(i).effect && m.sector(i).medium) mediums = true;
+    }
     // 16 only for a wall scaled differently along and up it; one scaled alike
     // both ways is a 15, as it always was.
-    const u16 version = effect_sectors > 0 ? MAP_VERSION
+    const u16 version = mediums ? MAP_VERSION
+                      : effect_sectors > 0 ? static_cast<u16>(17)
                       : stretched ? static_cast<u16>(16)
                       : styled_sides > 0 ? static_cast<u16>(15)
                       : has_effects ? static_cast<u16>(14) : static_cast<u16>(13);
@@ -236,9 +242,14 @@ bool save_map(const MapStorage& store, ByteWriter& w) noexcept {
         }
     }
 
-    // Effect sectors (17): their indices, ascending.
+    // Effect sectors (17): their indices, ascending -- and from 18 each one's
+    // medium after it.
     if (version >= 17) {
-        for (u32 i = 0; i < m.sector_count; ++i) if (m.sector(i).effect) w.u32v(i);
+        for (u32 i = 0; i < m.sector_count; ++i) {
+            if (!m.sector(i).effect) continue;
+            w.u32v(i);
+            if (version >= 18) w.u8v(m.sector(i).medium);
+        }
     }
 
     // Trailing content hash. Also what WELCOME's map_hash reports, so a client
@@ -868,11 +879,14 @@ MapLoadStatus load_map(ByteReader& r, MapStorage& store) noexcept {
         u32 next = 0;
         for (u32 k = 0; k < effect_sector_count; ++k) {
             const u32 i = r.u32v();
+            const u8 medium = version >= 18 ? r.u8v() : sector_medium::NONE;
             if (!r.ok()) { store.clear(); return MapLoadStatus::Truncated; }
-            if (i >= sector_count || i < next || store.view().sector(i).thickness > fx::zero()) {
+            if (i >= sector_count || i < next || store.view().sector(i).thickness > fx::zero() ||
+                medium > sector_medium::LIQUID) {
                 store.clear(); return MapLoadStatus::BadIndex;
             }
             store.sector_mut(i).effect = true;
+            store.sector_mut(i).medium = medium;
             next = i + 1;
         }
     }

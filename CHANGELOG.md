@@ -30,6 +30,13 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   all of it: a slide on a live server mispredicted nothing. State 0,
   `default`, is the movement as it always was. The debug overlay shows the
   state.
+- **Liquids, and how deep a body stands in them** (docs/MOVEMENT.md, step 2
+  of 5). `sector type liquid` is an effect sector that is water, its `ceil`
+  the surface (map version 18, only for a map with one). Transitions can ask
+  `depth none|feet|waist|eyes` and `depth below <level>`. In a `liquid` state
+  buoyancy lifts only while the water is at the waist or above, and swimming
+  up stops at the surface. Wading, swimming and climbing or jumping out of a
+  pool are seven lines; `maps/pool.map` is a pool to try them in.
 
 ## 0.2.3.10 -- 2026-10-26
 

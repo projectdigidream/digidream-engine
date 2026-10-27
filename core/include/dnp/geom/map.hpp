@@ -134,7 +134,16 @@ struct Sector {
     // What it carries is its effects (fog, snow, ...) and its entering and
     // leaving (graphs' when_sector_entered / when_sector_left, by e:effect_sectors).
     bool effect = false;
+    // WHAT FILLS IT, for an effect sector (map version 18): sector_medium::.
+    // A liquid is water a body stands in to some depth (liquid_depth), its
+    // `ceil_z` the surface -- what the movement states' `depth` reads.
+    u8 medium = 0;
 };
+
+namespace sector_medium {
+inline constexpr u8 NONE   = 0;
+inline constexpr u8 LIQUID = 1;
+}  // namespace sector_medium
 
 // Rails and wires (design §3.4).
 //
@@ -510,6 +519,12 @@ struct MapData {
 
     SectorGrid grid{};
 
+    // The liquid sectors (Sector::medium), so a depth asked every tick of
+    // every body looks at these and not at the whole map. Gathered by the
+    // store when it builds its grid.
+    const u16* liquids = nullptr;
+    u32 liquid_count = 0;
+
     const fx2& point(u32 i) const noexcept { return points[i]; }
     const Sector& sector(u32 i) const noexcept { return sectors[i]; }
     const Side& side(u32 i) const noexcept { return sides[i]; }
@@ -556,6 +571,11 @@ i32 find_sector(const MapData& map, fx2 p) noexcept;
 // look at geometry NEAR a point rather than AT it -- reaching for a switch, and
 // nothing else yet -- would otherwise have to scan the whole map.
 u32 sectors_near(const MapData& map, fx2 p, fx radius, u16* out, u32 cap) noexcept;
+
+// HOW DEEP a body stands in liquid (docs/MOVEMENT.md): 0 not at all, 1 the
+// surface above its feet, 2 above half its height, 3 above its eyes -- the
+// deepest of the liquids over where it stands, as Quake's water levels.
+u8 liquid_depth(const MapData& map, fx3 feet, fx height) noexcept;
 
 // The sector whose floor a body standing at `feet_z` is on.
 //

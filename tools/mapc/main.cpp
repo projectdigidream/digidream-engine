@@ -454,6 +454,7 @@ int main(int argc, char** argv) {
     SectorRender sector_render{};
     fx thickness{};
     bool effect = false;
+    u8 medium = 0;
     int sector_start_line = 0;
 
     char buf[1024];
@@ -477,6 +478,7 @@ int main(int argc, char** argv) {
             sector_render = SectorRender{};
             thickness = fx::zero();
             effect = false;
+            medium = 0;
             sector_start_line = lineno;
             for (size_t i = 1; i + 1 < tok.size(); i += 2) {
                 if (tok[i] == "floor") { if (!parse_fx(tok[i + 1], floor_z)) err(lineno, "bad floor '%s'", tok[i + 1].c_str()); }
@@ -497,9 +499,12 @@ int main(int argc, char** argv) {
                 // `type effect`: a volume for effects and entering, nothing
                 // to collide with or draw (geom::Sector::effect).
                 else if (tok[i] == "type") {
+                    // `liquid`: an effect sector that is water, its ceil the
+                    // surface a body stands in to some depth (docs/MOVEMENT.md).
                     if (tok[i + 1] == "effect") effect = true;
+                    else if (tok[i + 1] == "liquid") { effect = true; medium = sector_medium::LIQUID; }
                     else if (tok[i + 1] == "solid") effect = false;
-                    else err(lineno, "unknown sector type '%s' (solid or effect)", tok[i + 1].c_str());
+                    else err(lineno, "unknown sector type '%s' (solid, effect or liquid)", tok[i + 1].c_str());
                 }
                 else if (tok[i] == "floortex") sector_render.floor_tex = intern(lineno, store, tok[i + 1]);
                 else if (tok[i] == "ceiltex") sector_render.ceil_tex = intern(lineno, store, tok[i + 1]);
@@ -670,6 +675,7 @@ int main(int argc, char** argv) {
             store.sector_render_mut(si) = sector_render;
             store.sector_mut(si).thickness = thickness;
             store.sector_mut(si).effect = effect;
+            store.sector_mut(si).medium = medium;
             if (effect && thickness > fx::zero()) err(sector_start_line, "an effect sector has no thickness: nothing collides with it");
             for (SectorFx e : pending_fx) {
                 e.sector = si;

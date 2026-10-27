@@ -126,7 +126,7 @@ void enter_data_state(MoveState& st) noexcept {
 }
 
 bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 vel,
-           u16 now, u16 pressed, u16 released) noexcept {
+           u16 now, u16 pressed, u16 released, u8 depth) noexcept {
     switch (c.kind) {
         case MoveCond::Grounded: return st.grounded;
         case MoveCond::Airborne: return !st.grounded;
@@ -144,6 +144,9 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
         case MoveCond::FloorTag:
             return st.grounded && st.sector >= 0 && static_cast<u32>(st.sector) < map.sector_count &&
                    map.sector(static_cast<u32>(st.sector)).tag == c.arg;
+        case MoveCond::DepthAtLeast: return depth >= c.arg;
+        case MoveCond::DepthNone:    return depth == 0;
+        case MoveCond::DepthBelow:   return depth < c.arg;
         case MoveCond::None: break;
     }
     return false;
@@ -153,14 +156,14 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
 // `any`'s, each in file order, the first whose every condition holds. `any`
 // never re-enters the state already running, which would restart its clock.
 void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p, MoveState& st,
-                     fx3& vel, fx2 facing, u16 now, u16 pressed, u16 released) noexcept {
+                     fx3& vel, fx2 facing, u16 now, u16 pressed, u16 released, u8 depth) noexcept {
     for (int pass = 0; pass < 2; ++pass) {
         for (u8 k = 0; k < d.transition_count; ++k) {
             const MoveTransition& t = d.transitions[k];
             if (pass == 0 ? t.from != st.move_state : (t.from != MOVE_ANY || t.to == st.move_state)) continue;
             if (t.to >= d.state_count) continue;
             bool all = true;
-            for (u8 c = 0; c < t.cond_count && all; ++c) all = holds(t.cond[c], map, st, vel, now, pressed, released);
+            for (u8 c = 0; c < t.cond_count && all; ++c) all = holds(t.cond[c], map, st, vel, now, pressed, released, depth);
             if (!all) continue;
             if (st.move_state == 0 && t.to != 0) enter_data_state(st);
             st.move_state = t.to;
@@ -189,7 +192,7 @@ void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p,
 // group says what the stick moves you through. A number the state does not
 // set is the player's own.
 void step_data_state(const MoveStateDef& s, const MoveParams& p, MoveState& st, const MoveCommand& cmd,
-                     fx2 wish, bool has_wish, u16 pressed, fx3& vel, fx dt) noexcept {
+                     fx2 wish, bool has_wish, u16 pressed, u8 depth, fx3& vel, fx dt) noexcept {
     const fx speed    = (s.has & move_has::SPEED)    ? s.speed    : p.move_speed;
     const fx accel    = (s.has & move_has::ACCEL)    ? s.accel    : p.ground_accel;
     const fx friction = (s.has & move_has::FRICTION) ? s.friction : p.friction;
@@ -219,12 +222,18 @@ void step_data_state(const MoveStateDef& s, const MoveParams& p, MoveState& st, 
         }
         case MoveGroup::Liquid: {
             // In 3D: the stick on the level, JUMP up and CROUCH down (cmd.up).
-            const fx3 target{wish.x * speed, wish.y * speed, cmd.up * speed};
+            // Up stops at the surface: with the water no higher than the waist
+            // a swimmer is at the top, and leaving it is a transition's `do`.
+            const fx up = (cmd.up > fx::zero() && depth < 3) ? fx::zero() : cmd.up;
+            const fx3 target{wish.x * speed, wish.y * speed, up * speed};
             const fx rate = (has_wish || cmd.up != fx::zero()) ? accel : friction;
             vel.x = approach(vel.x, target.x, rate, dt);
             vel.y = approach(vel.y, target.y, rate, dt);
             vel.z = approach(vel.z, target.z, rate, dt);
-            break;
+            // Buoyancy lifts only what is in the water to the waist, so a body
+            // left alone floats with the surface about its middle.
+            vel.z = vel.z + ((depth >= 2 ? buoyancy : fx::zero()) + sim::GRAVITY * gravity) * dt;
+            return;
         }
         case MoveGroup::None: {
             const fx2 v2 = approach2(fx2{vel.x, vel.y}, fx2{}, st.grounded ? friction : p.air_accel, dt);
@@ -299,13 +308,15 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     const u16 pressed = static_cast<u16>(now_buttons & ~st.prev_buttons);
     const u16 released = static_cast<u16>(st.prev_buttons & ~now_buttons);
     st.prev_buttons = now_buttons;
+    // How deep the body stands in liquid, measured only when something asks.
+    const u8 depth = (defs != nullptr && defs->uses_depth) ? liquid_depth(map, pos, p.height) : 0;
     if (defs != nullptr && defs->transition_count > 0) {
-        take_transition(*defs, map, p, st, vel, facing, now_buttons, pressed, released);
+        take_transition(*defs, map, p, st, vel, facing, now_buttons, pressed, released, depth);
     }
     if (st.state_ticks < 0xFFFF) ++st.state_ticks;
     if (defs != nullptr && st.move_state != 0 && st.move_state < defs->state_count) {
         const MoveStateDef& s = defs->states[st.move_state];
-        step_data_state(s, p, st, cmd, wish, has_wish, pressed, vel, dt);
+        step_data_state(s, p, st, cmd, wish, has_wish, pressed, depth, vel, dt);
         finish_tick(map, p, st, pos, vel, dt);
         if (s.flags & move_flag::COUNTS_AS_GROUND) { st.jumps_used = 0; st.coyote_timer = p.coyote_time; }
         return;

@@ -1470,8 +1470,12 @@ void dnp_map_set_sector_render(geom::MapStorage* m, unsigned i, unsigned floor_t
 // An effect sector (`sector type effect`, geom::Sector::effect), for a reader
 // that builds a map itself (editor/src/build.js) rather than through mapc.
 EMSCRIPTEN_KEEPALIVE
-void dnp_map_set_sector_effect(geom::MapStorage* m, unsigned i, int on) {
-    if (i < m->sector_count()) m->sector_mut(i).effect = on != 0;
+void dnp_map_set_sector_effect(geom::MapStorage* m, unsigned i, int on, int medium) {
+    if (i >= m->sector_count()) return;
+    m->sector_mut(i).effect = on != 0;
+    // sector_medium:: (a liquid's depth, docs/MOVEMENT.md); a caller that
+    // predates it passes nothing, which JS makes 0.
+    m->sector_mut(i).medium = on && medium == geom::sector_medium::LIQUID ? geom::sector_medium::LIQUID : geom::sector_medium::NONE;
 }
 
 // HOW A FLAT IS PAINTED: `which` is 0 for the floor and 1 for the ceiling, and

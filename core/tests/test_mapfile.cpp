@@ -889,6 +889,28 @@ static void test_effect_sectors() {
         }
         CHECK(loaded_silently == 0);
     }
+    // A LIQUID (version 18): the effect sector's medium, one byte more, written
+    // only when some sector has one -- the map above stayed 17.
+    {
+        const u64 effect_only = src.hash();
+        src.sector_mut(2).medium = sector_medium::LIQUID;
+        src.rebuild_grid();
+        CHECK(src.hash() != effect_only);     // CONTROL: the medium IS hashed
+        CHECK(src.view().liquid_count == 1 && src.view().liquids[0] == 2);
+        static u8 lb[16384];
+        ByteWriter lw(lb, sizeof(lb));
+        CHECK(save_map(src, lw));
+        CHECK(lb[4] == 18);
+        ByteReader lr(lb, lw.size());
+        CHECK(load_map(lr, dst) == MapLoadStatus::Ok && dst.view().sector(2).medium == sector_medium::LIQUID &&
+              dst.view().liquid_count == 1 && dst.hash() == src.hash());
+        // A medium nobody knows is refused, not read as water.
+        lb[lw.size() - 8 - 1] = 2;
+        ByteReader br(lb, lw.size());
+        CHECK(load_map(br, dst) != MapLoadStatus::Ok);
+        src.sector_mut(2).medium = sector_medium::NONE;
+        src.rebuild_grid();
+    }
 }
 
 // A WALL'S TEXTURE ANGLE AND SCALE (version 15): a map that uses them is

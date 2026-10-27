@@ -93,6 +93,9 @@ enum class MoveCond : u8 {
     SpeedAbove, SpeedBelow,         // value: units/s, horizontally
     After,                          // arg: ticks in the state
     FloorTag,                       // arg: the tag of the sector stood on
+    DepthAtLeast,                   // arg: 1 feet, 2 waist, 3 eyes (geom::liquid_depth)
+    DepthNone,                      // out of every liquid
+    DepthBelow,                     // arg: less deep than this
 };
 
 struct MoveCondition {
@@ -124,6 +127,9 @@ struct MoveDefs {
     MoveStateDef states[MAX_MOVE_STATES]{};
     u8 transition_count = 0;
     MoveTransition transitions[MAX_MOVE_TRANSITIONS]{};
+    // Whether anything asks how deep a body stands -- a `depth` condition, or a
+    // liquid state -- so the controller measures it only then.
+    bool uses_depth = false;
 };
 
 // Read a module's movement text: every `movestate` line, then every

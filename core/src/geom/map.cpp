@@ -132,6 +132,21 @@ u32 sectors_near(const MapData& map, fx2 p, fx radius, u16* out, u32 cap) noexce
     return n;
 }
 
+u8 liquid_depth(const MapData& map, fx3 feet, fx height) noexcept {
+    u8 best = 0;
+    for (u32 k = 0; k < map.liquid_count; ++k) {
+        const u32 s = map.liquids[k];
+        const Sector& sec = map.sector(s);
+        const fx surface = sec.ceil_z;
+        if (feet.z >= surface || feet.z + height <= sec.floor_z) continue;
+        if (!point_in_sector(map, s, fx2{feet.x, feet.y})) continue;
+        const fx d = surface - feet.z;
+        const u8 lv = d > height * sim::EYE_FRACTION ? 3 : d > height / fx::from_int(2) ? 2 : 1;
+        if (lv > best) best = lv;
+    }
+    return best;
+}
+
 i32 find_sector(const MapData& map, fx2 p) noexcept {
     // The SMALLEST sector containing the point, not the first one declared.
     //

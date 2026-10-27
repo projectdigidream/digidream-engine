@@ -447,6 +447,10 @@ private:
 
     u32  grid_start_[GRID_CELLS + 1]{};
     u16  grid_items_[MAX_GRID_ITEMS]{};
+    // The liquid sectors (Sector::medium), gathered with the grid (MapData::liquids).
+    static constexpr u32 MAX_LIQUIDS = 256;
+    u16  liquids_[MAX_LIQUIDS]{};
+    u32  liquid_count_ = 0;
     fx2  grid_min_{};
     fx   grid_cell_{};
     u16  grid_cols_ = 0;

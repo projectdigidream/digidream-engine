@@ -414,6 +414,11 @@ CommitStatus MapStorage::commit_shape(u32 sector) noexcept {
 }
 
 void MapStorage::rebuild_grid() noexcept {
+    // The liquids first: they are needed whatever becomes of the grid below.
+    liquid_count_ = 0;
+    for (u32 s = 0; s < sector_count_ && liquid_count_ < MAX_LIQUIDS; ++s) {
+        if (sectors_[s].effect && sectors_[s].medium == sector_medium::LIQUID) liquids_[liquid_count_++] = static_cast<u16>(s);
+    }
     grid_built_ = false;
     grid_dirty_ = false;
     grid_cols_ = 0;
@@ -809,6 +814,8 @@ MapData MapStorage::view() const noexcept {
     m.path_point_count = path_point_count_;
     m.holes = holes_;
     m.hole_loop_count = hole_count_;
+    m.liquids = liquids_;
+    m.liquid_count = liquid_count_;
 
     // Only offered when it is both built and current. A stale grid is never
     // handed out, so no query can silently consult one.
@@ -859,6 +866,7 @@ u64 MapStorage::hash() const noexcept {
         for (u32 t = 0; t < static_cast<u32>(s.tri_count) * 3; ++t) h.u32v(tris_[s.first_tri + t]);
         // Only when set, so a map without effect sectors keeps its hash.
         if (s.effect) h.u32v(0xEFFEC7u);
+        if (s.medium) h.u32v(0x4E0D0000u + s.medium);   // only when set, as the effect
     }
     for (u32 i = 0; i < side_count_; ++i) {
         const Side& sd = sides_[i];

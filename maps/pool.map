@@ -1,0 +1,43 @@
+# A pool (`sector type liquid`, docs/MOVEMENT.md "Depth"): a hall with a pit
+# in it, and water over the pit and a margin round it -- a shallow edge to wade
+# and a deep middle to swim. The water does nothing until a module declares the
+# states that read it; docs/MOVEMENT.md has the seven lines.
+#
+#   scripts/run_stack.sh --module doom2 build/<arch>/pool.dnpm
+body radius 0.3333 height 1.1667
+texscale 48
+
+# 0: the hall, with the pit cut out of its floor.
+sector floor 0 ceil 6 floortex FLOOR4_8 ceiltex CEIL5_1 light 190
+  vertex  0  0 wall tex STONE2
+  vertex 24  0 wall tex STONE2
+  vertex 24 16 wall tex STONE2
+  vertex  0 16 wall tex STONE2
+  hole
+    vertex  8  4 neighbor 1 lower STONE2
+    vertex  8 12 neighbor 1 lower STONE2
+    vertex 18 12 neighbor 1 lower STONE2
+    vertex 18  4 neighbor 1 lower STONE2
+  end
+end
+
+# 1: the pit, two and a half units down.
+sector floor -2.5 ceil 6 floortex FLAT5_4 ceiltex CEIL5_1 light 150
+  vertex  8  4 neighbor 0 lower STONE2
+  vertex 18  4 neighbor 0 lower STONE2
+  vertex 18 12 neighbor 0 lower STONE2
+  vertex  8 12 neighbor 0 lower STONE2
+end
+
+# 2: the water, its surface 0.3 over the hall's floor: ankle-deep on the
+# margin, over the head in the pit.
+sector type liquid floor -2.5 ceil 0.3 tag 7
+  fx fog density 0.6 top 2.8 falloff 0.3 color 3a6a8a
+  vertex  6  2
+  vertex 20  2
+  vertex 20 14
+  vertex  6 14
+end
+
+spawn start 3 8 0
+light 12 8 5 color 220 230 255 radius 20 intensity 1.4
