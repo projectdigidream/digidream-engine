@@ -66,11 +66,34 @@ fx decay(fx t, fx dt) noexcept {
 }
 
 
+// THE LAYERED MOVES on this tick's velocity, just before the sweep: each axis
+// a move holds is its speed (`set`) or what it was before the state steered
+// (`add`, whose impulse came as it started). Not while climbing or on a rope:
+// those are the engine's, and hold the body themselves.
+void apply_moves(const MoveDefs& d, MoveState& st, fx3& vel, fx3 vel0) noexcept {
+    if (st.climbing || st.grappling) return;
+    const ActiveMove& h = st.moves[0];
+    if (h.move != 0) {
+        const LayeredMoveDef& m = d.moves[h.move - 1];
+        const fx2 v = m.mix == MoveMix::Set ? h.dir * m.speed : fx2{vel0.x, vel0.y};
+        vel.x = v.x;
+        vel.y = v.y;
+    }
+    const ActiveMove& u = st.moves[1];
+    if (u.move != 0) {
+        const LayeredMoveDef& m = d.moves[u.move - 1];
+        if (m.mix == MoveMix::Set) vel.z = m.dir == MoveDir::Up ? m.speed : -m.speed;
+        if (m.dir == MoveDir::Up) st.grounded = false;
+    }
+}
+
 // THE END OF EVERY TICK, whatever moved the body: the swept move, where it is
 // now, whether it stands, and what standing gives back. Its own function since
-// the module's movement states (docs/MOVEMENT.md) end their ticks here too.
+// the module's movement states (docs/MOVEMENT.md) end their ticks here too,
+// and the layered moves are laid on here, last, so they hold over both.
 void finish_tick(const MapData& map, const MoveParams& p, MoveState& st, fx3& pos, fx3& vel,
-                 fx dt) noexcept {
+                 fx dt, const MoveDefs* defs, fx3 vel0) noexcept {
+    if (defs != nullptr && defs->move_count > 0) apply_moves(*defs, st, vel, vel0);
     MoveInput mi;
     mi.pos = pos;
     mi.vel = vel;
@@ -156,6 +179,27 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
     return false;
 }
 
+// START A LAYERED MOVE, if its axis is free or holds one of no higher
+// priority, and its cost can be paid. An `add` gives its impulse now.
+bool start_move(const MoveDefs& d, u8 k, MoveState& st, fx3& vel, fx2 facing) noexcept {
+    const LayeredMoveDef& m = d.moves[k];
+    const bool vertical = m.dir == MoveDir::Up || m.dir == MoveDir::Down;
+    ActiveMove& slot = st.moves[vertical ? 1 : 0];
+    if (slot.move != 0 && d.moves[slot.move - 1].priority > m.priority) return false;
+    if (m.cost_meter != NO_METER) {
+        if (st.meters[m.cost_meter] < m.cost) return false;
+        st.meters[m.cost_meter] = st.meters[m.cost_meter] - m.cost;
+    }
+    const fx2 dir = m.dir == MoveDir::Facing ? facing : m.dir == MoveDir::Back ? fx2{-facing.x, -facing.y} : fx2{};
+    if (m.mix == MoveMix::Add) {
+        if (vertical) vel.z = vel.z + (m.dir == MoveDir::Up ? m.speed : -m.speed);
+        else { vel.x = vel.x + dir.x * m.speed; vel.y = vel.y + dir.y * m.speed; }
+        if (m.dir == MoveDir::Up) st.grounded = false;
+    }
+    if (m.ticks > 0) slot = ActiveMove{static_cast<u8>(k + 1), m.ticks, dir};
+    return true;
+}
+
 // THE WAY OUT, if one holds this tick: the state's own transitions before
 // `any`'s, each in file order, the first whose every condition holds. `any`
 // never re-enters the state already running, which would restart its clock.
@@ -189,6 +233,7 @@ void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p,
                     st.meters[t.meter] = fx_clamp(v, fx::zero(), d.meters[t.meter].max);
                     break;
                 }
+                case MoveAction::StartMove: start_move(d, t.meter, st, vel, facing); break;
                 case MoveAction::None: break;
             }
             return;
@@ -214,6 +259,21 @@ void run_meters(const MoveDefs& d, const MapData& map, MoveState& st, fx3 vel, u
             }
         }
         st.meters[m] = fx_clamp(st.meters[m] + rate * dt, fx::zero(), d.meters[m].max);
+    }
+}
+
+// The layered moves that start themselves: each whose conditions all hold and
+// that is not the one already running on its axis.
+void auto_moves(const MoveDefs& d, const MapData& map, MoveState& st, fx3& vel, fx2 facing, u16 now,
+                u16 pressed, u16 released, u8 depth) noexcept {
+    for (u8 k = 0; k < d.move_count; ++k) {
+        const LayeredMoveDef& m = d.moves[k];
+        if (m.cond_count == 0) continue;
+        const bool vertical = m.dir == MoveDir::Up || m.dir == MoveDir::Down;
+        if (st.moves[vertical ? 1 : 0].move == k + 1) continue;
+        bool all = true;
+        for (u8 c = 0; c < m.cond_count && all; ++c) all = holds(m.cond[c], map, st, vel, now, pressed, released, depth);
+        if (all) start_move(d, k, st, vel, facing);
     }
 }
 
@@ -341,6 +401,10 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     st.prev_buttons = now_buttons;
     // How deep the body stands in liquid, measured only when something asks.
     const u8 depth = (defs != nullptr && defs->uses_depth) ? liquid_depth(map, pos, p.height) : 0;
+    // The layered moves' clocks, before anything can start one this tick.
+    for (ActiveMove& am : st.moves) {
+        if (am.move != 0 && --am.left == 0) am = ActiveMove{};
+    }
     if (defs != nullptr && defs->transition_count > 0) {
         take_transition(*defs, map, p, st, vel, facing, now_buttons, pressed, released, depth);
     }
@@ -348,10 +412,15 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
     if (defs != nullptr && defs->meter_count > 0) {
         run_meters(*defs, map, st, vel, now_buttons, pressed, released, depth, dt);
     }
+    if (defs != nullptr && defs->move_count > 0) {
+        auto_moves(*defs, map, st, vel, facing, now_buttons, pressed, released, depth);
+    }
+    // What the velocity was before the state steers: an `add` move keeps it.
+    const fx3 vel0 = vel;
     if (defs != nullptr && st.move_state != 0 && st.move_state < defs->state_count) {
         const MoveStateDef& s = defs->states[st.move_state];
         step_data_state(s, p, st, cmd, wish, has_wish, pressed, depth, vel, dt);
-        finish_tick(map, p, st, pos, vel, dt);
+        finish_tick(map, p, st, pos, vel, dt, defs, vel0);
         if (s.flags & move_flag::COUNTS_AS_GROUND) { st.jumps_used = 0; st.coyote_timer = p.coyote_time; }
         return;
     }
@@ -667,7 +736,7 @@ void step_controller(const MapData& map, const MoveParams& p, MoveState& st,
         }
     }
 
-    finish_tick(map, p, st, pos, vel, dt);
+    finish_tick(map, p, st, pos, vel, dt, defs, vel0);
 }
 
 }  // namespace dnp::physics

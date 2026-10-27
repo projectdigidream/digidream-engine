@@ -240,6 +240,16 @@ struct MoveParams {
 // How many meters a module may declare (docs/MOVEMENT.md "Meters").
 inline constexpr u32 MAX_MOVE_METERS = 8;
 
+// A LAYERED MOVE running on a body (docs/MOVEMENT.md "Layered moves"): which
+// (its index + 1, 0 for none), its ticks left, and the way it goes, fixed when
+// it started. One per axis: [0] the level, [1] up and down.
+struct ActiveMove {
+    u8  move = 0;
+    u16 left = 0;
+    fx2 dir{};
+};
+inline constexpr u32 MOVE_AXES = 2;
+
 struct MoveState {
     ControllerMode mode = ControllerMode::Standard;
 
@@ -324,6 +334,8 @@ struct MoveState {
     // MoveDefs -- breath, stamina, whatever it names -- each 0..its max. Hashed
     // and in SelfBlock; a spawn starts them at their `start`.
     fx   meters[MAX_MOVE_METERS]{};
+    // The layered moves running, one per axis. Hashed and in SelfBlock.
+    ActiveMove moves[MOVE_AXES]{};
 
     bool grappling = false;
     bool grapple_pulling = false;

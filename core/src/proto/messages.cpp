@@ -194,6 +194,16 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         while (n > 0 && s.meters[n - 1] == fx::zero()) --n;
         w.u8v(n);
         for (u8 i = 0; i < n; ++i) w.fxraw(s.meters[i]);
+        u8 mask = 0;
+        for (u32 a = 0; a < physics::MOVE_AXES; ++a) mask = static_cast<u8>(mask | (s.moves[a].move ? 1u << a : 0u));
+        w.u8v(mask);
+        for (u32 a = 0; a < physics::MOVE_AXES; ++a) {
+            if (!s.moves[a].move) continue;
+            w.u8v(s.moves[a].move);
+            w.u16v(s.moves[a].left);
+            w.fxraw(s.moves[a].dir.x);
+            w.fxraw(s.moves[a].dir.y);
+        }
     }
     if (s.state_flags & state_flag::GRAPPLING) {
         w.vec3_raw(s.grapple_anchor);
@@ -256,6 +266,14 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
         for (u8 i = 0; i < n; ++i) {
             const fx v = r.fxraw();
             if (i < physics::MAX_MOVE_METERS) s.meters[i] = v;
+        }
+        const u8 mask = r.u8v();
+        for (u32 a = 0; a < physics::MOVE_AXES; ++a) {
+            if (!(mask & (1u << a))) continue;
+            s.moves[a].move = r.u8v();
+            s.moves[a].left = r.u16v();
+            s.moves[a].dir.x = r.fxraw();
+            s.moves[a].dir.y = r.fxraw();
         }
     }
     if (s.state_flags & state_flag::GRAPPLING) {

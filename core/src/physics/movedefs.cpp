@@ -251,6 +251,55 @@ const char* read_meter_rule(MoveDefs& d, const Line& L) noexcept {
     return nullptr;
 }
 
+// `move <name> add|set facing|back|up|down <speed> for <seconds>
+//   [priority <n>] [cost <meter> <n>] [when <conditions>]`
+const char* read_move(MoveDefs& d, const Line& L) noexcept {
+    if (d.move_count == MAX_LAYERED_MOVES) return "a module has at most 8 layered moves";
+    if (L.n < 7 || !is(L.tok[5], "for"))
+        return "a move is: move <name> add|set facing|back|up|down <speed> for <seconds> [priority <n>] [cost <meter> <n>] [when <conditions>]";
+    if (layered_move_index(d, L.tok[1]) >= 0) return "a move of that name is already declared";
+    LayeredMoveDef m;
+    if (!copy_name(m.name, L.tok[1])) return "a move's name is 1 to 15 characters";
+    if (is(L.tok[2], "add")) m.mix = MoveMix::Add;
+    else if (is(L.tok[2], "set")) m.mix = MoveMix::Set;
+    else return "a move adds or sets: add or set";
+    const char* w = L.tok[3];
+    if (is(w, "facing")) m.dir = MoveDir::Facing;
+    else if (is(w, "back")) m.dir = MoveDir::Back;
+    else if (is(w, "up")) m.dir = MoveDir::Up;
+    else if (is(w, "down")) m.dir = MoveDir::Down;
+    else return "a move goes facing, back, up or down";
+    if (!number(L.tok[4], m.speed)) return "a number is a decimal, like 9 or 0.25";
+    fx secs{};
+    if (!number(L.tok[6], secs) || secs < fx::zero() || secs > fx::from_int(60)) return "for <seconds>, 0 to 60";
+    m.ticks = static_cast<u16>((secs.raw * static_cast<i64>(sim::TICK_RATE_HZ) + (i64{1} << 31)) >> 32);
+    if (m.mix == MoveMix::Set && m.ticks == 0) return "a `set` move needs to last: for 0.2";
+    u32 i = 7;
+    while (i < L.n && !is(L.tok[i], "when")) {
+        const char* k = L.tok[i];
+        if (is(k, "priority") && i + 1 < L.n) {
+            const int pr = std::atoi(L.tok[i + 1]);
+            if (pr < 0 || pr > 255) return "priority is 0 to 255";
+            m.priority = static_cast<u8>(pr);
+            i += 2;
+        } else if (is(k, "cost") && i + 2 < L.n) {
+            const i32 mt = meter_index(d, L.tok[i + 1]);
+            if (mt < 0) return "it names a meter no meter line declares";
+            if (!number(L.tok[i + 2], m.cost) || m.cost < fx::zero()) return "cost <meter> <n>, n 0 or more";
+            m.cost_meter = static_cast<u8>(mt);
+            i += 3;
+        } else return "after `for`: priority <n>, cost <meter> <n>, when <conditions>";
+    }
+    if (i < L.n) {
+        ++i;
+        if (const char* why = read_conditions(d, L, i, m.cond, m.cond_count)) return why;
+        if (m.cond_count == 0) return "`when` needs a condition";
+        if (i < L.n) return "a move does itself; `do` is a transition's";
+    }
+    d.moves[d.move_count++] = m;
+    return nullptr;
+}
+
 const char* read_transition(MoveDefs& d, const Line& L) noexcept {
     if (d.transition_count == MAX_MOVE_TRANSITIONS) return "a module has at most 32 transitions";
     if (L.n < 5 || !is(L.tok[2], "->") || !is(L.tok[4], "when"))
@@ -271,7 +320,7 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
     if (const char* why = read_conditions(d, L, i, t.cond, t.cond_count)) return why;
     if (t.cond_count == 0) return "a transition needs at least one condition";
     if (i < L.n) {   // `do`
-        if (i + 1 >= L.n) return "do what? (jump, stop, impulse up|facing|back <n>, meter <name> set|add <n>)";
+        if (i + 1 >= L.n) return "do what? (jump, stop, impulse up|facing|back <n>, meter <name> set|add <n>, move <name>)";
         const char* act = L.tok[i + 1];
         if (is(act, "jump")) { t.action = MoveAction::Jump; i += 2; }
         else if (is(act, "stop")) { t.action = MoveAction::Stop; i += 2; }
@@ -294,8 +343,12 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
             t.meter = static_cast<u8>(m);
             i += 5;
         } else if (is(act, "move")) {
-            return "layered moves are not built yet (docs/MOVEMENT.md, step 4)";
-        } else return "do jump, stop, impulse up|facing|back <n>, or meter <name> set|add <n>";
+            const i32 m = layered_move_index(d, i + 2 < L.n ? L.tok[i + 2] : "");
+            if (m < 0) return "it names a move no move line declares";
+            t.action = MoveAction::StartMove;
+            t.meter = static_cast<u8>(m);
+            i += 3;
+        } else return "do jump, stop, impulse up|facing|back <n>, meter <name> set|add <n>, or move <name>";
         if (i < L.n) return "one action after `do`";
     }
     d.transitions[d.transition_count++] = t;
@@ -303,6 +356,13 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
 }
 
 }  // namespace
+
+i32 layered_move_index(const MoveDefs& d, const char* name) noexcept {
+    for (u8 i = 0; i < d.move_count; ++i) {
+        if (std::strcmp(d.moves[i].name, name) == 0) return i;
+    }
+    return -1;
+}
 
 i32 meter_index(const MoveDefs& d, const char* name) noexcept {
     for (u8 i = 0; i < d.meter_count; ++i) {
@@ -322,7 +382,9 @@ bool parse_move_defs(MoveDefs& out, const char* text, u32 len, char* err, u32 er
     out = MoveDefs{};
     std::memcpy(out.states[0].name, "default", 8);
     static Line L;   // a line's worth of tokens; the core has no heap, and this is too big for a wasm frame
-    for (int pass = 0; pass < 2; ++pass) {
+    // Three passes: what is named (states, meters), then the moves (which may
+    // ask a meter), then what refers to all of them.
+    for (int pass = 0; pass < 3; ++pass) {
         u32 at = 0;
         u32 lineno = 0;
         while (at < len) {
@@ -333,8 +395,9 @@ bool parse_move_defs(MoveDefs& out, const char* text, u32 len, char* err, u32 er
             if (!tokenize(text + at, end - at, L)) why = "a line too long, or with too many words";
             else if (L.n > 0 && pass == 0 && is(L.tok[0], "movestate")) why = read_state(out, L);
             else if (L.n > 0 && pass == 0 && is(L.tok[0], "meter") && !(L.n > 2 && is(L.tok[2], "in"))) why = read_meter(out, L);
-            else if (L.n > 0 && pass == 1 && is(L.tok[0], "transition")) why = read_transition(out, L);
-            else if (L.n > 0 && pass == 1 && is(L.tok[0], "meter") && L.n > 2 && is(L.tok[2], "in")) why = read_meter_rule(out, L);
+            else if (L.n > 0 && pass == 1 && is(L.tok[0], "move")) why = read_move(out, L);
+            else if (L.n > 0 && pass == 2 && is(L.tok[0], "transition")) why = read_transition(out, L);
+            else if (L.n > 0 && pass == 2 && is(L.tok[0], "meter") && L.n > 2 && is(L.tok[2], "in")) why = read_meter_rule(out, L);
             if (why) {
                 if (err && err_cap) std::snprintf(err, err_cap, "line %u: %s", lineno, why);
                 out = MoveDefs{};

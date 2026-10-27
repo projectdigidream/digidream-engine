@@ -222,6 +222,7 @@ export class Predictor {
       moveState: sb.moveState ?? 0,
       stateTicks: sb.stateTicks ?? 0,
       meters: sb.meters,
+      moves: sb.moves,
 
       // The swing countdown IS replicated, because it cannot be derived: the
       // server decides when a swing ends, and the client holds only the button

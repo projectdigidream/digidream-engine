@@ -438,6 +438,9 @@ struct SelfBlock {
     // The meters (docs/MOVEMENT.md "Meters"), sent up to the last that is not
     // 0: nearly always as many as the module declares, and none for most.
     fx     meters[physics::MAX_MOVE_METERS]{};
+    // The layered moves running, one per axis (docs/MOVEMENT.md), each only
+    // when there is one.
+    physics::ActiveMove moves[physics::MOVE_AXES]{};
 
     // Only encoded when state_flags & GRAPPLING. A swinging player is the
     // exception, and gating it keeps 32 bytes off every other snapshot.

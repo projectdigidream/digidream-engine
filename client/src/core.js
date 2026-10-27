@@ -14,17 +14,17 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // the controller keeps between ticks, because reconciliation overwrites local
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
-const BUF64_LEN = 28
-const BUF32_LEN = 25
+const BUF64_LEN = 32
+const BUF32_LEN = 29
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
-  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17, COYOTE: 19, METERS: 20,
+  GRAP_ANCH: 11, GRAP_DIST: 14, DASH_DIR: 15, CLIMB_N: 17, COYOTE: 19, METERS: 20, MOVE_DIR: 28,
 
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
   GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20, HOPPING: 21,
-  MOVE_STATE: 22, STATE_TICKS: 23, PREV_BUTTONS: 24
+  MOVE_STATE: 22, STATE_TICKS: 23, PREV_BUTTONS: 24, MOVES: 25
 }
 
 // A camera path's header, mirroring PATH32_* in client/wasm/bindings.cpp. Its
@@ -910,6 +910,12 @@ export class WasmWorld {
       coyote: i64[b64 + IDX.COYOTE],
       // The meters (docs/MOVEMENT.md "Meters"): eight raw fx, the module's in order.
       meters: Array.from({ length: 8 }, (_, k) => i64[b64 + IDX.METERS + k]),
+      // The layered moves running, [0] the level and [1] up and down: the move
+      // (index + 1, 0 none), its ticks left and the way it goes.
+      moves: [0, 1].map((k) => ({
+        move: u32[b32 + IDX.MOVES + 2 * k], left: u32[b32 + IDX.MOVES + 2 * k + 1],
+        dir: { x: i64[b64 + IDX.MOVE_DIR + 2 * k], y: i64[b64 + IDX.MOVE_DIR + 2 * k + 1] }
+      })),
       // The movement state (docs/MOVEMENT.md): 0 `default`, 1..8 the module's.
       moveState: u32[b32 + IDX.MOVE_STATE],
       stateTicks: u32[b32 + IDX.STATE_TICKS],
@@ -941,6 +947,13 @@ export class WasmWorld {
     i64[b64 + IDX.DASH_CD] = s.dashCooldown ?? z
     i64[b64 + IDX.COYOTE] = s.coyote ?? z
     for (let k = 0; k < 8; k++) i64[b64 + IDX.METERS + k] = s.meters?.[k] ?? z
+    for (let k = 0; k < 2; k++) {
+      const mv = s.moves?.[k]
+      u32[b32 + IDX.MOVES + 2 * k] = mv?.move ?? 0
+      u32[b32 + IDX.MOVES + 2 * k + 1] = mv?.left ?? 0
+      i64[b64 + IDX.MOVE_DIR + 2 * k] = mv?.dir?.x ?? z
+      i64[b64 + IDX.MOVE_DIR + 2 * k + 1] = mv?.dir?.y ?? z
+    }
     i64[b64 + IDX.HOVER_F] = s.hoverFuel ?? z
     i64[b64 + IDX.FLIGHT_F] = s.flightFuel ?? z
     i64[b64 + IDX.GRAP_ANCH] = s.grappleAnchor?.x ?? z

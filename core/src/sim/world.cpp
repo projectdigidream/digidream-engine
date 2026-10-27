@@ -1074,6 +1074,7 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.u32v(m.state_ticks);
     h.u32v(m.prev_buttons);
     for (const fx& v : m.meters) h.fxv(v);
+    for (const physics::ActiveMove& am : m.moves) { h.u32v(am.move); h.u32v(am.left); h.vec2(am.dir); }
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
     // NOT rebased, deliberately. A grapple anchor is a point on the geometry

@@ -30,6 +30,8 @@ inline constexpr u8 MAX_MOVE_CONDITIONS = 4;
 inline constexpr u8 MOVE_NAME_LEN = 16;           // with its terminating NUL
 inline constexpr u8 MOVE_ANY = 0xFF;              // a transition from any state
 inline constexpr u8 MAX_METER_RULES = 16;
+inline constexpr u8 MAX_LAYERED_MOVES = 8;
+inline constexpr u8 NO_METER = 0xFF;
 
 // What the stick moves you through.
 enum class MoveGroup : u8 {
@@ -116,6 +118,7 @@ enum class MoveAction : u8 {
     ImpulseBack,              // value: units/s added the other way
     MeterSet,                 // meter: which; value: to what
     MeterAdd,                 // meter: which; value: how much (less than 0 takes)
+    StartMove,                // meter: the layered move's index
 };
 
 struct MoveTransition {
@@ -124,7 +127,7 @@ struct MoveTransition {
     u8 cond_count = 0;
     MoveCondition cond[MAX_MOVE_CONDITIONS]{};
     MoveAction action = MoveAction::None;
-    u8 meter = 0;             // for MeterSet / MeterAdd
+    u8 meter = 0;             // for MeterSet / MeterAdd; the move for StartMove
     fx value{};
 };
 
@@ -147,6 +150,29 @@ struct MeterRule {
     fx rate{};
 };
 
+// A LAYERED MOVE: for a time, on top of whatever state runs and surviving a
+// change of state, it holds one axis -- the level (`facing`, `back`) or the
+// vertical (`up`, `down`). `set` holds the velocity there at `speed`; `add`
+// adds `speed` once as it starts and keeps the state's steering off that axis
+// for its time. One per axis: a new one replaces the running one when its
+// priority is no lower, and otherwise does not start. It starts by itself when
+// its conditions hold (`when`), from a transition's `do move`, or a script.
+enum class MoveMix : u8 { Add, Set };
+enum class MoveDir : u8 { Facing, Back, Up, Down };
+
+struct LayeredMoveDef {
+    char name[MOVE_NAME_LEN]{};
+    MoveMix mix = MoveMix::Add;
+    MoveDir dir = MoveDir::Facing;
+    fx  speed{};
+    u16 ticks = 0;            // 0: an `add` that is only its impulse
+    u8  priority = 0;
+    u8  cost_meter = NO_METER;
+    fx  cost{};
+    u8  cond_count = 0;       // 0: it starts only when something starts it
+    MoveCondition cond[MAX_MOVE_CONDITIONS]{};
+};
+
 struct MoveDefs {
     u8 state_count = 1;       // `default` is always state 0
     MoveStateDef states[MAX_MOVE_STATES]{};
@@ -156,14 +182,16 @@ struct MoveDefs {
     MeterDef meters[MAX_MOVE_METERS]{};
     u8 meter_rule_count = 0;
     MeterRule meter_rules[MAX_METER_RULES]{};
+    u8 move_count = 0;
+    LayeredMoveDef moves[MAX_LAYERED_MOVES]{};
     // Whether anything asks how deep a body stands -- a `depth` condition, or a
     // liquid state -- so the controller measures it only then.
     bool uses_depth = false;
 };
 
 // Read a module's movement text: every `movestate` and `meter` declaration,
-// then every `transition` line and meter rule (so either may name a state or a
-// meter declared after it).
+// then every `move`, then every `transition` line and meter rule (so a line
+// may name a state, a meter or a move declared after it).
 // Other lines are not ours and are skipped. On the first refusal, false, with
 // the line number and the reason in `err`, and `out` reset to `default` alone:
 // a half-read set would move one client differently from the server.
@@ -174,5 +202,8 @@ i32 move_state_index(const MoveDefs& defs, const char* name) noexcept;
 
 // A meter by name, or -1.
 i32 meter_index(const MoveDefs& defs, const char* name) noexcept;
+
+// A layered move by name, or -1.
+i32 layered_move_index(const MoveDefs& defs, const char* name) noexcept;
 
 }  // namespace dnp::physics

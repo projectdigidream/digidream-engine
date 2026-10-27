@@ -65,6 +65,10 @@ static void test_the_parser() {
         "meter air max 10 start 11\n",                                              // more than its max
         "meter air max 10\nmeter air in nowhere rate 1\n",                         // no such state
         "meter air max 10\nmovestate a group floor\ntransition default -> a when grounded do meter air fill 3\n",
+        "move dash add sideways 9 for 0.2\n",                                       // no such way
+        "move dash set facing 9 for 0\n",                                           // a set with no time
+        "move dash add facing 9 for 0.2 cost breath 5\n",                           // no such meter
+        "movestate a group floor\ntransition default -> a when grounded do move blink\n",   // no such move
         "movestate a group floor\ntransition default -> a when pressed sneeze\n",
         "movestate a group floor\ntransition default -> a when grounded do dance\n",
     };
@@ -337,6 +341,84 @@ static void test_stamina() {
     CHECK(out_at > 170 && out_at < 190);              // 90 / 30 = 3 s, then back to walking
 }
 
+// LAYERED MOVES. A dash that holds the level at 18 for 0.2 s and costs 20
+// stamina, on USE (DASH would also start the built-in dash); a pad, up; and a
+// boost a transition starts as a slide begins.
+struct Dash { double speed_in, speed_after, stamina; double peak; };
+static Dash dash_with(const char* text) {
+    static World w;
+    static MoveDefs d;
+    CHECK(parse(d, text));
+    w.reset();
+    w.set_map(&test_map());
+    w.set_move_defs(d);
+    const u32 a = w.spawn(fx3{fx::from_int(4), fx::from_int(10), fx::zero()});
+    Dash r{};
+    for (u32 t = 0; t < 120; ++t) {
+        proto::InputFrame in;
+        in.move_x = t < 60 ? 32767 : 0;
+        if (t == 30) in.buttons = proto::button::INTERACT;
+        if (t == 80) in.buttons = proto::button::CLIMB;
+        w.set_input(a, in);
+        w.step();
+        const auto& g = w.agent(a);
+        if (t == 36) r.speed_in = f(length(fx2{g.vel.x, g.vel.y}));
+        if (t == 50) { r.speed_after = f(length(fx2{g.vel.x, g.vel.y})); r.stamina = f(g.mv.meters[0]); }
+        if (t > 80) r.peak = std::max(r.peak, f(g.pos.z));
+    }
+    return r;
+}
+
+static void test_layered_moves() {
+    std::printf("moves: a dash that costs, a pad that lifts, a boost a transition starts\n");
+    const char* MOVES =
+        "meter stamina max 100 rate 0\n"
+        "move dash set facing 18 for 0.2 cost stamina 20 when pressed use\n"
+        "move pad set up 9 for 0.1 when grounded pressed climb\n";
+    const Dash on = dash_with(MOVES);
+    std::string poor = MOVES;
+    poor.replace(poor.find("rate 0"), 6, "start 10");   // not enough for the dash's 20
+    const Dash broke = dash_with(poor.c_str());
+    std::printf("  dashing: %.2f units/s, %.2f after it, stamina %.0f; pad peak %.2f\n", on.speed_in, on.speed_after, on.stamina, on.peak);
+    std::printf("  CONTROL, 10 stamina: %.2f units/s, stamina %.0f\n", broke.speed_in, broke.stamina);
+    CHECK(on.speed_in > 17.9 && on.speed_in < 18.1);    // held at 18
+    CHECK(on.speed_after < 8.1);                        // and over: walking pace again
+    CHECK(on.stamina == 80);                            // paid for
+    CHECK(broke.speed_in < 8.1 && broke.stamina == 10); // CONTROL: too dear, no dash, nothing paid
+    CHECK(on.peak > 0.5);                               // the pad lifts: 9 up for 0.1 s, then a fall
+
+    // A boost started by the transition into a slide: `add`, so the level
+    // keeps the speed it had plus the boost while it runs, untouched by the
+    // slide's friction.
+    auto slide = [&](bool boost) {
+        static World w;
+        static MoveDefs d;
+        std::string text = std::string("movestate slide group floor speed 14 accel 1 friction 3\n"
+                                        "move boost add facing 6 for 0.3\n") +
+                           (boost ? "transition default -> slide when grounded pressed crouch do move boost\n"
+                                  : "transition default -> slide when grounded pressed crouch\n");
+        CHECK(parse(d, text.c_str()));
+        w.reset();
+        w.set_map(&test_map());
+        w.set_move_defs(d);
+        const u32 a = w.spawn(fx3{fx::from_int(4), fx::from_int(10), fx::zero()});
+        double at = 0;
+        for (u32 t = 0; t < 80; ++t) {
+            proto::InputFrame in;
+            in.move_x = t < 60 ? 32767 : 0;
+            if (t == 60) in.buttons = proto::button::CROUCH;
+            w.set_input(a, in);
+            w.step();
+            if (t == 75) at = f(length(fx2{w.agent(a).vel.x, w.agent(a).vel.y}));
+        }
+        return at;
+    };
+    const double boosted = slide(true), plain = slide(false);
+    std::printf("  a quarter second into the slide: boosted %.2f units/s, CONTROL plain %.2f\n", boosted, plain);
+    CHECK(boosted > 13.9 && boosted < 14.1);   // 8 + 6, held: no friction while it runs
+    CHECK(plain < 8);                          // CONTROL: the slide's friction at work
+}
+
 static void test_it_is_deterministic() {
     std::printf("movestates: the same inputs, the same states and hash\n");
     auto once = []() {
@@ -367,6 +449,7 @@ int main() {
     test_wading_and_swimming();
     test_breath();
     test_stamina();
+    test_layered_moves();
     test_it_is_deterministic();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

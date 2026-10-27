@@ -889,6 +889,11 @@ export function decodeSnapshot (buf) {
   // The meters, up to the last that is not 0; the rest are 0. Raw fx, as BigInt.
   snap.self.meters = Array(8).fill(0n)
   for (let k = 0, n = r.u8(); k < n; k++) { const v = r.fxraw(); if (k < 8) snap.self.meters[k] = v }
+  // The layered moves, one per axis, each present only when it runs.
+  const moveMask = r.u8()
+  snap.self.moves = [0, 1].map((k) => (moveMask & (1 << k))
+    ? { move: r.u8(), left: r.u16(), dir: { x: r.fxraw(), y: r.fxraw() } }
+    : { move: 0, left: 0, dir: { x: 0n, y: 0n } })
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()

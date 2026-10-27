@@ -49,7 +49,8 @@ constexpr int BUF64_DASH_DIR  = 15;  // 2
 constexpr int BUF64_CLIMB_N   = 17;  // 2
 constexpr int BUF64_COYOTE    = 19;  // appended: core.js mirrors this by hand
 constexpr int BUF64_METERS    = 20;  // physics::MAX_MOVE_METERS (docs/MOVEMENT.md)
-constexpr int BUF64_LEN       = 28;
+constexpr int BUF64_MOVE_DIR  = 28;  // 2 per axis: physics::ActiveMove::dir
+constexpr int BUF64_LEN       = 32;
 
 // Layout of the u32 buffer.
 constexpr int BUF32_FACING    = 0;
@@ -81,7 +82,8 @@ constexpr int BUF32_HOPPING   = 21;
 constexpr int BUF32_MOVE_STATE  = 22;   // MoveState::move_state (docs/MOVEMENT.md)
 constexpr int BUF32_STATE_TICKS = 23;
 constexpr int BUF32_PREV_BUTTONS = 24;
-constexpr int BUF32_LEN       = 25;
+constexpr int BUF32_MOVES     = 25;   // 2 per axis: physics::ActiveMove move, left
+constexpr int BUF32_LEN       = 29;
 
 // A camera path's header (design 4.1). Its OWN four slots, not appended to the
 // agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
@@ -1099,6 +1101,12 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
     out64[BUF64_CLIMB_N + 1] = m.climb_normal.y.raw;
     out64[BUF64_COYOTE] = m.coyote_timer.raw;
     for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) out64[BUF64_METERS + k] = m.meters[k].raw;
+    for (u32 k = 0; k < physics::MOVE_AXES; ++k) {
+        out64[BUF64_MOVE_DIR + 2 * k] = m.moves[k].dir.x.raw;
+        out64[BUF64_MOVE_DIR + 2 * k + 1] = m.moves[k].dir.y.raw;
+        out32[BUF32_MOVES + 2 * k] = m.moves[k].move;
+        out32[BUF32_MOVES + 2 * k + 1] = m.moves[k].left;
+    }
 
     out32[BUF32_FACING]    = a.facing.raw;
     out32[BUF32_FLAGS]     = w->state_flags(idx);
@@ -1172,6 +1180,11 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
     m.prev_buttons = static_cast<u16>(in32[BUF32_PREV_BUTTONS]);
     m.coyote_timer = fx::from_raw(in64[BUF64_COYOTE]);
     for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) m.meters[k] = fx::from_raw(in64[BUF64_METERS + k]);
+    for (u32 k = 0; k < physics::MOVE_AXES; ++k) {
+        m.moves[k].dir = fx2{fx::from_raw(in64[BUF64_MOVE_DIR + 2 * k]), fx::from_raw(in64[BUF64_MOVE_DIR + 2 * k + 1])};
+        m.moves[k].move = static_cast<u8>(in32[BUF32_MOVES + 2 * k]);
+        m.moves[k].left = static_cast<u16>(in32[BUF32_MOVES + 2 * k + 1]);
+    }
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
     m.grounded = in32[BUF32_GROUNDED] != 0;

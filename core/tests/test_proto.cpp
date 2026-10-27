@@ -291,6 +291,13 @@ TEST_FN void test_snapshot_roundtrip() {
         // trim is exercised and a zero inside the run is kept.
         for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k)
             self.meters[k] = (rng.next_u32() % 3 == 0) ? fx::zero() : fx::from_raw(static_cast<i64>(rng.next_u64()) >> 24);
+        // Layered moves: each axis present or not, apart.
+        for (u32 k = 0; k < physics::MOVE_AXES; ++k) {
+            if (rng.next_u32() % 2) continue;
+            self.moves[k].move = static_cast<u8>(1 + rng.next_u32() % 8);
+            self.moves[k].left = static_cast<u16>(rng.next_u32());
+            self.moves[k].dir = fx2{fx::from_raw(static_cast<i64>(rng.next_u64()) >> 30), fx::from_raw(static_cast<i64>(rng.next_u64()) >> 30)};
+        }
         // Every flag, ARMED included, so the weapon block is written on about
         // half the iterations and its absence is exercised on the rest.
         self.state_flags = static_cast<u16>(rng.next_u32() & 0x7F);
@@ -409,6 +416,9 @@ TEST_FN void test_snapshot_roundtrip() {
         {
             bool same = true;
             for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) same = same && got.self.meters[k] == self.meters[k];
+            for (u32 k = 0; k < physics::MOVE_AXES; ++k)
+                same = same && got.self.moves[k].move == self.moves[k].move && got.self.moves[k].left == self.moves[k].left &&
+                       got.self.moves[k].dir.x == self.moves[k].dir.x && got.self.moves[k].dir.y == self.moves[k].dir.y;
             CHECK(same);
         }
         if (self.state_flags & state_flag::ARMED) {

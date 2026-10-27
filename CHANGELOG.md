@@ -43,6 +43,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   Transitions ask `meter <name> empty|full|below|above` and can
   `do meter <name> add|set <n>`. Predicted, like the states. Breath that runs
   out under water, and a sprint that costs stamina, are a few lines each.
+- **Layered moves** (docs/MOVEMENT.md, step 4 of 5): `move <name> add|set
+  facing|back|up|down <speed> for <seconds>` lines, with a priority, a meter
+  cost and `when` conditions that start them. They hold over any state and
+  through a change of state, one per axis. A transition can `do move <name>`.
+  A dash that costs stamina, a jump pad and a boost into a slide are one line
+  each. Predicted.
 
 ## 0.2.3.10 -- 2026-10-26
 
