@@ -448,6 +448,11 @@ struct SelfBlock {
     // exception, and gating it keeps 32 bytes off every other snapshot.
     fx3    grapple_anchor{};
     fx     grapple_dist{};
+    // Only encoded when state_flags & CLIMBING: the wall's normal, which the
+    // controller carries between ticks and turns the climber by (and is
+    // cleared off the wall). Without it every adoption zeroed it, and the top
+    // of every climb mispredicted.
+    fx2    climb_normal{};
 
     // Which generation of this entity's movement parameters produced the state
     // above (docs/protocol.md 8.4, 10.1.2).

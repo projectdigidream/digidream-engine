@@ -4389,6 +4389,7 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             sb.wall_contact    = self.mv.wall_contact ? 1 : 0;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
+            sb.climb_normal    = self.mv.climb_normal;
             // The sector this entity rides (design §3.2.5), encoded with the
             // same "raw 0 means none" convention handles use. Not replicating
             // it left the client carrying a stale anchor across any server-side

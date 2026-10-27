@@ -78,6 +78,9 @@ class Client {
     this.tick = 0
     this.bytes = 0
     this.snapCount = 0
+    // The smallest snapshot with no entity block in it: the fixed overhead,
+    // measured (see "an idle world costs almost nothing").
+    this.bare = Infinity
     this.reasm = new SnapshotReassembler()
     this.selfPos = null
     this.baselineTicksSeen = []
@@ -126,6 +129,7 @@ class Client {
         if (!s) continue
         this.bytes += raw.length
         this.snapCount++
+        if (s.entities.length === 0) this.bare = Math.min(this.bare, raw.length)
         this.baselineTicksSeen.push(s.baselineTick)
         this.selfPos = s.self.pos
         this.reasm.apply(s)
@@ -204,11 +208,17 @@ await sleep(300)
   const idleAvg = (a.bytes - bytesBefore) / Math.max(1, a.snapCount - countBefore)
   console.log(`\n  idle snapshot average: ${idleAvg.toFixed(1)} bytes`)
 
-  // Fixed overhead is 129 bytes (docs/protocol.md 5.4); one entity block is 23.
+  // The fixed overhead is the header and the observer's own SelfBlock, which
+  // grows whenever the controller carries something new (docs/protocol.md
+  // 5.1) -- so it is MEASURED, as the smallest snapshot that carried no entity
+  // block, not written down here to go stale. One entity block is 23 bytes.
   // Settled and unchanging, a snapshot should be at or near the floor -- so the
   // threshold is overhead plus less than one entity, which is what makes this
   // an assertion about entities being ELIDED rather than merely compressed.
-  check(idleAvg < 150, `idle snapshots collapse to fixed overhead (${idleAvg.toFixed(1)} bytes < 150)`)
+  // CONTROL in itself: if no snapshot ever went without an entity, there is
+  // no floor and this fails.
+  check(Number.isFinite(a.bare) && idleAvg < a.bare + 23,
+        `idle snapshots collapse to fixed overhead (${idleAvg.toFixed(1)} bytes; with no entity a snapshot is ${a.bare})`)
   check(a.reasm.stats.carriedForward > 0,
         `entities were carried forward rather than re-sent (${a.reasm.stats.carriedForward})`)
 }

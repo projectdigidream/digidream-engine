@@ -69,6 +69,15 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
     state 7`).
   - The HUD bindings `meter.<name>` and `meter.<name>_max`.
 
+### Fixed
+
+- **The top of a climb no longer mispredicts.** After mantling off a wall, a
+  predicting client went on disagreeing with the server (about 40 corrections
+  in the first two seconds, still counting, in movetest's vine and climbtest's
+  tower), because the wall's normal was never sent and lingered after the climb. It is cleared
+  off the wall now, and the snapshot carries it while climbing: 0 mispredictions
+  over the same climbs.
+
 ## 0.2.3.10 -- 2026-10-26
 
 ### Added

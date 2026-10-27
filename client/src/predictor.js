@@ -188,6 +188,8 @@ export class Predictor {
       flightFuel: sb.flightFuel,
       grappleAnchor: sb.grappleAnchor,
       grappleDist: sb.grappleDist,
+      // Only while climbing; off a wall it is nothing on both sides.
+      climbNormal: sb.climbNormal,
       grounded: (sb.stateFlags & STATE_FLAG.GROUNDED) !== 0,
       // The sector this entity rides, and whether it is riding it. Both are
       // controller state carried between ticks, so a replay starting from the

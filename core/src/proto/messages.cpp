@@ -211,6 +211,10 @@ void encode_self(ByteWriter& w, const SelfBlock& s) noexcept {
         w.vec3_raw(s.grapple_anchor);
         w.fxraw(s.grapple_dist);
     }
+    if (s.state_flags & state_flag::CLIMBING) {
+        w.fxraw(s.climb_normal.x);
+        w.fxraw(s.climb_normal.y);
+    }
     if (s.state_flags & state_flag::ARMED) {
         const sim::WeaponState& k = s.weapon;
         w.u32v(k.have);
@@ -283,6 +287,10 @@ void decode_self(ByteReader& r, SelfBlock& s) noexcept {
     if (s.state_flags & state_flag::GRAPPLING) {
         s.grapple_anchor = r.vec3_raw();
         s.grapple_dist   = r.fxraw();
+    }
+    if (s.state_flags & state_flag::CLIMBING) {
+        s.climb_normal.x = r.fxraw();
+        s.climb_normal.y = r.fxraw();
     }
     if (s.state_flags & state_flag::ARMED) {
         sim::WeaponState& k = s.weapon;

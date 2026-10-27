@@ -357,11 +357,16 @@ static void test_climb_rules() {
         Agent a(fx3{Ff(194, 10), F(20), F(0)});
         a.step(room.map, push);
         CHECK(a.st.climbing);
+        // On the wall, its normal points back at the climber (west)...
+        CHECK(a.st.climb_normal.x < fx::zero());
         int ticks = 0;
         while (a.st.climbing && ticks < 300) { a.step(room.map, push); ++ticks; }
         std::printf("  mantled after %d ticks at z %.2f, vel (%.2f, %.2f)\n", ticks,
                     a.pos.z.raw / 4294967296.0, a.vel.x.raw / 4294967296.0, a.vel.z.raw / 4294967296.0);
         CHECK(!a.st.climbing && ticks < 300);
+        // ...and off it, nothing: SelfBlock sends it only while climbing, so a
+        // stale one would be a hash the client can never match.
+        CHECK(a.st.climb_normal.x == fx::zero() && a.st.climb_normal.y == fx::zero());
         CHECK(a.pos.z <= F(3) + Ff(1, 4));            // at the top, not above it
         CHECK(a.vel.z > fx::zero() && a.vel.x > fx::zero());   // up and onto the ledge
     }

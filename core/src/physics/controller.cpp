@@ -135,6 +135,10 @@ void finish_tick(const MapData& map, const MoveParams& p, MoveState& st, fx3& po
     // Coyote time: full on the ground and on a wall (both are ground enough to
     // jump from), running down in the air.
     st.coyote_timer = (now_grounded || st.climbing) ? p.coyote_time : decay(st.coyote_timer, dt);
+    // The wall's normal is a climber's, and only a climber's: cleared off the
+    // wall, so no stale one outlives the climb in the hash. SelfBlock carries
+    // it while climbing; off it, both sides agree it is nothing.
+    if (!st.climbing) st.climb_normal = fx2{};
 }
 
 // The flags `default` carries for the abilities it alone has, cleared on the

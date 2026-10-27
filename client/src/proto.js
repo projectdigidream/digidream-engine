@@ -900,6 +900,8 @@ export function decodeSnapshot (buf) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()
   }
+  // The wall's normal, only while climbing (MoveState::climb_normal).
+  if (snap.self.stateFlags & STATE_FLAG.CLIMBING) snap.self.climbNormal = { x: r.fxraw(), y: r.fxraw() }
   // The weapon machine, when the body holds weapons (docs/WEAPON_PREDICTION.md).
   if (snap.self.stateFlags & STATE_FLAG.ARMED) {
     const k = {}

@@ -303,6 +303,10 @@ TEST_FN void test_snapshot_roundtrip() {
         // Every flag, ARMED included, so the weapon block is written on about
         // half the iterations and its absence is exercised on the rest.
         self.state_flags = static_cast<u16>(rng.next_u32() & 0x7F);
+        // The wall's normal, sent only while climbing: set either way, so the
+        // decode must drop it when the flag is off.
+        self.climb_normal = fx2{fx::from_raw(static_cast<i64>(rng.next_u64()) >> 30),
+                                fx::from_raw(static_cast<i64>(rng.next_u64()) >> 30)};
         if (self.state_flags & state_flag::ARMED) {
             sim::WeaponState& k = self.weapon;
             k.have = rng.next_u32();
@@ -419,6 +423,10 @@ TEST_FN void test_snapshot_roundtrip() {
             bool same = true;
             for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) same = same && got.self.meters[k] == self.meters[k];
             same = same && got.self.asked == self.asked && got.self.wall_contact == self.wall_contact;
+            // CONTROL inside: off a wall it is not sent, and comes back nothing.
+            same = same && ((self.state_flags & state_flag::CLIMBING)
+                                ? got.self.climb_normal.x == self.climb_normal.x && got.self.climb_normal.y == self.climb_normal.y
+                                : got.self.climb_normal.x == fx::zero() && got.self.climb_normal.y == fx::zero());
             for (u32 k = 0; k < physics::MOVE_AXES; ++k)
                 same = same && got.self.moves[k].move == self.moves[k].move && got.self.moves[k].left == self.moves[k].left &&
                        got.self.moves[k].dir.x == self.moves[k].dir.x && got.self.moves[k].dir.y == self.moves[k].dir.y;
