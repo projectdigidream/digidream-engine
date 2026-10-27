@@ -16,6 +16,25 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Added
 
+- **A fill's picture has its own opacity**: `surface` (0..1) on the `fx fill`
+  line, beside its colour and alpha (docs/SECTOR_FX.md §1.3), and in the
+  studio's fill settings. It multiplies the ceiling's `ceilalpha`, so a map
+  that set that is unchanged.
+
+### Fixed
+
+- **A body in the water no longer appears, disappears or half-disappears as the
+  camera turns.** The water and a sprite drawn alone (a player's avatar, most
+  often) were sorted by distance and swapped places with the angle; sprites now
+  draw where the sprite batches do, and the water right after them.
+- **A swimmer coming up from a dive is no longer thrown out of the water** to
+  float in the air still swimming. The surface stops a rising swimmer; out is a
+  jump, as before.
+- **A `liquid` movement state out of any liquid rises again** when asked
+  (flying with inertia): "up stops at the surface" only holds in the water.
+
+### Added
+
 - **The studio's self-update says how far it is.** The desktop app and the
   Android app report the download as it arrives -- bytes so far of the whole --
   then unpacking (desktop) or Android's installer, then the restart, through

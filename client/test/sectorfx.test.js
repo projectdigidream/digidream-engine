@@ -176,15 +176,17 @@ const MAP = {
 // --- a fill, built: its top shares the map's picture; the eye inside tints -------
 {
   const map = { ...MAP, sectors: [{ ...MAP.sectors[0], effect: true, ceilTex: 0, ceilStyle: { alpha: 0.5 } }],
-                fx: [{ sector: 0, kind: KIND.FILL, params: { color: 0x3a6a8a, alpha: 0.4, top: 2 } }] }
+                fx: [{ sector: 0, kind: KIND.FILL, params: { color: 0x3a6a8a, alpha: 0.4, top: 2, surface: 0.4 } }] }
   const pic = { map: { value: new THREE.Texture() }, repeat: { value: new THREE.Vector2(0.25, 0.25) } }
   const fx = new SectorFx({ THREE, map, surfaces: (i) => (i === 0 ? pic : null) })
   const [top, body, tint] = fx.root.children
   check(top.name === 'fill:top:0' && body.name === 'fill:body:0' && tint === fx.tint, 'a fill: its top, its body, and one tint')
   check(top.material.uniforms.map === pic.map && top.material.uniforms.repeat === pic.repeat,
         "the top shares the map's own uniforms, so it shows the picture as it loads and animates")
-  check(body.material.uniforms.textured.value === 0 && top.material.uniforms.surface.value === 0.5,
-        "CONTROL: the body has no picture; the top's opacity is the ceiling's alpha")
+  check(body.material.uniforms.textured.value === 0 && near(top.material.uniforms.surface.value, 0.4 * 0.5),
+        "CONTROL: the body has no picture; the top's opacity is its `surface` times the ceiling's alpha")
+  check(top.renderOrder > -1 && top.renderOrder < 0 && body.renderOrder === top.renderOrder,
+        'drawn after every sprite (-1, which writes depth) and before rain and effects (0)')
   check(top.material.side === THREE.DoubleSide && body.material.side === THREE.FrontSide, 'the top both ways, the rest outward only')
   check(body.geometry.attributes.position.count === 7 * 6 + 3 * 3, 'seven sides of two triangles, and a bottom of three')
   check(!fx.hasFog, 'a fill takes no fog pass')

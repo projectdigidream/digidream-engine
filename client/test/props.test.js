@@ -165,6 +165,9 @@ sprite 10 state 1 fps 10 frames BOOM1,BOOM2,BOOM3
 
   const mesh = reg.make(10)
   check(mesh !== null, 'the registry built a sprite for the kind')
+  // Water draws at -0.5 (sectorfx.js) and must come after every sprite: one
+  // sorted by distance instead swapped places with it as the camera turned.
+  check(mesh.renderOrder === -1, 'a sprite drawn alone is drawn where the batches are, before the water')
 
   reg.update(0)
   check(mesh.material.map === 'tex:idle', 'and shows its idle frame')

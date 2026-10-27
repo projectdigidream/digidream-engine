@@ -256,6 +256,81 @@ static void test_wading_and_swimming() {
     CHECK(walked.out == 0 && walked.out_x < 10);               // or up the edge on foot: not left swimming on land
 }
 
+// COMING UP FROM A DIVE: movetest's swimmer (friction 1, buoyancy 8) let go
+// on the bottom rises on buoyancy alone, and fast -- and the surface stops it.
+// Momentum does not throw a swimmer clean out of the water to hang in the air
+// still swimming; out is a transition's `do jump`, which still works.
+static void test_coming_up_from_a_dive() {
+    std::printf("movestates: up from a dive, the surface stops the swimmer; a jump still takes them out\n");
+    static Pool pool;
+    static World w;
+    static MoveDefs d;
+    CHECK(parse(d,
+        "movestate wade group floor speed 4\n"
+        "movestate swim group liquid speed 5 accel 20 friction 1 gravity 0.3 buoyancy 8\n"
+        "transition any -> swim when depth waist falling\n"
+        "transition swim -> wade when pressed jump depth below eyes do jump\n"
+        "transition wade -> default when depth none\n"));
+    w.reset();
+    pool.attach(w);
+    w.set_move_defs(d);
+    const u32 a = w.spawn(fx3{fx::from_int(30), fx::from_int(8), fx::from_frac(-1, 2)});   // in the deep end, falling in
+    double top = -99, rise = 0;
+    bool swam = true;
+    int jumped_at = -1;
+    double after_jump = -99;
+    for (u32 t = 0; t < 600; ++t) {
+        proto::InputFrame in;
+        if (t < 90) in.buttons = proto::button::CROUCH;            // dived to the bottom, then let go
+        if (t == 480) in.buttons = proto::button::JUMP;            // later, out with a jump
+        w.set_input(a, in);
+        w.step();
+        const auto& g = w.agent(a);
+        const double z = f(g.pos.z);
+        if (t >= 90 && t < 480) {
+            top = std::max(top, z);
+            rise = std::max(rise, f(g.vel.z));
+            if (g.mv.move_state != 2) swam = false;
+        }
+        if (t == 480) jumped_at = g.mv.move_state;
+        if (t > 480) after_jump = std::max(after_jump, z);
+    }
+    std::printf("  rose at up to %.2f units/s; feet highest at %.2f (the surface is 0.75); swimming throughout %d; "
+                "a jump: state %d, feet to %.2f\n", rise, top, swam, jumped_at, after_jump);
+    CHECK(rise > 2);                                // CONTROL: it really came up fast
+    CHECK(top < 0.75 && swam);                      // and stayed in the water, swimming
+    CHECK(jumped_at == 1 && after_jump > 0.75);     // a jump still leaves it
+}
+
+// FLYING WITH INERTIA: a liquid-group state where there is no liquid (depth
+// none) goes up when asked. "Up stops at the surface" is a swimmer's rule, for
+// a body in the water; with none, there is no surface to stop at.
+static void test_a_liquid_group_flies_dry() {
+    std::printf("movestates: a liquid-group state out of any liquid rises on JUMP\n");
+    static World w;
+    static MoveDefs d;
+    CHECK(parse(d,
+        "movestate fly group liquid speed 4 accel 10 friction 2 gravity 0\n"
+        "transition default -> fly when pressed climb\n"
+        "transition fly -> default when depth feet\n"));      // depth used, so it is measured
+    w.reset();
+    w.set_map(&test_map());
+    w.set_move_defs(d);
+    const u32 a = w.spawn(fx3{fx::from_int(10), fx::from_int(10), fx::from_int(1)});
+    double z0 = 0, z1 = 0;
+    for (u32 t = 0; t < 120; ++t) {
+        proto::InputFrame in;
+        if (t == 0) in.buttons = proto::button::CLIMB;
+        if (t >= 10) in.buttons = proto::button::JUMP;
+        w.set_input(a, in);
+        w.step();
+        if (t == 10) z0 = f(w.agent(a).pos.z);
+        z1 = f(w.agent(a).pos.z);
+    }
+    std::printf("  flying, JUMP held: from %.2f to %.2f\n", z0, z1);
+    CHECK(w.agent(a).mv.move_state == 1 && z1 > z0 + 2);
+}
+
 // BREATH: under the water to the eyes the air drains; above, it comes back;
 // out of it the swimmer drowns -- a state with no control, sinking.
 static const char* BREATH =
@@ -522,6 +597,8 @@ int main() {
     test_a_crouch_slide();
     test_a_liquid_state_and_a_flag();
     test_wading_and_swimming();
+    test_coming_up_from_a_dive();
+    test_a_liquid_group_flies_dry();
     test_breath();
     test_stamina();
     test_layered_moves();

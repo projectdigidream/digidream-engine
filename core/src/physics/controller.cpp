@@ -325,9 +325,12 @@ void step_data_state(const MoveStateDef& s, const MoveParams& p, MoveState& st, 
         }
         case MoveGroup::Liquid: {
             // In 3D: the stick on the level, JUMP up and CROUCH down (cmd.up).
-            // Up stops at the surface: with the water no higher than the waist
+            // Up stops at the surface: with the water no higher than the eyes
             // a swimmer is at the top, and leaving it is a transition's `do`.
-            const fx up = (cmd.up > fx::zero() && depth < 3) ? fx::zero() : cmd.up;
+            // Only in the water (depth 1 to 2): with none at all there is no
+            // surface, and the group is flying with inertia.
+            const bool wet = depth >= 1;
+            const fx up = (cmd.up > fx::zero() && wet && depth < 3) ? fx::zero() : cmd.up;
             const fx3 target{wish.x * speed, wish.y * speed, up * speed};
             const fx rate = (has_wish || cmd.up != fx::zero()) ? accel : friction;
             vel.x = approach(vel.x, target.x, rate, dt);
@@ -336,6 +339,11 @@ void step_data_state(const MoveStateDef& s, const MoveParams& p, MoveState& st, 
             // Buoyancy lifts only what is in the water to the waist, so a body
             // left alone floats with the surface about its middle.
             vel.z = vel.z + ((depth >= 2 ? buoyancy : fx::zero()) + sim::GRAVITY * gravity) * dt;
+            // THE SURFACE STOPS A RISING SWIMMER. Past the waist (the water at the
+            // feet only), rising ends: buoyancy and a fast swim up would otherwise
+            // throw a diver clean out of the water, to hang in the air still
+            // swimming. Out is a transition's `do jump`.
+            if (depth == 1 && vel.z > fx::zero()) vel.z = fx::zero();
             return;
         }
         case MoveGroup::None: {

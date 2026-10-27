@@ -71,6 +71,9 @@ inline constexpr FxKeyDef FX_KEYS[] = {
     { "falloff",  FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 0,        DNP_FX_N } },
     { "noise",    FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 0,        DNP_FX_N } },
     { "drift",    FX_FOG,        false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 300,      DNP_FX_N } },
+    // A fill's top picture (the sector's ceiltex): how opaque it is, 0..1, on
+    // top of the ceiling's own alpha.
+    { "surface",  FX_FILL,       false, { DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, DNP_FX_N, 1000 } },
 };
 #undef DNP_FX_N
 inline constexpr u8 FX_KEY_COUNT = static_cast<u8>(sizeof(FX_KEYS) / sizeof(FX_KEYS[0]));

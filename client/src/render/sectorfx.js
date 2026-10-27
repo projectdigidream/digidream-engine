@@ -534,7 +534,8 @@ export class SectorFx {
         map: pic && top ? pic.map : { value: null },
         repeat: pic && top ? pic.repeat : { value: new THREE.Vector2(1, 1) },
         textured: { value: pic && top ? 1 : 0 },
-        surface: { value: s.ceilStyle?.alpha ?? 1 },
+        // The picture's opacity: the fill's `surface`, times the ceiling's alpha.
+        surface: { value: Math.max(0, Math.min(1, p.surface ?? 1)) * (s.ceilStyle?.alpha ?? 1) },
         color: { value: color },
         alpha: { value: alpha },
         lit: { value: lit }
@@ -552,6 +553,13 @@ export class SectorFx {
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
       const m = new THREE.Mesh(geo, material(top))
       m.frustumCulled = false
+      // AFTER EVERY SPRITE, BEFORE THE REST OF THE SEE-THROUGH THINGS. Sprites
+      // are cut-outs that write depth (-1, props.js and spritebatch.js), so the
+      // water drawn after them covers exactly the part of a body under it, from
+      // any angle; rain and effects (0), which write none, come after it, so a
+      // drop over the pool is not drawn under its surface. Sorted by distance,
+      // the water and a sprite swapped places as the camera turned.
+      m.renderOrder = -0.5
       m.name = `fill:${name}:${e.sector}`
       this.root.add(m)
       this.meshes.push(m)

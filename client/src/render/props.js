@@ -562,6 +562,12 @@ export class PropRegistry {
       side: THREE.DoubleSide
     })
     const mesh = new THREE.Mesh(geo, mat)
+    // Drawn where the sprite batches are (spritebatch.js), first of the
+    // see-through things: a cut-out writes depth, so whatever is drawn after it
+    // -- water (sectorfx.js), a grate -- covers it only where it is in front.
+    // Sorted by distance instead, a sprite drawn alone swapped places with the
+    // water as the camera turned, and was hidden or not by angle.
+    mesh.renderOrder = -1
     mesh.userData.propKind = kind
     // Feet on the ground: the simulation's position is the bottom of the thing,
     // and a plane's origin is its middle.
@@ -603,6 +609,7 @@ export class PropRegistry {
     // never survives; what matters is that the attributes exist to write into.
     const geo = lightable(THREE, new THREE.PlaneGeometry(1, 1))
     const mesh = new THREE.Mesh(geo, entry.material)
+    mesh.renderOrder = -1                // with the batches: see the sprite above
     mesh.userData.propKind = kind
     mesh.userData.yOffset = 0
     this.animated.set(mesh, { def, stateId: 0, blend: def.blend ?? 0, from: null, sheet: def.sheet, frameKey: null })
