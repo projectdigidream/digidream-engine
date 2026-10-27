@@ -671,6 +671,8 @@ suite_studio () {
   node ../studio/test/rooms.test.js | tail -1
   # The player's movement states, meters and moves: read by the core's own parser.
   node ../studio/test/movement.test.js | tail -1
+  # The studio's caps against the engine's own (mapstore, map, triangulate, sector_fx).
+  node ../studio/test/caps.test.js | tail -1
   node ../studio/test/mapfmt.test.js | tail -2
   node ../studio/test/pack.test.js | tail -2
   # The GitHub sync plugin's engine: two devices against a fake GitHub.
