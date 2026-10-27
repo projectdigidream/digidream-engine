@@ -165,8 +165,17 @@ export function stateFor (avatar, condition) {
  */
 export function resolveState (declared, motion, avatar) {
   if (declared) return declared
-  return stateFor(avatar, derive(motion))
+  const c = derive(motion)
+  // A MOVEMENT STATE'S OWN ANIMATION (docs/MOVEMENT.md, a movestate's `anim`):
+  // a module's name, `swim` or `slide`, drawn when the avatar says which state
+  // draws it (`avatar <id> when swim state 7`). Below dying, pain and a swing;
+  // over the rest, which a swimmer's motion would only call a fall. An avatar
+  // that does not draw it animates as it always did.
+  const own = motion?.moveAnim
+  if (own && !URGENT.has(c) && typeof avatar?.when?.[own] === 'number') return avatar.when[own]
+  return stateFor(avatar, c)
 }
+const URGENT = new Set(['death', 'pain', 'attack'])
 
 /**
  * One frame-rate-independent step of an exponential ease.

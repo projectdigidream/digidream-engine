@@ -39,4 +39,9 @@ void step_controller(const geom::MapData& map, const MoveParams& p, MoveState& s
 // time by a different piece of work.
 void handoff_to_standard(MoveState& st, fx3& vel, fx3 carried_velocity) noexcept;
 
+// Start the module's layered move `k` (docs/MOVEMENT.md) on a body facing
+// `facing`: false when its axis holds one of higher priority, or its cost
+// cannot be paid. What a transition's `do move` and a script's start_move do.
+bool start_layered_move(const MoveDefs& d, u8 k, MoveState& st, fx3& vel, fx2 facing) noexcept;
+
 }  // namespace dnp::physics

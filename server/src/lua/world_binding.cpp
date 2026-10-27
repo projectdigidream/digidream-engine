@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "dnp/physics/movedefs.hpp"
 #include "dnp/sim/blast.hpp"
 #include "dnp/proto/messages.hpp"
 #include "dnp/sim/sectormotion.hpp"
@@ -580,6 +581,77 @@ int l_entity_set_animation(lua_State* L) {
     return 0;
 }
 
+// THE MOVEMENT STATES (docs/MOVEMENT.md), by the names the module gave them.
+// A name it did not declare is an error: a typo should stop the script, not
+// quietly do nothing.
+const physics::MoveDefs& move_defs_of(WorldContext& ctx) { return ctx.world->move_defs(); }
+
+int named(lua_State* L, int idx, i32 found, const char* what) {
+    if (found < 0) return luaL_error(L, "no %s is called '%s' (module.txt)", what, luaL_checkstring(L, idx));
+    return found;
+}
+
+// e:movement_state() -- its name; "default" for state 0.
+int l_entity_movement_state(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    if (a < 0) { lua_pushnil(L); return 1; }
+    const u8 s = ctx.world->agent(static_cast<u32>(a)).mv.move_state;
+    const physics::MoveDefs& d = move_defs_of(ctx);
+    lua_pushstring(L, s < d.state_count ? d.states[s].name : "default");
+    return 1;
+}
+
+// e:ask_movement_state(name) -- taken by a transition that says `asked`.
+int l_entity_ask_movement_state(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const char* n = luaL_checkstring(L, 2);
+    const i32 s = std::strcmp(n, "default") == 0 ? 0 : physics::move_state_index(move_defs_of(ctx), n);
+    named(L, 2, s, "movement state");
+    if (a < 0) return 0;
+    if (ctx.commands->push(Command{CmdKind::AskState, static_cast<u32>(a), fx3{fx::from_int(s), fx::zero(), fx::zero()}})) {
+        ++ctx.stats.commands_queued;
+    }
+    return 0;
+}
+
+// e:meter(name) -- its value now and its max, two fx.
+int l_entity_meter(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const i32 m = named(L, 2, physics::meter_index(move_defs_of(ctx), luaL_checkstring(L, 2)), "meter");
+    if (a < 0) { lua_pushnil(L); return 1; }
+    push_fx(L, ctx.world->agent(static_cast<u32>(a)).mv.meters[m]);
+    push_fx(L, move_defs_of(ctx).meters[m].max);
+    return 2;
+}
+
+// e:set_meter(name, v) -- from the next tick; kept within 0..max.
+int l_entity_set_meter(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const i32 m = named(L, 2, physics::meter_index(move_defs_of(ctx), luaL_checkstring(L, 2)), "meter");
+    const fx v = check_fx(L, 3);
+    if (a < 0) return 0;
+    if (ctx.commands->push(Command{CmdKind::SetMeter, static_cast<u32>(a), fx3{fx::from_int(m), v, fx::zero()}})) {
+        ++ctx.stats.commands_queued;
+    }
+    return 0;
+}
+
+// e:start_move(name) -- as a transition's `do move` would.
+int l_entity_start_move(lua_State* L) {
+    WorldContext& ctx = ctx_of(L);
+    const i32 a = resolve(L, ctx, check_handle(L, 1));
+    const i32 k = named(L, 2, physics::layered_move_index(move_defs_of(ctx), luaL_checkstring(L, 2)), "move");
+    if (a < 0) return 0;
+    if (ctx.commands->push(Command{CmdKind::StartMove, static_cast<u32>(a), fx3{fx::from_int(k), fx::zero(), fx::zero()}})) {
+        ++ctx.stats.commands_queued;
+    }
+    return 0;
+}
+
 int l_entity_kind(lua_State* L) {
     WorldContext& ctx = ctx_of(L);
     const i32 a = resolve(L, ctx, check_handle(L, 1));
@@ -856,6 +928,11 @@ const luaL_Reg ENTITY_METHODS[] = {
     {"trail", l_entity_trail},
     {"set_trail", l_entity_set_trail},
     {"set_animation", l_entity_set_animation},
+    {"movement_state", l_entity_movement_state},
+    {"ask_movement_state", l_entity_ask_movement_state},
+    {"meter", l_entity_meter},
+    {"set_meter", l_entity_set_meter},
+    {"start_move", l_entity_start_move},
     {"kind", l_entity_kind},
     {"name", l_entity_name},
     {"facing", l_entity_facing},

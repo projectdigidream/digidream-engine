@@ -15,7 +15,7 @@ import createModule from '../wasm/dist/dnp_core.mjs'
 // state and replays from it -- anything missing here survives the overwrite and
 // diverges silently (docs/protocol.md 5.1).
 const BUF64_LEN = 32
-const BUF32_LEN = 29
+const BUF32_LEN = 31
 
 export const IDX = {
   POS: 0, VEL: 3, HASH: 6, DASH_T: 7, DASH_CD: 8, HOVER_F: 9, FLIGHT_F: 10,
@@ -24,7 +24,7 @@ export const IDX = {
   FACING: 0, FLAGS: 1, JUMPS: 2, JUMP_HELD: 3, ACTIVE: 4, MODE: 5, DASHES: 6,
   SECTOR: 7, DASH_HELD: 8, GRAP_HELD: 9, CLIMBING: 10, GRAPPLING: 11,
   GRAP_PULL: 12, GROUNDED: 13, ANCHOR: 14, ANCHORED: 15, INTR_HELD: 16, ATK_HELD: 17, ATK_LEFT: 18, ATK_CD: 19, HANGING: 20, HOPPING: 21,
-  MOVE_STATE: 22, STATE_TICKS: 23, PREV_BUTTONS: 24, MOVES: 25
+  MOVE_STATE: 22, STATE_TICKS: 23, PREV_BUTTONS: 24, MOVES: 25, ASKED: 29, WALL: 30
 }
 
 // A camera path's header, mirroring PATH32_* in client/wasm/bindings.cpp. Its
@@ -853,6 +853,8 @@ export class WasmWorld {
     const err = M._malloc(160)
     M.HEAPU8.set(bytes, ptr)
     const ok = M._dnp_world_set_move_defs(this.ptr, ptr, bytes.length, err, 160)
+    this._anims = []   // the names are the new definitions'
+    this._meters = null
     const why = ok ? null : new TextDecoder().decode(M.HEAPU8.subarray(err, M.HEAPU8.indexOf(0, err)))
     M._free(ptr)
     M._free(err)
@@ -860,6 +862,30 @@ export class WasmWorld {
   }
 
   /** What the wire's buttons leave in MoveState.prev_buttons (movedefs.hpp move_buttons). */
+  /** The module's meters (docs/MOVEMENT.md), [{ name, max }] in their order. Read once per definitions. */
+  meterInfo () {
+    if (this._meters) return this._meters
+    const M = this.core.M
+    const n = M._dnp_world_meter_count ? M._dnp_world_meter_count(this.ptr) : 0
+    const text = (at) => new TextDecoder().decode(M.HEAPU8.subarray(at, M.HEAPU8.indexOf(0, at)))
+    this._meters = Array.from({ length: n }, (_, k) => ({
+      name: text(M._dnp_world_meter_name(this.ptr, k)), max: M._dnp_world_meter_max_milli(this.ptr, k) / 1000
+    }))
+    return this._meters
+  }
+
+  /** A movement state's `anim` name (docs/MOVEMENT.md), '' for none. Read once per definitions. */
+  moveAnim (state) {
+    if (!state) return ''
+    this._anims ??= []
+    if (this._anims[state] === undefined) {
+      const M = this.core.M
+      const at = M._dnp_world_move_anim ? M._dnp_world_move_anim(this.ptr, state) : 0
+      this._anims[state] = at ? new TextDecoder().decode(M.HEAPU8.subarray(at, M.HEAPU8.indexOf(0, at))) : ''
+    }
+    return this._anims[state]
+  }
+
   moveButtons (protoButtons) {
     const M = this.core.M
     return M._dnp_move_buttons ? M._dnp_move_buttons(protoButtons) : 0
@@ -920,6 +946,8 @@ export class WasmWorld {
       moveState: u32[b32 + IDX.MOVE_STATE],
       stateTicks: u32[b32 + IDX.STATE_TICKS],
       prevButtons: u32[b32 + IDX.PREV_BUTTONS],
+      asked: u32[b32 + IDX.ASKED],
+      wallContact: u32[b32 + IDX.WALL] !== 0,
       grappling: u32[b32 + IDX.GRAPPLING] !== 0,
       grapplePulling: u32[b32 + IDX.GRAP_PULL] !== 0,
       grounded: u32[b32 + IDX.GROUNDED] !== 0,
@@ -985,6 +1013,8 @@ export class WasmWorld {
     u32[b32 + IDX.MOVE_STATE] = s.moveState ?? 0
     u32[b32 + IDX.STATE_TICKS] = s.stateTicks ?? 0
     u32[b32 + IDX.PREV_BUTTONS] = s.prevButtons ?? 0
+    u32[b32 + IDX.ASKED] = s.asked ?? 0
+    u32[b32 + IDX.WALL] = s.wallContact ? 1 : 0
     u32[b32 + IDX.GRAPPLING] = s.grappling ? 1 : 0
     u32[b32 + IDX.GRAP_PULL] = s.grapplePulling ? 1 : 0
     u32[b32 + IDX.GROUNDED] = s.grounded ? 1 : 0

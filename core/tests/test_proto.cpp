@@ -291,6 +291,8 @@ TEST_FN void test_snapshot_roundtrip() {
         // trim is exercised and a zero inside the run is kept.
         for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k)
             self.meters[k] = (rng.next_u32() % 3 == 0) ? fx::zero() : fx::from_raw(static_cast<i64>(rng.next_u64()) >> 24);
+        self.asked = static_cast<u8>(rng.next_u32() % 10);
+        self.wall_contact = static_cast<u8>(rng.next_u32() & 1);
         // Layered moves: each axis present or not, apart.
         for (u32 k = 0; k < physics::MOVE_AXES; ++k) {
             if (rng.next_u32() % 2) continue;
@@ -416,6 +418,7 @@ TEST_FN void test_snapshot_roundtrip() {
         {
             bool same = true;
             for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) same = same && got.self.meters[k] == self.meters[k];
+            same = same && got.self.asked == self.asked && got.self.wall_contact == self.wall_contact;
             for (u32 k = 0; k < physics::MOVE_AXES; ++k)
                 same = same && got.self.moves[k].move == self.moves[k].move && got.self.moves[k].left == self.moves[k].left &&
                        got.self.moves[k].dir.x == self.moves[k].dir.x && got.self.moves[k].dir.y == self.moves[k].dir.y;

@@ -103,6 +103,7 @@ void finish_tick(const MapData& map, const MoveParams& p, MoveState& st, fx3& po
     mi.grounded = st.grounded;
 
     const MoveResult mr = move(map, mi, dt);
+    st.wall_contact = mr.hit_wall;
 
     pos = mr.pos;
     vel = mr.vel;
@@ -174,6 +175,8 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
         case MoveCond::MeterFull:    return st.meters[c.arg] >= c.value;
         case MoveCond::MeterBelow:   return st.meters[c.arg] < c.value;
         case MoveCond::MeterAbove:   return st.meters[c.arg] > c.value;
+        case MoveCond::Asked:        return st.asked != 0 && st.asked == c.arg + 1;
+        case MoveCond::TouchingWall: return st.wall_contact;
         case MoveCond::None: break;
     }
     return false;
@@ -181,7 +184,9 @@ bool holds(const MoveCondition& c, const MapData& map, const MoveState& st, fx3 
 
 // START A LAYERED MOVE, if its axis is free or holds one of no higher
 // priority, and its cost can be paid. An `add` gives its impulse now.
-bool start_move(const MoveDefs& d, u8 k, MoveState& st, fx3& vel, fx2 facing) noexcept {
+}  // namespace
+
+bool start_layered_move(const MoveDefs& d, u8 k, MoveState& st, fx3& vel, fx2 facing) noexcept {
     const LayeredMoveDef& m = d.moves[k];
     const bool vertical = m.dir == MoveDir::Up || m.dir == MoveDir::Down;
     ActiveMove& slot = st.moves[vertical ? 1 : 0];
@@ -200,6 +205,8 @@ bool start_move(const MoveDefs& d, u8 k, MoveState& st, fx3& vel, fx2 facing) no
     return true;
 }
 
+namespace {
+
 // THE WAY OUT, if one holds this tick: the state's own transitions before
 // `any`'s, each in file order, the first whose every condition holds. `any`
 // never re-enters the state already running, which would restart its clock.
@@ -216,6 +223,7 @@ void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p,
             if (st.move_state == 0 && t.to != 0) enter_data_state(st);
             st.move_state = t.to;
             st.state_ticks = 0;
+            if (st.asked == t.to + 1) st.asked = 0;   // what was asked for, given
             const MoveStateDef& to = d.states[t.to];
             switch (t.action) {
                 case MoveAction::Jump:
@@ -233,7 +241,7 @@ void take_transition(const MoveDefs& d, const MapData& map, const MoveParams& p,
                     st.meters[t.meter] = fx_clamp(v, fx::zero(), d.meters[t.meter].max);
                     break;
                 }
-                case MoveAction::StartMove: start_move(d, t.meter, st, vel, facing); break;
+                case MoveAction::StartMove: start_layered_move(d, t.meter, st, vel, facing); break;
                 case MoveAction::None: break;
             }
             return;
@@ -273,7 +281,7 @@ void auto_moves(const MoveDefs& d, const MapData& map, MoveState& st, fx3& vel, 
         if (st.moves[vertical ? 1 : 0].move == k + 1) continue;
         bool all = true;
         for (u8 c = 0; c < m.cond_count && all; ++c) all = holds(m.cond[c], map, st, vel, now, pressed, released, depth);
-        if (all) start_move(d, k, st, vel, facing);
+        if (all) start_layered_move(d, k, st, vel, facing);
     }
 }
 

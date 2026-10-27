@@ -4385,6 +4385,8 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
             sb.state_ticks     = self.mv.state_ticks;
             for (u32 k = 0; k < physics::MAX_MOVE_METERS; ++k) sb.meters[k] = self.mv.meters[k];
             for (u32 k = 0; k < physics::MOVE_AXES; ++k) sb.moves[k] = self.mv.moves[k];
+            sb.asked           = self.mv.asked;
+            sb.wall_contact    = self.mv.wall_contact ? 1 : 0;
             sb.grapple_anchor  = self.mv.grapple_anchor;
             sb.grapple_dist    = self.mv.grapple_dist;
             // The sector this entity rides (design §3.2.5), encoded with the

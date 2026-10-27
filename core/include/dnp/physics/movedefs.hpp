@@ -101,6 +101,8 @@ enum class MoveCond : u8 {
     DepthBelow,                     // arg: less deep than this
     MeterEmpty, MeterFull,          // arg: the meter (value: its max, for full)
     MeterBelow, MeterAbove,         // arg: the meter; value: the level
+    Asked,                          // a script asked for the state this goes to
+    TouchingWall,                   // last tick's move met a wall
 };
 
 struct MoveCondition {

@@ -49,6 +49,16 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
   through a change of state, one per axis. A transition can `do move <name>`.
   A dash that costs stamina, a jump pad and a boost into a slide are one line
   each. Predicted.
+- **Movement states for scripts, graphs, animation and the HUD**
+  (docs/MOVEMENT.md, step 5 of 5):
+  - Lua `e:movement_state()`, `e:ask_movement_state(name)`, `e:meter(name)`,
+    `e:set_meter(name, v)`, `e:start_move(name)`.
+  - Graph nodes for the same, and the start nodes
+    `when_movement_state_entered` / `_left` and `when_meter_empty` / `_full`.
+  - The `asked` and `touching wall` conditions.
+  - A state's `anim` plays when the avatar names it (`avatar <id> when swim
+    state 7`).
+  - The HUD bindings `meter.<name>` and `meter.<name>_max`.
 
 ## 0.2.3.10 -- 2026-10-26
 

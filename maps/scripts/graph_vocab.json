@@ -513,6 +513,136 @@
     {
       "args": [
         {
+          "doc": "A movestate's name, or `default`. Any without it.",
+          "name": "state",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "state"
+      ],
+      "doc": "Somebody's movement state changed to this one: they began to swim, slide, cling.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_movement_state_entered",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "state",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity",
+        "state"
+      ],
+      "doc": "Somebody's movement state changed from this one: out of the water, off the wall.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_movement_state_left",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "doc": "A meter's name, from module.txt.",
+          "name": "meter",
+          "type": "string"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "Somebody's meter ran out: no air left, no stamina. Once, until it fills again.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_meter_empty",
+      "starts": true
+    },
+    {
+      "args": [
+        {
+          "name": "meter",
+          "type": "string"
+        },
+        {
+          "name": "who",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "players",
+            "monsters",
+            "anyone"
+          ]
+        }
+      ],
+      "category": "events",
+      "data_in": [],
+      "data_out": [
+        "entity"
+      ],
+      "doc": "Somebody's meter is full again. Once, until it falls.",
+      "exec_in": [],
+      "exec_out": [
+        "then"
+      ],
+      "level_only": true,
+      "name": "when_meter_full",
+      "starts": true
+    },
+    {
+      "args": [
+        {
           "doc": "The spot, picked on the map.",
           "name": "x",
           "type": "number"
@@ -1143,6 +1273,89 @@
         "then"
       ],
       "name": "set_animation_for"
+    },
+    {
+      "args": [
+        {
+          "doc": "A movestate's name, or `default`.",
+          "name": "state",
+          "type": "string"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Ask for a movement state. A transition that says `asked` takes the body there, when its other conditions hold; the module's rules stay in charge.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "ask_movement_state"
+    },
+    {
+      "args": [
+        {
+          "doc": "A meter's name, from module.txt.",
+          "name": "meter",
+          "type": "string"
+        },
+        {
+          "doc": "Defaults to 0.",
+          "name": "value",
+          "optional": true,
+          "type": "number"
+        },
+        {
+          "doc": "Set it to the value, or add the value (less than 0 takes). Set by default.",
+          "name": "how",
+          "optional": true,
+          "type": "enum",
+          "values": [
+            "set",
+            "add"
+          ]
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity",
+        "value"
+      ],
+      "data_out": [],
+      "doc": "Fill, drain or set a meter: a bubble of air, a stamina potion. Kept within 0 and its max.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "set_meter"
+    },
+    {
+      "args": [
+        {
+          "doc": "A layered move's name, from module.txt.",
+          "name": "move",
+          "type": "string"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [],
+      "doc": "Start a layered move: a knockback, a boost. As a transition's `do move` would: not if its axis runs a move of higher priority, or its cost cannot be paid.",
+      "exec_in": [
+        "in"
+      ],
+      "exec_out": [
+        "then"
+      ],
+      "name": "start_move"
     },
     {
       "args": [
@@ -3099,6 +3312,40 @@
       "exec_in": [],
       "exec_out": [],
       "name": "health_of"
+    },
+    {
+      "args": [],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "state"
+      ],
+      "doc": "The name of the movement state an entity is in: `default`, or one of the module's.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "movement_state_of"
+    },
+    {
+      "args": [
+        {
+          "name": "meter",
+          "type": "string"
+        }
+      ],
+      "category": "entity",
+      "data_in": [
+        "entity"
+      ],
+      "data_out": [
+        "value",
+        "max"
+      ],
+      "doc": "How full one of an entity's meters is, and its max.",
+      "exec_in": [],
+      "exec_out": [],
+      "name": "meter_of"
     },
     {
       "args": [],

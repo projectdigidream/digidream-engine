@@ -300,6 +300,14 @@ public:
     // same text through the same parser. Kept across reset(), as the map is.
     void set_move_defs(const physics::MoveDefs& defs) noexcept { move_defs_ = defs; }
     const physics::MoveDefs& move_defs() const noexcept { return move_defs_; }
+    // What scripts do to the movement states (docs/MOVEMENT.md), by index into
+    // the definitions: set a meter (clamped to 0..max), start a layered move as
+    // a transition would, ask for a state (taken by a transition that says
+    // `asked`). False when the index is not one the module declared, or the
+    // move could not start.
+    bool set_meter(u32 i, u32 meter, fx v) noexcept;
+    bool start_move(u32 i, u32 move) noexcept;
+    bool ask_movement_state(u32 i, u32 state) noexcept;
     // The flags of the movement state body `i` is in (physics::move_flag); 0 in `default`.
     u16 state_flags_of(u32 i) const noexcept {
         const u8 st = agents_[i].mv.move_state;

@@ -13,6 +13,7 @@
 #include <string>
 #include <unistd.h>
 
+#include "dnp/physics/movedefs.hpp"
 #include "dnp/sim/world.hpp"
 #include "dnp/geom/mapstore.hpp"
 #include "sky.hpp"
@@ -1719,6 +1720,81 @@ int main(int argc, char** argv) {
           "nodes": [ { "id": "go", "type": "on_call", "name": "x" },
                      { "id": "a", "type": "change_player_setting", "setting": "hp", "value": 5 } ],
           "links": [ ["go.then", "a.in"] ] })"));
+    }
+
+    // ================================================================
+    // THE MOVEMENT STATES from a graph (docs/MOVEMENT.md): ask for a state, set
+    // a meter, start a move, read them back; and the four start nodes.
+    {
+        std::printf("-- movement states --\n");
+        static physics::MoveDefs md;
+        char err[160] = {0};
+        const char* text =
+            "movestate stunned group none\n"
+            "meter air max 10 start 10\n"
+            "move shove set back 10 for 0.1\n"
+            "transition default -> stunned when asked\n"
+            "transition stunned -> default when after 0.25\n";
+        CHECK(physics::parse_move_defs(md, text, static_cast<u32>(std::strlen(text)), err, sizeof(err)));
+        g_world->set_move_defs(md);
+        g_world->set_meter(player, 0, F(10));   // spawned before the module's meters existed
+        CHECK(run("graphs.reset(); dnp.players()[1]:teleport(vec3.new(fx.int(15), fx.int(0), fx.int(0)))", "a clean slate"));
+        CHECK(load_graph(R"({
+          "graph": 1, "name": "moving",
+          "nodes": [
+            { "id": "go",    "type": "on_call", "name": "mv" },
+            { "id": "ask",   "type": "ask_movement_state", "state": "stunned" },
+            { "id": "drain", "type": "set_meter", "meter": "air", "value": -4, "how": "add" },
+            { "id": "push",  "type": "start_move", "move": "shove" },
+            { "id": "bad",   "type": "ask_movement_state", "state": "flying" },
+            { "id": "zero",  "type": "on_call", "name": "zero" },
+            { "id": "z",     "type": "set_meter", "meter": "air", "value": 0 },
+            { "id": "fill",  "type": "on_call", "name": "fill" },
+            { "id": "f",     "type": "set_meter", "meter": "air", "value": 10 },
+            { "id": "in",    "type": "when_movement_state_entered", "state": "stunned" },
+            { "id": "c1",    "type": "action", "a": "counter_add", "counter": "m_in" },
+            { "id": "out",   "type": "when_movement_state_left", "state": "stunned" },
+            { "id": "c2",    "type": "action", "a": "counter_add", "counter": "m_out" },
+            { "id": "any",   "type": "when_movement_state_entered" },
+            { "id": "c3",    "type": "action", "a": "counter_add", "counter": "m_any" },
+            { "id": "empty", "type": "when_meter_empty", "meter": "air" },
+            { "id": "c4",    "type": "action", "a": "counter_add", "counter": "m_empty" },
+            { "id": "full",  "type": "when_meter_full", "meter": "air" },
+            { "id": "c5",    "type": "action", "a": "counter_add", "counter": "m_full" }
+          ],
+          "links": [ ["go.then", "ask.in"], ["ask.then", "drain.in"], ["drain.then", "push.in"], ["push.then", "bad.in"],
+                     ["zero.then", "z.in"], ["fill.then", "f.in"],
+                     ["in.then", "c1.in"], ["out.then", "c2.in"], ["any.then", "c3.in"],
+                     ["empty.then", "c4.in"], ["full.then", "c5.in"] ]
+        })"));
+        ticks(2);
+        CHECK(run("graphs.call('mv', dnp.players()[1], nil)", "asking, draining, shoving"));
+        ticks(3);
+        CHECK(run("local p = dnp.players()[1]; m_state = p:movement_state(); local v, mx = p:meter('air')\n"
+                  "m_air = tonumber(v.raw) / 4294967296; m_max = tonumber(mx.raw) / 4294967296\n"
+                  "m_vx = tonumber(p:vel().x.raw) / 4294967296", "reading"));
+        const std::string during = str("m_state");
+        const double air = num("m_air"), vx = num("m_vx");
+        ticks(20);                                   // 0.25 s stunned, then default
+        CHECK(run("m_after = dnp.players()[1]:movement_state()", "after"));
+        CHECK(run("graphs.call('zero', dnp.players()[1], nil)", "emptying"));
+        ticks(3);
+        CHECK(run("graphs.call('fill', dnp.players()[1], nil)", "filling"));
+        ticks(3);
+        CHECK(run("local c = triggers.counter\n"
+                  "m1, m2, m3, m4, m5 = c('m_in'), c('m_out'), c('m_any'), c('m_empty'), c('m_full')", "counting"));
+        std::printf("  asked: %s, air %g of %g, x velocity %.2f; then %s; entered %g left %g any %g; empty %g full %g\n",
+                    during.c_str(), air, num("m_max"), vx, str("m_after").c_str(), num("m1"), num("m2"), num("m3"),
+                    num("m4"), num("m5"));
+        CHECK(during == "stunned" && str("m_after") == "default");
+        CHECK(air == 6 && num("m_max") == 10);
+        CHECK(vx < -9.9 && vx > -10.1);
+        CHECK(num("m1") == 1 && num("m2") == 1 && num("m3") == 2);   // stunned, then default again
+        CHECK(num("m4") == 1 && num("m5") == 1);                     // CONTROL for both: not at the start, full as it was
+        // A name the module never declared raises from a script, and stops nothing else.
+        CHECK(raises("dnp.players()[1]:meter('breath')"));
+        CHECK(!raises("dnp.players()[1]:meter('air')"));             // CONTROL
+        g_world->set_move_defs(physics::MoveDefs{});
     }
 
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);

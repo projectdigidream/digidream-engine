@@ -894,6 +894,8 @@ export function decodeSnapshot (buf) {
   snap.self.moves = [0, 1].map((k) => (moveMask & (1 << k))
     ? { move: r.u8(), left: r.u16(), dir: { x: r.fxraw(), y: r.fxraw() } }
     : { move: 0, left: 0, dir: { x: 0n, y: 0n } })
+  snap.self.asked = r.u8()
+  snap.self.wallContact = r.u8() !== 0
   if (snap.self.stateFlags & STATE_FLAG.GRAPPLING) {
     snap.self.grappleAnchor = r.vec3raw()
     snap.self.grappleDist = r.fxraw()

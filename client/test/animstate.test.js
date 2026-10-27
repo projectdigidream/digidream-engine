@@ -133,6 +133,18 @@ console.log('\n--- declared beats derived, and zero means derived ---')
   check(resolveState(4, still, null) === 4, 'a declared death wins over idle')
 }
 
+console.log('\n--- a movement state draws its own animation, when the avatar draws it ---')
+{
+  // A swimmer: in the air as far as motion can tell, in `swim` as the module says.
+  const swimming = { grounded: false, vel: { x: FX(2), y: 0n, z: -FX(1) }, moveAnim: 'swim' }
+  const avatar = { when: { ...defaultStates(), swim: 7 } }
+  check(resolveState(0, swimming, avatar) === 7, "a movestate's `anim swim` draws the avatar's `when swim` state")
+  check(resolveState(0, swimming, { when: defaultStates() }) === 1,
+    'CONTROL: an avatar that does not draw swim shows the fall it always did')
+  check(resolveState(0, { ...swimming, attackLeft: 3 }, avatar) === 2, 'a swing still beats it')
+  check(resolveState(5, swimming, avatar) === 5, 'and a declared state beats everything')
+}
+
 console.log('\n--- an avatar can point a condition somewhere else ---')
 {
   const avatar = { when: { ...defaultStates(), climb: 7 } }

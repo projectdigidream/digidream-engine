@@ -520,12 +520,20 @@ console.log('\n--- which record draws a player ---')
   check(fresh.avatars.get(0).when.climb === 1,
     'CONTROL: a later parse still sees the default climb state')
 
-  // An unknown condition is a warning, not a silent write.
-  const badWhen = parseProps([
+  // A name outside the engine's conditions is taken: it may be a movement
+  // state's `anim` (docs/MOVEMENT.md), which no catalogue can know.
+  const ownWhen = parseProps([
     'prop 5 a radius 1 height 1', 'sprite 5 size 1 frames A',
     'avatar 5', 'avatar 5 when somersault state 7'
   ].join('\n'))
-  check(badWhen.warnings.some((x) => /somersault/.test(x)), 'an unknown condition warns')
+  check(ownWhen.warnings.length === 0 && ownWhen.avatars.get(0).when.somersault === 7,
+    "a module's own animation name is taken")
+  // CONTROL: what is not a name at all still warns, not a silent write.
+  const badWhen = parseProps([
+    'prop 5 a radius 1 height 1', 'sprite 5 size 1 frames A',
+    'avatar 5', 'avatar 5 when 7-up state 7'
+  ].join('\n'))
+  check(badWhen.warnings.some((x) => /7-up/.test(x)), 'CONTROL: a condition that is not a name warns')
 }
 
 console.log('\n--- the cross-fade is opt-in, and terminates ---')

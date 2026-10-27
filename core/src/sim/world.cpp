@@ -846,6 +846,24 @@ void World::teleport(u32 index, fx3 pos) noexcept {
     a.mv.grounded = false;
 }
 
+bool World::set_meter(u32 i, u32 meter, fx v) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active || meter >= move_defs_.meter_count) return false;
+    agents_[i].mv.meters[meter] = fx_clamp(v, fx::zero(), move_defs_.meters[meter].max);
+    return true;
+}
+
+bool World::start_move(u32 i, u32 move) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active || move >= move_defs_.move_count) return false;
+    AgentState& a = agents_[i];
+    return physics::start_layered_move(move_defs_, static_cast<u8>(move), a.mv, a.vel, fx_dir(a.facing));
+}
+
+bool World::ask_movement_state(u32 i, u32 state) noexcept {
+    if (i >= MAX_AGENTS || !agents_[i].active || state >= move_defs_.state_count) return false;
+    agents_[i].mv.asked = agents_[i].mv.move_state == state ? 0 : static_cast<u8>(state + 1);
+    return true;
+}
+
 void World::add_impulse(u32 index, fx3 dv) noexcept {
     if (index >= MAX_AGENTS || !agents_[index].active) return;
     agents_[index].vel += dv;
@@ -1075,6 +1093,8 @@ u64 World::agent_hash(u32 i) const noexcept {
     h.u32v(m.prev_buttons);
     for (const fx& v : m.meters) h.fxv(v);
     for (const physics::ActiveMove& am : m.moves) { h.u32v(am.move); h.u32v(am.left); h.vec2(am.dir); }
+    h.u32v(m.asked);
+    h.boolv(m.wall_contact);
     h.boolv(m.grappling);
     h.boolv(m.grapple_pulling);
     // NOT rebased, deliberately. A grapple anchor is a point on the geometry

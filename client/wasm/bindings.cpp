@@ -83,7 +83,9 @@ constexpr int BUF32_MOVE_STATE  = 22;   // MoveState::move_state (docs/MOVEMENT.
 constexpr int BUF32_STATE_TICKS = 23;
 constexpr int BUF32_PREV_BUTTONS = 24;
 constexpr int BUF32_MOVES     = 25;   // 2 per axis: physics::ActiveMove move, left
-constexpr int BUF32_LEN       = 29;
+constexpr int BUF32_ASKED     = 29;   // MoveState::asked
+constexpr int BUF32_WALL      = 30;   // MoveState::wall_contact
+constexpr int BUF32_LEN       = 31;
 
 // A camera path's header (design 4.1). Its OWN four slots, not appended to the
 // agent layout above: a path's points need up to 3 x MAX_MAP_PATH_POINTS i64,
@@ -893,6 +895,29 @@ int dnp_world_set_move_defs(sim::World* w, const char* text, unsigned len, char*
     return ok ? 1 : 0;
 }
 
+// The module's meters (docs/MOVEMENT.md): how many, each one's name, and its
+// max in thousandths, for the HUD's `meter.<name>` bindings.
+EMSCRIPTEN_KEEPALIVE
+unsigned dnp_world_meter_count(sim::World* w) { return w->move_defs().meter_count; }
+EMSCRIPTEN_KEEPALIVE
+const char* dnp_world_meter_name(sim::World* w, unsigned k) {
+    const physics::MoveDefs& d = w->move_defs();
+    return k < d.meter_count ? d.meters[k].name : "";
+}
+EMSCRIPTEN_KEEPALIVE
+int dnp_world_meter_max_milli(sim::World* w, unsigned k) {
+    const physics::MoveDefs& d = w->move_defs();
+    return k < d.meter_count ? static_cast<int>((d.meters[k].max.raw * 1000) >> 32) : 0;
+}
+
+// A movement state's `anim` (docs/MOVEMENT.md): its animation condition's
+// name, "" for none or for a state the definitions do not have.
+EMSCRIPTEN_KEEPALIVE
+const char* dnp_world_move_anim(sim::World* w, unsigned state) {
+    const physics::MoveDefs& d = w->move_defs();
+    return state < d.state_count ? d.states[state].anim : "";
+}
+
 // What a tick's buttons (the wire's) leave in MoveState::prev_buttons, for the
 // predictor deriving it from the input it sent (sim::move_buttons_of_input).
 EMSCRIPTEN_KEEPALIVE
@@ -1107,6 +1132,8 @@ void dnp_world_read_agent(sim::World* w, unsigned idx, long long* out64, unsigne
         out32[BUF32_MOVES + 2 * k] = m.moves[k].move;
         out32[BUF32_MOVES + 2 * k + 1] = m.moves[k].left;
     }
+    out32[BUF32_ASKED] = m.asked;
+    out32[BUF32_WALL] = m.wall_contact ? 1u : 0u;
 
     out32[BUF32_FACING]    = a.facing.raw;
     out32[BUF32_FLAGS]     = w->state_flags(idx);
@@ -1185,6 +1212,8 @@ void dnp_world_write_agent(sim::World* w, unsigned idx, const long long* in64, c
         m.moves[k].move = static_cast<u8>(in32[BUF32_MOVES + 2 * k]);
         m.moves[k].left = static_cast<u16>(in32[BUF32_MOVES + 2 * k + 1]);
     }
+    m.asked = static_cast<u8>(in32[BUF32_ASKED]);
+    m.wall_contact = in32[BUF32_WALL] != 0;
     m.grappling = in32[BUF32_GRAPPLING] != 0;
     m.grapple_pulling = in32[BUF32_GRAP_PULL] != 0;
     m.grounded = in32[BUF32_GROUNDED] != 0;

@@ -2731,6 +2731,7 @@ let latestHp = null
 // World::agent_hash so that setting it cannot mispredict. Zero means "nothing
 // declared", which is why it starts there.
 let selfAnimation = 0
+const meterValues = {}   // the HUD's meter.<name> bindings, refilled each frame
 // Which avatar draws THIS player, from SelfBlock. Server state like hp, not
 // simulation state: a costume is not physics.
 let selfAvatar = 0
@@ -3379,6 +3380,7 @@ function frame (now) {
   buildBody()
   if (props && bodyAvatar >= 0) {
     props.setLook(body, selfLook)
+    a.moveAnim = world.moveAnim(a.moveState)   // a movement state's own animation (docs/MOVEMENT.md)
     props.setState(body, resolveState(selfAnimation, a, props.avatarFor(selfAvatar)), now / 1000)
     // A sprite quad has to face the camera, and keep its own heading somewhere
     // the billboard has not overwritten -- the same two lines every remote body
@@ -3883,6 +3885,18 @@ function frame (now) {
   if (LIVE && latestHp !== undefined && latestHp !== null) {
     hudView.update({ hp: latestHp, map: homeName ?? '' })
     hudView.update(hudValues)
+    // The meters (docs/MOVEMENT.md), as `meter.<name>` and `meter.<name>_max`:
+    // the predicted body's, so a bar moves with no round trip.
+    const meterInfo = agent !== null ? world.meterInfo() : []
+    if (meterInfo.length) {
+      const m = world.readAgent(agent).meters
+      for (let k = 0; k < meterInfo.length; k++) {
+        meterValues[`meter.${meterInfo[k].name}`] = Math.round(Number(m[k]) / 42949672.96) / 100
+        meterValues[`meter.${meterInfo[k].name}_max`] = meterInfo[k].max
+      }
+      hudView.update(meterValues)
+      ui?.update(meterValues)
+    }
     // THE MARKERS, now that every body and the camera are where they are drawn.
     if (markers.count > 0) {
       const w = innerWidth

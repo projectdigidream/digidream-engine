@@ -28,7 +28,7 @@
  */
 import { SpriteBatcher } from './spritebatch.js'
 import { frameKey, quadFor, uvFor } from './atlas.js'
-import { CONDITIONS, defaultStates } from './animstate.js'
+import { defaultStates } from './animstate.js'
 import { lightable } from './proplight.js'
 
 /**
@@ -201,7 +201,10 @@ export function parseProps (text) {
           case 'as': break   // already read above
           case 'blend': avatar.blend = Number(val); break
           case 'when':
-            if (!CONDITIONS.includes(val)) {
+            // The engine's conditions (animstate.js CONDITIONS), or a name a module's movement
+            // state gives as its `anim` (docs/MOVEMENT.md) -- which this
+            // catalogue cannot know, so any word is taken.
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(val)) {
               warnings.push(`line ${i + 1}: '${val}' is not an animation condition`)
             }
             when = val

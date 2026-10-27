@@ -517,6 +517,32 @@ function EXEC.set_layer(g, n, ev, pull)
   end
   return "then"
 end
+-- THE MOVEMENT STATES (docs/MOVEMENT.md), by the module's names. A name it
+-- never declared is said, not thrown: one node's typo stops one node.
+local function movement(g, n, e, method, ...)
+  if e == nil or e[method] == nil then return end
+  local ok, why = pcall(e[method], e, ...)
+  if not ok then say("%s: node '%s': %s", g.name, n.id, tostring(why)) end
+end
+function EXEC.ask_movement_state(g, n, ev, pull)
+  movement(g, n, entity_of(pull, ev, nil, g.data_src[n.id]), "ask_movement_state", n.state or "default")
+  return "then"
+end
+function EXEC.set_meter(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  local v = tonumber(pull("value")) or 0
+  if e ~= nil and n.how == "add" and e.meter ~= nil then
+    local ok, now = pcall(e.meter, e, n.meter or "")
+    if ok and now ~= nil then v = unfx(now) + v end
+  end
+  movement(g, n, e, "set_meter", n.meter or "", fxn(v))
+  return "then"
+end
+function EXEC.start_move(g, n, ev, pull)
+  movement(g, n, entity_of(pull, ev, nil, g.data_src[n.id]), "start_move", n.move or "")
+  return "then"
+end
+
 function EXEC.set_animation_for(g, n, ev, pull)
   local e = entity_of(pull, ev, nil, g.data_src[n.id])
   local state = tonumber(pull("state"))
@@ -1210,6 +1236,19 @@ function PURE.health_of(g, n, ev, pull)
   if m ~= nil then return m end
   return e.hp ~= nil and e:hp() or nil
 end
+function PURE.movement_state_of(g, n, ev, pull)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  if e == nil or e.movement_state == nil then return nil end
+  return e:movement_state()
+end
+function PURE.meter_of(g, n, ev, pull, pin)
+  local e = entity_of(pull, ev, nil, g.data_src[n.id])
+  if e == nil or e.meter == nil then return nil end
+  local ok, v, max = pcall(e.meter, e, n.meter or "")
+  if not ok then say("%s: node '%s': %s", g.name, n.id, tostring(v)); return nil end
+  if v == nil then return nil end
+  return unfx(pin == "max" and max or v)
+end
 function PURE.distance(g, n, ev, pull)
   local a, b = entity_of(pull, ev, "a", g.data_src[n.id]), entity_of(pull, ev, "b", g.data_src[n.id])
   if a == nil or b == nil then return nil end
@@ -1406,7 +1445,9 @@ M.touched = function(entity, prop) touched(entity, prop) end
 local track = {}
 local t0 = nil
 local function watch_everyone()
-  for _, kind in ipairs({ "when_sector_entered", "when_sector_left", "when_floor_touched", "when_near" }) do
+  for _, kind in ipairs({ "when_sector_entered", "when_sector_left", "when_floor_touched", "when_near",
+                          "when_movement_state_entered", "when_movement_state_left",
+                          "when_meter_empty", "when_meter_full" }) do
     for _, g in ipairs(loaded) do
       for _, id in ipairs(g.by_start[kind] or {}) do
         if (g.by_id[id].who or "players") ~= "players" then return true end
@@ -1415,6 +1456,29 @@ local function watch_everyone()
   end
   return false
 end
+-- Each meter a start node names, as "empty", "full" or "" for this body.
+local function meter_levels(e)
+  if e.meter == nil then return nil end
+  local out = {}
+  for _, kind in ipairs({ "when_meter_empty", "when_meter_full" }) do
+    for _, g in ipairs(loaded) do
+      for _, id in ipairs(g.by_start[kind] or {}) do
+        local name = g.by_id[id].meter
+        if name ~= nil and out[name] == nil then
+          local ok, v, max = pcall(e.meter, e, name)
+          if ok and v ~= nil then
+            local x, m = unfx(v), unfx(max)
+            out[name] = x <= 0 and "empty" or x >= m and "full" or ""
+          else
+            out[name] = ""
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+
 local function tick_starts(now)
   if t0 == nil then
     t0 = now
@@ -1425,7 +1489,10 @@ local function tick_starts(now)
   fire_start("after", function(n) return el == ticks_of(n.seconds) end, {})
 
   local rooms = any_start("when_sector_entered") or any_start("when_sector_left")
-  local spatial = rooms or any_start("when_floor_touched") or any_start("when_near")
+  -- The movement states and meters (docs/MOVEMENT.md): watched like a room.
+  local moving = any_start("when_movement_state_entered") or any_start("when_movement_state_left")
+  local meters = any_start("when_meter_empty") or any_start("when_meter_full")
+  local spatial = rooms or moving or meters or any_start("when_floor_touched") or any_start("when_near")
   local roster = not in_game() and (any_start("when_player_arrives") or any_start("when_player_leaves"))
   if not spatial and not roster then return end
   local list = (spatial and watch_everyone()) and dnp.entities() or dnp.players()
@@ -1458,9 +1525,11 @@ local function tick_starts(now)
       -- EFFECT SECTORS (`sector type effect`): volumes laid over anything, so a
       -- body is in any number at once, and never as its sector.
       local fx_in = (rooms and e.effect_sectors ~= nil) and e:effect_sectors() or {}
+      local mstate = (moving and e.movement_state ~= nil) and e:movement_state() or nil
+      local levels = meters and meter_levels(e) or nil
       if t == nil then
         track[i] = { sector = sec, floor = floor, since = now, player = is_player(e), who = who, seen = now, here = here,
-                     fx = fx_in }
+                     fx = fx_in, mstate = mstate, levels = levels }
         if roster and here and is_player(e) then fire_start("when_player_arrives", nil, { entity = e }) end
       else
         t.seen = now
@@ -1501,6 +1570,27 @@ local function tick_starts(now)
           end
         end
         t.fx = fx_in
+        if mstate ~= t.mstate then
+          local was = t.mstate
+          t.mstate = mstate
+          if was ~= nil then
+            fire_start("when_movement_state_left", function(n) return who_ok(n.who, e) and (n.state == nil or n.state == was) end,
+                       { entity = e, state = was })
+          end
+          if mstate ~= nil then
+            fire_start("when_movement_state_entered", function(n) return who_ok(n.who, e) and (n.state == nil or n.state == mstate) end,
+                       { entity = e, state = mstate })
+          end
+        end
+        -- A meter fires as it reaches empty or full, once, until it leaves.
+        for name, lv in pairs(levels or {}) do
+          local was = t.levels and t.levels[name]
+          if lv ~= was and lv ~= "" then
+            fire_start(lv == "empty" and "when_meter_empty" or "when_meter_full",
+                       function(n) return who_ok(n.who, e) and n.meter == name end, { entity = e })
+          end
+        end
+        t.levels = levels
         if floor ~= t.floor then
           t.floor = floor
           t.since = now

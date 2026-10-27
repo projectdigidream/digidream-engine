@@ -58,6 +58,14 @@ enum class CmdKind : u8 {
     // script started -- a weapon run in Lua -- is the observer's to be told
     // about, like any other change to its own body it could not predict.
     Swing = 5,
+
+    // THE MOVEMENT STATES' (docs/MOVEMENT.md): e:set_meter, e:start_move and
+    // e:ask_movement_state. `v.x` is the meter, move or state by index, `v.y`
+    // a meter's value. Through the queue because each changes a body's own
+    // movement, which its client predicts and must be told it could not.
+    SetMeter = 6,
+    StartMove = 7,
+    AskState = 8,
 };
 
 struct Command {
@@ -111,6 +119,9 @@ public:
                 case CmdKind::SetSectorOffset: break;   // handled above
                 case CmdKind::Touch: break;
                 case CmdKind::Swing:       world.request_swing(c.subject); break;
+                case CmdKind::SetMeter:    world.set_meter(c.subject, static_cast<u32>(c.v.x.floor_int()), c.v.y); break;
+                case CmdKind::StartMove:   world.start_move(c.subject, static_cast<u32>(c.v.x.floor_int())); break;
+                case CmdKind::AskState:    world.ask_movement_state(c.subject, static_cast<u32>(c.v.x.floor_int())); break;
             }
             touched(c.subject);
             ++applied;

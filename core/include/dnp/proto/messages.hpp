@@ -441,6 +441,8 @@ struct SelfBlock {
     // The layered moves running, one per axis (docs/MOVEMENT.md), each only
     // when there is one.
     physics::ActiveMove moves[physics::MOVE_AXES]{};
+    u8     asked = 0;               // MoveState::asked: a script's ask, until given
+    u8     wall_contact = 0;        // MoveState::wall_contact, for `touching wall`
 
     // Only encoded when state_flags & GRAPPLING. A swinging player is the
     // exception, and gating it keeps 32 bytes off every other snapshot.

@@ -336,6 +336,11 @@ struct MoveState {
     fx   meters[MAX_MOVE_METERS]{};
     // The layered moves running, one per axis. Hashed and in SelfBlock.
     ActiveMove moves[MOVE_AXES]{};
+    // The state a script asked for (its index + 1, 0 none), until the body is
+    // in it: what the `asked` condition reads. And whether last tick's sweep
+    // met a wall: `touching wall`. Hashed and in SelfBlock.
+    u8   asked = 0;
+    bool wall_contact = false;
 
     bool grappling = false;
     bool grapple_pulling = false;

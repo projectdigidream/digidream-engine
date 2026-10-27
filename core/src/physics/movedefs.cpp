@@ -178,6 +178,12 @@ const char* read_conditions(MoveDefs& d, const Line& L, u32& i, MoveCondition (&
             c.arg = level;
             d.uses_depth = true;
             i += below ? 2 : 1;
+        } else if (is(k, "asked")) {
+            c.kind = MoveCond::Asked;
+        } else if (is(k, "touching")) {
+            if (!is(a, "wall")) return "touching wall";
+            c.kind = MoveCond::TouchingWall;
+            ++i;
         } else if (is(k, "meter")) {
             // meter <name> empty|full|below <v>|above <v>
             const i32 m = meter_index(d, a);
@@ -191,7 +197,7 @@ const char* read_conditions(MoveDefs& d, const Line& L, u32& i, MoveCondition (&
                 i += 3;
             } else return "meter <name> empty, full, below <n> or above <n>";
         } else {
-            return "not a condition (grounded airborne rising falling pressed held released speed after floor depth meter)";
+            return "not a condition (grounded airborne rising falling pressed held released speed after floor depth meter asked touching)";
         }
         ++count;
     }
@@ -246,6 +252,7 @@ const char* read_meter_rule(MoveDefs& d, const Line& L) noexcept {
         if (const char* why = read_conditions(d, L, i, r.cond, r.cond_count)) return why;
         if (r.cond_count == 0) return "`when` needs a condition";
         if (i < L.n) return "a meter rule does nothing; `do` is a transition's";
+        for (u8 c = 0; c < r.cond_count; ++c) if (r.cond[c].kind == MoveCond::Asked) return "`asked` is a transition's";
     }
     d.meter_rules[d.meter_rule_count++] = r;
     return nullptr;
@@ -295,6 +302,7 @@ const char* read_move(MoveDefs& d, const Line& L) noexcept {
         if (const char* why = read_conditions(d, L, i, m.cond, m.cond_count)) return why;
         if (m.cond_count == 0) return "`when` needs a condition";
         if (i < L.n) return "a move does itself; `do` is a transition's";
+        for (u8 c = 0; c < m.cond_count; ++c) if (m.cond[c].kind == MoveCond::Asked) return "`asked` is a transition's";
     }
     d.moves[d.move_count++] = m;
     return nullptr;
@@ -318,6 +326,8 @@ const char* read_transition(MoveDefs& d, const Line& L) noexcept {
 
     u32 i = 5;
     if (const char* why = read_conditions(d, L, i, t.cond, t.cond_count)) return why;
+    // `asked`: a script asked for the state this transition goes to.
+    for (u8 c = 0; c < t.cond_count; ++c) if (t.cond[c].kind == MoveCond::Asked) t.cond[c].arg = t.to;
     if (t.cond_count == 0) return "a transition needs at least one condition";
     if (i < L.n) {   // `do`
         if (i + 1 >= L.n) return "do what? (jump, stop, impulse up|facing|back <n>, meter <name> set|add <n>, move <name>)";

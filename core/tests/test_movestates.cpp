@@ -69,6 +69,8 @@ static void test_the_parser() {
         "move dash set facing 9 for 0\n",                                           // a set with no time
         "move dash add facing 9 for 0.2 cost breath 5\n",                           // no such meter
         "movestate a group floor\ntransition default -> a when grounded do move blink\n",   // no such move
+        "meter air max 10\nmeter air in any rate 1 when asked\n",                  // `asked` is a transition's
+        "movestate a group floor\ntransition default -> a when touching floor\n",  // only walls
         "movestate a group floor\ntransition default -> a when pressed sneeze\n",
         "movestate a group floor\ntransition default -> a when grounded do dance\n",
     };
@@ -419,6 +421,79 @@ static void test_layered_moves() {
     CHECK(plain < 8);                          // CONTROL: the slide's friction at work
 }
 
+// WHAT SCRIPTS DO, and `touching wall`. A script asks for `stunned`, which
+// a transition saying `asked` takes; sets a meter (clamped); starts a move. And
+// a body that jumps into the west wall clings to it.
+static void test_scripts_and_walls() {
+    std::printf("scripts and walls: asked, set_meter, start_move, touching wall\n");
+    static World w;
+    static MoveDefs d;
+    CHECK(parse(d,
+                "movestate stunned group none\n"
+                "movestate cling group air speed 2 gravity 0.1\n"
+                "movestate never group none\n"
+                "meter air max 10 start 10\n"
+                "move shove set back 10 for 0.1\n"
+                "transition default -> stunned when asked\n"
+                "transition stunned -> default when after 0.5\n"
+                "transition default -> cling when airborne touching wall\n"));
+    w.reset();
+    w.set_map(&test_map());
+    w.set_move_defs(d);
+    const u32 a = w.spawn(fx3{fx::from_int(20), fx::from_int(10), fx::zero()});
+    auto step = [&](u32 n, proto::InputFrame in = {}) { for (u32 t = 0; t < n; ++t) { w.set_input(a, in); w.step(); } };
+    step(10);
+    const int before = w.agent(a).mv.move_state;
+    CHECK(w.ask_movement_state(a, 1));
+    step(1);
+    const int asked_in = w.agent(a).mv.move_state;
+    const int asked_left = w.agent(a).mv.asked;
+    step(40);
+    const int back = w.agent(a).mv.move_state;
+    // A state nobody's transition takes when asked: the ask waits, nothing moves.
+    CHECK(w.ask_movement_state(a, 3));
+    step(10);
+    const int waited_state = w.agent(a).mv.move_state, waited = w.agent(a).mv.asked;
+    std::printf("  asked for stunned: %d -> %d (ask left %d), back to %d after 0.5 s; asked for `never`: state %d, ask %d\n",
+                before, asked_in, asked_left, back, waited_state, waited);
+    CHECK(before == 0 && asked_in == 1 && asked_left == 0 && back == 0);
+    CHECK(waited_state == 0 && waited == 4);
+    CHECK(!w.ask_movement_state(a, 9));                 // no such state
+
+    CHECK(w.set_meter(a, 0, fx::from_frac(7, 2)) && w.agent(a).mv.meters[0] == fx::from_frac(7, 2));
+    CHECK(w.set_meter(a, 0, fx::from_int(99)) && w.agent(a).mv.meters[0] == fx::from_int(10));   // clamped
+    CHECK(!w.set_meter(a, 1, fx::zero()));              // no such meter
+
+    // Facing east (aim 0), so `back` is west.
+    CHECK(w.start_move(a, 0));
+    step(3);
+    const double vx = f(w.agent(a).vel.x);
+    std::printf("  start_move(shove): x velocity %.2f\n", vx);
+    CHECK(vx < -9.9 && vx > -10.1);
+    CHECK(!w.start_move(a, 1));                          // no such move
+
+    // Into the west wall, jumping: cling. CONTROL: the same jump east, in the open.
+    auto jump_at = [&](i16 way) {
+        w.reset();
+        w.set_map(&test_map());
+        w.set_move_defs(d);
+        const u32 b = w.spawn(fx3{fx::from_int(way < 0 ? 2 : 20), fx::from_int(10), fx::zero()});
+        bool clung = false;
+        for (u32 t = 0; t < 60; ++t) {
+            proto::InputFrame in;
+            in.move_x = way;
+            if (t == 2) in.buttons = proto::button::JUMP;
+            w.set_input(b, in);
+            w.step();
+            if (w.agent(b).mv.move_state == 2) clung = true;
+        }
+        return clung;
+    };
+    const bool wall = jump_at(-32767), open = jump_at(32767);
+    std::printf("  jumping into the west wall: clung %d; CONTROL, east in the open: %d\n", wall, open);
+    CHECK(wall && !open);
+}
+
 static void test_it_is_deterministic() {
     std::printf("movestates: the same inputs, the same states and hash\n");
     auto once = []() {
@@ -450,6 +525,7 @@ int main() {
     test_breath();
     test_stamina();
     test_layered_moves();
+    test_scripts_and_walls();
     test_it_is_deterministic();
     std::printf("== %d checks, %d failures ==\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
