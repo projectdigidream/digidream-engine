@@ -14,6 +14,12 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **The starter's key hint says what F is: a punch.** The starter has no weapon;
+  F swings the player's bare hands (10 a hit), and "F attack" read as a weapon
+  that was not there.
+
 ### Added
 
 - **The module's movement states and moves can be switched on and off**, per

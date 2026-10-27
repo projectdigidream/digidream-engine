@@ -19,7 +19,7 @@
      "anchor": "c",
      "x": 0,
      "y": 0,
-     "text": "WASD walk | SPACE jump | SHIFT dash | E use | F attack | Q/R turn the camera",
+     "text": "WASD walk | SPACE jump | SHIFT dash | E use | F punch | Q/R turn the camera",
      "style": {
       "size": 13,
       "align": "center"
@@ -32,7 +32,7 @@
      "anchor": "c",
      "x": 0,
      "y": 0,
-     "text": "left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK",
+     "text": "left thumb walks | the buttons on the right: JUMP, DASH, USE, ATK (punch)",
      "style": {
       "size": 13,
       "align": "center"
