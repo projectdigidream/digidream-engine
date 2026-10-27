@@ -97,7 +97,8 @@ export async function gameFiles (modules) {
 
 /** The server's command line for those files, under /game. */
 export function gameArgs (modules) {
-  return modules.length
+  // --single-player: the page's own server, for its one player.
+  return [...(modules.length
     ? modules.flatMap((m) => ['--module', `/game/${basename(m)}`])
-    : ['--map', '/game/maps/test.dnpm']
+    : ['--map', '/game/maps/test.dnpm']), '--single-player']
 }

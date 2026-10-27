@@ -74,12 +74,15 @@ const certHash = Buffer.from(
   JSON.parse(readFileSync(join(CERTS, 'cert-hash.json'), 'utf8')).sha256_base64, 'base64')
 
 // One server, an edge in front of it, one client.
-async function start (persist, stateDir) {
+// `hosted`: started as a hosted server, not a game's own for its one player
+// (--single-player, which the desktop app, the Android app and the web build pass).
+async function start (persist, stateDir, { hosted = false } = {}) {
   const args = ['--port', String(LINK_PORT), '--map', MAP,
                 '--script', join(ROOT, 'maps', 'scripts', 'persist_test.lua'),
                 '--script', join(ROOT, 'maps', 'scripts', 'placed_test.lua'),
                 '--props', join(REPO, 'modules', 'doom2', 'assets', 'props.txt'),
                 '--persist', persist, '--state-dir', stateDir]
+  if (!hosted) args.push('--single-player')
   const server = spawn(serverBin, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
   const run = { server, log: '' }
   current = run
@@ -233,15 +236,31 @@ try {
     check(/saved level state\(s\) read/.test(second.log), 'and says where it read them from')
 
     // A new game forgets the kept state ON DISK too, or the next restart would
-    // bring the old game back.
+    // bring the old game back -- on a game's own server. On a HOSTED one that
+    // keeps its world, the lone player on it may not: the world is the host's.
     const file = join(dir, 'levels', 'test.save')
     check(existsSync(file), 'CONTROL: the kept state is on disk before a new game')
-    await second.cw.write(encodeGameNew())
-    await waitFor(() => second.results.length >= 1, 6000, 'new game result')
-    check(second.results[0].ok && /deleted/.test(second.results[0].text),
-          `a new game deletes it (${second.results[0].text})`)
-    check(!existsSync(file), 'and it is gone')
     await stop(second)
+    const hosted = await start('server', dir, { hosted: true })
+    await hosted.cw.write(encodeGameNew())
+    await waitFor(() => hosted.results.length >= 1, 6000, 'hosted new game result')
+    check(!hosted.results[0].ok && /host/.test(hosted.results[0].text),
+          `a hosted world that persists refuses the new game (${hosted.results[0].text})`)
+    check(existsSync(file), 'and keeps its state on disk')
+    // A SECOND HELLO is ignored: it used to place the player again, at the
+    // spawn with full health, the level's on_player_enter run again.
+    const w0 = hosted.welcomes
+    await hosted.cw.write(encodeHello())
+    await sleep(600)
+    check(hosted.welcomes === w0, `a second HELLO places nobody again (${hosted.welcomes - w0} welcomes)`)
+    await stop(hosted)
+    const third = await start('server', dir)
+    await third.cw.write(encodeGameNew())
+    await waitFor(() => third.results.length >= 1, 6000, 'new game result')
+    check(third.results[0].ok && /deleted/.test(third.results[0].text),
+          `CONTROL: on the game's own server, a new game deletes it (${third.results[0].text})`)
+    check(!existsSync(file), 'and it is gone')
+    await stop(third)
   }
 } catch (e) {
   check(false, `the run finished (${e.message})`)

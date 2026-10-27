@@ -107,6 +107,7 @@ final class GameServer {
     for (File m : modules) { cmd.add("--module"); cmd.add(m.getAbsolutePath()); }
     for (File m : maps) { cmd.add("--map"); cmd.add(m.getAbsolutePath()); }
     cmd.add("--spawn"); cmd.add("start");
+    cmd.add("--single-player");   // the game's own server, for its one player
     ProcessBuilder pb = new ProcessBuilder(cmd);
     pb.directory(workDir);
     pb.redirectErrorStream(true);

@@ -37,6 +37,13 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ### Fixed
 
+- **A second HELLO is ignored.** It placed the player again: back at the
+  first level's spawn with full health, the level's on_player_enter run again.
+- **A hosted world that persists is not wiped by a new game.** The lone player
+  on a `persist server` world could start a new game and delete game.save and
+  every level's saved state. A server now knows whether it is a game's own, for
+  its one player (`--single-player`, which the desktop app, the Android app and
+  the web build pass), and only that one starts a new game over a kept world.
 - **A platform is seen from below.** A floating platform (open edges) with no
   thickness drew its floor one-sided, so from underneath it was not there. It
   has an underside now, at its floor, in its floor's picture.

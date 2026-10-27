@@ -39,9 +39,10 @@ using namespace dnp;
 // this range and a band the size of the agent space would otherwise leave
 // nothing to spawn into.
 //
-// 2048 mirror slots plus 384 spawnable, which is the same number of spawnable
-// props the 768/384 split gave -- the raises are for agents, and quietly halving
-// what a map may place would be a different change wearing this one's clothes.
+// 2048 mirror slots (MIRROR_SLOTS, below: MAX_AGENTS) plus the spawnable ones.
+// When agents were raised, spawnable stayed what the 768/384 split had given --
+// quietly halving what a map may place would have been a different change
+// wearing that one's clothes.
 // SPAWNABLE_PROPS is checked below rather than left to underflow: it is
 // unsigned, so MAX_PROPS < MIRROR_SLOTS would wrap to four billion and the
 // allocator would hand out prop indices on top of the mirror band.
@@ -60,8 +61,9 @@ inline constexpr u32 MAX_PROPS    = 2048 + 4096;
 //
 // Reserving the band here rather than agreeing a convention in the client is
 // the difference between a guarantee and a hope: the server's allocator is what
-// would collide, so the server's allocator is what has to know. It costs 64
-// prop slots no map has come close to using.
+// would collide, so the server's allocator is what has to know. It costs
+// MAX_AGENTS (2048) slots of the prop range, which is why MAX_PROPS carries
+// them on top of the 4096 a region spawns.
 inline constexpr u32 MIRROR_SLOTS   = MAX_AGENTS;
 static_assert(MAX_PROPS > MIRROR_SLOTS,
               "the mirror band fills the prop range: SPAWNABLE_PROPS would "

@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - name: unit + property tests
@@ -43,14 +43,16 @@ jobs:
   # THE gate. Every target must emit a byte-identical hash stream. See
   # docs/physics-contract.md for why this is a required check and not advisory.
   #
-  # ubuntu-latest is x86-64 and macos-14 is arm64, so the two runners together
+  # macos-latest, not a pinned image: from 2026-10-26 every macos-14 job sat
+  # "not acquired by Runner" until cancelled, and the arm64 leg did not run.
+  # ubuntu-latest is x86-64 and macos-latest is arm64, so the two runners together
   # cover both native architectures; the wasm leg runs on ubuntu with emsdk.
   determinism:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: mymindstorm/setup-emsdk@v14

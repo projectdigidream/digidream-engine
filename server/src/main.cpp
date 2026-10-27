@@ -1,11 +1,11 @@
 //
 // Authoritative server: fixed-timestep loop, link endpoint, snapshot production.
 //
-// Phase 1 harness. The simulation is the placeholder point-mass controller from
-// core/sim/world.cpp, and there is no Lua and no map yet. What IS real is the
-// shape: the tick loop, the input jitter buffer, per-observer snapshot
-// encoding, delta compression against an acked baseline, and budget
-// enforcement.
+// The levels a module gives it (maps, their Lua, the game's scripts), each a
+// core World; sessions, their input jitter buffers and per-observer snapshots,
+// delta-compressed against an acked baseline within the datagram budget; and
+// the reliable messages (map data, parameters, UI, saves) beside them. Built
+// natively, and to wasm for a single-player page (docs/WEB.md).
 //
 #include <chrono>
 #include <memory>
@@ -922,6 +922,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     bool persist_levels = false;
     bool persist_saves = false;
     bool persist_server = false;
+    // Started by a game for its one player (--single-player: the desktop app,
+    // the Android app, the web build), not hosted. Decides what a lone session
+    // may do to a kept world: a hosted one is not the player's to wipe.
+    bool single_player = false;
     std::string state_dir = ".dnp-state";
     // Saved level state, by level NAME: names survive a restart and a change
     // in the order levels were given; indices do not.
@@ -1595,6 +1599,13 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
     // Single player only, like a save; but not gated on saves being enabled,
     // because starting again is not saving.
     void new_game(Session& s, u32 id) {
+        // BY THE SERVER'S MODE, not by who happens to be on it: the lone player
+        // on a hosted world that persists (`persist server`) would otherwise
+        // delete it -- game.save and every level's -- with F2 twice.
+        if (persist_server && !single_player) {
+            send_game_result(id, 2, 0, false, "this world is kept by its server: a new game is the host's to start");
+            return;
+        }
         if (sessions.size() != 1) { send_game_result(id, 2, 0, false, "a new game is for a single player"); return; }
         if (!replace_world(s, id, {}, nullptr)) {
             send_game_result(id, 2, 0, false, "the game's scripts would not start");
@@ -2681,6 +2692,11 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
         }
 
         if (type == proto::MSG_HELLO) {
+            // ONE HELLO A SESSION. A second one used to place the player again:
+            // back at level 0's spawn, full health, on_player_enter run again --
+            // free heals for any client that sent it. Ignored, as anything else
+            // out of order on the control stream is.
+            if (s.hello_done) return;
             const u16 version = r.u16v();
             if (!r.ok() || version != proto::PROTOCOL_VERSION) {
                 // Version 0 is UNSTABLE: there is no compatibility range, so a
@@ -2743,10 +2759,10 @@ struct Server : lua::MapChangeSink, lua::UiSink, lua::LevelListSink, lua::CrossS
 
     // Crush and pin events from the tick just run (design §3.1).
     //
-    // Reported, not acted on. What happens to a crushed entity is a Lua
-    // decision and Lua arrives in Phase 4; until then this is where that
-    // callback will be dispatched from, and logging it keeps the detection
-    // observable rather than silently discarded.
+    // Reported, not acted on. What happens to a crushed entity is the
+    // scripts' decision -- the on_crush hook, called once per episode from the
+    // tick (below, where the level's hooks run) -- and this line keeps the
+    // detection observable in the log whether or not a script listens.
     //
     // Rate-limited per entity: a body held under a closing ceiling raises an
     // event on every tick it stays there, and a line per tick per player would
@@ -4944,6 +4960,7 @@ int main(int argc, char** argv) {
     // A flag still wins, so a command line remains the last word.
     u32 hash_trace_every = 0;
     bool test_player = false;
+    bool single_player = false;
     // Persistence (docs/SAVING.md): from the modules' module.txt, unless
     // --persist says otherwise.
     const char* persist_arg = nullptr;
@@ -5026,6 +5043,9 @@ int main(int argc, char** argv) {
         } else if (std::strcmp(argv[i], "--perf") == 0 && i + 1 < argc) {
             // Report where each tick went, every N ticks. See Server::Perf.
             perf_every = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (std::strcmp(argv[i], "--single-player") == 0) {
+            // A game's own server for its one player, not a hosted one.
+            single_player = true;
         } else if (std::strcmp(argv[i], "--test-player") == 0) {
             // A stationary player-kind body at the spawn tag, and level 0
             // ticked from tick 0. See Server::test_player.
@@ -5427,6 +5447,7 @@ int main(int argc, char** argv) {
         if (lua_stall_us > 0) srv.vm_config.stall_warn_us = lua_stall_us;
         srv.hash_trace = hash_trace_every;
         srv.test_player = test_player;
+        srv.single_player = single_player;
         srv.scripts_enabled = true;
         // Stated at startup, deliberately. Under the default profile a script
         // can reach the filesystem, databases and native libraries, and the

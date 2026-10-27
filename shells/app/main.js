@@ -139,6 +139,8 @@ function spawnServer (linkPort, extra = {}) {
   // default, .dnp-state in its cwd, is inside a packaged app, which is
   // read-only (and on macOS, sealed).
   args.push('--state-dir', join(app.getPath('userData'), 'state'))
+  // A game's own server, for its one player: a new game may wipe what it kept.
+  args.push('--single-player')
 
   // cwd is the GAME directory, not wherever the app was launched from. The
   // server resolves assets/props.txt and modules/ against its working
