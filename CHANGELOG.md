@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.4.1 -- 2026-10-28
+
 ### Added
 
 - **The automatic camera on a lead**: `auto_turn = 2`. It turns with the
