@@ -20,7 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # arm64 on Linux: the macOS runners stopped being handed out (see
+        # determinism below).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
       - name: unit + property tests
@@ -43,16 +45,18 @@ jobs:
   # THE gate. Every target must emit a byte-identical hash stream. See
   # docs/physics-contract.md for why this is a required check and not advisory.
   #
-  # macos-latest, not a pinned image: from 2026-10-26 every macos-14 job sat
-  # "not acquired by Runner" until cancelled, and the arm64 leg did not run.
-  # ubuntu-latest is x86-64 and macos-latest is arm64, so the two runners together
-  # cover both native architectures; the wasm leg runs on ubuntu with emsdk.
+  # The arm64 leg is ubuntu-24.04-arm, not macOS: from 2026-10-26 every
+  # macos-14 job, and from 2026-10-28 every macos-latest one, sat "not acquired
+  # by Runner" until cancelled, so the arm64 leg did not run and every run was
+  # red. ubuntu-latest is x86-64 and ubuntu-24.04-arm is arm64, so the two
+  # runners together cover both native architectures; the wasm leg runs on each
+  # with emsdk. Apple's clang is covered by `test.sh determinism` on a Mac.
   determinism:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v4
       - uses: mymindstorm/setup-emsdk@v14
