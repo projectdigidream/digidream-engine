@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.4.3 -- 2026-10-28
+
 ### Fixed
 
 - **The automatic camera's cone turns the camera round corners instead of
