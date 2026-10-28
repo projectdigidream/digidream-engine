@@ -14,6 +14,28 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Fixed
+
+- **The automatic camera's cone turns the camera round corners instead of
+  letting it scrape through them.** With a `lead`, the cone and the walls were
+  measured as if the camera aimed at the player, while it aims ahead of them, so
+  it ended up pressed against a pillar and slid along its faces. It now
+  measures from where the camera really stands, at its whole distance (so a
+  camera pressed in by a wall still turns out from behind it). It looks a
+  moment ahead, as the player moves on and the lead swings round, so it turns
+  before the wall comes between them. It turns just past the edge of what is in
+  the way, easing in and out. Round a pillar with a lead of 6, the camera used
+  to be pressed in by the walls about a fifth of the time, and now almost never.
+- With a `lead`, `collide` tested the walls on the line to where the camera
+  would be without the lead; it now tests the line to where it really stands.
+- The ground in front of a low camera's player, or a ceiling just over them,
+  no longer counts as cutting the cone; a ledge between them still does.
+
+### Changed
+
+- `cone_rate` is how fast the cone's turn may go: at most that many eighths of
+  a turn a second (half a turn at the default 4), easing in and out.
+
 ## 0.2.4.2 -- 2026-10-28
 
 ### Added

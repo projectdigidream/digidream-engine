@@ -116,14 +116,15 @@ export const DEFAULTS = {
   // player (clearFraction); it eases back out to its distance after.
   collide: 0,
   // THE CONE, with the automatic camera (either way it turns): `cone` degrees
-  // across, from the camera to the point it looks at. When a wall, a ceiling or
-  // a floor cuts into it -- the player going behind a wall -- the camera orbits
-  // round the player to the nearest heading where it is clear, or failing one
-  // lowers or raises itself, at `coneRate` per second (coneClear, nearestClear).
-  // The swing behind never turns into a wall either. Like `collide`, for a
-  // camera inside the level: one hovering outside it would find the level's own
-  // walls across its cone. With `collide`, the cone is the camera's as it
-  // stands, pulled in. 0: no cone.
+  // across, from where the camera wants to stand to the player. When a wall, a
+  // ceiling or a floor cuts into it -- the player going behind a wall -- the
+  // camera turns round the player to just past the nearest heading where it is
+  // clear, or failing one lowers or raises itself, easing in and out, up to
+  // `coneRate` eighths of a turn a second (ConeKeeper). It looks CONE_AHEAD
+  // seconds ahead, so it turns before the wall comes between them rather than
+  // after. The swing behind never turns into a wall either. Like `collide`,
+  // for a camera inside the level: one hovering outside it would find the
+  // level's own walls across its cone. 0: no cone.
   cone: 0,
   coneRate: 4,
 
@@ -719,8 +720,13 @@ export function trailYaw (yaw, reach, dx, dy) {
  * test (physics::line_clear) starts in the sector its first point is in, and a
  * first point out in the void or above a room is clear -- which a camera
  * hovering over the level usually is, so traced from the eye nothing ever cut.
+ *
+ * `heights` ({ lo, hi }), when given: the player's end kept between them -- the
+ * heights the player fills. A low camera's cone otherwise reaches under the
+ * ground in front of their feet, and a ceiling just over their head cuts it,
+ * neither of which stands between them; a ledge between them still does.
  */
-export function coneClear (clear, eye, target, cone, rays = 8, reach = 0.85) {
+export function coneClear (clear, eye, target, cone, rays = 8, reach = 0.85, heights = null) {
   const d = { x: target.x - eye.x, y: target.y - eye.y, z: target.z - eye.z }
   const len = Math.hypot(d.x, d.y, d.z)
   if (len < 1e-6) return true
@@ -732,7 +738,10 @@ export function coneClear (clear, eye, target, cone, rays = 8, reach = 0.85) {
   if (rl < 1e-9) { rx = 1; ry = 0 } else { rx /= rl; ry /= rl }
   const u = { x: ry * f.z, y: -rx * f.z, z: rx * f.y - ry * f.x }
   const r = len * Math.tan(cone / 2)
-  const to = (ox, oy, oz) => ({ x: eye.x + (d.x + ox * r) * reach, y: eye.y + (d.y + oy * r) * reach, z: eye.z + (d.z + oz * r) * reach })
+  const lo = heights ? heights.lo : -Infinity
+  const hi = heights ? heights.hi : Infinity
+  const to = (ox, oy, oz) => ({ x: eye.x + (d.x + ox * r) * reach, y: eye.y + (d.y + oy * r) * reach,
+                                z: Math.min(hi, Math.max(lo, eye.z + (d.z + oz * r) * reach)) })
   if (!clear(to(0, 0, 0), eye)) return false
   for (let k = 0; k < rays; k++) {
     const c = Math.cos((k / rays) * Math.PI * 2)
@@ -755,6 +764,143 @@ export function nearestClear (ok, from, step, n, prefer = 1) {
     if (ok(from - first * k * step)) return from - first * k * step
   }
   return null
+}
+
+// How far past the edge of what cut the cone it turns (radians), and how far
+// ahead it looks (seconds): see ConeKeeper.
+export const CONE_MARGIN = 3 * Math.PI / 180
+export const CONE_AHEAD = 0.3
+
+/**
+ * Where the cone turns to when it is cut at `yaw`: just past (`margin`) the
+ * nearest heading round the player that `ok` takes -- found in `step`s, up to
+ * half a turn either way, the `prefer` side first (nearestClear), and its edge
+ * then halved down to a third of a degree, so the turn is to the edge of what
+ * is in the way and not to the next step past it. { goal, side }, or null with
+ * nowhere clear.
+ */
+export function coneGoal (ok, yaw, prefer = 1, step = Math.PI / 36, n = 36, margin = CONE_MARGIN) {
+  const y = nearestClear(ok, yaw, step, n, prefer)
+  if (y === null) return null
+  const side = y > yaw ? 1 : -1
+  let cut = y - side * step
+  let at = y
+  for (let i = 0; i < 4; i++) {
+    const m = (cut + at) / 2
+    if (ok(m)) at = m
+    else cut = m
+  }
+  const past = at + side * margin
+  return { goal: ok(past) ? past : y, side }
+}
+
+/**
+ * WHERE THE CAMERA'S AIM WILL BE `seconds` from now, in the engine's frame:
+ * the head moved on at `vel` ({ x, y }, units a second), and the point aimed at
+ * -- `anchor` now -- gone round to the lead's end: `cfg.lead` plus the forward
+ * speed times `cfg.leadVelocity` along the facing (in turns), kept within the
+ * deadzone of where it was, as update() keeps it. A turn the lead is about to
+ * make is the camera's too, and this is what lets the cone see it coming.
+ */
+export function aimAhead (cfg, head, anchor, vel, facingTurns, seconds) {
+  const th = facingTurns * Math.PI * 2
+  const fx = Math.cos(th)
+  const fy = Math.sin(th)
+  let ahead = cfg.lead > 0 ? cfg.lead : 0
+  const forward = vel.x * fx + vel.y * fy
+  if (cfg.leadVelocity > 0 && forward > 0) ahead += forward * cfg.leadVelocity
+  const soon = { x: head.x + vel.x * seconds, y: head.y + vel.y * seconds, z: head.z }
+  const dz = cfg.deadzoneX
+  const keep = (was, want) => want - was > dz ? want - dz : want - was < -dz ? want + dz : was
+  return { head: soon, anchor: { x: keep(anchor.x, soon.x + fx * ahead), y: keep(anchor.y, soon.y + fy * ahead), z: anchor.z } }
+}
+
+/**
+ * THE CONE, KEPT CLEAR (CAMERA_SET cone, cone_rate): what turns the automatic
+ * camera round the player before a wall comes between them. step() once a
+ * frame; it returns the yaw.
+ *
+ * `clear(yaw, elevation, soon)` is the cone test for the camera at that heading
+ * and elevation, as things stand (soon false) and CONE_AHEAD seconds on (soon
+ * true: the player moved on, the lead swung round to where they face). It is
+ * cut if either is, so the turn starts before the wall arrives.
+ *
+ * Cut, it turns to just past the nearest heading clear both ways (coneGoal) --
+ * or with none, clear as things stand -- on a critically damped spring at twice
+ * `rate`: it starts gently, catches up the faster the further behind it is, and
+ * stops without overshooting. And never faster than `rate` eighths of a turn a
+ * second (half a turn at 4): the eye follows its target on a spring of its own
+ * (update()), and a faster swing has it cut across the circle it should go
+ * round, past the player's nose. Passing its goal lets go of it, so it never pulls
+ * back against the swing behind or the lead, and with no goal its speed dies
+ * away. With no heading clear at all it lowers or raises itself instead
+ * (`pitch`, eased at `rate`), and failing that looks again in a quarter of a
+ * second: a whole search is not a cost to pay every frame for no answer.
+ */
+export class ConeKeeper {
+  constructor () {
+    this.vel = 0          // the yaw's speed, radians a second
+    this.goal = null      // the heading it is turning to
+    this.side = 1         // which way it last turned: on a tie, that way again
+    this.pitch = 0        // its own lowering or raising of the camera, radians
+    this.restUntil = 0    // after a search that found nowhere clear (ms)
+    this.turns = 0        // frames it has found the cone cut, for dnpStats.camera
+  }
+
+  // The player turned the camera themselves, or the cone is off: let go.
+  release () {
+    this.vel = 0
+    this.goal = null
+  }
+
+  /** { yaw, turned }: turned when it is turning the camera, or lowering or raising it. */
+  step (yaw, elev, dt, now, rate, clear) {
+    const ease = 1 - Math.exp(-rate * dt)
+    const e = elev + this.pitch
+    let soon = true
+    const ok = (y, el) => clear(y, el, false) && (!soon || clear(y, el, true))
+    let turned = false
+    if (!ok(yaw, e)) {
+      this.turns++
+      if (now >= this.restUntil) {
+        let g = coneGoal((v) => ok(v, e), yaw, this.side)
+        if (!g) {
+          soon = false
+          if (!ok(yaw, e)) g = coneGoal((v) => ok(v, e), yaw, this.side)
+        }
+        if (g) {
+          this.goal = g.goal
+          this.side = g.side
+        } else if (!ok(yaw, e)) {
+          const p = nearestClear((v) => ok(yaw, elev + v), this.pitch, Math.PI / 36, 12, -1)
+          if (p !== null) {
+            this.pitch += (p - this.pitch) * ease
+            turned = true
+          } else {
+            this.restUntil = now + 250
+          }
+        }
+      }
+    } else if (this.pitch !== 0 && ok(yaw, elev)) {
+      // Clear at its own height again: back to it.
+      this.pitch *= 1 - ease
+      if (Math.abs(this.pitch) < 1e-3) this.pitch = 0
+    }
+    // The spring, in steps it is stable over (w * h at most a quarter), and
+    // never faster than `rate` eighths of a turn a second.
+    const w = 2 * rate
+    const most = rate * Math.PI / 4
+    const n = Math.max(1, Math.ceil(dt * w * 4))
+    const h = dt / n
+    for (let i = 0; i < n; i++) {
+      // Passed, or as good as: a spring only ever nears its goal.
+      if (this.goal !== null && (this.goal - yaw) * this.side <= 1e-3) this.goal = null
+      const pull = this.goal === null ? 0 : w * w * (this.goal - yaw)
+      this.vel = Math.max(-most, Math.min(most, this.vel + (pull - 2 * w * this.vel) * h))
+      yaw += this.vel * h
+    }
+    return { yaw, turned: turned || this.goal !== null }
+  }
 }
 
 /**

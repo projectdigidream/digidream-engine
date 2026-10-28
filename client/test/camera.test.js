@@ -3,7 +3,8 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, trailYaw, clearFraction, clearBall, byHeight, coneClear, nearestClear
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, trailYaw, clearFraction, clearBall, byHeight, coneClear, nearestClear,
+  coneGoal, aimAhead, ConeKeeper, CONE_MARGIN, CONE_AHEAD
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -1097,6 +1098,208 @@ console.log('camera: a lead that grows with forward speed')
   // And a clear way is clear whatever the size, straight up included.
   check(clearBall(wall, head, { x: -4, y: 3, z: 2 }, 0.35) === 1 && clearBall(wall, head, { x: 0, y: 0, z: 5 }, 0.35) === 1,
         'away from the wall, and straight up, all clear')
+}
+
+// THE CONE KEPT CLEAR: the player's end of it kept to their heights, the goal
+// just past the edge, the look ahead along the lead, and the spring.
+console.log('\n--- the cone, kept clear ---')
+{
+  // The ground: a line going below it is cut.
+  const ground = (a, b) => Math.min(a.z, b.z) >= 0
+  // A low camera (5 up, 15 back, looking at 2 up) and a wide cone: its lower
+  // edge reaches under the ground in front of the feet.
+  const head = { x: 0, y: 0, z: 2 }
+  const eye = { x: 15, y: 0, z: 5 }
+  const C = 30 * Math.PI / 180
+  check(!coneClear(ground, eye, head, C), 'CONTROL: a low camera\'s wide cone reaches under the ground in front of the feet')
+  check(coneClear(ground, eye, head, C, 8, 0.85, { lo: 0.2, hi: 2.2 }), 'kept to the heights the player fills, the ground under them does not cut it')
+  // A ledge as high as their head, halfway: it is between them, heights or not.
+  const ledge = (a, b) => {
+    if (!ground(a, b)) return false
+    for (let i = 0; i <= 64; i++) {
+      const t = i / 64
+      const x = a.x + (b.x - a.x) * t
+      const z = a.z + (b.z - a.z) * t
+      if (x > 7 && x < 8 && z < 3) return false
+    }
+    return true
+  }
+  check(!coneClear(ledge, eye, head, C, 8, 0.85, { lo: 0.2, hi: 2.2 }), 'and a ledge between them still does')
+
+  // The goal: just past the edge of the wall, not the next step past it.
+  const side = (o, u, v) => Math.sign((u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x))
+  const wall = (p, q) => (a, b) => !(side(a, b, p) !== side(a, b, q) && side(p, q, a) !== side(p, q, b))
+  const blocks = wall({ x: 5, y: -2 }, { x: 5, y: 2 })
+  const h = { x: 0, y: 0, z: 1 }
+  const at = (yaw) => ({ x: Math.cos(yaw) * 10, y: -Math.sin(yaw) * 10, z: 4 })
+  const ok = (yaw) => coneClear(blocks, at(yaw), h, 20 * Math.PI / 180)
+  const g = coneGoal(ok, 0, 1)
+  // The edge, by bisecting: the first clear heading less the margin.
+  let edge = 0
+  while (!ok(edge)) edge += 0.001
+  check(g !== null && g.side === 1 && ok(g.goal) && Math.abs(g.goal - CONE_MARGIN - edge) < 0.01,
+        `the goal is ${(CONE_MARGIN * 180 / Math.PI).toFixed(0)} degrees past the edge (${(g.goal * 180 / Math.PI).toFixed(2)}, the edge ${(edge * 180 / Math.PI).toFixed(2)})`)
+  check(coneGoal(() => false, 0, 1) === null, 'CONTROL: nowhere clear, no goal')
+
+  // The look ahead: the head moved on, the aim gone round to the lead's end.
+  const cfg = { lead: 6, leadVelocity: 0.5, deadzoneX: 2.5 }
+  const s = aimAhead(cfg, { x: 0, y: 0, z: 2 }, { x: 6, y: 0, z: 2 }, { x: 0, y: 8 }, 0.25, 0.3)
+  check(near(s.head.x, 0) && near(s.head.y, 2.4) && near(s.head.z, 2), `the head ${CONE_AHEAD} seconds on at 8 a second: 2.4 on (${s.head.y.toFixed(2)})`)
+  // Facing north at 8: the lead's end is 6 + 4 north of the head moved on, kept within 2.5 of where the aim was (6, 0).
+  check(near(s.anchor.x, 2.5, 1e-9) && near(s.anchor.y, 2.4 + 10 - 2.5, 1e-9),
+        `the aim gone round to the lead's end, within the deadzone of where it was (${s.anchor.x.toFixed(2)}, ${s.anchor.y.toFixed(2)})`)
+  const still = aimAhead({ lead: 0, leadVelocity: 0, deadzoneX: 2.5 }, { x: 0, y: 0, z: 2 }, { x: 1, y: 1, z: 2 }, { x: 0, y: 0 }, 0, 0.3)
+  check(near(still.anchor.x, 1) && near(still.anchor.y, 1), 'CONTROL: no lead and standing still, the aim stays where it was')
+
+  // The spring: from rest to a goal 40 degrees round, gently, without overshooting, and let go.
+  const k = new ConeKeeper()
+  k.goal = 40 * Math.PI / 180
+  k.side = 1
+  let yaw = 0
+  let speed = 0
+  let fastest = 0
+  let jump = 0
+  let back = false
+  let t = 0
+  let reached = null
+  for (; t < 2; t += 1 / 60) {
+    const r = k.step(yaw, 0.3, 1 / 60, t * 1000, 4, () => true)
+    if (r.yaw < yaw) back = true
+    jump = Math.max(jump, Math.abs((r.yaw - yaw) * 60 - speed))
+    speed = (r.yaw - yaw) * 60
+    fastest = Math.max(fastest, Math.abs(speed))
+    yaw = r.yaw
+    if (reached === null && yaw > 36 * Math.PI / 180) reached = t
+  }
+  check(yaw <= 40 * Math.PI / 180 + 1e-9 && yaw > 39.5 * Math.PI / 180 && !back, `it settles at the goal without overshooting or turning back (${(yaw * 180 / Math.PI).toFixed(2)})`)
+  check(reached !== null && reached < 0.55, `nine tenths of the way in ${reached?.toFixed(2)} s at rate 4`)
+  check(fastest <= Math.PI + 1e-9, `never faster than half a turn a second at rate 4 (${(fastest * 180 / Math.PI).toFixed(1)} degrees a second)`)
+  check(jump * 180 / Math.PI < 60, `its speed changes smoothly: never more than ${(jump * 180 / Math.PI).toFixed(1)} degrees a second from one frame to the next`)
+  check(k.goal === null && Math.abs(k.vel) < 1e-3, 'and having got there it has let go and stopped')
+  // Let go when passed: a swing carrying the yaw past the goal is not pulled back.
+  k.goal = 0.5
+  k.side = 1
+  const r = k.step(0.6, 0.3, 1 / 60, 3000, 4, () => true)
+  check(k.goal === null && r.yaw >= 0.6, 'a yaw already past the goal is not pulled back to it')
+  // Cut at the current heading: it sets a goal and reports turning; the CONTROL, clear: nothing.
+  const k2 = new ConeKeeper()
+  const r2 = k2.step(0, 0.3, 1 / 60, 0, 4, (y) => y > 0.3)
+  check(r2.turned && k2.goal !== null && k2.goal > 0.3 && k2.turns === 1, 'cut, it takes a goal round to where it is clear')
+  const k3 = new ConeKeeper()
+  const r3 = k3.step(0, 0.3, 1 / 60, 0, 4, () => true)
+  check(!r3.turned && k3.goal === null && r3.yaw === 0, 'CONTROL: clear, it does nothing')
+  // Cut soon but not now: it turns already, before the wall arrives.
+  const k4 = new ConeKeeper()
+  k4.step(0, 0.3, 1 / 60, 0, 4, (y, e, soon) => !soon || y > 0.3)
+  check(k4.goal !== null && k4.goal > 0.3, 'cut only as things will be in a moment, it starts turning now')
+  // Nowhere clear: it does not claim to turn (so the swing behind may), and rests.
+  const k5 = new ConeKeeper()
+  const r5 = k5.step(0, 0.3, 1 / 60, 0, 4, () => false)
+  check(!r5.turned && k5.restUntil > 0, 'nowhere clear at all: no turn, and it looks again later')
+}
+
+// THE CONE ROUND A PILLAR: the camera on a lead (auto_turn 2, a lead of 6.25
+// and 0.35 more a unit of speed, the camera 5 up and 15 back, looking at 2 up,
+// walls on) round a tall square pillar at 8 a second, 3 off its faces -- the
+// real Camera, and what main.js does round it. Where the camera REALLY stands
+// is checked: how often walls press it in, and how near the head it comes.
+console.log('\n--- the cone round a pillar ---')
+{
+  const P = { x0: 35, y0: 35, x1: 45, y1: 45 }
+  const inside = (q) => q.x > P.x0 && q.x < P.x1 && q.y > P.y0 && q.y < P.y1
+  // The level's line test: the pillar (taller than anything here) and the
+  // ground; and as the core's, a line STARTING in the void is clear.
+  const clear = (a, b) => {
+    if (inside(a)) return true
+    if (Math.min(a.z, b.z) < 0) return false
+    let lo = 0
+    let hi = 1
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    for (const [p, q] of [[-dx, a.x - P.x0], [dx, P.x1 - a.x], [-dy, a.y - P.y0], [dy, P.y1 - a.y]]) {
+      if (p === 0) { if (q < 0) return true; continue }
+      const r = q / p
+      if (p < 0) lo = Math.max(lo, r)
+      else hi = Math.min(hi, r)
+      if (lo > hi) return true
+    }
+    return false
+  }
+  const legs = [[0, 1, (p) => p.y >= 48], [1, 0, (p) => p.x >= 48], [0, -1, (p) => p.y <= 32], [-1, 0, (p) => p.x <= 32],
+                [0, 1, (p) => p.y >= 48], [1, 0, (p) => p.x >= 48]]
+  const run = (how) => {
+    const camera = new Camera({ lead: 6.25, leadVelocity: 0.35, maxAccel: 400 })
+    const keeper = new ConeKeeper()
+    const fit = byHeight(15, 5, 2)
+    const dist = fit.distance
+    const elev = fit.elevation
+    const pos = { x: 32, y: 30 }
+    let yaw = Math.PI / 4
+    let wallsT = null
+    let pitchWas = elev
+    let from = null
+    let leg = 0
+    let pressed = 0
+    let nearest = Infinity
+    const dt = 1 / 60
+    for (let f = 0; f < 60 * 20 && leg < legs.length; f++) {
+      const [dx, dy, done] = legs[leg]
+      pos.x += dx * 8 * dt
+      pos.y += dy * 8 * dt
+      if (done(pos)) leg++
+      const facing = Math.atan2(dy, dx) / (Math.PI * 2)
+      const head = { x: pos.x, y: pos.y, z: 2 }
+      const anchor = camera._started && how.anchor !== false ? { x: camera.target.x, y: -camera.target.z, z: camera.target.y } : head
+      const camAt = (y, d, e, a0 = anchor) => {
+        const o = cameraOffset(y, d, e)
+        return { x: a0.x + o.x, y: a0.y - o.z, z: a0.z + o.y }
+      }
+      // On a lead.
+      if (from) yaw = trailYaw(yaw, Math.max(0.3, Math.cos(pitchWas) * dist * (wallsT ?? 1)), pos.x - from.x, pos.y - from.y)
+      from = { ...pos }
+      let pitch = elev
+      if (how.cone) {
+        const soon = aimAhead(camera.cfg, head, anchor, { x: dx * 8, y: dy * 8 }, facing, CONE_AHEAD)
+        const heights = { lo: 0.2, hi: 2.2 }
+        const at = (y, e, later) => coneClear(clear, camAt(y, dist, e, later ? soon.anchor : anchor), later ? soon.head : head,
+                                              20 * Math.PI / 180, 8, 0.85, heights)
+        const r = keeper.step(yaw, elev, dt, f * dt * 1000, 4, how.ahead === false ? (y, e, later) => later || at(y, e, false) : at)
+        yaw = r.yaw
+        pitch = elev + keeper.pitch
+      }
+      // The walls, along the line from the head.
+      pitchWas = pitch
+      const want = camAt(yaw, dist, pitch)
+      const t = clearBall(clear, head, want, 0.35)
+      wallsT = wallsT === null || t < wallsT ? t : Math.min(t, wallsT + (1 - wallsT) * (1 - Math.exp(-2 * dt)))
+      const q = { x: head.x + (want.x - head.x) * wallsT, y: head.y + (want.y - head.y) * wallsT, z: head.z + (want.z - head.z) * wallsT }
+      camera.cfg.offset = { x: q.x - anchor.x, y: q.z - anchor.z, z: -(q.y - anchor.y) }
+      const eye = camera.update({ x: pos.x, y: 2, z: -pos.y }, dt, { x: Math.cos(facing * Math.PI * 2), z: -Math.sin(facing * Math.PI * 2) },
+                                null, { x: dx * 8, z: -dy * 8 })
+      // Where it eased to: pressed in by a wall?
+      const real = { x: eye.x, y: -eye.z, z: eye.y }
+      const b = clearBall(clear, head, real, 0.35)
+      if (b < 1) {
+        pressed++
+        const e2 = { x: head.x + (real.x - head.x) * b, y: head.y + (real.y - head.y) * b, z: head.z + (real.z - head.z) * b }
+        camera.position.x = e2.x; camera.position.y = e2.z; camera.position.z = -e2.y
+        camera.velocity.x = 0; camera.velocity.y = 0; camera.velocity.z = 0
+        nearest = Math.min(nearest, Math.hypot(e2.x - head.x, e2.y - head.y, e2.z - head.z))
+      } else {
+        nearest = Math.min(nearest, Math.hypot(real.x - head.x, real.y - head.y, real.z - head.z))
+      }
+    }
+    return { pressed, nearest, laps: leg }
+  }
+  const kept = run({ cone: true })
+  const none = run({ cone: false })
+  const blind = run({ cone: true, ahead: false })
+  const head = run({ cone: true, anchor: false, ahead: false })
+  check(kept.laps === legs.length, `the walk goes round (${kept.laps} legs)`)
+  check(kept.pressed <= 3 && kept.nearest > 8, `with the cone the walls hardly touch it: pressed in ${kept.pressed} frames, never nearer the head than ${kept.nearest.toFixed(1)}`)
+  check(none.pressed > 60 && none.nearest < 5, `CONTROL: without it the pillar presses it in ${none.pressed} frames, to ${none.nearest.toFixed(1)} from the head`)
+  check(blind.pressed > kept.pressed * 10 + 20, `CONTROL: not looking ahead, it turns too late at the corners: pressed in ${blind.pressed} frames`)
+  check(head.pressed > kept.pressed * 10 + 20, `CONTROL: tested from the head rather than where it aims (0.2.4.2), pressed in ${head.pressed} frames`)
 }
 
 console.log(`\ncamera: ${checks} checks, ${fails} failures`)
