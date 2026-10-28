@@ -105,6 +105,8 @@ export const DEFAULTS = {
 
   // 1: the camera swings round behind the player by itself (autoTurnYaw),
   // unless they have turned it themselves in the last `autoDelay` seconds.
+  // 2: it turns with them as a camera on a lead (trailYaw): it keeps them in
+  // view and follows them, but never goes round behind their back.
   // 0: it stays where the player puts it, as it always has.
   autoTurn: 0,
   autoDelay: 2,
@@ -675,6 +677,24 @@ export function autoTurnYaw (yaw, facingTurns, dt, rate) {
   const want = -(facingTurns * TAU + Math.PI)
   const d = ((((want - yaw) % TAU) + TAU * 1.5) % TAU) - Math.PI
   return yaw + d * (1 - Math.exp(-rate * dt))
+}
+
+/**
+ * THE CAMERA ON A LEAD (auto_turn 2): `yaw` after the subject moved (dx, dy),
+ * engine space, with the camera `reach` from it on the level. The camera stays
+ * where it stood and the subject moves away from it, so it looks along the line
+ * from where it stood to where the subject is now: running sideways turns it to
+ * keep them in view, running away it follows behind, and walking TOWARDS it
+ * backs it off rather than sending it round behind them. The short way round,
+ * so yaw stays continuous.
+ */
+export function trailYaw (yaw, reach, dx, dy) {
+  const vx = Math.cos(yaw) * reach - dx
+  const vy = -Math.sin(yaw) * reach - dy
+  if (Math.hypot(vx, vy) < 1e-9) return yaw
+  const TAU = Math.PI * 2
+  const want = Math.atan2(-vy, vx)
+  return yaw + (((((want - yaw) % TAU) + TAU * 1.5) % TAU) - Math.PI)
 }
 
 /**

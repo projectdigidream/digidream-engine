@@ -30,7 +30,7 @@ import { Sky, skyFromMessage } from './render/sky.js'
 import { ColliderView } from './render/colliders.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  viewYaw, between, autoTurnYaw, clearBall, byHeight,
+  viewYaw, between, autoTurnYaw, trailYaw, clearBall, byHeight,
   DEFAULT_DISTANCE
 } from './camera.js'
 import { buildSpline } from './spline.js'
@@ -660,6 +660,8 @@ let yaw = START_YAW
 // When the player last turned the camera themselves (ms, the frame clock): the
 // automatic camera leaves it alone for autoDelay seconds after.
 let camTurnedAt = -Infinity
+// Where the player was last frame, for the camera on a lead (auto_turn 2).
+let camTrailFrom = null
 // THE AUTOMATIC CAMERA'S SIZE, with walls on (camera.js clearBall): a ball this
 // wide is kept clear of the map, and it comes no nearer the head than the other.
 const CAM_BALL = 0.35
@@ -2356,7 +2358,8 @@ const camera = new Camera()
 // ?autocam=1: the automatic camera -- behind the player, walls pulling it in --
 // without a script asking for it (a module turns it on with CAMERA_SET).
 // &camcollide=0 leaves the walls out of it.
-if (params.get('autocam') === '1') { camera.cfg.autoTurn = 1; camera.cfg.collide = params.get('camcollide') === '0' ? 0 : 1 }
+// ?autocam=1 swings round behind the player; ?autocam=2 is the camera on a lead.
+if (params.get('autocam') === '1' || params.get('autocam') === '2') { camera.cfg.autoTurn = Number(params.get('autocam')); camera.cfg.collide = params.get('camcollide') === '0' ? 0 : 1 }
 // &camheight=3&aimheight=1.5: where it sits and what it looks at, by height.
 if (params.get('camheight') !== null) camera.cfg.cameraHeight = Number(params.get('camheight'))
 if (params.get('aimheight') !== null) camera.cfg.aimHeight = Number(params.get('aimheight'))
@@ -3570,9 +3573,24 @@ function frame (now) {
   // collide). Behind the player unless they turned it lately; never in first
   // person, whose camera is the eyes, nor while a map locks the yaw.
   const camCfg = camera.cfg
-  if (!isFps() && !camLockYaw && !controlsTaken() && camCfg.autoTurn >= 0.5 &&
-      now - camTurnedAt > camCfg.autoDelay * 1000) {
-    yaw = autoTurnYaw(yaw, (a.facing >>> 0) / 4294967296, dt, camCfg.autoRate)
+  const camAuto = !isFps() && !camLockYaw && !controlsTaken()
+  if (camAuto && camCfg.autoTurn >= 1.5) {
+    // 2: ON A LEAD. By how far the player moved since last frame, not by where
+    // they face; a jump of more than half the lead (a teleport, a respawn) is
+    // not a move, and leaves the camera where it is.
+    if (camTrailFrom) {
+      const dx = px - camTrailFrom.x
+      const dy = py - camTrailFrom.y
+      const o = camCfg.offset
+      const reach = o ? Math.hypot(o.x, o.z) : camDistance()
+      if (reach > 0 && Math.hypot(dx, dy) < reach * 0.5) yaw = trailYaw(yaw, reach, dx, dy)
+    }
+    camTrailFrom = { x: px, y: py }
+  } else {
+    camTrailFrom = null
+    if (camAuto && camCfg.autoTurn >= 0.5 && now - camTurnedAt > camCfg.autoDelay * 1000) {
+      yaw = autoTurnYaw(yaw, (a.facing >>> 0) / 4294967296, dt, camCfg.autoRate)
+    }
   }
   let camPitch = camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2
   let camDist = camDistance()

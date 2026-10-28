@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, clearFraction, clearBall, byHeight
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, trailYaw, clearFraction, clearBall, byHeight
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -981,6 +981,30 @@ console.log('camera: a lead that grows with forward speed')
   check(Math.abs(side) < 0.05, `and moving sideways adds nothing: it is FORWARD speed (${side.toFixed(3)})`)
   const still = settle({ lead: 0, leadVelocity: 0.5 }, null)
   check(Math.abs(still) < 1e-6, `no velocity given, no lead (${still})`)
+}
+
+// THE CAMERA ON A LEAD (auto_turn 2): it turns with the body's movement, never
+// round behind it. Walked straight at, it backs off with its yaw unchanged --
+// where the swinging camera would go round behind; run past sideways, it turns
+// to keep them in view and stays where it stood rather than keeping up.
+{
+  const walk = (yaw, dx, dy, steps) => { for (let i = 0; i < steps; i++) yaw = trailYaw(yaw, 10, dx, dy); return yaw }
+  // The camera due east (yaw 0); the body walks east, at it, 6 units.
+  const at = walk(0, 0.1, 0, 60)
+  check(Math.abs(at) < 1e-9, `walked straight at, the camera backs off and does not turn (yaw ${at.toFixed(4)})`)
+  let swing = 0
+  for (let i = 0; i < 600; i++) swing = autoTurnYaw(swing, 0, 1 / 60, 2)
+  check(Math.abs(Math.abs(swing) - Math.PI) < 0.05, `CONTROL: the swinging camera, the body facing it, goes round behind (yaw ${swing.toFixed(2)})`)
+  const away = walk(0, -0.1, 0, 60)
+  check(Math.abs(away) < 1e-9, 'walked away from, it follows straight behind')
+  // Sideways: 10 units north, past it. It turns towards the body, the short way.
+  const side = walk(0, 0, 0.1, 100)
+  const o = cameraOffsetEngine(side, 10)
+  check(side > 0 && side < Math.PI / 2, `run past sideways, it turns to keep them in view (yaw ${side.toFixed(2)})`)
+  // Behind the way they went (south of them), between where they started (y 0)
+  // and where they are (y 10): trailing, not keeping up.
+  check(o.y < 0 && 10 + o.y > 0 && 10 + o.y < 10, `and it trails: south of them, at y ${(10 + o.y).toFixed(2)} of 0..10`)
+  check(trailYaw(1, 10, 0, 0) === 1, 'CONTROL: no move, no turn')
 }
 
 // THE AUTOMATIC CAMERA: it swings behind the body's facing, the short way

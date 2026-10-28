@@ -14,6 +14,14 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **The automatic camera on a lead**: `auto_turn = 2`. It turns with the
+  player's movement rather than their facing: running sideways it turns to keep
+  them in view, running away it follows, and walking towards it backs it off
+  instead of swinging round behind them. `collide` works with it as with 1;
+  `?autocam=2` tries it in the client.
+
 ## 0.2.4 -- 2026-10-28
 
 Everything since 0.2.3. (The development releases 0.2.3.1 to 0.2.3.12 below
