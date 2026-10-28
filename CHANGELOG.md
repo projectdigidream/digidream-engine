@@ -14,6 +14,53 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.4 -- 2026-10-28
+
+Everything since 0.2.3. (The development releases 0.2.3.1 to 0.2.3.12 below
+had it piece by piece.)
+
+### Added
+
+- **Movement states, defined by the module** (docs/MOVEMENT.md): its own
+  states (a slide, ice, mud, wading, swimming, a glide, a cling, a stun),
+  the transitions between them, meters (breath, stamina) and layered moves (a
+  dash, a jump pad, a boost), each switchable on and off per player by scripts
+  and graph nodes. All of it predicted.
+- **Liquids**, and how deep a body stands in one; and **filled volumes**
+  (`fx fill`): a colour, a transparency and a surface picture with its own
+  opacity.
+- **Effect sectors**: volumes for rain, snow, fog and the rest, entered and
+  left, overlapping anything.
+- **Single-player web games**: the server in the page, on Lua 5.1, as a static
+  folder for any host.
+- **Props, monsters and players lit by the map.**
+- **Ledge grab, a variable jump, an automatic camera, the camera's height**, a
+  `hop` off a ledge, and colliders drawn over the frame.
+- **Layers on a player** and animations redefined per player, with graph
+  nodes for how a player looks.
+- **The studio updates itself** on the desktop as on Android, and says how far
+  it is.
+
+### Changed
+
+- A ledge is caught only on the way down; a climbing body faces its wall.
+- Scripts keep to Lua 5.1, which the web build runs.
+- Alpha 254 is a cut-out (the picture's own holes) that writes depth.
+
+### Fixed
+
+- A crowded level could stop sending snapshots altogether.
+- The top of a climb mispredicted; it no longer does.
+- A body in the water was drawn whole, tinted or cut by the camera's angle; a
+  swimmer coming up from a dive could be thrown out of the water; water under
+  a see-through platform could be drawn over it.
+- A platform with no thickness was not there from below.
+- A second HELLO re-placed the player; a hosted world that persists could be
+  wiped by a new game.
+- A platform could not cross the border between two rooms; the automatic
+  camera could show what is behind a wall; subtitles under a fade or cut short;
+  Q and R in first person; coyote time without a limit.
+
 ## 0.2.3.12 -- 2026-10-27
 
 ### Fixed
