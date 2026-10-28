@@ -1010,6 +1010,15 @@ graph_vocab = {
                { name = "auto", type = "bool", optional = true,
                  doc = "The automatic camera: it swings round behind the player by itself, unless " ..
                        "they turn it; `distance` and `height` are where it stays." },
+               { name = "auto_lead", type = "bool", optional = true,
+                 doc = "The automatic camera on a lead instead: it turns with the player's movement " ..
+                       "and never goes round behind them -- walking towards it backs it off." },
+               { name = "cone", type = "number", optional = true,
+                 doc = "With either automatic camera: a cone this many degrees across, from the camera " ..
+                       "to the player. When a wall, ceiling or floor cuts into it, the camera turns " ..
+                       "round the player until it is clear. 0 is none." },
+               { name = "cone_rate", type = "number", optional = true,
+                 doc = "How fast it turns to keep the cone clear, per second. Defaults to 4." },
                { name = "auto_delay", type = "number", optional = true,
                  doc = "Seconds after the player turns it before it swings back behind. Defaults to 2." },
                { name = "auto_rate", type = "number", optional = true,

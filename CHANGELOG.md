@@ -14,6 +14,18 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **The automatic camera's cone**: `cone` (degrees) with `auto_turn` 1 or 2.
+  A cone that wide runs from the camera to the player; when a wall, ceiling or
+  floor cuts into it -- the player starting to go behind a wall -- the camera
+  orbits round them to the nearest heading where it is clear (or, with none,
+  lowers or raises itself), at `cone_rate` per second, and the swing behind
+  never turns into a wall. For a camera inside the level, as `collide` is; with
+  `collide` the cone is the camera's as it stands. The `camera_follow` node
+  takes `cone`, `cone_rate` and `auto_lead` (the camera on a lead); `?camcone=`
+  tries it in the client.
+
 ## 0.2.4.1 -- 2026-10-28
 
 ### Added

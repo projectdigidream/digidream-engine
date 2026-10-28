@@ -2091,7 +2091,11 @@ static const char* const CAMERA_FIELD_NAMES[] = {
     // Where the camera sits and looks, by height over the player's feet
     // (fields 23, 24): camera_height (negative: the pitch decides, as before) and
     // aim_height, the point it looks at.
-    "camera_height", "aim_height"
+    "camera_height", "aim_height",
+    // The automatic camera's cone (fields 25, 26): degrees across, from the
+    // camera to the point it looks at, kept clear of walls by turning round the
+    // player; and how fast it turns to.
+    "cone", "cone_rate"
 };
 
 // The fields a Lua table names, in thousandths. Shared by dnp.camera and

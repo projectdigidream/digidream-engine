@@ -115,6 +115,17 @@ export const DEFAULTS = {
   // 1: walls pull the camera in rather than standing between it and the
   // player (clearFraction); it eases back out to its distance after.
   collide: 0,
+  // THE CONE, with the automatic camera (either way it turns): `cone` degrees
+  // across, from the camera to the point it looks at. When a wall, a ceiling or
+  // a floor cuts into it -- the player going behind a wall -- the camera orbits
+  // round the player to the nearest heading where it is clear, or failing one
+  // lowers or raises itself, at `coneRate` per second (coneClear, nearestClear).
+  // The swing behind never turns into a wall either. Like `collide`, for a
+  // camera inside the level: one hovering outside it would find the level's own
+  // walls across its cone. With `collide`, the cone is the camera's as it
+  // stands, pulled in. 0: no cone.
+  cone: 0,
+  coneRate: 4,
 
   // WHERE THE CAMERA SITS AND LOOKS, by height over the player's feet
   // (CAMERA_SET camera_height, aim_height). `aimHeight`: the point it looks at
@@ -695,6 +706,55 @@ export function trailYaw (yaw, reach, dx, dy) {
   const TAU = Math.PI * 2
   const want = Math.atan2(-vy, vx)
   return yaw + (((((want - yaw) % TAU) + TAU * 1.5) % TAU) - Math.PI)
+}
+
+/**
+ * THE AUTOMATIC CAMERA'S CONE: is the cone from `eye` to `target`, `cone`
+ * radians across, clear of the map? `clear(a, b)` is the line test (engine
+ * space). Its axis and `rays` lines round its edge, each from `reach` of the way
+ * towards the target back to the eye: so the wall a player stands against, at
+ * the cone's wide end, does not count, and one coming between them does.
+ *
+ * FROM THE PLAYER'S END, as clearBall traces from the head: the core's line
+ * test (physics::line_clear) starts in the sector its first point is in, and a
+ * first point out in the void or above a room is clear -- which a camera
+ * hovering over the level usually is, so traced from the eye nothing ever cut.
+ */
+export function coneClear (clear, eye, target, cone, rays = 8, reach = 0.85) {
+  const d = { x: target.x - eye.x, y: target.y - eye.y, z: target.z - eye.z }
+  const len = Math.hypot(d.x, d.y, d.z)
+  if (len < 1e-6) return true
+  const f = { x: d.x / len, y: d.y / len, z: d.z / len }
+  // Right, level and square to the axis (any level way for an axis straight up
+  // or down); up, square to both -- as clearBall does.
+  let rx = f.y, ry = -f.x
+  const rl = Math.hypot(rx, ry)
+  if (rl < 1e-9) { rx = 1; ry = 0 } else { rx /= rl; ry /= rl }
+  const u = { x: ry * f.z, y: -rx * f.z, z: rx * f.y - ry * f.x }
+  const r = len * Math.tan(cone / 2)
+  const to = (ox, oy, oz) => ({ x: eye.x + (d.x + ox * r) * reach, y: eye.y + (d.y + oy * r) * reach, z: eye.z + (d.z + oz * r) * reach })
+  if (!clear(to(0, 0, 0), eye)) return false
+  for (let k = 0; k < rays; k++) {
+    const c = Math.cos((k / rays) * Math.PI * 2)
+    const s = Math.sin((k / rays) * Math.PI * 2)
+    if (!clear(to(rx * c + u.x * s, ry * c + u.y * s, u.z * s), eye)) return false
+  }
+  return true
+}
+
+/**
+ * The nearest of `from` +- k * `step` (k = 1..`n`) that `ok` takes, trying the
+ * `prefer` side (+1 or -1) first at each k: where the cone is clear again, the
+ * shortest turn away, and the same way as the last on a tie (so it does not
+ * dither between two). Null when none is.
+ */
+export function nearestClear (ok, from, step, n, prefer = 1) {
+  const first = prefer < 0 ? -1 : 1
+  for (let k = 1; k <= n; k++) {
+    if (ok(from + first * k * step)) return from + first * k * step
+    if (ok(from - first * k * step)) return from - first * k * step
+  }
+  return null
 }
 
 /**

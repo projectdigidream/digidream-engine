@@ -30,8 +30,8 @@ import { Sky, skyFromMessage } from './render/sky.js'
 import { ColliderView } from './render/colliders.js'
 import {
   Camera, CAM_MODE, cameraOffset, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  viewYaw, between, autoTurnYaw, trailYaw, clearBall, byHeight,
-  DEFAULT_DISTANCE
+  viewYaw, between, autoTurnYaw, trailYaw, clearBall, byHeight, coneClear, nearestClear,
+  DEFAULT_DISTANCE, ISO_ELEVATION
 } from './camera.js'
 import { buildSpline } from './spline.js'
 import { PathView } from './render/paths.js'
@@ -662,6 +662,13 @@ let yaw = START_YAW
 let camTurnedAt = -Infinity
 // Where the player was last frame, for the camera on a lead (auto_turn 2).
 let camTrailFrom = null
+// THE CONE's own lowering or raising of the camera (radians of elevation),
+// when no heading round the player cleared it; eased back to 0 once its own
+// height is clear. And which way it last turned, to keep turning that way.
+let camConePitch = 0
+let camConeSide = 1
+let camConeTurns = 0             // frames the cone has turned the camera, for dnpStats.camera
+let camConeRestUntil = 0         // after a search that found nowhere clear (ms)
 // THE AUTOMATIC CAMERA'S SIZE, with walls on (camera.js clearBall): a ball this
 // wide is kept clear of the map, and it comes no nearer the head than the other.
 const CAM_BALL = 0.35
@@ -684,7 +691,9 @@ let camViewYaw = 0
 // The camera's angle as this client holds it, in degrees: what a page test
 // reads to see a CAMERA_SET (a graph's camera node) arrive.
 dnpStats.debug = () => ({ shown: debugShown, hud: hud.style.display !== 'none', text: hud.textContent.length })
-dnpStats.camera = () => ({ yaw: yaw * 180 / Math.PI, viewYaw: camViewYaw * 180 / Math.PI })
+dnpStats.camera = () => ({ yaw: yaw * 180 / Math.PI, viewYaw: camViewYaw * 180 / Math.PI,
+                           coneTurns: camConeTurns, conePitch: camConePitch * 180 / Math.PI,
+                           autoTurn: camera?.cfg?.autoTurn, cone: camera?.cfg?.cone })
 // The home level's sector effects (render/sectorfx.js), and which map they are of.
 let sectorFx = null
 let sectorFxFor = null
@@ -2360,6 +2369,8 @@ const camera = new Camera()
 // &camcollide=0 leaves the walls out of it.
 // ?autocam=1 swings round behind the player; ?autocam=2 is the camera on a lead.
 if (params.get('autocam') === '1' || params.get('autocam') === '2') { camera.cfg.autoTurn = Number(params.get('autocam')); camera.cfg.collide = params.get('camcollide') === '0' ? 0 : 1 }
+// ?camcone=20: the automatic camera's cone, that many degrees across.
+if (Number(params.get('camcone')) > 0) camera.cfg.cone = Number(params.get('camcone'))
 // &camheight=3&aimheight=1.5: where it sits and what it looks at, by height.
 if (params.get('camheight') !== null) camera.cfg.cameraHeight = Number(params.get('camheight'))
 if (params.get('aimheight') !== null) camera.cfg.aimHeight = Number(params.get('aimheight'))
@@ -3574,6 +3585,29 @@ function frame (now) {
   // person, whose camera is the eyes, nor while a map locks the yaw.
   const camCfg = camera.cfg
   const camAuto = !isFps() && !camLockYaw && !controlsTaken()
+  let camPitch = camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2
+  let camDist = camDistance()
+  // By height over the player (camera_height, aim_height): the camera that high,
+  // `distance` behind, looking at a point aim_height above the feet.
+  const aimH = camCfg.aimHeight || 0
+  if (!isFps() && camCfg.cameraHeight >= 0) {
+    const h = byHeight(camDist, camCfg.cameraHeight, aimH)
+    camDist = h.distance
+    camPitch = h.elevation
+  }
+  const camHead = { x: px, y: py, z: pz + (aimH > 0 ? aimH : bodyHeight * 0.9) }
+  // THE CONE (cone, cone_rate), with the automatic camera: is it clear from the
+  // camera at heading y and elevation e to the head? In the engine's frame.
+  const coneOn = camAuto && camCfg.cone > 0 && camCfg.autoTurn >= 0.5
+  const camElev = camPitch ?? ISO_ELEVATION
+  // Where the camera really stands: pulled in by the walls (last frame's), if they pull it.
+  const coneDist = camCfg.collide >= 0.5 && camClearDistance !== null ? Math.min(camDist, camClearDistance) : camDist
+  const coneAt = (y, e) => {
+    if (e < -0.15 || e > 1.45) return false
+    const o = cameraOffset(y, coneDist, e)
+    return coneClear(camLineClear, { x: camHead.x + o.x, y: camHead.y - o.z, z: camHead.z + o.y }, camHead,
+                     camCfg.cone * Math.PI / 180)
+  }
   if (camAuto && camCfg.autoTurn >= 1.5) {
     // 2: ON A LEAD. By how far the player moved since last frame, not by where
     // they face; a jump of more than half the lead (a teleport, a respawn) is
@@ -3589,21 +3623,42 @@ function frame (now) {
   } else {
     camTrailFrom = null
     if (camAuto && camCfg.autoTurn >= 0.5 && now - camTurnedAt > camCfg.autoDelay * 1000) {
-      yaw = autoTurnYaw(yaw, (a.facing >>> 0) / 4294967296, dt, camCfg.autoRate)
+      // The swing behind, but never into a wall: a step whose cone is cut is not taken.
+      const next = autoTurnYaw(yaw, (a.facing >>> 0) / 4294967296, dt, camCfg.autoRate)
+      if (!coneOn || coneAt(next, camElev + camConePitch)) yaw = next
     }
   }
-  let camPitch = camOverridePitch === null ? undefined : camOverridePitch * Math.PI * 2
-  let camDist = camDistance()
-  // By height over the player (camera_height, aim_height): the camera that high,
-  // `distance` behind, looking at a point aim_height above the feet.
-  const aimH = camCfg.aimHeight || 0
-  if (!isFps() && camCfg.cameraHeight >= 0) {
-    const h = byHeight(camDist, camCfg.cameraHeight, aimH)
-    camDist = h.distance
-    camPitch = h.elevation
+  if (coneOn) {
+    const e = camElev + camConePitch
+    const ease = 1 - Math.exp(-camCfg.coneRate * dt)
+    if (!coneAt(yaw, e)) {
+      // Cut: round the player to the nearest heading where it is clear (7.5
+      // degree steps, up to half a turn either way), or, with none, lower or
+      // raise the camera instead (5 degree steps, up to 60).
+      // Searched at most four times a second when it finds nothing: up to 72
+      // cones of nine lines each is not a cost to pay every frame for no answer.
+      const y = now < camConeRestUntil ? null : nearestClear((v) => coneAt(v, e), yaw, Math.PI / 24, 24, camConeSide)
+      if (y !== null) {
+        camConeSide = y > yaw ? 1 : -1
+        yaw += (y - yaw) * ease
+      } else if (now >= camConeRestUntil) {
+        const p = nearestClear((v) => coneAt(yaw, camElev + v), camConePitch, Math.PI / 36, 12, -1)
+        if (p !== null) camConePitch += (p - camConePitch) * ease
+        else camConeRestUntil = now + 250
+      }
+      // As after the player turns it: the swing behind waits auto_delay.
+      camTurnedAt = now
+      camConeTurns++
+    } else if (camConePitch !== 0 && coneAt(yaw, camElev)) {
+      // Clear at its own height again: back to it.
+      camConePitch *= 1 - ease
+      if (Math.abs(camConePitch) < 1e-3) camConePitch = 0
+    }
+    camPitch = camElev + camConePitch
+  } else {
+    camConePitch = 0
   }
   const camWalls = !isFps() && camCfg.collide >= 0.5
-  const camHead = { x: px, y: py, z: pz + (aimH > 0 ? aimH : bodyHeight * 0.9) }
   if (camWalls) {
     // From the head to where the camera wants to be, in the engine's frame;
     // a wall in the way pulls the camera in front of it, at once, and it eases

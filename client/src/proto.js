@@ -97,7 +97,10 @@ export const CAMERA_FIELD = [
   'autoTurn', 'autoDelay', 'autoRate', 'collide',
   // 23, 24: where the camera sits and looks, by height over the player
   // (camera.js cameraHeight, aimHeight).
-  'cameraHeight', 'aimHeight'
+  'cameraHeight', 'aimHeight',
+  // 25, 26: the automatic camera's cone, degrees across, and how fast it turns
+  // to keep it clear (camera.js cone, coneRate).
+  'cone', 'coneRate'
 ]
 
 // The cap on fields in ONE CameraSet, mirroring proto/messages.hpp. Not the

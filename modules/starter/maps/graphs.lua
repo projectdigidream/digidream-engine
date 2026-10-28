@@ -1198,6 +1198,9 @@ function EXEC.camera_follow(g, n, ev, pull)
   if n.lead ~= nil then f.lead = n.lead end
   if n.lead_velocity ~= nil then f.lead_velocity = n.lead_velocity end
   if n.auto ~= nil then f.auto_turn = n.auto and 1 or 0 end
+  if n.auto_lead then f.auto_turn = 2 end
+  if n.cone ~= nil then f.cone = n.cone end
+  if n.cone_rate ~= nil then f.cone_rate = n.cone_rate end
   if n.auto_delay ~= nil then f.auto_delay = n.auto_delay end
   if n.auto_rate ~= nil then f.auto_rate = n.auto_rate end
   if n.collide ~= nil then f.collide = n.collide and 1 or 0 end

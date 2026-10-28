@@ -3,7 +3,7 @@
 //
 import {
   Camera, DEFAULTS, CAM_MODE, cameraOffset, cameraOffsetEngine, screenRelativeMove, facingDirection, aimFor, billboardYaw,
-  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, trailYaw, clearFraction, clearBall, byHeight
+  ISO_ELEVATION, DEFAULT_DISTANCE, distanceForFraming, viewYaw, between, autoTurnYaw, trailYaw, clearFraction, clearBall, byHeight, coneClear, nearestClear
 } from '../src/camera.js'
 import { buildSpline } from '../src/spline.js'
 
@@ -1005,6 +1005,43 @@ console.log('camera: a lead that grows with forward speed')
   // and where they are (y 10): trailing, not keeping up.
   check(o.y < 0 && 10 + o.y > 0 && 10 + o.y < 10, `and it trails: south of them, at y ${(10 + o.y).toFixed(2)} of 0..10`)
   check(trailYaw(1, 10, 0, 0) === 1, 'CONTROL: no move, no turn')
+}
+
+// THE CONE (cone, cone_rate): from the camera to the head, cut by a wall
+// between them -- on its axis or only at its edge -- but not by one at the
+// player's end; and the orbit to the nearest heading where it is clear.
+{
+  // A wall as a level segment, standing from the floor to the sky: does the
+  // line a-b cross it, in the plane?
+  const wall = (p, q) => (a, b) => {
+    const side = (o, u, v) => Math.sign((u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x))
+    return !(side(a, b, p) !== side(a, b, q) && side(p, q, a) !== side(p, q, b))
+  }
+  const head = { x: 0, y: 0, z: 1 }
+  const eye = { x: 10, y: 0, z: 4 }
+  const C = 20 * Math.PI / 180
+  check(coneClear(() => true, eye, head, C), 'nothing in the way: clear')
+  check(!coneClear(wall({ x: 5, y: -0.5 }, { x: 5, y: 0.5 }), eye, head, C), 'a wall across the middle cuts it')
+  // At x 5 the cone is about 1.7 across; a wall from y 0.3 to 3 misses the axis but not the edge.
+  const edge = wall({ x: 5, y: 0.3 }, { x: 5, y: 3 })
+  check(edge(eye, head) && !coneClear(edge, eye, head, C), 'one that misses the axis but not its edge cuts it too: a cone, not a line')
+  check(coneClear(edge, eye, head, 0), 'CONTROL: a cone of 0 is the line alone, which it misses')
+  check(coneClear(wall({ x: 0.5, y: 0.2 }, { x: 0.5, y: 3 }), eye, head, C), "and the wall at the player's end, past 85% of the way, does not count")
+  // The core's line test: a line starting out in the void is clear. The camera
+  // hovering outside the level is in it -- so the cone must be traced from the
+  // player's end, or a wall between them is never seen.
+  const voidAware = (a, b) => a.x > 8 || wall({ x: 5, y: -0.5 }, { x: 5, y: 0.5 })(a, b)
+  check(!coneClear(voidAware, eye, head, C), "traced from the player's end: a camera out in the void still sees the wall cut its cone")
+  // The orbit: the wall east of the head; round to the nearest heading clear of it.
+  const blocks = wall({ x: 5, y: -2 }, { x: 5, y: 2 })
+  const at = (yaw) => ({ x: Math.cos(yaw) * 10, y: -Math.sin(yaw) * 10, z: 4 })
+  const ok = (yaw) => coneClear(blocks, at(yaw), head, C)
+  check(!ok(0), 'CONTROL: due east, the wall is in the way')
+  const y = nearestClear(ok, 0, Math.PI / 24, 24, 1)
+  check(y !== null && ok(y) && !ok(y - Math.PI / 24), `it turns round to the first clear heading (${(y * 180 / Math.PI).toFixed(1)} degrees), not further`)
+  const other = nearestClear(ok, 0, Math.PI / 24, 24, -1)
+  check(other !== null && Math.abs(other + y) < 1e-9, 'the same distance the other way round when that side is preferred')
+  check(nearestClear(() => false, 0, 0.1, 5) === null, 'CONTROL: nowhere clear, no heading')
 }
 
 // THE AUTOMATIC CAMERA: it swings behind the body's facing, the short way

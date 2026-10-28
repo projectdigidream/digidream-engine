@@ -1490,6 +1490,19 @@ int main(int argc, char** argv) {
           "links": [ ["c.then", "f.in"] ] })"));
         CHECK(run("graphs.call('plain_on', dnp.players()[1], nil)", "plain"));
         CHECK(!g_ui.cams.count(4) && !g_ui.cams.count(18));
+        // The camera on a lead, with its cone: auto_turn 2 (field 19), cone and
+        // cone_rate (fields 25, 26). CONTROL: the plain one above set none of them.
+        CHECK(!g_ui.cams.count(19) && !g_ui.cams.count(25) && !g_ui.cams.count(26));
+        g_ui.cams.clear();
+        CHECK(load_graph(R"({ "graph": 1, "name": "conecam",
+          "nodes": [ { "id": "c", "type": "on_call", "name": "cone_on" },
+                     { "id": "f", "type": "camera_follow", "everyone": true, "auto_lead": true, "cone": 15, "cone_rate": 6 } ],
+          "links": [ ["c.then", "f.in"] ] })"));
+        CHECK(run("graphs.call('cone_on', dnp.players()[1], nil)", "cone on"));
+        std::printf("  auto_turn %d, cone %d, cone_rate %d (thousandths)\n", g_ui.cams.count(19) ? g_ui.cams[19] : -1,
+                    g_ui.cams.count(25) ? g_ui.cams[25] : -1, g_ui.cams.count(26) ? g_ui.cams[26] : -1);
+        CHECK(g_ui.cams.count(19) && g_ui.cams[19] == 2000);
+        CHECK(g_ui.cams.count(25) && g_ui.cams[25] == 15000 && g_ui.cams.count(26) && g_ui.cams[26] == 6000);
     }
 
     // ================================================================
