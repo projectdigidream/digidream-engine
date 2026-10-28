@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.4.2 -- 2026-10-28
+
 ### Added
 
 - **The automatic camera's cone**: `cone` (degrees) with `auto_turn` 1 or 2.
