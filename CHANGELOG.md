@@ -14,6 +14,8 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.4.4 -- 2026-11-05
+
 ### Added
 
 - **Composite textures**: one texture name made of up to 8 pictures, laid out
