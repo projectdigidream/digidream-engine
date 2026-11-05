@@ -24,6 +24,7 @@
 
 import { NO_TEXTURE, NO_SECTOR, PEG, SIDE_FLAG } from './mapdata.js'
 import { isSkyName } from './render/sky.js'
+import { sideSeed } from './render/composite.js'
 
 // Engine (z-up) -> Three (y-up).
 export const toThreeX = (x) => x
@@ -80,8 +81,16 @@ function solidAnchor (sector, peg) {
 
 // --- surfaces --------------------------------------------------------------
 
+// Which field a wall surface is, for its composite seed (render/composite.js).
+const FIELD_CODE = { [SURFACE.UPPER]: 1, [SURFACE.MIDDLE]: 2, [SURFACE.LOWER]: 3, [SURFACE.SKIRT]: 4 }
+
 function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
                      zBot, zTop, anchorZ, a, b, outward = false }) {
+  // A COMPOSITE TEXTURE'S TILES are counted from u = 0, and every wall's u
+  // starts at its own end -- so without a seed of its own every wall in a room
+  // would open with the same tiles. Taken before the swap below, from the side
+  // as the map has it.
+  const seed = sideSeed(a.x, a.y, b.x, b.y, FIELD_CODE[kind] ?? 0)
   // `outward` swaps a and b, which reverses both the winding and the direction
   // u runs -- so the face turns around and its texture stays un-mirrored. Doing
   // only one of the two is how a surface ends up correct from one side and
@@ -152,6 +161,7 @@ function wallQuad ({ kind, sector, sectorIndex, side, sideIndex, texture,
     positions,
     normals,
     uvs,
+    seed,
     indices: [0, 1, 2, 0, 2, 3]
   }
 }
@@ -428,7 +438,7 @@ export function mergeByTexture (surfaces) {
     const key = `${s.texture}:${alpha}`
     let g = byTexture.get(key)
     if (!g) {
-      g = { texture: s.texture, alpha, positions: [], normals: [], uvs: [], colors: [], indices: [] }
+      g = { texture: s.texture, alpha, positions: [], normals: [], uvs: [], colors: [], seeds: [], indices: [] }
       byTexture.set(key, g)
     }
     const base = g.positions.length / 3
@@ -440,6 +450,10 @@ export function mergeByTexture (surfaces) {
     // different lighting model, not a nicer version of this one.
     const l = s.light / 255
     for (let i = 0; i < s.positions.length / 3; i++) g.colors.push(l, l, l)
+    // A wall's composite seed (wallQuad), on every vertex of it; a flat has 0,
+    // its tiles being counted in world units and unique already.
+    const seed = s.seed ?? 0
+    for (let i = 0; i < s.positions.length / 3; i++) g.seeds.push(seed)
     for (const i of s.indices) g.indices.push(base + i)
   }
   return [...byTexture.values()]

@@ -23,6 +23,7 @@
 // worth asserting -- reaches zero AT the radius, never negative, monotonic --
 // are asserted on the JS side.
 //
+import { COMPOSITE_GLSL } from './composite.js'
 
 /** Falloff at `dist` for a light of `radius`. 1 at the source, 0 at the edge. */
 export function attenuation (dist, radius) {
@@ -142,9 +143,19 @@ export const VERTEX_SHADER = /* glsl */`
   varying vec3 vNormalW;
   varying vec3 vWorld;
   varying vec3 vSector;
+#ifdef COMPOSITE
+  // FLAT: a wall's seed is one integer for the whole wall, and interpolating
+  // it -- even between four equal values -- can land a hair off it, which is a
+  // different hash and a different tile.
+  attribute float tileSeed;
+  flat varying float vTileSeed;
+#endif
   void main () {
     vUv = uv;
     vSector = color;
+#ifdef COMPOSITE
+    vTileSeed = tileSeed;
+#endif
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
     vNormalW = normalize(mat3(modelMatrix) * normal);
@@ -175,8 +186,19 @@ export const FRAGMENT_SHADER = /* glsl */`
   varying vec3 vWorld;
   varying vec3 vSector;
 
+#ifdef COMPOSITE
+  // A COMPOSITE TEXTURE (render/composite.js): map is the atlas of its
+  // members, and which of them each tile shows is worked out here.
+  flat varying float vTileSeed;
+  ${COMPOSITE_GLSL}
+#endif
+
   void main () {
+#ifdef COMPOSITE
+    vec4 texel = compositeTexel(vUv * repeat, vTileSeed);
+#else
     vec4 texel = texture2D(map, vUv * repeat);
+#endif
     // Doom's transparency is binary -- a grate is either there or it is not --
     // so a cutout is discarded outright rather than blended. Blending would
     // still write depth and hide whatever was behind the gap, which is the

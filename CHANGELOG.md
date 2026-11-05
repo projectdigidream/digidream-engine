@@ -14,6 +14,22 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+### Added
+
+- **Composite textures**: one texture name made of up to 8 pictures, laid out
+  tile by tile so a big floor or wall stops showing its repeat. A
+  `composite` line in `assets/animations.txt` names the pictures, with
+  weights, and the ways to lay them out:
+  - `flip` and `turn`, at random per tile;
+  - `shift`, each tile at its own offset with a dithered seam;
+  - `patches`, irregular patches with no tile grid;
+  - `seam blend`, a soft seam for shift or patches;
+  - `overlay`, one big picture over the surface.
+
+  A map names a composite as any texture. It is the same layout on every visit,
+  costs no extra draw calls, and changes no map. See
+  docs/COMPOSITE_TEXTURES.md.
+
 ## 0.2.4.3 -- 2026-10-28
 
 ### Fixed

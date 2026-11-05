@@ -1342,6 +1342,29 @@ const scene = new THREE.Scene()
 const sky = new Sky(THREE)
 MapView.sky = sky
 scene.add(sky.background)
+// Animated textures -- nukage, water, lava (render/animtex.js). Client only:
+// which picture is on a wall changes nothing the simulation can observe.
+//
+// DECLARED AND FETCHED HERE, above the first MapView -- a composite texture's
+// material is one from the start (MapView.composites) -- and so above the
+// texture load that reads it. It sat two hundred lines below that load, which
+// is a temporal dead zone by way of a function call:
+// loadMapTextures() is invoked at module scope and reads animCatalogue, so the
+// `let` had not been initialised and the call threw before it ever reached
+// view.loadTextures. The whole map rendered untextured, and the only sign was
+// one unhandled rejection in the console.
+let animCatalogue = { groups: [], sheets: new Map(), composites: new Map(), warnings: [] }
+let animator = null
+try {
+  animCatalogue = parseAnimations(await (await fetch(`${BASE}animations.txt`)).text())
+  for (const w of animCatalogue.warnings) console.warn(`[anim] ${w}`)
+} catch (e) {
+  // Not fatal, and the failure is the right one: everything draws its first
+  // frame and nothing moves.
+  console.warn(`[anim] no animation catalogue (${e.message}); textures will be still`)
+}
+MapView.composites = animCatalogue.composites
+
 stage('geometry', 0, 'building geometry')
 let view = new MapView(mapData)
 stage('geometry', 1)
@@ -1356,26 +1379,6 @@ if (movers.length) view.setDynamicSectors(movers)
 // it arrives.
 // Every frame of every sequence, so the animator has something to swap
 // between: the frames after the first appear in no map's texture list.
-// Animated textures -- nukage, water, lava (render/animtex.js). Client only:
-// which picture is on a wall changes nothing the simulation can observe.
-//
-// DECLARED AND FETCHED HERE, above the texture load that reads it. It sat two
-// hundred lines below, which is a temporal dead zone by way of a function call:
-// loadMapTextures() is invoked at module scope and reads animCatalogue, so the
-// `let` had not been initialised and the call threw before it ever reached
-// view.loadTextures. The whole map rendered untextured, and the only sign was
-// one unhandled rejection in the console.
-let animCatalogue = { groups: [], sheets: new Map(), warnings: [] }
-let animator = null
-try {
-  animCatalogue = parseAnimations(await (await fetch(`${BASE}animations.txt`)).text())
-  for (const w of animCatalogue.warnings) console.warn(`[anim] ${w}`)
-} catch (e) {
-  // Not fatal, and the failure is the right one: everything draws its first
-  // frame and nothing moves.
-  console.warn(`[anim] no animation catalogue (${e.message}); textures will be still`)
-}
-
 async function loadMapTextures () {
   const extra = animCatalogue.groups.flatMap((g) => g.frames)
   // The map's own scale unless a flag overrides it. ?texpx= stays for
@@ -1385,6 +1388,8 @@ async function loadMapTextures () {
     pxPerUnit,
     extra,
     sheets: animCatalogue.sheets,
+    composites: animCatalogue.composites,
+    compositeSeed: homeLevel,
     onProgress: (done, total) => stage('textures', total ? done / total : 1,
                                        `textures ${done} / ${total}`)
   })
@@ -1414,11 +1419,15 @@ async function loadMapTextures () {
 // have every texture half again the wrong size -- which reads as textures being
 // placed wrong rather than as a scale error, which is why the map declares it.
 // Every map in a composed world happens to agree today; nothing makes them.
-function neighbourTextureOpts (scale) {
+function neighbourTextureOpts (scale, level) {
   return {
     pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (scale ?? 32),
     extra: animCatalogue.groups.flatMap((g) => g.frames),
-    sheets: animCatalogue.sheets
+    sheets: animCatalogue.sheets,
+    // Its OWN level's number, as the home view uses its own: a promoted
+    // neighbour keeps its materials, so its floors stay laid out as they were.
+    composites: animCatalogue.composites,
+    compositeSeed: level ?? 0
   }
 }
 
@@ -1434,7 +1443,7 @@ function makeNeighbourView (built) {
   // Whether its pictures have arrived: a cell walked into soon after it
   // appears can be promoted with placeholders still on it.
   v.texturesLoaded = false
-  v.loadTextures(neighbourTextureOpts(built.textureScale))
+  v.loadTextures(neighbourTextureOpts(built.textureScale, built.level))
     .then(() => { v.texturesLoaded = true })
     .catch((e) => console.warn(`[seam] neighbour textures: ${e.message}`))
   return v
@@ -2951,7 +2960,8 @@ function applySectorSet (local, m) {
   if (!s) return
   if (m.what === 'floor' || m.what === 'ceiling') {
     const changed = view.setSectorTexture(local, m.what, m.texture.toUpperCase(),
-      { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32), sheets: animCatalogue.sheets })
+      { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32), sheets: animCatalogue.sheets,
+        composites: animCatalogue.composites, compositeSeed: homeLevel })
     if (changed >= 0) view.setDynamicSectors(dynamicSectors([changed]))
   } else if (m.what === 'light') {
     if (m.fadeMs > 0) {
@@ -3150,7 +3160,8 @@ function frame (now) {
       }
       const side = homeLocal(m.side)
       const sector = view.setSideTexture(side, m.field, m.name.toUpperCase(),
-        { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32), sheets: animCatalogue.sheets })
+        { pxPerUnit: params.has('texpx') ? Number(params.get('texpx')) : (map.textureScale ?? 32), sheets: animCatalogue.sheets,
+          composites: animCatalogue.composites, compositeSeed: homeLevel })
       if (sector >= 0) {
         mapData.sides[side] = view.map.sides[side]
         view.setDynamicSectors([...new Set([...movers, sector])])

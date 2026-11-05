@@ -19,6 +19,7 @@
 // typical wall -- enough to see tiling and alignment without turning the screen
 // into a grid.
 import { BASE } from '../base.js'
+import { compositeAtlas, overlayTexture, applyComposite } from './composite.js'
 export const DEFAULT_WORLD_SIZE = 4
 
 const PIXELS = 128
@@ -167,6 +168,10 @@ function cutSheet (THREE, tex, spec, warn) {
 
 // Every picture this session has loaded, by URL. See fetchTexture below.
 const SHARED_TEXTURES = new Map()
+// Composite atlases and overlay textures, shared the same way: by what they are
+// made of, so the neighbours of a region build one each, not one per cell.
+const SHARED_ATLASES = new Map()
+const SHARED_OVERLAYS = new Map()
 
 export async function loadRealTextures (THREE, names, materials, {
   baseUrl = `${BASE}textures`, pxPerUnit = 32, extra = [],
@@ -174,6 +179,10 @@ export async function loadRealTextures (THREE, names, materials, {
   // A sheet's material shows its first frame, sized as one frame; the frames
   // come back in `frames` as NAME, NAME#1, ... for the animator.
   sheets = null, warn = (m) => console.warn(m),
+  // Composite textures (animations.txt `composite` lines; render/composite.js):
+  // name -> definition. `compositeSeed` is the level's number, which turns the
+  // picks so two cells of a region do not lay their floors out alike.
+  composites = null, compositeSeed = 0,
   // Called as each picture arrives, with (done, total). Optional, and a
   // counter rather than bytes: a texture is one request whose size nobody knows
   // until it lands, so counting requests is the honest measure and is the one
@@ -243,7 +252,52 @@ export async function loadRealTextures (THREE, names, materials, {
     if (tex) frames.set(name, tex)
     tick()
   }))
+  // A COMPOSITE has no picture of its own, so no `sizes` entry: only its
+  // members and overlay need one. Each member keeps its line's weight; one with
+  // no picture is left out, and the composite keeps its placeholder only if
+  // none of them has one.
+  const picture = async (n) => {
+    const dim = sizes[n]
+    if (!dim) return null
+    const tex = await fetchTexture(n)
+    return tex?.image ? { name: n, image: tex.image, w: dim[0], h: dim[1], cutout: !!cutout[n] } : null
+  }
+  const loadComposite = async (def, material) => {
+    const got = await Promise.all(def.members.map(async (m) => {
+      const p = await picture(m.name)
+      if (!p) warn(`[anim] composite ${def.name}: no picture for ${m.name}; left out`)
+      return p && { ...p, weight: m.weight }
+    }))
+    const members = got.filter(Boolean)
+    if (members.length === 0) return false
+    const key = `${baseUrl}|${def.name}|${members.map((m) => `${m.name}:${m.w}x${m.h}`).join(',')}`
+    let atlas = SHARED_ATLASES.get(key)
+    if (!atlas) {
+      atlas = compositeAtlas(THREE, def, members, { configure: configureTexture, warn })
+      SHARED_ATLASES.set(key, atlas)
+    }
+    let overlay = null
+    if (def.overlay) {
+      const o = await picture(def.overlay.name)
+      if (!o) {
+        warn(`[anim] composite ${def.name}: no picture for its overlay ${def.overlay.name}`)
+      } else {
+        const okey = `${baseUrl}|${o.name}`
+        if (!SHARED_OVERLAYS.has(okey)) SHARED_OVERLAYS.set(okey, overlayTexture(THREE, o.image))
+        overlay = { texture: SHARED_OVERLAYS.get(okey), w: o.w, h: o.h }
+      }
+    }
+    applyComposite(THREE, material, { def, members, atlas, overlay, pxPerUnit, level: compositeSeed })
+    return true
+  }
+
   await Promise.all(names.map(async (name, i) => {
+    const comp = composites?.get?.(name)
+    if (comp && materials[i]) {
+      if (await loadComposite(comp, materials[i])) loaded++
+      tick()
+      return
+    }
     let dim = sizes[name]
     if (!dim || !materials[i]) { tick(); return }
     let tex = await fetchTexture(name)

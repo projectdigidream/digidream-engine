@@ -31,6 +31,7 @@
 //
 import { toThreeX, toThreeY, toThreeZ, flatUV } from '../mapgeom.js'
 import { NO_TEXTURE } from '../mapdata.js'
+import { COMPOSITE_GLSL, compositeUniformsOf } from './composite.js'
 
 export const KIND = { RAIN: 1, SNOW: 2, DUST: 3, EMBERS: 4, FOG: 5, FILL: 6 }
 export const PARTICLE_KINDS = [KIND.RAIN, KIND.SNOW, KIND.DUST, KIND.EMBERS]
@@ -396,11 +397,20 @@ uniform vec3 color;
 uniform float alpha;
 uniform float lit;
 varying vec2 vUv;
+#ifdef COMPOSITE
+// The ceiling's picture is a composite (render/composite.js): its tiles, as the
+// map's own surfaces draw them. A flat, so no seed of its own.
+${COMPOSITE_GLSL}
+#endif
 void main () {
   float a = gl_FrontFacing ? alpha : 0.0;
   vec3 c = color * a;
   if (textured > 0.5) {
+#ifdef COMPOSITE
+    vec4 t = compositeTexel(vUv * repeat, 0.0);
+#else
     vec4 t = texture2D(map, vUv * repeat);
+#endif
     float s = surface * t.a;
     c = t.rgb * lit * s + c * (1.0 - s);
     a = s + a * (1.0 - s);
@@ -534,12 +544,14 @@ export class SectorFx {
         map: pic && top ? pic.map : { value: null },
         repeat: pic && top ? pic.repeat : { value: new THREE.Vector2(1, 1) },
         textured: { value: pic && top ? 1 : 0 },
+        ...(pic && top ? compositeUniformsOf(pic) : {}),
         // The picture's opacity: the fill's `surface`, times the ceiling's alpha.
         surface: { value: Math.max(0, Math.min(1, p.surface ?? 1)) * (s.ceilStyle?.alpha ?? 1) },
         color: { value: color },
         alpha: { value: alpha },
         lit: { value: lit }
       },
+      defines: pic && top && pic.cpCell ? { COMPOSITE: '' } : {},
       vertexShader: FILL_VS,
       fragmentShader: FILL_FS,
       transparent: true,

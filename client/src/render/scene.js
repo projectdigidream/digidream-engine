@@ -16,6 +16,7 @@ import {
 } from './lighting.js'
 import { distanceForFraming } from '../camera.js'
 import { isSkyName } from './sky.js'
+import { compositeUniforms, compositeUniformsOf } from './composite.js'
 
 function geometryFromGroup (g) {
   const geo = new THREE.BufferGeometry()
@@ -23,13 +24,27 @@ function geometryFromGroup (g) {
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3))
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvs, 2))
   geo.setAttribute('color', new THREE.Float32BufferAttribute(g.colors, 3))
+  // Each wall's composite seed (mapgeom.js wallQuad). Read only by a composite
+  // material; every other one leaves it alone.
+  if (g.seeds) geo.setAttribute('tileSeed', new THREE.Float32BufferAttribute(g.seeds, 1))
   geo.setIndex(g.indices)
   return geo
 }
 
+// A composite's material carries the COMPOSITE define and its own uniforms
+// from the start, so the see-through twins and a fill's top can share them
+// before the pictures arrive -- as they share `map`.
+const compositeDefines = (m) => (m?.defines?.COMPOSITE !== undefined ? { COMPOSITE: '' } : {})
+
 export class MapView {
   /** The renderer's Sky (render/sky.js), whose material sky flats wear. */
   static sky = null
+  /**
+   * The composite textures (animations.txt; render/composite.js), name ->
+   * definition. Set before any MapView, as the sky is, so a composite's
+   * material is one from the start.
+   */
+  static composites = null
 
   /**
    * `opts.prebuilt` is geometry somebody else already derived -- the seam
@@ -66,7 +81,7 @@ export class MapView {
     // is not the conventional one: sector light is an ADDITIVE FLOOR, not a
     // multiplier. See lighting.js -- multiplying, which is what vertexColors on
     // a standard material does, makes a torch in a dark room stay dark.
-    this.materials = this.textures.map((tex) => this.#material(tex))
+    this.materials = this.textures.map((tex, i) => this.#material(tex, map.textures[i]))
 
     // The see-through twins, built on demand and keyed by texture AND opacity.
     // On demand because a map with no transparent surface -- which is every map
@@ -106,6 +121,7 @@ export class MapView {
       geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.normals, 3))
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvs, 2))
       geo.setAttribute('color', new THREE.Float32BufferAttribute(g.colors, 3))
+      if (g.seeds) geo.setAttribute('tileSeed', new THREE.Float32BufferAttribute(g.seeds, 1))
       geo.setIndex(new THREE.BufferAttribute(g.indices, 1))
       // A name this view's own texture list does not carry gets the missing
       // material, which draws as a magenta wireframe. Visible rather than
@@ -127,13 +143,16 @@ export class MapView {
    * other one. Two constructions differing by a flag would show as a wall that
    * changes how it is lit the moment it is switched.
    */
-  #material (tex) {
+  #material (tex, name) {
+    const composite = MapView.composites?.has?.(name) ?? false
     return new THREE.ShaderMaterial({
         uniforms: {
           map: { value: tex },
           repeat: { value: new THREE.Vector2(1 / DEFAULT_WORLD_SIZE, 1 / DEFAULT_WORLD_SIZE) },
+          ...(composite ? compositeUniforms(THREE) : {}),
           ...this.lightUniforms
         },
+        defines: composite ? { COMPOSITE: '' } : {},
         vertexShader: VERTEX_SHADER,
         fragmentShader: FRAGMENT_SHADER,
         side: THREE.FrontSide,
@@ -190,9 +209,12 @@ export class MapView {
     this.map.textures.push(name)
     const tex = makeTextureSet(THREE, [name])[0]
     this.textures.push(tex)
-    this.materials.push(this.#material(tex))
+    this.materials.push(this.#material(tex, name))
     loadRealTextures(THREE, [name], [this.materials[slot]], loadOpts)
-      .then((r) => { for (const [n, t] of r.frames ?? []) this.frameTextures?.set(n, t) })
+      .then((r) => {
+        for (const [n, t] of r.frames ?? []) this.frameTextures?.set(n, t)
+        this.syncTwins()
+      })
       .catch(() => {})
     return slot
   }
@@ -228,6 +250,7 @@ export class MapView {
     // material of its own refers to. Kept so the animator can swap between
     // them without loading a second copy.
     this.frameTextures = res.frames ?? new Map()
+    this.syncTwins()
     return res
   }
 
@@ -248,8 +271,10 @@ export class MapView {
         map: base.uniforms.map,
         repeat: base.uniforms.repeat,
         opacity: { value: alpha },
+        ...compositeUniformsOf(base.uniforms),
         ...this.lightUniforms
       },
+      defines: compositeDefines(base),
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER_ALPHA,
       side: THREE.FrontSide,
@@ -274,10 +299,10 @@ export class MapView {
     const base = this.materials[texture]
     if (!base) return this.missing
     const m = new THREE.ShaderMaterial({
-      uniforms: { map: base.uniforms.map, repeat: base.uniforms.repeat, ...this.lightUniforms },
+      uniforms: { map: base.uniforms.map, repeat: base.uniforms.repeat, ...compositeUniformsOf(base.uniforms), ...this.lightUniforms },
       vertexShader: VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
-      defines: { CUTOUT: '' },
+      defines: { CUTOUT: '', ...compositeDefines(base) },
       side: THREE.FrontSide,
       depthWrite: true
     })
@@ -301,6 +326,20 @@ export class MapView {
       this.clearMaterials.set(key, m)
     }
     return m
+  }
+
+  /**
+   * A twin built before its texture turned out to be a composite -- a view
+   * made before MapView.composites was set -- is brought into line with it.
+   */
+  syncTwins () {
+    for (const [key, m] of this.clearMaterials) {
+      const base = this.materials[Number(key.split(':')[0])]
+      if (base?.defines?.COMPOSITE === undefined || m.defines?.COMPOSITE !== undefined) continue
+      Object.assign(m.uniforms, compositeUniformsOf(base.uniforms))
+      m.defines = { ...(m.defines ?? {}), COMPOSITE: '' }
+      m.needsUpdate = true
+    }
   }
 
   /**

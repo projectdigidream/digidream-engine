@@ -17,6 +17,7 @@
 // frame change is a uniform write: no shader recompile, no material swap, and
 // the cost of animating a hundred surfaces is a hundred pointer stores a frame.
 //
+import { parseCompositeLine } from './composite.js'
 
 // SPRITE SHEETS: one picture holding every frame, stacked top to bottom
 // (`vertical`) or side by side (`horizontal`) -- what qPainter exports.
@@ -30,15 +31,30 @@
 export const SHEET_MAX_FRAMES = 256
 export const SHEET_DEFAULT_FPS = 8
 
-/** Read the `anim` and `sheet` records out of the catalogue text. */
+// COMPOSITE TEXTURES (render/composite.js, docs/COMPOSITE_TEXTURES.md): one name
+// made of several pictures, laid out so the repeat stops showing.
+//
+//   composite <NAME> <TEX> [weight] <TEX> [weight] ... [flip [x|y]] [turn]
+//             [shift | patches [size n]] [seam dither|blend]
+//             [overlay <TEX> [scale n] [strength s]] [seed n]
+
+/** Read the `anim`, `sheet` and `composite` records out of the catalogue text. */
 export function parseAnimations (text) {
   const groups = []
   const sheets = new Map()
+  const composites = new Map()
   const warnings = []
   text.split('\n').forEach((raw, i) => {
     const line = raw.split('#')[0].trim()
     if (!line) return
     const tok = line.split(/\s+/)
+    if (tok[0] === 'composite') {
+      const r = parseCompositeLine(tok)
+      if (r.error) { warnings.push(`line ${i + 1}: ${r.error}`); return }
+      // A later line for the same name wins, as for a sheet.
+      composites.set(r.def.name, { ...r.def, line: i + 1 })
+      return
+    }
     if (tok[0] === 'sheet') {
       const name = (tok[1] ?? '').toUpperCase()
       const layout = tok[2]
@@ -82,7 +98,28 @@ export function parseAnimations (text) {
     }
     groups.push({ fps, frames })
   })
-  return { groups, sheets, warnings }
+  // Only once every line is read, because a sheet may be declared after the
+  // composite that names it. A member must be one still picture: a sheet's
+  // frames or another composite's tiles have no single picture to put in a tile.
+  for (const c of composites.values()) {
+    const keep = c.members.filter((m) => {
+      const why = composites.has(m.name) ? 'a composite' : sheets.has(m.name) ? 'a sheet' : null
+      if (why) warnings.push(`line ${c.line}: ${c.name}: ${m.name} is ${why}, which cannot be one of its textures; left out`)
+      return !why
+    })
+    if (keep.length === 0) {
+      warnings.push(`line ${c.line}: ${c.name}: none of its textures is a still picture; not a composite`)
+      composites.delete(c.name)
+      continue
+    }
+    c.members = keep
+    if (c.overlay && (composites.has(c.overlay.name) || sheets.has(c.overlay.name))) {
+      warnings.push(`line ${c.line}: ${c.name}: the overlay ${c.overlay.name} is not a still picture; no overlay`)
+      c.overlay = null
+    }
+    if (sheets.has(c.name)) warnings.push(`line ${c.line}: ${c.name} is a sheet as well; the composite wins`)
+  }
+  return { groups, sheets, composites, warnings }
 }
 
 /**
@@ -119,6 +156,8 @@ export class TextureAnimator {
       if (slot < 0) continue                       // this map does not use it
       const material = materials[slot]
       if (!material?.uniforms?.map) continue
+      // A composite's map is its atlas, not a frame to swap out.
+      if (material.defines?.COMPOSITE !== undefined) continue
 
       const textures = []
       for (const f of g.frames) {

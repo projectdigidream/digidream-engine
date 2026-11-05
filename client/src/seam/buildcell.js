@@ -35,12 +35,13 @@ export function buildCell (core, bytes) {
     normals: new Float32Array(g.normals),
     uvs: new Float32Array(g.uvs),
     colors: new Float32Array(g.colors),
+    seeds: new Float32Array(g.seeds),
     indices: new Uint32Array(g.indices)
   }))
   const transfer = []
   for (const g of groups) {
     transfer.push(g.positions.buffer, g.normals.buffer, g.uvs.buffer,
-                  g.colors.buffer, g.indices.buffer)
+                  g.colors.buffer, g.seeds.buffer, g.indices.buffer)
   }
   return { built: { textures: map.textures, lights: map.lights, textureScale, hash, groups }, transfer }
 }

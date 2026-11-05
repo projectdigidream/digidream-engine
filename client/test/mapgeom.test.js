@@ -358,6 +358,35 @@ console.log('\n--- merging ---')
   check(near(s1[0].colors[0], 128 / 255), 'sector 1 carries its own lower light level')
 }
 
+console.log('\n--- a composite texture\'s seed, per wall ---')
+{
+  // Walls count u from their own end, so a composite needs each wall told
+  // apart (render/composite.js sideSeed); flats are counted in world units.
+  const m = fixture({ f1: 2, c1: 6 })
+  const surf = buildSectorSurfaces(m, 0)
+  const walls = surf.filter((s) => s.side >= 0)
+  const flats = surf.filter((s) => s.side < 0)
+  check(flats.length > 0 && flats.every((s) => s.seed === undefined || s.seed === 0), 'a flat has no seed of its own')
+  check(walls.every((s) => Number.isInteger(s.seed) && s.seed >= 0 && s.seed < 2 ** 24),
+        'every wall has a whole 24-bit seed, which a float carries exactly')
+  const again = buildSectorSurfaces(fixture({ f1: 2, c1: 6 }), 0).filter((s) => s.side >= 0)
+  check(walls.every((s, i) => s.seed === again[i].seed), 'the same on a rebuild')
+  const solid = walls.filter((s) => s.kind === SURFACE.MIDDLE)
+  check(new Set(solid.map((s) => s.seed)).size === solid.length, 'each solid wall its own')
+  const up = find(surf, SURFACE.UPPER, 1)
+  const low = find(surf, SURFACE.LOWER, 1)
+  check(up && low && up.seed !== low.seed, 'the upper and lower field of one side differ')
+  const other = find(buildSectorSurfaces(m, 1), SURFACE.MIDDLE, 4)
+  const lifted = buildSectorSurfaces(fixture({ f1: 3, c1: 6 }), 0).filter((s) => s.side >= 0)
+  check(walls.every((s, i) => s.seed === lifted[i].seed), 'a moving neighbour leaves the seeds alone')
+  check(other && !solid.some((s) => s.seed === other.seed), "and another sector's walls have theirs")
+  const groups = mergeByTexture(surf)
+  check(groups.every((g) => g.seeds.length === g.positions.length / 3), 'merged: one seed per vertex')
+  const wallGroup = groups.find((g) => g.texture === 3)
+  check(wallGroup && new Set(wallGroup.seeds).size === solid.length,
+        "and the merged walls keep their own, so a draw call doesn't share one")
+}
+
 console.log('\n--- how a flat is painted ---')
 {
   // THE DEFAULT IS THE PROJECTION THAT WAS ALWAYS THERE. Straight down the

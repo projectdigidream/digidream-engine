@@ -614,6 +614,10 @@ suite_client () {
   node client/test/nearnow.test.js | grep -E 'FAIL|failures'
   # Animated textures, and that every sequence a map uses was fully extracted.
   node client/test/animtex.test.js | grep -E 'FAIL|failures'
+  # Composite textures (docs/COMPOSITE_TEXTURES.md): the line, the hash pinned
+  # by a golden table with a control, weights, flips, turns, shift and patches,
+  # and that the plain shaders are untouched without the define.
+  node client/test/composite.test.js | grep -E 'FAIL|failures'
   # The synth: instruments, a baked track, and audio that is not silence.
   # Skips itself when midisynth's wasm has not been built.
   node client/test/music.test.js | grep -E 'FAIL|failures'
@@ -902,6 +906,10 @@ suite_browser () {
   # Self-gated like the editor's: it launches headless Chrome, so it skips
   # loudly without DNP_CLIENT_PAGE_TEST=1 rather than costing every run.
   node client/test/page.test.js | grep -E 'FAIL|failures'
+  # Composite textures on the GPU: every pixel of a composite floor and wall,
+  # read back and held to the JS twin's pick, with a control. Needs only
+  # Chrome, not the stack; gated with the page test.
+  node client/test/composite.page.test.js | grep -E 'FAIL|failures'
   # Does the game client leak? Chrome against a real stack: rounds of play and a
   # new game each, measuring the JS heap, the wasm heap, the DOM, and three.js's
   # live geometries and textures -- each world change used to strand the old
