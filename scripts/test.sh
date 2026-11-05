@@ -791,6 +791,8 @@ suite_studio () {
   node ../studio/test/snapshots.test.js | tail -2
   # Animated textures: the sheet lines the studio writes are what the client reads, cut where it cuts.
   node ../studio/test/texsheet.test.js | tail -2
+  # Composite textures: the lines the client reads back, the pictures index.json sizes, the drawings its shader's twin picks.
+  node ../studio/test/composites.test.js | tail -2
   # The module's keys: the server reads every key line the studio writes; a graph answering one loads.
   node ../studio/test/keys.test.js | tail -2
   # The debug overlay: module.txt says the module's choice, or a play-test's; the server reads both.
