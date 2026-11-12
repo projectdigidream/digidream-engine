@@ -14,6 +14,34 @@ Sections: **Fixed** (it was wrong and is now right), **Added**, **Changed**
 
 ## Unreleased
 
+## 0.2.5 -- 2026-11-12
+
+Everything since 0.2.4. (The development releases 0.2.4.1 to 0.2.4.4 below
+had it piece by piece.)
+
+### Added
+
+- **Composite textures** (docs/COMPOSITE_TEXTURES.md): one texture name made
+  of up to 8 pictures, laid out tile by tile so a big floor or wall stops
+  showing its repeat. A `composite` line in `assets/animations.txt` names the
+  pictures, with weights, and the ways to lay them out: `flip` and `turn` at
+  random per tile, `shift` (each tile at its own offset) or `patches`
+  (irregular patches with no grid), a dithered or blended seam, and an
+  `overlay` picture over the whole surface. A map names a composite as any
+  texture; the same layout on every visit and every device, no extra draw
+  calls, and no change to the map.
+- **The automatic camera on a lead**: `auto_turn = 2` turns with the player's
+  movement rather than their facing, and never swings round behind them:
+  walking towards it backs it off. `collide` works with it.
+- **The automatic camera's cone**: `cone` (degrees across) and `cone_rate`,
+  with either automatic camera. When a wall, a ceiling or a floor starts to
+  come between the camera and the player, the camera turns round them, just
+  past the edge of what is in the way and easing in and out, at most
+  `cone_rate` eighths of a turn a second (half a turn at the default 4). It is
+  measured from where the camera really stands and looks a moment ahead, so it
+  turns round corners before they come between. The `camera_follow` node takes
+  `cone`, `cone_rate` and `auto_lead`.
+
 ## 0.2.4.4 -- 2026-11-05
 
 ### Added
